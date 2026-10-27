@@ -1662,3 +1662,138 @@ def test_guide_describes_the_thermal_plan_fields_and_migration() -> None:
         "`learning.thermal`",
     ):
         assert topic in update, topic
+
+
+def _plan_thermal_lines() -> list[str]:
+    """Die Sätze von ``planThermalLine`` (UI) mit den Platzhaltern des Handbuchs."""
+    source = Path("ui/src/lib/learning/thermal.ts").read_text(encoding="utf-8")
+    body = source.split("export function planThermalLine", 1)[1].split("\n}\n", 1)[0]
+    lines = re.findall(r"return [`']([^`']+)[`'];", body)
+    assert len(lines) == 7, lines
+    return [
+        line.replace("${saving}", "{x} ct").replace("${MODE_LABELS[thermal.mode]}", "{Betriebsart}")
+        for line in lines
+    ]
+
+
+def test_docs_name_phase_5c_endpoints_and_settings() -> None:
+    # Plan 5c, Task 12: Betriebshandbuch, Abnahme, Spec und Übergabe nennen, was 5c baut, so wie es
+    # umgesetzt ist (Entscheidungen 15 bis 17 und die Festlegungen der Umsetzung).
+    from bindaems.app.learning.thermal_service import COMPONENT
+    from bindaems.shared.config import HA_THERMAL_PLAN_ID, HA_THERMAL_SUFFIXES
+    from bindaems.shared.plan import ReasonCode
+    from bindaems.shared.settings import ThermalPlanSettings
+
+    section = _guide_section("Vorheizen und Vorkühlen (Phase 5c)")
+    guide = " ".join(section.split())
+    for endpoint in (
+        "`GET /api/learning/thermal`",
+        "`POST /api/learning/thermal/recompute`",
+        "`GET /api/plan`",
+        "`PUT /api/settings`",
+    ):
+        assert endpoint in guide, endpoint
+    assert f"Komponente `{COMPONENT}`" in guide
+    for name in ThermalPlanSettings.model_fields:
+        assert f"`{name}`" in guide, name
+    assert "`learning.thermal`" in guide
+    codes = [code for code in get_args(ReasonCode) if code.startswith("KLIMA_")]
+    assert codes == ["KLIMA_MEHR", "KLIMA_WENIGER"]
+    for code in (*codes, "thermal_plan"):
+        assert f"`{code}`" in guide, code
+    assert HA_THERMAL_SUFFIXES[-1] == "planned_offset"
+    for entity in (HA_THERMAL_PLAN_ID, "thermal_klima_planned_offset"):
+        assert f"`{entity}`" in guide, entity
+    # die Teile des UI und die Sätze der Zeile im Zeitplan, wie das UI sie schreibt
+    for part in (
+        "Karte „Wärmemodell“",
+        "Karte „Vorheizen und Vorkühlen“",
+        "Spalte „Klima“",
+        "Zeile „Plan“",
+        "„{k} K bis {HH:MM}“",
+        "„kein Planwert“",
+        "Abschnitt „Vorheizen und Vorkühlen“ der **Einstellungen**",
+    ):
+        assert part in guide, part
+    lines = _plan_thermal_lines()
+    assert "Vorschau: Vorheizen/Vorkühlen würde etwa {x} ct sparen." in lines
+    for line in lines:
+        assert f"„{line}“" in guide, line
+    # ehrlich zum Nutzen: der große Akku deckt die teuren Stunden, der Heizteil gilt diesen Winter
+    for topic in ("„lohnt nicht“", "PV-Überschuss", "Wärmepumpe", "diesen Winter"):
+        assert topic in guide, topic
+    # Kleinigkeiten aus den Reviews: Anlass, `thermal_steps`, Sensoren und Zeilen der Karte
+    assert "(Anlass „Einstellungen“)" not in guide
+    assert "(Anlass „Einstellungen geändert“)" in guide
+    assert "`null` ohne Verschiebung" not in guide
+    assert "`null` nur, wenn der Plan gar keine Verschiebung hat" in guide
+    climate = " ".join(_guide_section("Klimaanlage (Phase 6a)").split())
+    assert "vier Sensoren" not in climate
+    assert len(HA_THERMAL_SUFFIXES) == 5 and "je Gerät fünf Sensoren" in climate
+    assert "Wunsch in Stufen, Plan, Leistung" in climate
+    # Ausrollen: Sicherung, Migration, core und app gemeinsam, Regelbetrieb aus, frühestens nach
+    # den Abnahmen 5a/5b, Schalter aus, der Aktor bleibt im Dry-Run bis zur Freigabe
+    _, found, rest = section.partition("### Vorheizen und Vorkühlen ausrollen (Plan 5c)\n")
+    assert found, "Der Unterabschnitt „Vorheizen und Vorkühlen ausrollen (Plan 5c)“ fehlt."
+    rollout = " ".join(rest.split("\n### ", 1)[0].split())
+    for step in (
+        "/backup/vor-plan-5c.sqlite3",
+        "`0015`",
+        "`thermal_model`",
+        "core und app gemeinsam",
+        "Regelbetrieb aus",
+        "22.11.2026",
+        "5a und 5b",
+        "ab Werk aus",
+        "Dry-Run",
+        "Komponente `thermal_model`",
+        "docs/verification/abnahme-phase-5c.md",
+    ):
+        assert step in rollout, step
+    steps = [
+        rollout.index(marker)
+        for marker in (
+            "Regelbetrieb aus",
+            "docker compose stop ems-app",
+            "docker compose pull && docker compose up -d",
+            "Regelbetrieb an",
+        )
+    ]
+    assert steps == sorted(steps), steps
+    # Abnahme nach Entscheidung 16, Teil A und Teil B
+    text = " ".join(Path("docs/verification/abnahme-phase-5c.md").read_text("utf-8").split())
+    for criterion in (
+        "Teil A",
+        "Teil B",
+        "14 Tage",
+        "Schalter aus",
+        "Modell taugt.",
+        "τ",
+        "`C`",
+        "mindestens 95 %",
+        "±0,5 K",
+        "±3 K",
+        "Schrittregel",
+        "binnen 6 min",
+        "nicht negativ",
+        "Sichtprüfung",
+        "nichts Unangenehmes",
+        "GET /api/learning/thermal",
+        "GET /api/plan",
+        "`thermal_battery`",
+        "`thermal_plan`",
+        "abnahme-phase-6a.md",
+        "Nichts geht von selbst live",
+        "Unterschrift",
+    ):
+        assert criterion in text, criterion
+    assert "abnahme-phase-5c.md" in Path("docs/verification/README.md").read_text("utf-8")
+    handover = Path("docs/uebergabe.md").read_text("utf-8")
+    assert "abnahme-phase-5c.md" in handover and "claude/project-thread-x8izsc" in handover
+    # Spec: „Stand Plan 5c“ in Phase 5 und Phase 6 (18) und ein Hinweis in 9.3
+    spec = Path("docs/superpowers/specs/2026-10-08-bindaems-design.md").read_text("utf-8")
+    for heading in ("\n### 9.3 ", "\n### Phase 5 – ", "\n### Phase 6 – "):
+        _, found, rest = spec.partition(heading)
+        assert found, heading
+        body = re.split(r"\n###? ", rest, maxsplit=1)[0]
+        assert "**Stand Plan 5c**" in body, heading

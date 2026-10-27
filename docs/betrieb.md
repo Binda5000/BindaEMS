@@ -229,8 +229,9 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5c (Vorheizen und Vorkühlen):** Plan 5c ändert core und app; beide rollen
   gemeinsam aus, mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Migration `0015` legt die
   Tabelle `thermal_model` an; **sichere die Datenbank vorher** (`/backup/vor-plan-5c.sqlite3`). Der
-  Schalter „Vorheizen und Vorkühlen“ ist ab Werk aus. Die Beschreibung steht im Abschnitt
-  „Vorheizen und Vorkühlen (Phase 5c)“.
+  Schalter „Vorheizen und Vorkühlen“ ist ab Werk aus. Ausgerollt wird frühestens nach den Abnahmen 5a
+  und 5b (22.11.2026). Die Beschreibung und die Schritte stehen im Abschnitt „Vorheizen und Vorkühlen
+  (Phase 5c)“, „Vorheizen und Vorkühlen ausrollen (Plan 5c)“.
 - **Rollback auf einen Stand vor Plan 5c:** Die Migration `0015` der app ist beim Start gelaufen; eine
   ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Core und app gehen gemeinsam
   zurück, auf dasselbe Tag, mit **Regelbetrieb aus** (System → „Bedienung“) vor dem Wechsel und erst
@@ -1408,14 +1409,14 @@ gilt für diesen Browser.
 |---|---|
 | Übersicht | von oben nach unten: die Hinweis-Leiste (ohne Hinweise unsichtbar; eine Zeile, eine lange Vorschau endet mit „…“; „Anzeigen“ klappt die Liste auf, dann entfällt die Vorschau), die Kachelreihe mit dem Hausakku (doppelt breit: SOC, kWh, Reserve, Netzladen, Planausblick „Plan: sinkt bis 25 % um 06:00“, nach Mitternacht „morgen um 06:00“), PV, Haus und Netz (je mit 2-h-Linie und Tageswert) und dem Strompreis (jetzt, nächste 3 h, günstigste Viertelstunde), die Karte „Woher kommt der Strom – wohin geht er?“ (zwei Balken, darunter die Verbraucher im Haus; ist ein Zweig unbekannt, steht er als „PV –“ in der Liste und die Summe der Seite als „–“) neben „Autos“ (je Auto „{Wallbox} · lädt …“, „{Wallbox} · angesteckt“, „nicht angesteckt“ oder „Stand unbekannt“, wenn der Bericht des core fehlt oder der Steckerstatus unbekannt ist), das Diagramm „Preise, PV und Akku heute/morgen“ (Preis je Viertelstunde im Tooltip, Akku-SOC und Akku-Plan) und „Warum?“ (unten). Das Alter steht als „vor 45 s“, „vor 12 min“, „vor 3 h“ oder „vor 2 Tagen“. Scheitert die Abfrage des Plans, des Verlaufs oder der Tageswerte, fehlt nur ihr Teil (Planzeile, Linie, Tageswert); das gilt bis zur ersten erfolgreichen Antwort, danach bleiben bei einem gescheiterten Neuabruf die letzten Werte stehen |
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; in „Geplant“ mit Ziel-SOC, Abfahrt und „Fertig um“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
-| Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
-| Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (Profil und Modell) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Merkmale“ (Abschnitt „Lastmodell (Phase 5a)“) |
+| Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz, seit Plan 5c mit Klimaanlage die Karte „Vorheizen und Vorkühlen“; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
+| Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (Profil und Modell) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Merkmale“ (Abschnitt „Lastmodell (Phase 5a)“), seit Plan 5c mit Klimaanlage die Karte „Wärmemodell“ (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
 | Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Einspeiseerlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
-| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Lastmodell (Schalter und Sensoren aus Home Assistant), Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
+| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Lastmodell (Schalter und Sensoren aus Home Assistant), Vorheizen und Vorkühlen (seit Plan 5c), Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
 | Protokoll | nur Admins: Änderungsprotokoll nach Bereich |
 | Konto | eigenes Passwort, Zwei-Faktor-Anmeldung, Abmelden |
@@ -4778,6 +4779,52 @@ das Komfortband liegt immer innerhalb von `max_offset_k`.
   (`/backup/vor-plan-5c.sqlite3`, wie vor `0013` und `0014`); eine ältere app startet mit der
   Migration nicht (Abschnitt 4, „Rollback auf einen Stand vor Plan 5c“).
 
+### Wie der Plan verschiebt
+
+Nach dem Plan für Akku und Autos (Optimierer oder Ersatzplan) rechnet die app einen **zweiten, kleinen
+Schritt** auf den fertigen Slots (ein lineares Modell, gelöst mit HiGHS, Zeitlimit 5 s). Der Optimierer
+bleibt unverändert; so gilt die Rangfolge Akku → Autos → Klimaanlage → Einspeisung schon durch den
+Aufbau. Das Haus ist der Speicher: Der Plan darf es im Komfortband vorheizen (beim Kühlen vorkühlen)
+und absenken (wärmer werden lassen), je Viertelstunde höchstens eine Stufe von 0,5 K weiter weg vom
+Sollwert, und am Ende des Plans steht es nicht unter dem Sollwert ohne Versatz (beim Kühlen nicht
+darüber).
+
+- **Mehrverbrauch** kommt zuerst aus der geplanten Einspeisung (er kostet den Einspeisepreis, ohne
+  Einspeisepreis nichts), dann aus dem Netz, aber **nie in einem Slot, in dem der Akku das Haus
+  deckt** (Entladung über 50 W; kein Vorheizen aus dem Akku) und nur bis zum Budget der Spitze. Mehr
+  als die gelernte Höchstleistung der Klimaanlage plant er nicht.
+- **Minderverbrauch** spart Netzbezug, in einem Slot mit Entladung die Akkuenergie zum Restwert des
+  Akkus und in einem Slot mit Einspeisung nur den Einspeisepreis.
+- **Nur, wo die Anlage ohnehin läuft:** Verschoben wird nur in Viertelstunden mit einem Laufanteil
+  von mindestens 0,8 laut Profil. Die Grundleistung dort kommt aus dem Modell, dem Sollwert des
+  Profils, der Außentemperatur der Prognose und der PV des Slots, mal dem Laufanteil. Fehlt ein Wert,
+  wird der Slot nicht verschoben.
+- **Verschieben, nicht am Komfort sparen:** Die Verschiebung braucht über den Plan nie weniger Strom
+  als der schlichte Weg zurück zum Sollwert. Weicht das Haus beim Planen schon ab (Ist minus Soll ohne
+  Versatz aus Health), ist dieser Rückweg die **Grundlinie**; ohne Abweichung braucht sie nichts.
+- **Ersparnis** (`thermal.saving_ct`): Kosten der Grundlinie minus Kosten der Verschiebung, beide zu
+  echten Preisen. Die Marge (`margin_ct`) ist nur eine Hürde für Netzstrom beim Planen, kein Geld; sie
+  zählt in der Ersparnis nicht. Spart der Plan weniger als **2 ct**, unterbleibt die Verschiebung
+  (`not_worth`, „lohnt nicht“). Die Ersparnis ist nie negativ. `import_w`, `export_w` und `cost_ct`
+  der Slots bleiben die des ersten Schritts.
+- **Prüfung:** Plant die Rechnung einen Versatz außerhalb des Bands, gilt sie nicht (Grund `solver`,
+  im Log „Verschiebung der Klimaanlage verworfen, weil sie unplausibel ist“); wirft sie, gilt der Plan
+  ohne sie (im Log „Vorheizen und Vorkühlen nicht berechnet“). Die Verschiebung verhindert nie einen
+  Plan; auch ein Ersatzplan bekommt sie.
+- **An den core** geht die Verschiebung nur mit Schalter an, einem tauglichen Modell der laufenden
+  Betriebsart und der Betriebsart Heizen oder Kühlen (`thermal.active`). Jeder Slot der Absicht trägt
+  dann `thermal_steps` (Stufen, positiv mehr Leistung), `thermal_grid_w` (der dafür geplante
+  Netzbezug) und `thermal_mode` (die Betriebsart des Plans). Die app prüft den Schalter beim Senden:
+  Schaltest du ihn aus, geht gleich eine Absicht ohne Planwert hinaus. Der core folgt dem Planwert nur,
+  wenn `thermal_mode` seiner Betriebsart entspricht, und nur für das erste Gerät der Art `coe_offset`;
+  endet der Planwert, gehen die geplanten Stufen im selben Zyklus auf 0 (Abschnitt „Klimaanlage
+  (Phase 6a)“, „Planwert“).
+- **Der Ist-Wert** der Klimaanlage (UVR A9) ist beim Heizen die niedrigste, beim Kühlen die höchste
+  Raumtemperatur. Das Komfortband gilt also für den ungünstigsten Raum; die anderen Räume liegen beim
+  Vorheizen ähnlich darüber. Die einzelnen Räume nutzt das Modell nicht.
+- **Das Lastmodell** (Phase 5a) lernt aus Tagen mit Verschiebung mit. Das ist hingenommen, weil die
+  Verschiebung über den Tag fast energieneutral ist.
+
 ### Einstellungen (`learning.thermal`)
 
 Der Abschnitt „Vorheizen und Vorkühlen“ der **Einstellungen** (Rolle „Admin“, wie alle Einstellungen,
@@ -4800,7 +4847,7 @@ Abschnitt laden mit den Standardwerten.
 - **Das Band ist nie weiter als `max_offset_k`:** Je Richtung gilt der kleinere Wert aus der
   Einstellung und `max_offset_k` der Klimaanlage in der `config.yaml`, auf ein Vielfaches von 0,5 K
   abgerundet. Die harte Grenze von ±3 K bleibt in der Safety-Schicht.
-- **Wirkung:** Jede Änderung des Abschnitts löst einen neuen Plan aus (Anlass „Einstellungen“). Der
+- **Wirkung:** Jede Änderung des Abschnitts löst einen neuen Plan aus (Anlass „Einstellungen geändert“). Der
   Schalter wirkt auf den Plan, den die app dem core übergibt; das Verhalten des core steht im
   Abschnitt „Klimaanlage (Phase 6a)“, „Planwert“.
 
@@ -4846,8 +4893,9 @@ Namen (`label`) steht er statt „Klima“ vorn.
   ohne Klimaanlage mit 404 wie oben.
 - `GET /api/plan` (ab „Lesen“) nennt seit Plan 5c zusätzlich: je Slot `thermal_w` (Mehr- oder
   Minderverbrauch der Klimaanlage in W, negativ für weniger), `thermal_grid_w` (der Teil aus dem
-  Netz, in W) und `thermal_steps` (der Versatz in Stufen zu 0,5 K am Ende des Slots; `null` ohne
-  Verschiebung), und im Plan `thermal`: `null` ohne Klimaanlage der Art `coe_offset`, sonst
+  Netz, in W) und `thermal_steps` (der Versatz in Stufen zu 0,5 K am Ende des Slots, positiv mehr Leistung;
+  `null` nur, wenn der Plan gar keine Verschiebung hat, also `reason` nicht `ok` ist; mit `reason`
+  `ok` tragen Slots ohne Versatz `0`), und im Plan `thermal`: `null` ohne Klimaanlage der Art `coe_offset`, sonst
   `device`, `mode` (die Betriebsart beim Planen: `heizen`, `kuehlen`, `lueften`, `aus` oder
   `unbekannt`), `active`, `saving_ct` (Ersparnis der Verschiebung über den ganzen Plan in ct, nie
   negativ), `model_computed_at` (Stand des Modells der Betriebsart, `null` ohne) und `reason`.
@@ -4864,6 +4912,100 @@ Namen (`label`) steht er statt „Klima“ vorn.
 | `mode` | Die Klimaanlage heizt oder kühlt gerade nicht (oder die Betriebsart ist unbekannt). |
 | `not_worth` | Verschieben spart in diesem Plan weniger als 2 ct. |
 | `solver` | Die Verschiebung ließ sich nicht berechnen oder war unplausibel; der Plan gilt ohne sie. |
+
+### Anzeige im UI
+
+- **Prognosen**, Karte „Wärmemodell“ (nach „Anwesenheit“; ohne Klimaanlage fehlt sie): je Betriebsart
+  der Kopf „Heizen“ bzw. „Kühlen“ mit „· {n} Tage“, die Zeilen „Grundleistung“ („{u} W je K
+  Temperaturdifferenz“), „Zeitkonstante“ („{τ} h“), „Speicher“ („{c} kWh Strom je K“, mit
+  Versatz-Ereignissen „{c} kWh je K (aus {k} Versatz-Ereignissen, Modell {c₀})“), „Auskühl-Phasen“ und
+  „Anpassung“ („R² {r}“), darunter der Zustand („Modell taugt.“ oder der Satz des Grundes, oben) und
+  „Berechnet am {TT.MM. HH:MM}.“. Admins haben die Taste „Jetzt neu berechnen“ („Berechnung läuft …“);
+  ist die Komponente gestört, steht ihr Text oben in der Karte.
+- **Zeitplan**, Karte „Vorheizen und Vorkühlen“ unter „Ablauf“ (nur mit Klimaanlage): eine Zeile zum
+  Stand der Verschiebung, je nach Plan „Vorheizen/Vorkühlen aktiv: spart etwa {x} ct.“ (geht an den
+  core), „Vorschau: Vorheizen/Vorkühlen würde etwa {x} ct sparen.“ (Schalter aus, es lohnt sich),
+  „Vorheizen und Vorkühlen ist aus.“ (`off`), „Kein taugliches Wärmemodell für {Betriebsart}.“
+  (`no_model`), „Die Klimaanlage heizt oder kühlt gerade nicht.“ (`mode`), „Verschieben lohnt sich in
+  diesem Plan nicht.“ (`not_worth`) oder „Die Verschiebung ließ sich nicht berechnen.“ (`solver`).
+  Hat der Plan eine Verschiebung, folgt eine Tabelle mit „Zeit“ und der Spalte „Klima“: Zeiträume
+  gleicher Verschiebung („HH:MM–HH:MM“) mit dem Versatz des Sollwerts („+1,0 K“, „−0,5 K“, „–“ ohne
+  Versatz). Das Vorzeichen ist das des Sollwerts wie beim Sensor „Geplanter Versatz“: beim Heizen
+  +0,5 K je Stufe, beim Kühlen −0,5 K je Stufe. Diagramme und „Ablauf“ bleiben, wie sie sind; die
+  Sätze `KLIMA_MEHR` und `KLIMA_WENIGER` stehen im Ablauf nur, wenn die Verschiebung an den core geht.
+- **System**, Karte „Klimaanlage“: die Zeile „Plan“ zwischen „Wunsch“ und „Leistung“ zeigt den
+  Planwert, dem der core folgt (Health `planned`), als Versatz des Sollwerts: „{k} K bis {HH:MM}“ (das
+  Ende der Slots mit denselben Stufen im Plan, den der core hat, höchstens bis zu dessen Gültigkeit),
+  ohne Slot für jetzt nur „{k} K“, ohne Planwert „kein Planwert“. „Warum?“ nennt beim Folgen den Grund
+  `thermal_plan` („Klimaanlage folgt dem Plan ({k} K)“, Abschnitt „Klimaanlage (Phase 6a)“, „Gründe“).
+- **Einstellungen:** der Abschnitt „Vorheizen und Vorkühlen“ (oben) mit dem Schalter, der Hilfe „Die
+  Klimaanlage nutzt das Haus als Wärmespeicher. Aus: Der Zeitplan zeigt nur eine Vorschau.“ und den
+  Feldern „Heizen: vorheizen bis (K)“, „Heizen: absenken bis (K)“, „Kühlen: vorkühlen bis (K)“,
+  „Kühlen: wärmer werden lassen bis (K)“ und „Mindestvorteil bei Netzbezug (ct/kWh)“; ohne
+  Admin-Rechte eine eigene Karte mit denselben Werten.
+
+### Was Vorheizen und Vorkühlen an dieser Anlage bringt
+
+Erwarte nicht zu viel. **Mit einem großen Hausakku sagt die Verschiebung oft „lohnt nicht“:** Der Plan
+deckt die teuren Stunden schon aus dem Akku, Absenken spart dort nur den Restwert der Akkuenergie, und
+Vorheizen aus dem Netz ist gesperrt, solange der Akku entlädt. Was bleibt, sind vor allem
+Verschiebungen in den **PV-Überschuss** (vorheizen oder vorkühlen mit Strom, der sonst eingespeist
+würde) und in günstige Stunden, in denen der Akku nicht entlädt. Die Ersparnis je Plan ist darum klein
+und an vielen Tagen 0; die Zeile im Zeitplan sagt dann „Vorheizen und Vorkühlen ist aus.“ (Schalter
+aus) bzw. „Verschieben lohnt sich in diesem Plan nicht.“.
+
+**Der Heizteil wirkt voraussichtlich nur diesen Winter.** Ein Heizmodell gibt es ab etwa Ende November
+2026 (14 Tage Heizen seit dem 26.10.2026), ein Kühlmodell erst im Sommer 2027. Mit der Wärmepumpe
+(Phase 6b, 2027) heizt die Klimaanlage kaum noch; 6b bekommt dann ein eigenes Modell mit dem
+Pufferspeicher. Der Kühlteil bleibt. Die Wärme des Ölofens in den Bädern ist nicht gemessen; sie
+verlängert dort das Auskühlen, und ob das Heizmodell trotzdem trägt, zeigen `R²`, τ und die
+Ereignisse auf der Karte „Wärmemodell“.
+
+### Vorheizen und Vorkühlen ausrollen (Plan 5c)
+
+Plan 5c ändert **den core** (`core/control/thermal.py`, `core/control/regulation.py` und das Feld
+`planned` in Health, `core/runtime.py`; die Safety-Schicht bleibt unverändert), `shared`, die app mit
+der Migration `0015` und das UI. Ausgerollt wird **frühestens nach den Abnahmen 5a und 5b am
+22.11.2026** und nicht während des Wechsels von Victron auf live; wann genau, entscheidest du dann.
+Die `config.yaml` bekommt keine neuen Schlüssel. **Nichts geht von selbst live:** Der Schalter
+„Vorheizen und Vorkühlen“ ist ab Werk aus und bleibt beim Ausrollen aus (der Plan zeigt nur die
+Vorschau), und der Aktor `thermal.<name>` bleibt im Dry-Run, bis du ihn nach der Abnahme 6a freigibst;
+im Dry-Run sendet der core weiter 0, auch mit Schalter an.
+
+1. **Regelbetrieb aus:** im UI unter **System** → „Bedienung“ oder in Home Assistant; warte, bis die
+   Übergabe fertig ist. Das muss **vor** dem Stoppen der app geschehen, denn ohne app erreichst du den
+   Schalter nicht. Jeder Slot der Absicht trägt jetzt `thermal_steps`, `thermal_grid_w` und
+   `thermal_mode`, und ein core vor 5c liest sie nicht. Core und app wechseln deshalb gemeinsam.
+2. **Datenbank sichern:** `docker compose stop ems-app`, dann
+   `docker compose run --rm --no-deps --entrypoint sh ems-app -c 'cp /data/bindaems.sqlite3 /backup/vor-plan-5c.sqlite3'`.
+   Die Migration `0015` legt `thermal_model` an; eine ältere app startet danach nicht (Abschnitt 4,
+   „Rollback auf einen Stand vor Plan 5c“).
+3. **core und app gemeinsam ziehen:** `cd /opt/bindaems && docker compose pull && docker compose up -d`
+   (dieselben Image-Tags). Die Migration `0015` läuft beim Start der app von selbst und ändert keine
+   vorhandene Tabelle.
+4. **Regelbetrieb an:** wieder unter **System** → „Bedienung“, erst wenn **System** core und app mit
+   demselben Stand zeigt.
+5. **Prüfen:** Auf **System** → „Komponenten“ meldet die Komponente `thermal_model` „Wärmemodell
+   aktuell“ oder „Noch keine Daten der Klimaanlage“; die app rechnet beim Start, danach jede Nacht um
+   03:50 Uhr. Auf **Prognosen** steht die Karte „Wärmemodell“, auf **Zeitplan** die Karte „Vorheizen
+   und Vorkühlen“ (mit Schalter aus „Vorschau: …“ oder „Vorheizen und Vorkühlen ist aus.“), auf
+   **System** in der Karte „Klimaanlage“ die Zeile „Plan“ mit „kein Planwert“.
+6. **Schalter aus lassen:** Erst Teil A der Abnahme (14 Tage Vorschau), dann entscheidest du über
+   Teil B (Aktor live nach der Abnahme 6a, Schalter an).
+7. **Abnahme:** Checkliste `docs/verification/abnahme-phase-5c.md`.
+
+### Abnahme
+
+Die Abnahme hat zwei Teile (Plan 5c, Entscheidung 16; Checkliste
+`docs/verification/abnahme-phase-5c.md`). **Teil A** (14 Tage, Schalter aus): Das Heizmodell taugt,
+die Vorschau steht in jedem Plan mit Ersparnis und ohne Fehler, und die Karte „Wärmemodell“ zeigt τ und
+`C` plausibel. **Teil B** (14 Tage live, nach deiner Entscheidung: Aktor live, Schalter an): Ist minus
+Soll ohne Versatz liegt in mindestens 95 % der Viertelstunden im Komfortband ±0,5 K; der Versatz bleibt
+in ±3 K und folgt der Schrittregel (wie 6a); jeder positive Planwert, während der Akku entlud, ging
+binnen 6 min eine Stufe zurück; die geschätzte Ersparnis ist nicht negativ; die Räume in Home Assistant
+bleiben beim Vorheizen höchstens 0,5 K über dem eingestellten Band (Sichtprüfung); und du hast nichts
+Unangenehmes gemerkt. Mit Schalter aus steht für „lohnt nicht“ und „ließ sich nicht berechnen“
+gleichermaßen `off`; ob eine Rechnung scheiterte, zeigt in Teil A darum das Log der app.
 
 ## Planung
 
@@ -5964,9 +6106,11 @@ dem Code, an der Anlage zu bestätigen.
 ### Anzeige
 
 - **UI:** Die Karte „Klimaanlage“ unter **System** (Zeilen: Betriebsart, Läuft, Ist, Soll ohne
-  Versatz, Versatz mit „bestätigt“ oder dem Echo, Wunsch in Stufen, Leistung, „Grundlast … W ·
-  freigebbar … W“, Letzter Empfang, Grund). „Warum?“ nennt die Gründe oben.
-- **Home Assistant** (Abschnitt 7): je Gerät vier Sensoren am Gerät „BindaEMS“.
+  Versatz, Versatz mit „bestätigt“ oder dem Echo, Wunsch in Stufen, Plan, Leistung, „Grundlast … W ·
+  freigebbar … W“, Letzter Empfang, Grund). Die Zeile „Plan“ (seit Plan 5c) nennt den Planwert für
+  Vorheizen und Vorkühlen (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“, „Anzeige im UI“). „Warum?“ nennt die Gründe oben.
+- **Home Assistant** (Abschnitt 7): je Gerät fünf Sensoren am Gerät „BindaEMS“ (Versatz,
+  Betriebsart, Leistung, Wunsch und seit Plan 5c „Geplanter Versatz“).
 - **InfluxDB und Grafana:** Messung `thermal` (Tag `id`) mit `actual_c`, `setpoint_c`, `offset_k`
   (das Echo) und `offset_sent_k`, die Leistung in `power` mit `source=thermal`; das Panel
   „Klimaanlage“ im Dashboard (Abschnitt 3, „Grafana“). Der Wunsch steht im Entscheidungslog.

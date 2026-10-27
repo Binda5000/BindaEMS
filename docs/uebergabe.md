@@ -120,7 +120,24 @@ Abfahrt an einem Datum, `departure_on`), `shared` und die Datenbank der app (Mig
 app rollen gemeinsam aus, mit ausgeschaltetem Regelbetrieb, **zusammen mit 3d, 4b, 5a und 6a und damit
 nach der Abnahme der Phase 3**. Nichts geht von selbst live: Die Automatik ist aus, bis du sie
 einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die Safety-Schicht nie.
-Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a); der Plan `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` ist seit dem 27.10.2026 freigegeben und in Umsetzung.
+
+**Plan 5c (Vorheizen und Vorkühlen, der dritte Teil der Phase 5) ist umgesetzt und je Task geprüft**
+(`docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md`, 11 Tasks, Task 1 entfällt,
+freigegeben vom Betreiber am 27.10.2026 mit allen 17 Entscheidungen: „Freigeben, Task 1 vorziehen“):
+auf dem Branch `claude/project-thread-x8izsc` (auf dem Stand von `main` mit Übersicht B), **noch nicht
+auf `main`** (Gesamtreview und Zustimmung des Betreibers stehen aus) und nicht ausgerollt. Die app lernt
+je Betriebsart ein Wärmemodell des Hauses (Grundleistung, Zeitkonstante, Speicher je K; nachts um
+03:50 Uhr, Tabelle `thermal_model`, Migration `0015`), ein zweiter Planungsschritt nach Akku und Autos
+verschiebt den Verbrauch der Klimaanlage im Komfortband in günstige oder PV-reiche Stunden, und der core
+folgt dem Planwert mit den Regeln aus 6a und dem Akku-Wächter. 5c ändert core (`core/control/thermal.py`,
+`core/control/regulation.py`, das Health-Feld `planned` in `core/runtime.py`; die Safety-Schicht bleibt
+gleich), `shared`, app, UI und HA; core und app rollen gemeinsam aus, mit ausgeschaltetem Regelbetrieb,
+**frühestens nach den Abnahmen 5a und 5b am 22.11.2026**. Nichts geht von selbst live: Der Schalter
+„Vorheizen und Vorkühlen“ ist ab Werk aus (der Plan zeigt nur eine Vorschau), und der Aktor der
+Klimaanlage bleibt im Dry-Run bis zur Freigabe des Betreibers. Mit dem großen Hausakku wird die
+Verschiebung oft „lohnt nicht“ sagen (der Akku deckt die teuren Stunden, Vorheizen aus dem Netz ist
+gesperrt, solange er entlädt); es bleiben vor allem Verschiebungen in den PV-Überschuss. Der Heizteil
+wirkt voraussichtlich nur diesen Winter (die Wärmepumpe kommt 2027, 6b).
 
 **Die Welle „Aufgeschobene Kleinigkeiten“ (56 Punkte K1 bis K56, freigegeben vom Betreiber am 21.10.2026 um 10:39) ist
 umgesetzt** (`docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`, 13 Tasks, subagent-driven, Branch
@@ -882,6 +899,9 @@ Zeile „Übersicht“.
   - an der Anlage: Plan 5b (core und app gemeinsam, Regelbetrieb aus) mit 3d, 4b, 5a und 6a ausrollen
     (Punkt 11 unter „Offen an der Anlage“); danach die Abnahme 5b (28 Tage,
     `docs/verification/abnahme-phase-5b.md`)
+  - an der Anlage: Plan 5c (core und app gemeinsam, Regelbetrieb aus) frühestens nach den Abnahmen 5a und
+    5b am 22.11.2026 ausrollen (Punkt 13 unter „Offen an der Anlage“); danach die Abnahme 5c Teil A (14 Tage
+    Vorschau) und Teil B (14 Tage live, `docs/verification/abnahme-phase-5c.md`)
   - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
     der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
   - an der Anlage: Plan 6a mit 4b im gemeinsamen Fenster nach dem 25.10.2026 ausrollen (Punkt 8 unter „Offen an der
@@ -996,14 +1016,15 @@ Zeile „Übersicht“.
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
 | `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty`, seit dem 21.10.2026 auf `main` (Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md` | Welle „Aufgeschobene Kleinigkeiten“, 13 Tasks, 56 Punkte K1 bis K56 vor dem gemeinsamen Ausrollen; vom Betreiber am 21.10.2026 freigegeben |
-| `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` | Plan 5c, 11 Tasks (Task 1 entfällt: die Betriebsart steht schon in InfluxDB `status`), 17 Entscheidungen, **freigegeben vom Betreiber am 27.10.2026**: Wärmemodell je Betriebsart (Grundleistung, Zeitkonstante, Speicher je K), zweiter Planungsschritt nach Akku und Autos mit Vorschau, Planwert an den core, Schalter „Vorheizen und Vorkühlen“ ab Werk aus |
+| `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` | Plan 5c, 11 Tasks (Task 1 entfällt: die Betriebsart steht schon in InfluxDB `status`), 17 Entscheidungen, freigegeben vom Betreiber am 27.10.2026; **umgesetzt auf dem Branch `claude/project-thread-x8izsc`, noch nicht auf `main`, nicht ausgerollt**: Wärmemodell je Betriebsart (Grundleistung, Zeitkonstante, Speicher je K), zweiter Planungsschritt nach Akku und Autos mit Vorschau, Planwert an den core, Schalter „Vorheizen und Vorkühlen“ ab Werk aus |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
 | `docs/verification/abnahme-phase-6a.md` | Checkliste für die Abnahme 6a: Empfangstabelle, Timeout, 7 Tage Dry-Run, im Live-Betrieb Bereich, Schrittregel, Rückkehr auf 0 und Echo; Abfragen auf Entscheidungslog und Influx |
 | `docs/verification/abnahme-phase-5a.md` | Checkliste für die Abnahme 5a (Lastmodell): 28 Tage ab dem Ausrollen, Prognosegüte (Modell mindestens 10 % besser oder Profil automatisch aktiv), Verfahren und Grund in der Karte „Lastprognose“, Registry (jede Nacht eine Version), `load-model` ohne Fehler, Rückfall bei fehlender Modelldatei |
 | `docs/verification/abnahme-phase-5b.md` | Checkliste für die Abnahme 5b (Fahrverhalten): 28 Tage ab dem Ausrollen, Vorschläge mit Konfidenz auf „Prognosen“, „Laden“ und in HA, Trefferquote je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch die Automatik, erwartetes Auto im Zeitplan und beim Anstecken ersetzt |
-| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a, 5b und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
+| `docs/verification/abnahme-phase-5c.md` | Checkliste für die Abnahme 5c (Vorheizen und Vorkühlen): Teil A 14 Tage Vorschau mit Schalter aus (Heizmodell taugt, Vorschau in jedem Plan ohne Fehler, τ und `C` plausibel), Teil B 14 Tage live (95 % der Viertelstunden im Komfortband ±0,5 K, ±3 K und Schrittregel wie 6a, Akku-Wächter binnen 6 min, Ersparnis nicht negativ, Räume per Sichtprüfung, nichts Unangenehmes) |
+| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a, 5b, 5c und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
 ## Aufbau
@@ -1747,6 +1768,25 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
       Diagramm mit Akku-SOC und Akku-Plan; am Handy (360 bis 390 px) ohne waagrechtes Scrollen und mit einem Blick auf
       „Warum?“ (siehe die aufgeschobenen Kleinigkeiten am Ende der Datei).
+  13. **Vorheizen und Vorkühlen (Plan 5c) ausrollen**, frühestens nach den Abnahmen 5a und 5b am
+      22.11.2026 und nicht während des Wechsels von Victron auf live; wann, entscheidet der Betreiber (Plan
+      5c, Entscheidung 15), und erst nach dem Gesamtreview und seiner Zustimmung zur Integration auf `main`.
+      Anders als ein Pull nur von `ems-app` ändert 5c den core (der Planwert in der Absicht), core und app
+      rollen darum gemeinsam aus, **mit ausgeschaltetem Regelbetrieb**. Die Schritte stehen im
+      Betriebshandbuch, „Vorheizen und Vorkühlen (Phase 5c)“, „Vorheizen und Vorkühlen ausrollen
+      (Plan 5c)“, und in `docs/verification/abnahme-phase-5c.md`:
+      1. **Regelbetrieb aus**, vor dem Stoppen der app.
+      2. **Datenbank sichern:** `docker compose stop ems-app`, dann Kopie nach `/backup/vor-plan-5c.sqlite3`;
+         die Migration `0015` legt `thermal_model` an, eine ältere app startet danach nicht
+         (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5c“).
+      3. **core und app gemeinsam ziehen** (`cd /opt/bindaems && docker compose pull && docker compose up -d`),
+         dann **Regelbetrieb an**, sobald **System** beide mit demselben Stand zeigt.
+      4. **Prüfen:** Komponente `thermal_model`, Karte „Wärmemodell“ auf **Prognosen**, Karte „Vorheizen und
+         Vorkühlen“ auf **Zeitplan**. Der Schalter bleibt aus, der Aktor der Klimaanlage im Dry-Run.
+      5. **Abnahme Teil A:** 14 Tage Vorschau mit Schalter aus, sobald das Heizmodell taugt (14 Tage Heizen
+         seit dem 26.10.2026, also etwa ab Ende November).
+      6. **Abnahme Teil B:** nach Teil A, nach der Abnahme 6a (Aktor live) und nur auf Entscheidung des
+         Betreibers: Schalter an, 14 Tage live.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1925,9 +1965,12 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      für PV-Autos im MILP (Spec 7.6, Stand Plan 5b). Ändert auch den core (eine Zeile). Es folgt das
      Ausrollen gemeinsam mit 3d, 4b, 5a und 6a (Punkt 11 unter „Offen an der Anlage“) und die Abnahme über
      28 Tage; „Vorschläge erscheinen mit Konfidenz“ gehört zu ihr.
-   - **5c Vorheizen und Vorkühlen (später):** ein Wärmemodell des Hauses aus den Daten der Klimaanlage und
-     die Klimaanlage als flexible Last im Planer. Es braucht Wochen mit Daten aus 6a, also erst nach dem
-     Ausrollen von 6a; ob 5c allein oder mit 6b kommt, entscheidet der Betreiber dann.
+   - **5c Vorheizen und Vorkühlen:** umgesetzt und je Task geprüft auf dem Branch
+     `claude/project-thread-x8izsc`, **noch nicht auf `main`** (Gesamtreview und Zustimmung des Betreibers
+     stehen aus), nicht ausgerollt (Kurzfassung). Wärmemodell je Betriebsart, zweiter Planungsschritt mit
+     Vorschau, Planwert an den core, Schalter ab Werk aus. Es folgt das Ausrollen frühestens nach den
+     Abnahmen 5a und 5b am 22.11.2026 (Punkt 13 unter „Offen an der Anlage“), dann die Abnahme Teil A
+     (14 Tage Vorschau) und nach der Abnahme 6a und der Entscheidung des Betreibers Teil B (14 Tage live).
 8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt, geprüft und seit 27.10.2026 auf
    `main` (`8ae335e`; Kurzfassung oben, „Plan Übersicht B“). Es folgt das Ausrollen von `ems-app` (Punkt 12 unter
    „Offen an der Anlage“); wann, entscheidet der Betreiber. Die aufgeschobenen Kleinigkeiten stehen am Ende dieser Datei.

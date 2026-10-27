@@ -339,6 +339,19 @@ Ladung; und ein erwartetes Auto steht im Zeitplan und wird beim Anstecken durch 
 einmal an der Anlage beobachtet. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage
 aus und checkst sie hier ein.
 
+## Abnahme Phase 5c
+
+Die Checkliste für die Abnahme von Vorheizen und Vorkühlen (Phase 5c, Spec 18) steht in
+[`abnahme-phase-5c.md`](abnahme-phase-5c.md). **Teil A** (14 Tage, Schalter aus): Das Heizmodell
+taugt (`GET /api/learning/thermal`, Karte „Wärmemodell“), die Vorschau steht in jedem Plan mit
+Ersparnis und ohne Fehler, und τ und `C` sind plausibel. **Teil B** (14 Tage live, nach der Abnahme 6a
+und deiner Entscheidung: Aktor live, Schalter an): Ist minus Soll ohne Versatz liegt in mindestens 95 %
+der Viertelstunden im Komfortband ±0,5 K, der Versatz bleibt in ±3 K und folgt der Schrittregel, jeder
+positive Planwert geht bei entladendem Akku binnen 6 min eine Stufe zurück, die geschätzte Ersparnis ist
+nicht negativ, kein Raum liegt beim Vorheizen mehr als 0,5 K über dem Band (Sichtprüfung), und dir fiel
+nichts Unangenehmes auf. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und
+checkst sie hier ein.
+
 ## Abnahme Phase 6a
 
 Die Checkliste für die Abnahme der Phase 6a (Klimaanlage, Spec 18) steht in
