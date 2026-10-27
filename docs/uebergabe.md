@@ -139,9 +139,9 @@ wann, entscheidet der Betreiber (Entscheidung 7);** Vorschlag: mit dem nächsten
 Fenster (nach dem 25.10.2026), nicht in dieses Fenster gedrängt. Der Gesamtreview ist gemacht, und die Fix-Welle danach ist umgesetzt. Betrieb: `docs/betrieb.md`,
 Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
 
-**Plan Übersicht B (Kennzahlen-Leiste) ist umgesetzt und je Task geprüft; der Gesamtreview des Branches steht noch aus**
+**Plan Übersicht B (Kennzahlen-Leiste) ist umgesetzt und je Task geprüft; Gesamtreview und Fix-Welle erledigt; wartet auf Zustimmung zu `main`**
 (`docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md`, 6 Tasks, freigegeben vom Betreiber am 27.10.2026 mit allen 10 Entscheidungen: „Passt bitte machen“, nach Variante B
-der drei Entwürfe): Branch `claude/project-thread-81quvk` (Commits `5ad778d` bis `5df4b20` und die Doku), **nicht auf `main`,
+der drei Entwürfe): Branch `claude/project-thread-81quvk` (Commits `5ad778d` bis `5df4b20` und die Doku, die Fix-Welle nach dem Gesamtreview `ce4e650` bis `525966b`), **nicht auf `main`,
 nicht ausgerollt**. Die Übersicht (`ui/src/routes/+page.svelte`) hat jetzt oben die Hinweis-Leiste (aufklappbar), dann
 die Kachelreihe mit dem Hausakku doppelt breit (SOC, kWh, Reserve, Netzladen, Ausblick aus dem Plan), PV, Haus und Netz mit
 2-h-Linie und Tageswert und dem Strompreis, darunter „Woher kommt der Strom – wohin geht er?“ (zwei Balken) neben „Autos“,
@@ -149,8 +149,12 @@ das Diagramm „Preise, PV und Akku heute/morgen“ mit Akku-SOC und Akku-Plan u
 heißt überall „vor 45 s“, „vor 12 min“, „vor 3 h“, „vor 2 Tagen“ (auch auf „System“). Entfallen sind `EnergyFlow`, `SocList`,
 `ConsumerSummary`, `PriceNow` und `Notices` (und `flowBranches`). Plan Übersicht B ändert nur `ui/` und die Doku; core, app,
 `shared`, Migrationen, HA und API-Antworten bleiben gleich (neue Abfragen des UI: Plan alle 60 s, Verlauf ab 0 Uhr alle 120 s,
-Tageswerte alle 300 s, über vorhandene Endpunkte). Geprüft zuletzt (Task 5): `pnpm check` und `pnpm lint` sauber, 1025
-Vitest-Tests in 104 Dateien, E2E 44 grün. **Ausgerollt wird nur `ems-app`, ohne Migration, und wann, entscheidet der
+Tageswerte alle 300 s, über vorhandene Endpunkte). Die Fix-Welle nach dem Gesamtreview: „jetzt am günstigsten“ vergleicht mit
+dem Preis jetzt (`next_3h` beginnt erst mit der nächsten Viertelstunde), Autos zeigen „Stand unbekannt“ statt „nicht
+angesteckt“, wenn der Bericht des core oder der Steckerstatus fehlt, „Woher – Wohin“ zeigt bei einem unbekannten Zweig
+„–“ statt einer Teilsumme, die Planzeile sagt „morgen“, die Tageswerte fehlen bei `coverage` 0, und die Hinweis-Leiste
+bleibt bei 390 px eine Zeile. Geprüft zuletzt (Fix-Welle): `pnpm check` und `pnpm lint` sauber, 1039
+Vitest-Tests in 104 Dateien, Build sauber, E2E 44 grün. **Ausgerollt wird nur `ems-app`, ohne Migration, und wann, entscheidet der
 Betreiber beim Abschluss** (so steht es in der Einordnung des Plans); Vorschlag: mit dem nächsten
 Pull von `ems-app`, auch zusammen mit Plan 4c, falls der noch aussteht. Betrieb: `docs/betrieb.md`, Abschnitt 12, „Seiten“,
 Zeile „Übersicht“.
@@ -1736,8 +1740,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          Trefferquoten je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch
          die Automatik, ein erwartetes Auto im Zeitplan, beim Anstecken ersetzt (einmal beobachtet).
   12. **Übersicht neu (Plan Übersicht B) ausrollen:** nur `ems-app` (das UI liegt im Image der app), **keine Migration, keine
-      Änderung an core, `config.yaml` oder Home Assistant**. Wann, entscheidet der Betreiber beim Abschluss des Plans; erst nach dem Gesamtreview und der
-      Zustimmung zur Integration auf `main`. Vorschlag: mit dem nächsten Pull von `ems-app`
+      Änderung an core, `config.yaml` oder Home Assistant**. Wann, entscheidet der Betreiber beim Abschluss des Plans; Gesamtreview und Fix-Welle erledigt; wartet auf Zustimmung zu
+      `main`, erst danach ausrollen. Vorschlag: mit dem nächsten Pull von `ems-app`
       (`cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`; der Regelbetrieb
       braucht dafür nicht aus). Danach auf der Übersicht ansehen: die Hinweis-Leiste (ohne Hinweise unsichtbar), den Akku
       mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
@@ -1925,8 +1929,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      die Klimaanlage als flexible Last im Planer. Es braucht Wochen mit Daten aus 6a, also erst nach dem
      Ausrollen von 6a; ob 5c allein oder mit 6b kommt, entscheidet der Betreiber dann.
 8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt und je Task geprüft, auf dem Branch
-   `claude/project-thread-81quvk`, nicht auf `main` (Kurzfassung oben, „Plan Übersicht B“). Es folgen der Gesamtreview des
-   Branches, die Integration auf `main` (nur mit Zustimmung des Betreibers) und das Ausrollen von `ems-app` (Punkt 12 unter
+   `claude/project-thread-81quvk`, nicht auf `main` (Kurzfassung oben, „Plan Übersicht B“). Gesamtreview und Fix-Welle
+   erledigt; wartet auf Zustimmung zu `main`. Es folgen die Integration auf `main` (nur mit Zustimmung des Betreibers) und das Ausrollen von `ems-app` (Punkt 12 unter
    „Offen an der Anlage“); wann, entscheidet der Betreiber. Die aufgeschobenen Kleinigkeiten stehen am Ende dieser Datei.
 
 ### Nächster Schritt: die Anlage
@@ -3616,14 +3620,16 @@ Punkte behoben (23.10.2026); der Rest bleibt offen.
   `ems-app` ausgerollt ist.
 
 Aufgeschobene Kleinigkeiten aus Plan Übersicht B (aus den Reviews der Tasks 1 bis 5; keine davon gefährdet die Anlage, denn
-der Plan ändert nur die Anzeige der Übersicht). Der Gesamtreview des Branches kann einzelne noch beheben; was dann
-erledigt ist, wird hier durchgestrichen.
+der Plan ändert nur die Anzeige der Übersicht). Gesamtreview und Fix-Welle erledigt; wartet auf Zustimmung zu `main`. Was
+die Fix-Welle behoben hat, ist durchgestrichen.
 
 - **Task 1 (`battery.ts`):** `planOutlook` nimmt chronologisch sortierte Slots an (die API liefert sie sortiert); es gibt keine
   Tests für einen fallenden Lauf mit Wackler und für „steigt, dann zurück“.
 - **Task 2 (Modelle):**
-  - `vehicleCards` zeigt bei `health` gleich `null` „nicht angesteckt“ statt „unbekannt“.
-  - `balance` gibt bei teilweise unbekannten Quellen (etwa PV `null`) eine Teilsumme als Summe aus.
+  - ~~`vehicleCards` zeigt bei `health` gleich `null` „nicht angesteckt“ statt „unbekannt“.~~ (erledigt 27.10.2026,
+    Fix-Welle: „Stand unbekannt“)
+  - ~~`balance` gibt bei teilweise unbekannten Quellen (etwa PV `null`) eine Teilsumme als Summe aus.~~ (erledigt
+    27.10.2026, Fix-Welle: Summe „–“, Zweig „PV –“)
   - `sparkPoints` hat keine Obergrenze bei „jetzt“.
   - Ein eigenes Auto zeigt „lädt 5 W“, wenn `charging` wahr ist, die Leistung aber im Leerlauf liegt; der Pfad des Gastes
     nutzt `IDLE_W`, der des eigenen Autos nicht.
@@ -3645,3 +3651,8 @@ erledigt ist, wird hier durchgestrichen.
     dazu.
   - „Warum?“ bei 390 px: Die 44-px-Verweise reißen die erste Zeile jeder Entscheidung auseinander, der Text darunter wirkt
     gesperrt (lesbar, nicht geändert).
+  - Die Mini-Linien sind zwischen 0 und 2 Uhr kürzer als 2 h, weil der Verlauf erst ab Tagesbeginn abgefragt wird.
+  - Abfragelast: der Verlauf des ganzen Tages (4 Reihen) alle 120 s. Vorschlag: für die Mini-Linien nur die letzten 2 h alle
+    120 s, den Akku-SOC des Tages fürs Diagramm alle 5 bis 10 min.
+- **Task 6 (Doku):** ~~Spec und `betrieb.md` erwähnen nicht, dass die Vorschau der Hinweis-Leiste aufgeklappt entfällt.~~
+  (erledigt 27.10.2026, Fix-Welle)
