@@ -139,10 +139,10 @@ wann, entscheidet der Betreiber (Entscheidung 7);** Vorschlag: mit dem nächsten
 Fenster (nach dem 25.10.2026), nicht in dieses Fenster gedrängt. Der Gesamtreview ist gemacht, und die Fix-Welle danach ist umgesetzt. Betrieb: `docs/betrieb.md`,
 Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
 
-**Plan Übersicht B (Kennzahlen-Leiste) ist umgesetzt und je Task geprüft; Gesamtreview und Fix-Welle erledigt; wartet auf Zustimmung zu `main`**
+**Plan Übersicht B (Kennzahlen-Leiste) ist umgesetzt, geprüft und seit 27.10.2026 auf `main` (`8ae335e`, Fast-Forward mit Zustimmung des Betreibers, CI-Lauf 480 grün); an der Anlage noch nicht ausgerollt**
 (`docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md`, 6 Tasks, freigegeben vom Betreiber am 27.10.2026 mit allen 10 Entscheidungen: „Passt bitte machen“, nach Variante B
-der drei Entwürfe): Branch `claude/project-thread-81quvk` (Commits `5ad778d` bis `5df4b20` und die Doku, die Fix-Welle nach dem Gesamtreview `ce4e650` bis `525966b`), **nicht auf `main`,
-nicht ausgerollt**. Die Übersicht (`ui/src/routes/+page.svelte`) hat jetzt oben die Hinweis-Leiste (aufklappbar), dann
+der drei Entwürfe): Branch `claude/project-thread-81quvk` (Commits `5ad778d` bis `5df4b20` und die Doku, die Fix-Welle nach dem Gesamtreview `ce4e650` bis `525966b`), seit 27.10.2026 auf `main`,
+**nicht ausgerollt**. Die Übersicht (`ui/src/routes/+page.svelte`) hat jetzt oben die Hinweis-Leiste (aufklappbar), dann
 die Kachelreihe mit dem Hausakku doppelt breit (SOC, kWh, Reserve, Netzladen, Ausblick aus dem Plan), PV, Haus und Netz mit
 2-h-Linie und Tageswert und dem Strompreis, darunter „Woher kommt der Strom – wohin geht er?“ (zwei Balken) neben „Autos“,
 das Diagramm „Preise, PV und Akku heute/morgen“ mit Akku-SOC und Akku-Plan und „Warum?“ in einer Zeile je Aktor. Das Alter
@@ -989,7 +989,7 @@ Zeile „Übersicht“.
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md` | Plan 4c, 5 Tasks, umgesetzt, seit dem 25.10.2026 auf `main` (nicht ausgerollt): Verlauf je Auto in `GET /api/stats` (`vehicle_buckets`), Auswahl des Autos und Karte „Laden je Auto“ auf „Statistik“, Ladesessions bis 2000 mit Nachladen und CSV; die sieben Entscheidungen des Betreibers vom 23.10.2026 |
-| `docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md` | Plan Übersicht B, 6 Tasks, umgesetzt auf dem Branch `claude/project-thread-81quvk` (nicht auf `main`, nicht ausgerollt): die Übersicht als Kennzahlen-Leiste mit Hausakku, Hinweis-Leiste, „Woher – Wohin“, Autos, Diagramm mit Akku-SOC und -Plan; nur UI und Doku; die zehn Entscheidungen des Betreibers vom 27.10.2026 |
+| `docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md` | Plan Übersicht B, 6 Tasks, auf `main` seit 27.10.2026 (`8ae335e`), nicht ausgerollt: die Übersicht als Kennzahlen-Leiste mit Hausakku, Hinweis-Leiste, „Woher – Wohin“, Autos, Diagramm mit Akku-SOC und -Plan; nur UI und Doku; die zehn Entscheidungen des Betreibers vom 27.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
@@ -1740,8 +1740,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          Trefferquoten je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch
          die Automatik, ein erwartetes Auto im Zeitplan, beim Anstecken ersetzt (einmal beobachtet).
   12. **Übersicht neu (Plan Übersicht B) ausrollen:** nur `ems-app` (das UI liegt im Image der app), **keine Migration, keine
-      Änderung an core, `config.yaml` oder Home Assistant**. Wann, entscheidet der Betreiber beim Abschluss des Plans; Gesamtreview und Fix-Welle erledigt; wartet auf Zustimmung zu
-      `main`, erst danach ausrollen. Vorschlag: mit dem nächsten Pull von `ems-app`
+      Änderung an core, `config.yaml` oder Home Assistant**. Seit 27.10.2026 auf `main` (`8ae335e`); wann ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem nächsten Pull von `ems-app`
       (`cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`; der Regelbetrieb
       braucht dafür nicht aus). Danach auf der Übersicht ansehen: die Hinweis-Leiste (ohne Hinweise unsichtbar), den Akku
       mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
@@ -1928,9 +1927,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    - **5c Vorheizen und Vorkühlen (später):** ein Wärmemodell des Hauses aus den Daten der Klimaanlage und
      die Klimaanlage als flexible Last im Planer. Es braucht Wochen mit Daten aus 6a, also erst nach dem
      Ausrollen von 6a; ob 5c allein oder mit 6b kommt, entscheidet der Betreiber dann.
-8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt und je Task geprüft, auf dem Branch
-   `claude/project-thread-81quvk`, nicht auf `main` (Kurzfassung oben, „Plan Übersicht B“). Gesamtreview und Fix-Welle
-   erledigt; wartet auf Zustimmung zu `main`. Es folgen die Integration auf `main` (nur mit Zustimmung des Betreibers) und das Ausrollen von `ems-app` (Punkt 12 unter
+8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt, geprüft und seit 27.10.2026 auf
+   `main` (`8ae335e`; Kurzfassung oben, „Plan Übersicht B“). Es folgt das Ausrollen von `ems-app` (Punkt 12 unter
    „Offen an der Anlage“); wann, entscheidet der Betreiber. Die aufgeschobenen Kleinigkeiten stehen am Ende dieser Datei.
 
 ### Nächster Schritt: die Anlage
@@ -3620,7 +3618,7 @@ Punkte behoben (23.10.2026); der Rest bleibt offen.
   `ems-app` ausgerollt ist.
 
 Aufgeschobene Kleinigkeiten aus Plan Übersicht B (aus den Reviews der Tasks 1 bis 5; keine davon gefährdet die Anlage, denn
-der Plan ändert nur die Anzeige der Übersicht). Gesamtreview und Fix-Welle erledigt; wartet auf Zustimmung zu `main`. Was
+der Plan ändert nur die Anzeige der Übersicht). Gesamtreview und Fix-Welle erledigt; seit 27.10.2026 auf `main`. Was
 die Fix-Welle behoben hat, ist durchgestrichen.
 
 - **Task 1 (`battery.ts`):** `planOutlook` nimmt chronologisch sortierte Slots an (die API liefert sie sortiert); es gibt keine
