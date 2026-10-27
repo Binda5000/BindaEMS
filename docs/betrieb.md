@@ -226,6 +226,43 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Update mit dem Sofort-Limit:** Der Plan Sofort-Limit ändert core und app; beide rollen
+  **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`).
+  Die Absicht hat ein neues Feld, ein alter core lehnt es ab. Es gibt keine Migration, und die ACL des
+  Mosquitto-Benutzers `bindaems` bleibt unverändert (die Zahlen sind die Plattform `number`, die schon
+  freigegeben ist). Home Assistant bekommt je Fahrzeug die Zahl „Sofort-Höchststrom“ und, mit einer
+  EVCS, „Gast-Sofort-Höchststrom“. Alle Autos laden danach mit „Volle Leistung“, bis du ein Limit
+  wählst. Den Rückweg beschreibt der nächste Punkt.
+- **Rollback auf einen Stand vor dem Sofort-Limit:** Die Absicht des core hat das neue Feld
+  `now_max_a`, und ein älterer core lehnt unbekannte Felder ab (`extra="forbid"`). Das Feld steht in
+  `intent.json` (unter `core.data_dir`, im Volume `core-data` `/data/intent.json`; die Absicht steht
+  dort unter dem Schlüssel `intent`) bei **jedem** Eintrag unter `vehicles` und unter `guest`, auch
+  mit dem Wert `null`: „Volle Leistung“ vor dem Rollback zu wählen reicht also nicht. Ein älterer
+  core liest die Datei sonst nicht, startet ohne Absicht (Regelbetrieb aus) und meldet den Alarm
+  `intent.file`, wie beim Rollback vor Plan 5b (unten). Core und app gehen gemeinsam zurück, auf
+  dasselbe Tag. Schalte vorher den **Regelbetrieb aus** (System → „Bedienung“) und entferne die
+  Schlüssel, bevor du das Tag änderst:
+
+  ```bash
+  cd /opt/bindaems
+  docker compose stop ems-core
+  docker compose run --rm --no-deps --entrypoint python ems-core -c '
+  import json
+  from pathlib import Path
+  path = Path("/data/intent.json")
+  document = json.loads(path.read_text())
+  intent = document["intent"]
+  for entry in [*intent.get("vehicles", {}).values(), intent.get("guest", {})]:
+      entry.pop("now_max_a", None)
+  path.write_text(json.dumps(document))
+  print("now_max_a entfernt")'
+  ```
+
+  Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app), und
+  erst danach den Regelbetrieb wieder einschalten. Gehst du ohne diesen Schritt zurück, setzt du die
+  Absicht danach neu (Bedienung oder `PUT /v1/intent`). Die Datenbank der app ist nicht betroffen
+  (keine Migration). In Home Assistant bleiben die Zahlen „Sofort-Höchststrom“ und
+  „Gast-Sofort-Höchststrom“ als nicht mehr gepflegte Entitäten stehen, bis du sie dort entfernst.
 - **Rollback auf einen Stand vor Plan 5b:** Die Migration `0014` der app ist beim Start gelaufen; eine
   ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Core und app gehen gemeinsam
   zurück, auf dasselbe Tag, mit **Regelbetrieb aus** (System → „Bedienung“) vor dem Wechsel und erst
@@ -1403,6 +1440,16 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Dauer wählst du nicht. Ab „Bedienen“ steht unter den Bedienelementen, was ein Boost kosten kann:
   „Boost kann bis zu {€} € Leistungspreis im Monat kosten ({kW} kW mehr Spitze).“ (Abschnitt
   „Laderegelung“, „Lademodi“, Boost).
+- **Höchststrom:** Steht das Fahrzeug auf „Sofort“, hat die Karte ab „Bedienen“ die Auswahl
+  „Höchststrom“ (Plan Sofort-Limit). Die erste Wahl ist „Volle Leistung“ mit dem Höchststrom des
+  Fahrzeugs und seinen kW („Volle Leistung (16 A · 11,0 kW)“), darunter jeder Strom bis zum
+  Mindeststrom, jeweils mit den kW (Ampere · `grid.voltage_nominal_v` · Phasen des Fahrzeugs, etwa
+  beim Tesla mit 3 Phasen „5 A · 3,5 kW“ bis „16 A · 11,0 kW“, beim e-Golf mit 2 Phasen „6 A · 2,8 kW“
+  bis „16 A · 7,4 kW“). Die Wahl schickt `PUT /api/control/vehicles/{key}/now-limit`, gilt sofort und
+  bleibt über Abstecken, Neustart und Moduswechsel stehen, bis du sie änderst. „Lesen“ sieht statt der
+  Auswahl den Satz „Sofort mit höchstens {n} A ({kW} kW)“, und nur bei einem Limit. In anderen Modi,
+  auch im Boost, steht die Auswahl nicht da und das Limit ruht: Boost lädt mit voller Leistung,
+  „Geplant“ rechnet mit voller Leistung (Abschnitt „Laderegelung“, „Lademodi“, „Sofort-Limit“).
 - **Geplant:** Steht das Fahrzeug auf „Geplant“, hat die Karte ab „Bedienen“ die Felder „Ziel-SOC“ (%,
   ganze Zahl von 20 bis 100) und „Abfahrt“ (tägliche Uhrzeit) mit der Taste „Übernehmen“; sie schickt
   nur, was sich geändert hat (`PUT /api/control/vehicles/{key}/target`). Ein ungültiger Wert steht mit
@@ -1446,7 +1493,11 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Übersteuerung dieser Wallbox aufhebt, und die Fahrzeuge; eine Wallbox als leer zu übersteuern geht
   nicht.
 - **Gast:** der Lademodus für einen Gast an jeder Wallbox (Abschnitt „Laderegelung“, „Zuordnung Auto
-  und Wallbox“).
+  und Wallbox“). Steht der Gast auf „Sofort“, hat die Karte ab „Bedienen“ dieselbe Auswahl
+  „Höchststrom“ für jeden Gast (`PUT /api/control/guest/now-limit`), im Strombereich der EVCS (kleinstes
+  `min_a` bis größtes `max_a` aller EVCS; auf 3 Phasen etwa „6 A · 4,1 kW“ bis „16 A · 11,0 kW“).
+  Die Auswahl fehlt ohne EVCS in `config.yaml`: Am Wall Connector hat ein Gast keinen Aktor und bleibt
+  Last wie bisher.
 - **Vorrang:** die Reihenfolge der Fahrzeuge bei der Zuteilung („nach oben“, „nach unten“) und der
   Vorrang beim Überschuss: „Autos zuerst“, „Akku zuerst“ oder „Akku bis {SOC} %, dann Autos“.
 
@@ -1723,8 +1774,8 @@ Dry-Run, und ein installierter Watchdog wartet.
   **Version** ist das Größere aus den Millisekunden seit 1970 (Uhr der app) und der gültigen Version + 1,
   damit auch eine aus der Sicherung wiederhergestellte app neuere Versionen erzeugt. Jede Änderung steht
   im Änderungsprotokoll (Quelle `ui` oder `ha`; Aktionen `intent.control`, `intent.mode`,
-  `intent.target`, `intent.boost`, `intent.assignment`, `intent.guest_mode`, `intent.priority`,
-  `intent.actuators`, `control.support`).
+  `intent.target`, `intent.now_limit`, `intent.boost`, `intent.assignment`, `intent.guest_mode`,
+  `intent.guest_now_limit`, `intent.priority`, `intent.actuators`, `control.support`).
 - **`PUT /v1/intent` per `curl` mischt sich über die Version korrekt ein.** Die app führt Änderungen
   nacheinander aus. Antwortet der core mit 409, weil die Version veraltet ist (jemand hat dazwischen eine
   Absicht per `curl` gesendet), holt sie die gültige Absicht neu und wendet die Änderung genau einmal
@@ -2435,6 +2486,20 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   Sie gilt, wenn der Boost die Spitze wirklich um die volle Ladeleistung hebt. Gilt im Monat kein
   Leistungspreis mit Satz, fehlt der Hinweis. Die Zahlen liefert `GET /api/control/boost-cost`
   (ab „Lesen“).
+- **Sofort-Limit** (Plan Sofort-Limit): In „Sofort“ lädt ein Auto höchstens mit dem Strom, den du
+  bei „Höchststrom“ gewählt hast (Seite „Laden“, oder in Home Assistant die Zahl „Sofort-Höchststrom“;
+  für Gäste „Gast-Sofort-Höchststrom“). Der Strom ist eine ganze Zahl in A je Phase, vom Mindeststrom
+  bis zum Höchststrom des Fahrzeugs; „volle Leistung“ ist der Höchststrom des Fahrzeugs und wird als
+  „kein Limit“ gespeichert, sodass das Auto einem später höheren `max_a` in `config.yaml` folgt. Das
+  Limit gilt je Auto (und einmal für Gäste) dauerhaft und nur in „Sofort“; Boost lädt weiter mit
+  voller Leistung, „Geplant“ rechnet mit voller Leistung, PV-Überschuss und Min+PV begrenzt der
+  Überschuss. Es ist eine harte Grenze: Das Auto lädt nie darüber, auch wenn mehr PV-Überschuss da
+  wäre; der Rest geht an andere PV-Autos, die Klimaanlage, den Akku oder ins Netz. Unter den
+  Mindeststrom der Wallbox geht es nie (ein Limit darunter lädt mit dem Mindeststrom), und die
+  Wächter kappen weiter darunter. Ändert sich das Limit während des Ladens, folgt der Strom im
+  nächsten Regelzyklus (beim Tesla im Rahmen der Befehlslimits von Tessie). Kappt das Limit, trägt der
+  Befehl nach „Sofort“ den Grund „Sofort-Limit“ (`now_limit`); kappt ein Wächter darunter, steht
+  dessen Grund. Ein Gast wird nur an der EVCS begrenzt.
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
@@ -3213,6 +3278,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `mode_pv`, `mode_min_pv`, `mode_now`, `mode_off`, `mode_planned` | PV-Überschuss, Min+PV, Sofort, Aus, Geplant | der Lademodus des Fahrzeugs |
 | `boost` | Boost | Ein Boost gilt (er steht an Stelle des Modus). |
 | `pv_surplus` | Überschuss | Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten des PV-Überschusses haben einen Start oder Stopp ergeben. |
+| `now_limit` | Sofort-Limit | Das Sofort-Limit (Höchststrom des Autos, „Laderegelung“, „Lademodi“) senkt den Strom in „Sofort“; kappt ein Wächter darunter, steht dessen Grund. |
 | `phase_limit` | Phasengrenze | Der Wächter kappt am Ziel der Sicherung (Sofort, Boost). |
 | `import_limit` | Importlimit | Der Wächter kappt am Importlimit (PV-Überschuss, Min+PV). |
 | `reserve_guard` | Schutz der USV-Reserve | Sofort oder Boost richtet sich wegen eines niedrigen SOC am Importlimit aus. |

@@ -159,6 +159,21 @@ Betreiber beim Abschluss** (so steht es in der Einordnung des Plans); Vorschlag:
 Pull von `ems-app`, auch zusammen mit Plan 4c, falls der noch aussteht. Betrieb: `docs/betrieb.md`, Abschnitt 12, „Seiten“,
 Zeile „Übersicht“.
 
+**Plan Sofort-Limit (Ladelimit für „Sofort“) ist umgesetzt, je Task geprüft** (Gesamtreview folgt)
+(`docs/superpowers/plans/2026-10-27-sofort-ladelimit.md`, 7 Tasks, freigegeben vom Betreiber am 27.10.2026 mit allen 8
+Entscheidungen und der Änderung „Limit bitte auch für Gäste, ansonsten passt alles“): Branch
+`claude/project-thread-wi9jx5`, **nicht auf `main`** (die Integration braucht die Zustimmung des Betreibers), **nicht ausgerollt**.
+Wer in „Sofort“ nicht mit voller Leistung laden will, stellt je Auto und einmal für Gäste einen Höchststrom ein (`now_max_a`, ganze
+A je Phase, dauerhaft, „Volle Leistung“ ist `null`): Der core kappt Autos und Gäste an der EVCS in „Sofort“ (nicht in Boost, nicht
+in „Geplant“), nie unter den Mindeststrom, mit dem Grund `now_limit` („Sofort-Limit“); die app hat
+`PUT /api/control/vehicles/{key}/now-limit` und `PUT /api/control/guest/now-limit`, das UI die Auswahl „Höchststrom“ in der
+Fahrzeug- und Gastkarte, Home Assistant die Zahlen `<Fahrzeug>_now_max_a` und `guest_now_max_a`; neu ist das Simulator-Szenario
+`sofort-limit` (jetzt 40). **Ausgerollt werden core und app gemeinsam** (die Absicht hat ein neues Feld, ein alter core lehnt es ab),
+mit dem nächsten gemeinsamen Pull; **keine Migration, keine ACL-Zeile**. Der Rückweg zu einem core vor dem Plan braucht einen Schritt
+an der `intent.json` (Betrieb: `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor dem Sofort-Limit“). Plan 5c und „Abfahrt
+als Uhrzeit“ ändern `app/ha/entities.py`, `commands.py` und `VehicleCard.svelte` an anderen Stellen; wer zuletzt nach `main`
+geht, rebased. Betrieb: `docs/betrieb.md`, „Laden“ und „Lademodi“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -991,6 +1006,7 @@ Zeile „Übersicht“.
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md` | Plan 4c, 5 Tasks, umgesetzt, seit dem 25.10.2026 auf `main` (nicht ausgerollt): Verlauf je Auto in `GET /api/stats` (`vehicle_buckets`), Auswahl des Autos und Karte „Laden je Auto“ auf „Statistik“, Ladesessions bis 2000 mit Nachladen und CSV; die sieben Entscheidungen des Betreibers vom 23.10.2026 |
 | `docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md` | Plan Übersicht B, 6 Tasks, auf `main` seit 27.10.2026 (`8ae335e`), nicht ausgerollt: die Übersicht als Kennzahlen-Leiste mit Hausakku, Hinweis-Leiste, „Woher – Wohin“, Autos, Diagramm mit Akku-SOC und -Plan; nur UI und Doku; die zehn Entscheidungen des Betreibers vom 27.10.2026 |
+| `docs/superpowers/plans/2026-10-27-sofort-ladelimit.md` | Plan Sofort-Limit, 7 Tasks, umgesetzt auf dem Branch `claude/project-thread-wi9jx5` (nicht auf `main`, nicht ausgerollt): Höchststrom `now_max_a` für „Sofort" je Auto und für Gäste, Grund `now_limit`, Szenario `sofort-limit`, App-API, HA-Zahlen, Auswahl im UI; die 8 Entscheidungen des Betreibers vom 27.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
@@ -1749,6 +1765,13 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
       Diagramm mit Akku-SOC und Akku-Plan; am Handy (360 bis 390 px) ohne waagrechtes Scrollen und mit einem Blick auf
       „Warum?“ (siehe die aufgeschobenen Kleinigkeiten am Ende der Datei).
+  13. **Sofort-Limit (Plan Sofort-Limit) ausrollen:** core **und** app gemeinsam (ein alter core lehnt das neue Feld `now_max_a`
+      der Absicht ab), **keine Migration, keine ACL-Zeile** (die Zahlen sind die Plattform `number`). Noch nicht auf `main`;
+      wann integriert und ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem nächsten gemeinsamen Pull
+      (`cd /opt/bindaems && docker compose pull && docker compose up -d`). Danach auf „Laden“ ein Auto auf „Sofort“ stellen, bei
+      „Höchststrom“ einen Strom wählen (der Strom folgt im nächsten Regelzyklus, der Grund im Log heißt „Sofort-Limit“), dasselbe
+      beim Gast an der EVCS und die beiden Zahlen in Home Assistant ansehen (Abnahme: `docs/verification/abnahme-phase-4.md`,
+      Abschnitt 5). Der Rückweg steht in `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor dem Sofort-Limit“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1933,6 +1956,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt, geprüft und seit 27.10.2026 auf
    `main` (`8ae335e`; Kurzfassung oben, „Plan Übersicht B“). Es folgt das Ausrollen von `ems-app` (Punkt 12 unter
    „Offen an der Anlage“); wann, entscheidet der Betreiber. Die aufgeschobenen Kleinigkeiten stehen am Ende dieser Datei.
+9. **Plan Sofort-Limit** (Ladelimit für „Sofort“, auch für Gäste): umgesetzt und je Task geprüft, auf dem Branch
+   `claude/project-thread-wi9jx5`, Gesamtreview folgt; nicht auf `main` (Zustimmung des Betreibers nötig), nicht ausgerollt
+   (Kurzfassung oben, „Plan Sofort-Limit“). Es folgt das gemeinsame Ausrollen von core und app (Punkt 13 unter „Offen an der
+   Anlage“); wann, entscheidet der Betreiber.
 
 ### Nächster Schritt: die Anlage
 
