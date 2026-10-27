@@ -54,7 +54,13 @@ from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
-from bindaems.app.ha.entities import HaInputs, build_entities, build_inputs, support_of
+from bindaems.app.ha.entities import (
+    HaInputs,
+    build_entities,
+    build_inputs,
+    retired_discovery,
+    support_of,
+)
 from bindaems.app.ha.notify import (
     AlarmNotifications,
     HaNotifier,
@@ -406,6 +412,7 @@ class AppRuntime:
                     self.planning,
                     self.automation,
                 ),
+                retired=retired_discovery(cfg, mqtt),
             )
             self.ledger.on_slots_changed(self._on_stats_slots)
         self.settings.on_change(lambda _version: self.pipeline.republish())

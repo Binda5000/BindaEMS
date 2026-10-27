@@ -15,10 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
-from bindaems.app.control.intent import (
-    ASSIGNMENT_OVERRIDE,
-    DEPARTURE_PATTERN,
-)
+from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.learning.driving_profile import (
@@ -166,7 +163,7 @@ class HaInputs:
 @dataclass(frozen=True)
 class EntitySpec:
     object_id: str
-    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "text", "button"]
+    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "time", "button"]
     name: str
     device: DeviceSpec
     value: Callable[[HaInputs], str]
@@ -180,7 +177,6 @@ class EntitySpec:
     min: float | None = None  # Bereich und Schritt einer ``number``
     max: float | None = None
     step: float | None = None
-    pattern: str | None = None  # erlaubte Eingabe eines ``text`` (regulärer Ausdruck)
 
 
 def _number(value: Any) -> float | None:
@@ -297,7 +293,7 @@ def _departure_state(key: str) -> Callable[[HaInputs], str]:
     def value(inputs: HaInputs) -> str:
         if inputs.intent is None:
             return UNKNOWN
-        return inputs.intent.vehicles.get(key, VehicleIntent()).departure
+        return f"{inputs.intent.vehicles.get(key, VehicleIntent()).departure}:00"  # HH:MM:SS
 
     return value
 
@@ -1143,12 +1139,11 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             ),
             EntitySpec(
                 f"{oid}_departure",
-                "text",
+                "time",
                 "Abfahrtszeit",
                 device,
                 _departure_state(key),
                 command=True,
-                pattern=f"^{DEPARTURE_PATTERN.pattern}$",
             ),
             EntitySpec(
                 f"{oid}_done_by",
@@ -1265,8 +1260,8 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
 
     Ein Bedienelement trägt zusätzlich ``command_topic`` (``{base}/cmd/<object_id>``); ein
     ``button`` hat keinen Zustand und darum kein ``state_topic``. Eine ``number`` trägt ``min``,
-    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``), ein ``text`` sein
-    ``pattern``, ein ``select`` und ein ``enum``-Sensor ihre ``options``.
+    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``), ein ``select`` und ein
+    ``enum``-Sensor ihre ``options``; eine ``time`` hat keine weiteren Felder.
     """
     base = mqtt.base_topic
     payload: dict[str, Any] = {
@@ -1302,12 +1297,22 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
         payload["options"] = list(spec.options)
     elif spec.component == "number":
         payload.update({"min": spec.min, "max": spec.max, "step": spec.step, "mode": "box"})
-    elif spec.component == "text" and spec.pattern is not None:
-        payload["pattern"] = spec.pattern
     elif spec.component == "button":
         payload["payload_press"] = "PRESS"
     topic = f"{mqtt.discovery_prefix}/{spec.component}/{NODE_ID}/{spec.object_id}/config"
     return topic, json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def retired_discovery(cfg: Config, mqtt: HaMqttConfig) -> tuple[str, ...]:
+    """Discovery-Topics, die nicht mehr gelten und beim Verbinden geleert werden.
+
+    Die Abfahrtszeit war ein ``text``; als ``time`` bekommt sie ein anderes Topic, und das alte
+    gehaltene Textfeld bliebe in Home Assistant stehen.
+    """
+    return tuple(
+        f"{mqtt.discovery_prefix}/text/{NODE_ID}/{ha_object_id(key)}_departure/config"
+        for key in cfg.vehicles
+    )
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:

@@ -123,7 +123,8 @@ def _cases(cfg: Config) -> dict[str, Case]:
                 "06:30",
                 lambda w, get=get: get(w).departure == "06:30",
                 api=(f"{path}/target", {"target_soc_pct": None, "departure": "08:15"}),
-                shown="08:15",
+                published="06:30:00",
+                shown="08:15:00",
             ),
             # die Automatik des Tesla ist in der Demo an, die des e-Golf aus: HA kehrt sie um, die
             # API danach wieder

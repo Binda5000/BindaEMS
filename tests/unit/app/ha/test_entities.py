@@ -25,13 +25,14 @@ from bindaems.app.ha.entities import (
     build_inputs,
     discovery,
     on_off,
+    retired_discovery,
 )
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.builder import build_plan
 from bindaems.app.prices.service import PriceService
 from bindaems.app.stats.service import TodayStats
-from bindaems.shared.config import Config
+from bindaems.shared.config import Config, ha_object_id
 from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
 from bindaems.shared.plan import BatteryIntent, PlanVehicle
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT
@@ -899,8 +900,8 @@ def local(moment: datetime) -> str:
     return moment.astimezone(LOCAL_TZ).isoformat()
 
 
-def test_target_soc_number_and_departure_text(cfg) -> None:
-    number, text = config_of(cfg, "tesla_target_soc"), config_of(cfg, "tesla_departure")
+def test_target_soc_number_and_departure_time(cfg) -> None:
+    number, time = config_of(cfg, "tesla_target_soc"), config_of(cfg, "tesla_departure")
     assert (number["name"], number["min"], number["max"], number["step"]) == (
         "Ziel-SOC",
         20.0,
@@ -911,28 +912,36 @@ def test_target_soc_number_and_departure_text(cfg) -> None:
         "%",
         "bindaems/cmd/tesla_target_soc",
     )
-    assert (text["name"], text["pattern"]) == ("Abfahrtszeit", r"^([01]\d|2[0-3]):[0-5]\d$")
-    assert (text["command_topic"], text["state_topic"]) == (
+    assert "pattern" not in time
+    assert (time["name"], time["command_topic"], time["state_topic"]) == (
+        "Abfahrtszeit",
         "bindaems/cmd/tesla_departure",
         "bindaems/state/tesla_departure",
     )
     topic, _ = discovery(entity(cfg, "tesla_departure"), cfg.homeassistant.mqtt)
-    assert topic == "homeassistant/text/bindaems/tesla_departure/config"
+    assert topic == "homeassistant/time/bindaems/tesla_departure/config"
     intent = Intent(
         version=2, vehicles={"tesla": VehicleIntent(target_soc_pct=90, departure="06:30")}
     )
     inputs = sample_inputs(intent=intent)
+    # Zustand mit Sekunden, wie Home Assistant ihn für eine Uhrzeit erwartet
     assert (state(cfg, "tesla_target_soc", inputs), state(cfg, "tesla_departure", inputs)) == (
         "90",
-        "06:30",
+        "06:30:00",
     )
     # ohne Eintrag gelten die Standardwerte, ohne Absicht ist beides unbekannt
     assert (state(cfg, "egolf_target_soc", inputs), state(cfg, "egolf_departure", inputs)) == (
         "80",
-        "07:00",
+        "07:00:00",
     )
     unknown = sample_inputs(intent=None)
     assert {state(cfg, f"tesla_{s}", unknown) for s in ("target_soc", "departure")} == {"None"}
+
+
+def test_retired_discovery_names_the_old_departure_text(cfg) -> None:
+    assert retired_discovery(cfg, cfg.homeassistant.mqtt) == tuple(
+        f"homeassistant/text/bindaems/{ha_object_id(key)}_departure/config" for key in cfg.vehicles
+    )
 
 
 def test_done_by_and_target_reachable_discovery(cfg) -> None:

@@ -113,7 +113,7 @@ def _cause(exc: BaseException) -> str:
 def allowed_topic(mqtt: HaMqttConfig) -> re.Pattern[str]:
     prefix, base = re.escape(mqtt.discovery_prefix), re.escape(mqtt.base_topic)
     return re.compile(
-        rf"^({prefix}/(sensor|binary_sensor|select|switch|number|text|button)/bindaems/[a-z0-9_]+/config"
+        rf"^({prefix}/(sensor|binary_sensor|select|switch|number|text|time|button)/bindaems/[a-z0-9_]+/config"
         rf"|{base}/(status|state/[a-z0-9_]+(/attributes)?|{COMMAND_SEGMENT}/[a-z0-9_]+))$"
     )
 
@@ -129,6 +129,7 @@ class HaPublisher:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         backoff: Backoff | None = None,
         commands: CommandHandler | None = None,
+        retired: Sequence[str] = (),
     ) -> None:
         self._cfg = cfg
         self._entities = list(entities)
@@ -138,6 +139,7 @@ class HaPublisher:
         self._backoff = backoff or Backoff()
         self._allowed = allowed_topic(cfg)
         self._commands = commands
+        self._retired = tuple(retired)  # veraltete Discovery-Topics, beim Verbinden geleert
         self._command_prefix = f"{cfg.base_topic}/{COMMAND_SEGMENT}/"
         self._by_id = {spec.object_id: spec for spec in self._entities}
         self._sent: dict[str, str] = {}  # Topic → zuletzt veröffentlichter Zustand
@@ -227,6 +229,8 @@ class HaPublisher:
         await self._publish_entity(transport, spec, self._inputs(), force=True)
 
     async def _publish_all(self, transport: HaTransport) -> None:
+        for topic in self._retired:
+            await self._publish(transport, topic, "")  # leere gehaltene Nachricht löscht
         for spec in self._entities:
             topic, payload = discovery(spec, self._cfg)
             await self._publish(transport, topic, payload)

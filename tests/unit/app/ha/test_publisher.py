@@ -267,9 +267,21 @@ def test_number_topics_are_allowed(cfg) -> None:
     assert not pattern.fullmatch("homeassistant/numbers/bindaems/support_soc/config")
 
 
-def test_text_topics_are_allowed(cfg) -> None:
+def test_time_and_old_text_topics_are_allowed(cfg) -> None:
     pattern = allowed_topic(cfg.homeassistant.mqtt)
+    assert pattern.fullmatch("homeassistant/time/bindaems/tesla_departure/config")
     assert pattern.fullmatch("homeassistant/text/bindaems/tesla_departure/config")
     assert pattern.fullmatch("bindaems/state/tesla_departure")
     assert pattern.fullmatch("bindaems/cmd/tesla_departure")
-    assert not pattern.fullmatch("homeassistant/texts/bindaems/tesla_departure/config")
+    assert not pattern.fullmatch("homeassistant/times/bindaems/tesla_departure/config")
+
+
+async def test_retired_discovery_is_cleared_on_connect_and_ha_restart(publisher_env) -> None:
+    old = "homeassistant/text/bindaems/tesla_departure/config"
+    publisher, transport = publisher_env(
+        incoming=[("homeassistant/status", b"online")], retired=(old,)
+    )
+    await run_publisher_until(publisher, lambda: transport.count(old) == 2)
+    assert all(
+        payload == "" and retain for topic, payload, retain in transport.published if topic == old
+    )
