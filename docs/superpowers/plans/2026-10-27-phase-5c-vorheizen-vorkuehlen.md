@@ -34,9 +34,9 @@
 - **Parallel:** Der Umbau der Übersicht (Plan `2026-10-27-uebersicht-kennzahlen.md`) ändert nur `ui/`. 5c fasst die Übersicht (`ui/src/routes/+page.svelte`, `ui/src/lib/dashboard/`) und `ui/src/lib/charts/options.ts` nicht an. Überschneiden können sich `ui/src/lib/system/view.ts`, die Spec (Abschnitt 13) und `docs/uebergabe.md`: Die Umsetzung von 5c beginnt auf dem Stand von `main` nach der Übersicht oder rebased vor dem Fast-Forward darauf.
 - **Danach:** 6b (Wärmepumpe) nutzt Modell und zweiten Planungsschritt mit einem Pufferspeicher statt des Hauses; das ist nicht Teil von 5c.
 
-## Entscheidungen (zur Freigabe)
+## Entscheidungen (freigegeben am 27.10.2026)
 
-Der Plan ist auf diese Entscheidungen geschrieben. Wo **Offen** steht, brauche ich deine Wahl; sonst ist es mein Vorschlag, den du mit der Freigabe bestätigst.
+Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 27.10.2026 mit den vorgeschlagenen Werten freigegeben („Freigeben, Task 1 vorziehen“). Task 1 geht zuerst allein zur Integration; die mit **Offen** markierten Punkte gelten mit dem jeweiligen Vorschlag.
 
 1. **Zuschnitt** (Spec 18).
    - **In 5c:** Betriebsart in InfluxDB, Wärmemodell je Betriebsart mit Nachtlauf und Status, zweiter Planungsschritt mit Vorschau, Planwert an den core, Folgen im core mit den Regeln aus 6a, Schalter, Komfortband, Anzeige in UI und HA, Simulator-Szenarien, Abnahme.
