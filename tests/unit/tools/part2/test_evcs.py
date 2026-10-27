@@ -24,7 +24,9 @@ CHARGING_QUESTION = (
 FOREIGN_QUESTION = (
     "Bitte jetzt den Ladestrom der EVCS von Hand ändern (VictronConnect oder Cerbo). Bereit?"
 )
-UNPLUG_QUESTION = "Netzwerkkabel der EVCS für 60 s abziehen?"
+UNPLUG_QUESTION = (
+    "Netzwerkkabel der EVCS für 60 s abziehen? Erst ziehen, wenn das Werkzeug es sagt."
+)
 REPLUGGED_QUESTION = "Wieder angesteckt?"
 WATCHDOG_QUESTION = "Watchdog-Probe mit verstelltem Strom starten? Der Watchdog löst aus."
 SECONDS = r"\d+(,\d)?"  # eine Zeit in Sekunden mit höchstens einer Nachkommastelle

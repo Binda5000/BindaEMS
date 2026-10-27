@@ -56,7 +56,9 @@ QUESTION_CHARGING: Final = (
 QUESTION_FOREIGN: Final = (
     "Bitte jetzt den Ladestrom der EVCS von Hand ändern (VictronConnect oder Cerbo). Bereit?"
 )
-QUESTION_UNPLUG: Final = "Netzwerkkabel der EVCS für 60 s abziehen?"
+QUESTION_UNPLUG: Final = (
+    "Netzwerkkabel der EVCS für 60 s abziehen? Erst ziehen, wenn das Werkzeug es sagt."
+)
 QUESTION_REPLUGGED: Final = "Wieder angesteckt?"
 QUESTION_WATCHDOG: Final = "Watchdog-Probe mit verstelltem Strom starten? Der Watchdog löst aus."
 UNPLUG_HINT: Final = "Jetzt das Netzwerkkabel der EVCS abziehen, 60 s warten und wieder anstecken."
