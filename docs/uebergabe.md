@@ -902,6 +902,11 @@ Zeile „Übersicht“.
   - an der Anlage: Plan 5c (core und app gemeinsam, Regelbetrieb aus) frühestens nach den Abnahmen 5a und
     5b am 22.11.2026 ausrollen (Punkt 13 unter „Offen an der Anlage“); danach die Abnahme 5c Teil A (14 Tage
     Vorschau) und Teil B (14 Tage live, `docs/verification/abnahme-phase-5c.md`)
+  - im Code, Plan 5c: Die Betriebsbits der Klimaanlage (`running`, `heating`, `cooling`, `venting`) stehen nur
+    bei Änderung in InfluxDB, `raw` hält 90 Tage; ändert sich ein Bit über 90 Tage nicht (ohne Neustart des
+    core), fehlt sein Wert vor dem Fenster, die Viertelstunden bekommen keine Betriebsart, und das Modell meldet
+    `few_days` (sicher, Betriebshandbuch „Vorheizen und Vorkühlen (Phase 5c)“). Vor der Kühlsaison 2027
+    beheben (Seed aus dem frühesten Punkt im Fenster oder periodisches Neuschreiben der Zustände).
   - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
     der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
   - an der Anlage: Plan 6a mit 4b im gemeinsamen Fenster nach dem 25.10.2026 ausrollen (Punkt 8 unter „Offen an der

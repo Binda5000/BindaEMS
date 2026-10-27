@@ -322,7 +322,11 @@ Prüfschritte:
 2. Viertelstunden außerhalb prüfst du einzeln: Lief die Klimaanlage nicht im Heizen (Verlauf von
    „Klima Betriebsart“ in Home Assistant, Lüften oder Aus), zählen sie nicht; zähle sie ab und rechne
    den Anteil ohne sie neu. Nach dem Einschalten am Morgen oder nach einem Ausfall darf das Haus eine
-   Weile unter dem Band liegen; auch das notierst du.
+   Weile unter dem Band liegen; auch das notierst du. Ebenso zählen Viertelstunden über dem Band
+   nicht, in denen der core **Stufen aus dem Überschuss** fuhr (Regel „mehr“, Grund `thermal_more`
+   im Entscheidungslog, B2): Echter PV-Überschuss darf über den Planwert und damit über das Band
+   hinaus heizen, wie in 6a, höchstens bis ±3 K. Die Zeitpunkte findest du mit der Abfrage von B2,
+   Schritt 3.
 3. Bestanden, wenn mindestens **95 %** der Viertelstunden mit Heizen im Band liegen.
 
 | Messung | Wert |
@@ -355,12 +359,28 @@ Prüfschritte:
 
    `requested` liegt beim Heizen zwischen `−heat_down_k` und `+heat_up_k` (wirksames Band), und
    `result` ist `ok`. Die Safety-Schicht lehnte nichts ab (kein `rejected`).
+3. **Ausgenommen vom Band** sind die Stufen aus dem Überschuss: Regel „mehr“ (Grund `thermal_more`)
+   darf bei echter Einspeisung über den Planwert hinaus gehen, auch über das Band (höchstens ±3 K,
+   Schritt 1). Sinkt danach der Planwert, geht der Wunsch mit `thermal_plan` auf Planwert plus diese
+   Stufen zurück; auch diese Entscheidungen dürfen über dem Band liegen. Liste die Stufen aus dem
+   Überschuss und nimm beim Zählen von Schritt 2 jede `thermal_plan`-Entscheidung über dem Band aus,
+   wenn ihr eine `thermal_more`-Entscheidung vorausging und der Wunsch (`thermal_steps`) seitdem
+   nicht auf den Planwert (`planned_steps`) oder darunter gefallen war:
+
+   ```bash
+   jq -r '.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not)
+       and any(.codes[]; . == "thermal_more" or . == "thermal_plan"))
+       | [.ts, .requested, (.codes | join(",")), .inputs.thermal_steps, .inputs.planned_steps]
+       | @tsv' klima.json
+   ```
+
+   Eine `thermal_plan`-Entscheidung über dem Band ohne vorausgehendes `thermal_more` ist ein Fehler.
 
 | Kriterium | Ergebnis |
 |---|---|
 | 6a 4.1: kleinster / größter Versatz (K) | von ____ bis ____ ☐ innerhalb ±3 K |
 | 6a 4.2: Erhöhungen des Betrags (Zahl) | ____ ☐ alle 0,5 K ☐ alle mit Abstand ≥ 600 s |
-| Entscheidungen `thermal_plan` (Zahl) / davon im Band | ____ / ____ ☐ |
+| Entscheidungen `thermal_plan` (Zahl) / davon im Band / ausgenommen nach `thermal_more` | ____ / ____ / ____ ☐ |
 
 Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ________
 
@@ -432,6 +452,12 @@ Prüfschritte:
 3. Stichprobe an drei Tagen: Die Zeile im Zeitplan („Vorheizen/Vorkühlen aktiv: spart etwa {x} ct.“)
    passt zur Spalte „Klima“: vorgeheizt wird in günstigen Stunden oder mit PV-Überschuss, abgesenkt in
    teuren.
+4. **Kein Fehler:** Wechselt die Zeile zwischen „aktiv“ und „Verschieben lohnt sich in diesem Plan
+   nicht.“ (`not_worth`), ist das erwartet. Hält das Haus die geplante Wärme schon (vorgeheizt), bleibt
+   im nächsten Plan oft weniger als 2 ct Gewinn übrig; der Planwert endet, der core geht auf 0 zurück,
+   und das Haus driftet langsam zum Sollwert, bis ein späterer Plan wieder verschiebt. Solche Pläne
+   zählen in der Tabelle unter „andere“ (Betriebshandbuch, „Vorheizen und Vorkühlen (Phase 5c)“, „Wie
+   der Plan verschiebt“).
 
 | Grund | aktiv | Pläne (Zahl) | Ersparnis kleinste / größte (ct) |
 |---|---|---|---|

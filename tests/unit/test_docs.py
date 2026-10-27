@@ -1819,3 +1819,38 @@ def test_docs_name_phase_5c_endpoints_and_settings() -> None:
         assert found, heading
         body = re.split(r"\n###? ", rest, maxsplit=1)[0]
         assert "**Stand Plan 5c**" in body, heading
+
+
+def test_docs_name_the_limits_found_in_the_5c_review() -> None:
+    # Fix-Welle 5c (M6): Schrittregel nach unten, Pläne beim Rollback, Überschuss in der Abnahme,
+    # Wechsel „aktiv“/„lohnt nicht“ und die Betriebsbits nur bei Änderung.
+    from bindaems.app.planning.store import KEEP_PLANS
+
+    assert KEEP_PLANS.days == 30
+    section = " ".join(_guide_section("Vorheizen und Vorkühlen (Phase 5c)").split())
+    for topic in (
+        "nach unten sofort bis 0; unter 0 wächst der Betrag eine Stufe je 600 s",
+        "**„aktiv“ und „lohnt sich nicht“ wechseln sich ab:**",
+        "weniger als 2 ct Gewinn",
+        "**Bekannte Grenze, Betriebsbits nur bei Änderung:**",
+        "die Rohdaten (`raw`) hält InfluxDB 90 Tage",
+        "(`few_days`)",
+    ):
+        assert topic in section, topic
+    update = " ".join(_guide_section("4. Bedienung").split())
+    rollback = update.split("**Rollback auf einen Stand vor Plan 5c:**", 1)[1]
+    rollback = rollback.split("**Rollback auf einen Stand vor Plan 5b:**", 1)[0]
+    for topic in ("**Pläne seit 5c:**", "`code=plan_row_unreadable`", "nach 30 Tagen"):
+        assert topic in rollback, topic
+    check = " ".join(Path("docs/verification/abnahme-phase-5c.md").read_text("utf-8").split())
+    b1 = check.split("### B1.", 1)[1].split("### B2.", 1)[0]
+    b2 = check.split("### B2.", 1)[1].split("### B3.", 1)[0]
+    b4 = check.split("### B4.", 1)[1].split("### B5.", 1)[0]
+    assert "**Stufen aus dem Überschuss**" in b1 and "`thermal_more`" in b1
+    assert "**Ausgenommen vom Band**" in b2 and 'select(.actuator == "thermal.klima"' in b2
+    assert "`not_worth`" in b4 and "ist das erwartet" in b4
+    handover = " ".join(Path("docs/uebergabe.md").read_text("utf-8").split())
+    assert (
+        "Vor der Kühlsaison 2027 beheben (Seed aus dem frühesten Punkt im Fenster oder "
+        "periodisches Neuschreiben der Zustände)"
+    ) in handover

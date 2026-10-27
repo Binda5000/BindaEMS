@@ -265,6 +265,12 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   - **Kopie vor dem Ausrollen einspielen** (`/backup/vor-plan-5c.sqlite3`, Wiederherstellen wie in
     Abschnitt 9): Das setzt die **ganze** Datenbank der app auf den Stand vor dem Ausrollen zurück, mit
     den Folgen wie beim Rollback vor Plan 5a. Diesen Weg nimmst du nur, wenn das Zurückführen scheitert.
+  - **Pläne seit 5c:** Jeder Plan, den die app ab 5c speichert, trägt die neuen Felder (je Slot
+    `thermal_w`, `thermal_grid_w`, `thermal_steps`, im Plan `thermal`); die Modelle verbieten
+    unbekannte Felder. Eine ältere app überspringt solche Zeilen als unlesbar (im Log „Plan-Zeile
+    nicht lesbar“, `code=plan_row_unreadable`), bis sie nach 30 Tagen aus der Planablage fallen. Bis
+    dahin fehlen diese Pläne im Verlauf und im Vergleich Plan gegen Ist (`GET /api/plan/review`);
+    Verlauf und Vergleich verlieren diesen Zeitraum.
   - Ein core vor Plan 5c liest die Absicht eines core ab 5c nicht, sobald sie einen Plan trägt (jeder
     Slot trägt jetzt `thermal_steps`, `thermal_grid_w` und `thermal_mode`; die Modelle verbieten
     unbekannte Felder). Er startet dann ohne Absicht mit dem Alarm `intent.file`, wie beim Rollback
@@ -4792,8 +4798,9 @@ bleibt unverändert; so gilt die Rangfolge Akku → Autos → Klimaanlage → Ei
 Aufbau. Das Haus ist der Speicher: Der Plan darf es im Komfortband vorheizen (beim Kühlen vorkühlen)
 und absenken (wärmer werden lassen). Die Rechnung begrenzt je Viertelstunde nur das **Wachsen** des
 Speichers auf 0,5·`C` kWh (also etwa 0,5 K); das Absenken begrenzt allein die Grundleistung. Der core
-setzt die Stufen zusätzlich langsam um: eine Stufe nach oben je 600 s, nach unten sofort, ein
-Vorzeichenwechsel über 0. Am Ende des Plans steht das Haus nicht unter dem Sollwert ohne Versatz
+setzt die Stufen zusätzlich langsam um: eine Stufe nach oben je 600 s, nach unten sofort bis 0;
+unter 0 wächst der Betrag eine Stufe je 600 s, ein Vorzeichenwechsel geht über 0 (Abschnitt
+„Klimaanlage (Phase 6a)“, „Planwert“). Am Ende des Plans steht das Haus nicht unter dem Sollwert ohne Versatz
 (beim Kühlen nicht darüber).
 
 - **Mehrverbrauch** kommt zuerst aus der geplanten Einspeisung (er kostet den Einspeisepreis, ohne
@@ -4814,6 +4821,12 @@ Vorzeichenwechsel über 0. Am Ende des Plans steht das Haus nicht unter dem Soll
   zählt in der Ersparnis nicht. Spart der Plan weniger als **2 ct**, unterbleibt die Verschiebung
   (`not_worth`, „lohnt nicht“). Die Ersparnis ist nie negativ. `import_w`, `export_w` und `cost_ct`
   der Slots bleiben die des ersten Schritts.
+- **„aktiv“ und „lohnt sich nicht“ wechseln sich ab:** Hat das Haus die geplante Wärme schon
+  gespeichert (vorgeheizt, beim Kühlen vorgekühlt), bleibt im nächsten Plan oft weniger als 2 ct
+  Gewinn übrig. Der Plan sagt dann „Verschieben lohnt sich in diesem Plan nicht.“, der Planwert
+  endet, und der core geht auf 0 zurück (`thermal_plan`); das Haus driftet mit seiner Zeitkonstante
+  langsam zum Sollwert zurück, bis ein späterer Plan wieder verschiebt. Wechselnde Zeilen „aktiv“ und
+  „lohnt sich nicht“ im Zeitplan sind darum normal und kein Fehler.
 - **Prüfung:** Plant die Rechnung einen Versatz außerhalb des Bands, gilt sie nicht (Grund `solver`,
   im Log „Verschiebung der Klimaanlage verworfen, weil sie unplausibel ist“); wirft sie, gilt der Plan
   ohne sie (im Log „Vorheizen und Vorkühlen nicht berechnet“). Braucht der Schritt länger als
@@ -4834,6 +4847,13 @@ Vorzeichenwechsel über 0. Am Ende des Plans steht das Haus nicht unter dem Soll
   Vorheizen ähnlich darüber. Die einzelnen Räume nutzt das Modell nicht.
 - **Das Lastmodell** (Phase 5a) lernt aus Tagen mit Verschiebung mit. Das ist hingenommen, weil die
   Verschiebung über den Tag fast energieneutral ist.
+- **Bekannte Grenze, Betriebsbits nur bei Änderung:** Die Betriebsbits der Klimaanlage (`running`,
+  `heating`, `cooling`, `venting`) schreibt der core nur bei einer Änderung nach InfluxDB (`status`),
+  und die Rohdaten (`raw`) hält InfluxDB 90 Tage. Hat sich ein Bit länger als 90 Tage nicht geändert
+  (und der core nicht neu gestartet), fehlt sein letzter Wert vor dem Fenster; die Viertelstunden
+  bekommen dann keine Betriebsart, und das Modell meldet „Noch zu wenig Tage …“ (`few_days`). Das ist
+  sicher (ohne Modell keine Verschiebung); ein Neustart des core schreibt die Zustände neu. Behoben
+  wird das vor der Kühlsaison 2027 (`docs/uebergabe.md`, offene Punkte).
 
 ### Einstellungen (`learning.thermal`)
 
