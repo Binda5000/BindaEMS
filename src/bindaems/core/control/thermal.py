@@ -183,7 +183,9 @@ class ThermalStrategy:
 
     Endet der Planwert (abgelaufen, keine Absicht, andere Betriebsart), gehen geplante positive
     Stufen im selben Zyklus auf 0 (Grund ``thermal_plan``, nach den Regeln 1 und 2); nur die
-    Stufen aus dem Überschuss bleiben, und es gilt 6a.
+    Stufen aus dem Überschuss bleiben, und es gilt 6a. Ein negativer Wunsch unter
+    ``-less_max_steps`` geht mit dem Hinweis ``weniger`` im selben Zyklus auf ``-less_max_steps``
+    (tiefer reicht 6a nicht), ohne den Hinweis wie in 6a auf 0.
     """
 
     def __init__(self, cfg: CoeOffsetConfig) -> None:
@@ -246,6 +248,12 @@ class ThermalStrategy:
             # Ende des Planwerts: geplante Stufen sofort auf 0, nur die aus dem Überschuss bleiben
             # (Entscheidung 8: kein Vorheizen aus dem Akku, bis die SOC-Schwelle greift)
             self._move(kept, "thermal_plan", obs.now)
+            return self._wish
+        floor = -self._less_max_steps
+        if kept is not None and obs.hint == "weniger" and self._wish.steps < floor:
+            # Ende des Planwerts mit dem Hinweis „weniger“: 6a reicht nur bis −less_max_steps,
+            # tiefer geplante Stufen gehen sofort dorthin (ohne den Hinweis gleich unten auf 0)
+            self._move(floor, "thermal_plan", obs.now)
             return self._wish
         # Druck, offener Wagenbedarf und ein Akku unter der Schwelle sperren neue positive Stufen
         allow_up = not pressure and not _cars_unmet(obs) and _gate_met(obs)

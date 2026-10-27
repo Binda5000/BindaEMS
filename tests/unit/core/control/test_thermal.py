@@ -987,6 +987,36 @@ def test_end_of_the_plan_drops_planned_steps_at_once(strategy: ThermalStrategy) 
     assert strategy.step(planned(None, now=5000, **covering)).steps == 0
 
 
+def test_end_of_the_plan_limits_a_deep_negative_wish_to_6a(strategy: ThermalStrategy) -> None:
+    # Planwert −4 mit dem Hinweis „weniger“: Endet der Planwert, gilt 6a, und dort reicht
+    # „weniger“ nur bis −less_max_steps (−2). Der Wunsch geht im selben Zyklus auf −2, nicht erst
+    # mit dem Ende des Hinweises.
+    less = dict(hint="weniger", export_w=0.0)
+    for now in (0, 600, 1200, 1800):
+        strategy.step(planned(-4, now=now, **less))
+    assert strategy.wish == ThermalWish(-4, "thermal_plan")
+    assert strategy.step(planned(None, now=1801, **less)) == ThermalWish(-2, "thermal_plan")
+    # danach 6a: „weniger“ bleibt bei −2
+    for now in (2400, 3000, 9000):
+        assert strategy.step(planned(None, now=now, **less)).steps == -2
+    # ohne den Hinweis wie 6a sofort 0
+    assert strategy.step(planned(None, now=9001)) == ThermalWish(0, "thermal_less")
+
+
+def test_end_of_the_plan_without_the_hint_drops_a_negative_wish_to_zero(
+    strategy: ThermalStrategy,
+) -> None:
+    for now in (0, 600, 1200, 1800):
+        strategy.step(planned(-4, now=now))
+    assert strategy.step(planned(None, now=1801)) == ThermalWish(0, "thermal_less")
+
+
+def test_end_of_the_plan_keeps_a_negative_wish_within_6a(strategy: ThermalStrategy) -> None:
+    less = dict(hint="weniger", export_w=0.0)
+    strategy.step(planned(-1, now=0, **less))
+    assert strategy.step(planned(None, now=1, **less)) == ThermalWish(-1, "thermal_plan")
+
+
 def test_end_of_the_plan_keeps_the_surplus_steps(strategy: ThermalStrategy) -> None:
     strategy.step(planned(1, now=0, export_w=900))
     strategy.step(planned(1, now=600, export_w=900))  # +2: Planwert +1 und eine Stufe Überschuss

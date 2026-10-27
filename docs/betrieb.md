@@ -5754,7 +5754,9 @@ app plant). Der core folgt ihm nur, wenn der Plan für die Betriebsart gilt, in 
 gerade läuft (ein Plan fürs Heizen wirkt nie beim Kühlen). Endet der Planwert (Plan abgelaufen,
 keine gültige Absicht, andere Betriebsart), gehen geplante Stufen im selben Zyklus auf 0 (Grund
 `thermal_plan`); nur Stufen aus dem Überschuss bleiben, und es gelten die Regeln oben unverändert,
-wie ohne gültigen Slot oder ohne Planwert. Mit Planwert:
+wie ohne gültigen Slot oder ohne Planwert. Ein negativer Wunsch, der tiefer liegt als
+`strategy.less_max_steps` erlaubt, geht dabei mit dem Hinweis „weniger“ im selben Zyklus auf
+−`less_max_steps` (Grund `thermal_plan`), ohne den Hinweis wie in Regel 7 auf 0. Mit Planwert:
 
 - Nach oben (mehr Leistung) geht der Wunsch eine Stufe je 10 min zum Planwert, nach unten sofort,
   noch vor den Autos und dem Akku. Ein Vorzeichenwechsel geht über 0, und auch ins Negative
