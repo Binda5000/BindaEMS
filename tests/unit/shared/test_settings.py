@@ -10,6 +10,7 @@ from bindaems.shared.settings import (
     LearningSettings,
     RuntimeSettings,
     TariffSettings,
+    ThermalPlanSettings,
     TimeWindow,
     settings_warnings,
 )
@@ -164,5 +165,61 @@ def test_old_learning_settings_without_driving_load() -> None:
 def test_driving_settings_round_trip() -> None:
     settings = RuntimeSettings(
         learning=LearningSettings(driving=DrivingSettings(automation={"tesla": True}))
+    )
+    assert RuntimeSettings.model_validate(settings.model_dump(mode="json")) == settings
+
+
+def test_thermal_plan_defaults() -> None:
+    t = RuntimeSettings().learning.thermal
+    assert (t.enabled, t.heat_up_k, t.heat_down_k, t.cool_up_k, t.cool_down_k, t.margin_ct) == (
+        False,
+        1.5,
+        1.0,
+        1.5,
+        1.0,
+        2.0,
+    )
+
+
+@pytest.mark.parametrize("field", ["heat_up_k", "heat_down_k", "cool_up_k", "cool_down_k"])
+@pytest.mark.parametrize("value", [0.3, 1.25, 0.75])
+def test_band_not_multiple_of_half_is_rejected(field: str, value: float) -> None:
+    with pytest.raises(ValidationError, match=r"Das Komfortband geht in Schritten von 0,5 K\."):
+        ThermalPlanSettings(**{field: value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "limit"),
+    [("heat_up_k", 3.0), ("cool_up_k", 3.0), ("heat_down_k", 2.0), ("cool_down_k", 2.0)],
+)
+def test_band_above_limits_is_rejected(field: str, limit: float) -> None:
+    assert getattr(ThermalPlanSettings(**{field: limit}), field) == limit  # type: ignore[arg-type]
+    assert getattr(ThermalPlanSettings(**{field: 0.0}), field) == 0.0  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ThermalPlanSettings(**{field: limit + 0.5})  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ThermalPlanSettings(**{field: -0.5})  # type: ignore[arg-type]
+
+
+def test_thermal_margin_stays_between_0_and_20() -> None:
+    assert ThermalPlanSettings(margin_ct=0).margin_ct == 0
+    assert ThermalPlanSettings(margin_ct=20).margin_ct == 20
+    with pytest.raises(ValidationError):
+        ThermalPlanSettings(margin_ct=20.5)
+    with pytest.raises(ValidationError):
+        ThermalPlanSettings(margin_ct=-1)
+    with pytest.raises(ValidationError):
+        ThermalPlanSettings(margin_ct=float("nan"))
+
+
+def test_old_learning_settings_without_thermal_load() -> None:
+    old = RuntimeSettings().model_dump(mode="json")
+    del old["learning"]["thermal"]
+    assert RuntimeSettings.model_validate(old).learning.thermal == ThermalPlanSettings()
+
+
+def test_thermal_settings_round_trip() -> None:
+    settings = RuntimeSettings(
+        learning=LearningSettings(thermal=ThermalPlanSettings(enabled=True, heat_up_k=2.5))
     )
     assert RuntimeSettings.model_validate(settings.model_dump(mode="json")) == settings

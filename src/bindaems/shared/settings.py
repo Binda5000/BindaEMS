@@ -11,6 +11,7 @@ from datetime import date, time
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
+    AfterValidator,
     Discriminator,
     Field,
     PositiveFloat,
@@ -256,12 +257,35 @@ class DrivingSettings(_Model):
         return self
 
 
+def _half_steps(value: float) -> float:
+    if value * 2 != round(value * 2):
+        raise ValueError("Das Komfortband geht in Schritten von 0,5 K.")
+    return value
+
+
+BandUp = Annotated[float, Field(ge=0, le=3, allow_inf_nan=False), AfterValidator(_half_steps)]
+BandDown = Annotated[float, Field(ge=0, le=2, allow_inf_nan=False), AfterValidator(_half_steps)]
+
+
+class ThermalPlanSettings(_Model):
+    """Vorheizen und Vorkühlen (Plan 5c): Schalter, Komfortband in Kelvin (Vielfache von 0,5)
+    und Mindestvorteil bei Netzbezug."""
+
+    enabled: bool = False
+    heat_up_k: BandUp = 1.5
+    heat_down_k: BandDown = 1.0
+    cool_up_k: BandUp = 1.5
+    cool_down_k: BandDown = 1.0
+    margin_ct: Annotated[float, Field(ge=0, le=20, allow_inf_nan=False)] = 2.0
+
+
 class LearningSettings(_Model):
     """Lernen der Hauslast (Plan 5a): Modell ein oder aus, bis zu 8 HA-Sensoren als Merkmale."""
 
     load_model_enabled: bool = True
     ha_sensors: Annotated[list[HaEntityId], Field(max_length=8)] = Field(default_factory=list)
     driving: DrivingSettings = Field(default_factory=DrivingSettings)
+    thermal: ThermalPlanSettings = Field(default_factory=ThermalPlanSettings)
 
     @field_validator("ha_sensors")
     @classmethod

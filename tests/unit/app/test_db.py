@@ -24,9 +24,10 @@ from bindaems.app.db.schema import (
     model_registry,
     planned_charge,
     settings_version,
+    thermal_model,
 )
 
-HEAD = "0014"  # neueste Migration
+HEAD = "0015"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -618,6 +619,115 @@ def test_migration_0014_downgrade_removes_the_driving_settings(tmp_path: Path) -
                     )
                 )
         _downgrade(engine, "0013")
+        with engine.connect() as conn:
+            rows = conn.execute(select(settings_version).order_by("version")).mappings().all()
+        assert [r["data"] for r in rows] == [
+            {"tariff": {"x": 1}, "learning": learning},
+            {"tariff": {"x": 2}, "learning": learning},
+            {"tariff": {"x": 3}},
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_migration_0015_creates_thermal_model(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "thermal_model") == {
+        "id": False,
+        "computed_at": False,
+        "device": False,
+        "mode": False,
+        "params": False,
+        "profile": False,
+        "usable": False,
+        "reason": False,
+    }
+    assert inspector.get_pk_constraint("thermal_model")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("thermal_model")] == [
+        ("ix_thermal_model_device_mode_computed_at", ["device", "mode", "computed_at"])
+    ]
+    lengths = {
+        c["name"]: c["type"].length
+        for c in inspector.get_columns("thermal_model")
+        if c["name"] in ("device", "mode", "reason")
+    }
+    assert lengths["device"] == 32 and lengths["reason"] == 32
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
+
+
+def test_thermal_model_stores_utc_and_json(engine: Engine) -> None:
+    t = datetime(2026, 10, 27, 2, 0, tzinfo=UTC)
+    params = {"tau_h": 40.0, "gain_k_per_h": 0.8}
+    profile = {"werktag": {"setpoint": [21.0], "run_share": [0.5]}}
+    with engine.begin() as conn:
+        conn.execute(
+            insert(thermal_model).values(
+                computed_at=t,
+                device="klima",
+                mode="heizen",
+                params=params,
+                profile=profile,
+                usable=True,
+                reason="ok",
+            )
+        )
+        stored = conn.execute(select(thermal_model)).mappings().one()
+    assert (stored["computed_at"], stored["params"], stored["profile"]) == (t, params, profile)
+    assert stored["usable"] is True
+
+
+def test_migration_0015_keeps_driving_tables(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "alt.sqlite3")
+    t = datetime(2026, 10, 27, 2, 0, tzinfo=UTC)
+    try:
+        migrate(engine)
+        _downgrade(engine, "0014")
+        assert "thermal_model" not in inspect(engine).get_table_names()
+        with engine.begin() as conn:
+            conn.execute(insert(driving_automation).values(vehicle="tesla"))
+            conn.execute(
+                insert(driving_profile).values(
+                    vehicle="tesla",
+                    computed_at=t,
+                    data_from=t,
+                    data_to=t,
+                    source="tessie",
+                    profile={"key": "tesla"},
+                )
+            )
+        migrate(engine)
+        with engine.connect() as conn:
+            automation = conn.execute(select(driving_automation)).mappings().all()
+            profiles = conn.execute(select(driving_profile)).mappings().all()
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert [r["vehicle"] for r in automation] == ["tesla"]
+        assert [(r["vehicle"], r["computed_at"]) for r in profiles] == [("tesla", t)]
+        assert version == HEAD
+        assert "thermal_model" in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
+
+
+def test_migration_0015_downgrade_removes_the_thermal_settings(tmp_path: Path) -> None:
+    # eine app aus Plan 5b lehnt ``learning.thermal`` ab; die übrigen Lerneinstellungen bleiben
+    engine = open_database(tmp_path / "alt.sqlite3")
+    t = datetime(2026, 10, 27, 8, 0, tzinfo=UTC)
+    learning = {"load_model_enabled": False, "driving": {"target_min_pct": 40}}
+    try:
+        migrate(engine)
+        with engine.begin() as conn:
+            for version, data in (
+                (1, {"tariff": {"x": 1}, "learning": learning}),
+                (2, {"tariff": {"x": 2}, "learning": {**learning, "thermal": {"enabled": True}}}),
+                (3, {"tariff": {"x": 3}}),
+            ):
+                conn.execute(
+                    insert(settings_version).values(
+                        version=version, created_at=t, actor="admin", source="ui", data=data
+                    )
+                )
+        _downgrade(engine, "0014")
         with engine.connect() as conn:
             rows = conn.execute(select(settings_version).order_by("version")).mappings().all()
         assert [r["data"] for r in rows] == [

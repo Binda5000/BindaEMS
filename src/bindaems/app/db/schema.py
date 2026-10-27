@@ -237,6 +237,21 @@ driving_automation = Table(
     Column("last_values", JSON, nullable=True),
 )
 
+# Vorheizen und Vorkühlen (Plan 5c, Präzisierung 3): gelerntes Hausmodell je Gerät und Betriebsart
+thermal_model = Table(
+    "thermal_model",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("computed_at", UtcDateTime(), nullable=False),
+    Column("device", String(32), nullable=False),
+    Column("mode", String(16), nullable=False),  # heizen | kuehlen
+    Column("params", JSON, nullable=False),  # ModeModel ohne Profile
+    Column("profile", JSON, nullable=False),  # Sollwert und Laufanteil je Gruppe und Viertelstunde
+    Column("usable", Boolean, nullable=False),
+    Column("reason", String(32), nullable=False),
+    Index("ix_thermal_model_device_mode_computed_at", "device", "mode", "computed_at"),
+)
+
 # Abrechnung je Viertelstunde aus den slot_flows des core (Spec 11.4)
 ledger_slot = Table(
     "ledger_slot",

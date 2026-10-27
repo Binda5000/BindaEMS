@@ -161,6 +161,14 @@
           "egolf": false
         },
         "presence_entities": {}
+      },
+      "thermal": {
+        "enabled": false,
+        "heat_up_k": 1.5,
+        "heat_down_k": 1.0,
+        "cool_up_k": 1.5,
+        "cool_down_k": 1.0,
+        "margin_ct": 2.0
       }
     },
     "wallbox_names": {
