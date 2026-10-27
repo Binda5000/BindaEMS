@@ -273,7 +273,7 @@ test('Entscheidungen filtern', async ({ page }) => {
 	await page.getByLabel('Zeitraum').selectOption({ label: 'Eigenes Datum' });
 	await page.getByLabel('Datum', { exact: true }).fill('2026-10-09');
 	const rows = page.locator('tbody tr');
-	await expect(rows).toHaveCount(6); // alle Entscheidungen der Demo-Welt
+	await expect(rows).toHaveCount(10); // alle Entscheidungen der Demo-Welt
 
 	await page.getByLabel('Ergebnis').selectOption({ label: 'von außen geändert' });
 	await expect(rows).toHaveCount(1);
