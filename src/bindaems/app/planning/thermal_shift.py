@@ -24,23 +24,25 @@ Je Slot ``up_x`` (Mehrverbrauch aus geplanter Einspeisung), ``up_g`` (aus dem Ne
   Einspeisepreis (``dn_x``), sonst höben sich ``up_x`` und ``dn_g``/``dn_b`` im selben Slot in
   ``S`` auf und buchten eine Ersparnis, die es nicht gibt; ``dn_g + dn_b + dn_x ≤ base_w``; bei
   einem Laufanteil unter 0,8 alle fünf 0;
-- **Energiebedingung** ``Σ (up − dn) · Δ / 1000 ≥ −max(0, S_{−1})``: Die Verschiebung braucht im
-  Horizont mindestens so viel Strom, wie sie an gespeicherter Wärme vorfindet und entnimmt. Ohne
-  sie lohnte sich dauerndes Absenken schon bei gleichem Preis, weil ``a`` ein abgesenktes Haus
-  (``S < 0``) ohne Strom zum Soll zurückführt; das wäre Sparen am Komfort, keine Verschiebung.
-  Ein Defizit beim Start (``S_{−1} < 0``) verlangt keinen Strom über ``E ≥ 0`` hinaus: Aus
-  ``S_{−1} + E = S_end + (1 − a) · Σ S_{t−1}`` folgt, dass ``S_{−1} + E ≥ 0`` mit ``S ≤ 0`` nie
-  zu erfüllen wäre und die Grundlinie unlösbar machte;
+- **Energiebedingung** ``E = Σ (up − dn) · Δ / 1000 ≥ E_min``: Eine Verschiebung legt Energie
+  in der Zeit um, sie braucht nie weniger Strom als der schlichte Weg zurück zum Soll. Ohne die
+  Grenze lohnte sich Absenken schon bei gleichem Preis, weil ``a`` ein abgesenktes Haus
+  (``S < 0``) ohne Strom zum Soll zurückführt und ein kühleres Haus weniger verliert; das wäre
+  Sparen am Komfort, keine Verschiebung. ``E_min`` ist die kleinste Mehrenergie im LP der
+  Grundlinie (unten, Ziel ``min E`` statt der Kosten, ohne Energiebedingung); ohne Abweichung
+  jetzt ist ``E_min = 0`` und wird nicht gerechnet. Ein Spiel von ``ENERGY_TOL_KWH`` fängt Reste
+  des Solvers ab;
 - Ziel ``min Σ Δ/1000 · (feed_in · up_x + (import + margin) · up_g − import · dn_g
   − end_value · dn_b − feed_in · dn_x)``, ``feed_in = 0`` ohne Einspeisepreis.
 
 **Grundlinie:** Weicht das Haus jetzt ab (``S_{−1} ≠ 0``), muss der Rückweg zum Soll ohnehin
 bezahlt werden, und gespeicherte Wärme lässt sich ohnehin nutzen. Dasselbe LP mit dem Band
-``[min(0, S_{−1}), max(0, S_{−1})]`` (keine neue Abweichung) gibt die Kosten der Grundlinie, im
-Rest des Zeitlimits; ohne Abweichung kostet sie 0 und wird nicht gerechnet.
+``[min(0, S_{−1}), max(0, S_{−1})]`` (keine neue Abweichung) gibt zuerst ``E_min`` und dann, mit
+``E ≥ E_min``, die Kosten der Grundlinie; ohne Abweichung kostet sie 0 und wird nicht gerechnet.
+Das Zeitlimit gilt für alle Läufe zusammen: Der erste bekommt es ganz, jeder weitere den Rest.
 ``saving_ct = Kosten der Grundlinie − Kosten`` (ct). Spart der Horizont weniger als
 ``MIN_SAVING_CT``, lohnt die Verschiebung nicht (``not_worth``, alle Slots 0, ``saving_ct`` nie
-negativ). Ist einer der beiden Läufe unlösbar, ist keine Verschiebung möglich (``not_worth``,
+negativ). Ist einer der Läufe unlösbar, ist keine Verschiebung möglich (``not_worth``,
 ``saving_ct`` 0). Ohne optimale Lösung, bei Zeitlimit oder Fehler des Solvers ist das Ergebnis
 ``solver``, ebenfalls ohne Verschiebung. Ohne Slots ist es ``not_worth`` mit leerer Liste.
 
@@ -75,6 +77,7 @@ STEP_K: Final = 0.5  # eine Stufe des Sollwertversatzes
 MIN_ON_SHARE: Final = 0.8  # darunter keine Verschiebung im Slot
 DISCHARGE_W: Final = 50.0  # darüber deckt der Akku das Haus, kein Mehrverbrauch aus dem Netz
 CLEAN_W: Final = 1e-6  # Reste des Solvers darunter sind 0
+ENERGY_TOL_KWH: Final = 1e-6  # Spiel der Untergrenze E_min gegen Reste des Solvers
 
 _DT_H: Final = SLOT.total_seconds() / 3600
 _KWH: Final = _DT_H / 1000  # W über einen Slot → kWh
@@ -132,7 +135,7 @@ class ShiftResult:
     reason: Literal["ok", "not_worth", "solver"]
 
 
-_Solved = tuple[list[ShiftedSlot], float]  # Verschiebung und Kosten des Laufs in ct
+_Solved = tuple[list[ShiftedSlot], float]  # Verschiebung und Zielwert des Laufs
 
 
 def shift(inp: ShiftInput, time_limit_s: float = TIME_LIMIT_S) -> ShiftResult:
@@ -141,21 +144,36 @@ def shift(inp: ShiftInput, time_limit_s: float = TIME_LIMIT_S) -> ShiftResult:
     if not inp.slots:
         return ShiftResult(slots=[], saving_ct=0.0, reason="not_worth")
     started = perf_counter()
+    runs = 0
+
+    def run(
+        lo_kwh: float, hi_kwh: float, *, energy: bool, floor_kwh: float | None
+    ) -> _Solved | Literal["not_worth", "solver"]:
+        nonlocal runs
+        left_s = time_limit_s if runs == 0 else time_limit_s - (perf_counter() - started)
+        runs += 1
+        if left_s <= 0:
+            return "solver"
+        return _attempt(inp, lo_kwh, hi_kwh, left_s, energy=energy, floor_kwh=floor_kwh)
+
     c = inp.c_kwh_per_k
     start_kwh = _start_kwh(inp)
-    main = _attempt(inp, -inp.down_k * c, inp.up_k * c, time_limit_s)
-    if isinstance(main, str):
-        return _unshifted(inp, 0.0, main)
-    shifted, cost_ct = main
-    baseline_ct = 0.0  # ohne Abweichung jetzt bleibt die Grundlinie bei 0
+    floor_kwh = 0.0  # ohne Abweichung jetzt: E ≥ 0, die Grundlinie kostet 0
+    baseline_ct = 0.0
     if start_kwh != 0:
-        left_s = time_limit_s - (perf_counter() - started)
-        if left_s <= 0:
-            return _unshifted(inp, 0.0, "solver")
-        baseline = _attempt(inp, min(0.0, start_kwh), max(0.0, start_kwh), left_s)
+        band = (min(0.0, start_kwh), max(0.0, start_kwh))
+        least = run(*band, energy=True, floor_kwh=None)
+        if isinstance(least, str):
+            return _unshifted(inp, 0.0, least)
+        floor_kwh = least[1] - ENERGY_TOL_KWH
+        baseline = run(*band, energy=False, floor_kwh=floor_kwh)
         if isinstance(baseline, str):
             return _unshifted(inp, 0.0, baseline)
         baseline_ct = baseline[1]
+    main = run(-inp.down_k * c, inp.up_k * c, energy=False, floor_kwh=floor_kwh)
+    if isinstance(main, str):
+        return _unshifted(inp, 0.0, main)
+    shifted, cost_ct = main
     saving_ct = baseline_ct - cost_ct + 0.0  # + 0.0 macht aus −0,0 eine 0,0
     if saving_ct < MIN_SAVING_CT:
         return _unshifted(inp, max(0.0, saving_ct), "not_worth")
@@ -163,12 +181,18 @@ def shift(inp: ShiftInput, time_limit_s: float = TIME_LIMIT_S) -> ShiftResult:
 
 
 def _attempt(
-    inp: ShiftInput, lo_kwh: float, hi_kwh: float, time_limit_s: float
+    inp: ShiftInput,
+    lo_kwh: float,
+    hi_kwh: float,
+    time_limit_s: float,
+    *,
+    energy: bool,
+    floor_kwh: float | None,
 ) -> _Solved | Literal["not_worth", "solver"]:
     """Ein Lauf des LP; unlösbar heißt „keine Verschiebung möglich“ (``not_worth``), jeder andere
     Fehlschlag ``solver``."""
     try:
-        solved = _solve(inp, lo_kwh, hi_kwh, time_limit_s)
+        solved = _solve(inp, lo_kwh, hi_kwh, time_limit_s, energy=energy, floor_kwh=floor_kwh)
     except Exception:  # Solver und Modellaufbau dürfen die Planung nie anhalten
         return "solver"
     if solved == "infeasible":
@@ -205,9 +229,17 @@ def _unshifted(
 
 
 def _solve(
-    inp: ShiftInput, lo_kwh: float, hi_kwh: float, time_limit_s: float
+    inp: ShiftInput,
+    lo_kwh: float,
+    hi_kwh: float,
+    time_limit_s: float,
+    *,
+    energy: bool,
+    floor_kwh: float | None,
 ) -> _Solved | Literal["infeasible", "solver"]:
-    """Das LP mit dem Speicher im Band ``[lo_kwh, hi_kwh]``: Verschiebung und Kosten in ct."""
+    """Das LP mit dem Speicher im Band ``[lo_kwh, hi_kwh]`` und ``E ≥ floor_kwh`` (ohne Grenze bei
+    ``None``): Verschiebung und Zielwert, die Kosten in ct oder mit ``energy`` die kleinste
+    Mehrenergie ``E`` in kWh."""
     c = inp.c_kwh_per_k
     a = math.exp(-_DT_H / inp.tau_h)
     start_kwh = _start_kwh(inp)
@@ -251,8 +283,9 @@ def _solve(
         rows.append((up_x, up_g, dn_g, dn_b, dn_x, s))
         s_prev = s
     prob += s_prev >= 0, "store_end"
-    prob += pulp.lpSum(net) >= -max(0.0, start_kwh), "energy"
-    prob += pulp.lpSum(terms)
+    if floor_kwh is not None:
+        prob += pulp.lpSum(net) >= floor_kwh, "energy"
+    prob += pulp.lpSum(net) if energy else pulp.lpSum(terms)
 
     prob.solve(pulp.HiGHS(msg=False, timeLimit=time_limit_s))
     if prob.status == pulp.LpStatusInfeasible:

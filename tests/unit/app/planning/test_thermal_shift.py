@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 from datetime import UTC, datetime
-from itertools import pairwise
+from itertools import chain, pairwise, repeat
 from typing import Any, NoReturn
 
 import pulp
@@ -106,6 +106,9 @@ def all_zero(result: ShiftResult) -> bool:
     return all(s.thermal_w == 0 and s.grid_w == 0 and s.steps == 0 for s in result.slots)
 
 
+PREHEAT_STEPS = [0] * 10 + [1] * 4 + [2] * 4 + [1] * 6 + [0] * 5 + [-1] * 17 + [0, 0]
+
+
 def test_preheats_before_expensive_morning() -> None:
     r = shift(night_cheap_morning_expensive())
     assert r.reason == "ok" and r.saving_ct > 2
@@ -114,6 +117,7 @@ def test_preheats_before_expensive_morning() -> None:
     # Mehrverbrauch nur in billigen Slots, Minderverbrauch im teuren Morgen
     assert all(s.thermal_w <= TOL_W for s in r.slots[16:32])
     assert sum(s.thermal_w for s in r.slots[24:32]) < 0
+    assert [s.steps for s in r.slots] == PREHEAT_STEPS
 
 
 def test_steps_follow_the_store() -> None:
@@ -316,13 +320,20 @@ def test_replanning_mid_setback_keeps_it() -> None:
     r = shift(replace(inp, start_k=start_k, slots=inp.slots[31:]))
     assert r.reason == "ok" and r.saving_ct > MIN_SAVING_CT
     assert r.slots[0].steps < 0 and r.slots[0].thermal_w < 0
+    assert [s.steps for s in r.slots] == [-1] * 15 + [0, 0]
 
 
-def test_saving_is_measured_against_the_baseline() -> None:
-    # vorgeheizt gestartet, ab jetzt gleicher Preis: Die gespeicherte Wärme zu nutzen ist schon
-    # die Grundlinie, eine Verschiebung bringt nichts mehr
-    r = shift(shift_input([slot(i) for i in range(32)], start_k=1.0))
-    assert r.reason == "not_worth" and 0 <= r.saving_ct < MIN_SAVING_CT
+@pytest.mark.parametrize(
+    ("start_k", "down_k"),
+    [
+        (-0.25, 0.5),  # Defizit im Band: tiefer absenken spart nur Verluste
+        (-0.5, 1.0),
+        (1.0, 0.5),  # vorgeheizt: die gespeicherte Wärme zu nutzen ist schon die Grundlinie
+    ],
+)
+def test_start_off_setpoint_at_flat_price_is_not_worth(start_k: float, down_k: float) -> None:
+    r = shift(shift_input([slot(i) for i in range(48)], start_k=start_k, down_k=down_k))
+    assert r.reason == "not_worth" and 0 <= r.saving_ct < MIN_SAVING_CT and all_zero(r)
 
 
 def test_export_slots_save_only_the_feed_in_price() -> None:
@@ -348,18 +359,40 @@ def test_negative_saving_is_reported_as_zero(monkeypatch: pytest.MonkeyPatch) ->
     assert shift(inp) == ShiftResult(slots=zeros, saving_ct=0.0, reason="not_worth")
 
 
-def test_infeasible_baseline_is_not_worth(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[float, float]] = []
+@pytest.mark.parametrize("failing", [1, 2])
+def test_infeasible_floor_or_baseline_is_not_worth(
+    monkeypatch: pytest.MonkeyPatch, failing: int
+) -> None:
+    calls: list[tuple[float, float, bool]] = []
     original = thermal_shift._solve
 
-    def second_infeasible(inp: ShiftInput, lo: float, hi: float, limit: float) -> Any:
-        calls.append((lo, hi))
-        return original(inp, lo, hi, limit) if len(calls) == 1 else "infeasible"
+    def fails(inp: ShiftInput, lo: float, hi: float, limit: float, **kwargs: Any) -> Any:
+        calls.append((lo, hi, kwargs["energy"]))
+        return "infeasible" if len(calls) == failing else original(inp, lo, hi, limit, **kwargs)
 
-    monkeypatch.setattr(thermal_shift, "_solve", second_infeasible)
+    monkeypatch.setattr(thermal_shift, "_solve", fails)
     r = shift(night_cheap_morning_expensive(start_k=0.5))
-    assert calls == [(-1.0, 2.0), (0.0, 1.0)]  # Hauptlauf im Band, Grundlinie [0, S₋₁]
+    # Untergrenze der Energie und Grundlinie im Band [0, S₋₁], dann der Hauptlauf im ganzen Band
+    assert calls == [(0.0, 1.0, True), (0.0, 1.0, False)][:failing]
     assert r.reason == "not_worth" and r.saving_ct == 0 and all_zero(r)
+
+
+def test_runs_with_a_start_off_setpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[float, float, bool, float | None]] = []
+    original = thermal_shift._solve
+
+    def spy(inp: ShiftInput, lo: float, hi: float, limit: float, **kwargs: Any) -> Any:
+        calls.append((lo, hi, kwargs["energy"], kwargs["floor_kwh"]))
+        return original(inp, lo, hi, limit, **kwargs)
+
+    monkeypatch.setattr(thermal_shift, "_solve", spy)
+    shift(night_cheap_morning_expensive(start_k=-0.25))
+    assert [c[:3] for c in calls] == [(-0.5, 0.0, True), (-0.5, 0.0, False), (-1.0, 2.0, False)]
+    floor = calls[0][3]
+    assert floor is None and calls[1][3] == calls[2][3] is not None
+    calls.clear()
+    shift(night_cheap_morning_expensive())
+    assert calls == [(-1.0, 2.0, False, 0.0)]  # ohne Abweichung jetzt: E ≥ 0, ein Lauf
 
 
 def boom(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -397,11 +430,12 @@ def test_time_limit_reaches_the_solver(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen == [3.0, 5.0]  # ohne Abweichung jetzt kostet die Grundlinie 0, kein zweiter Lauf
     seen.clear()
     shift(night_cheap_morning_expensive(start_k=0.5), time_limit_s=3.0)
-    assert len(seen) == 2 and seen[0] == 3.0 and 0 < seen[1] <= 3.0  # die Grundlinie erbt den Rest
+    assert len(seen) == 3 and seen[0] == 3.0  # Untergrenze, Grundlinie und Hauptlauf
+    assert all(0 < limit <= 3.0 for limit in seen[1:])  # die weiteren Läufe erben den Rest
 
 
 def test_no_time_left_for_the_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = iter([0.0, 6.0])
+    clock = chain([0.0], repeat(6.0))
     monkeypatch.setattr(thermal_shift, "perf_counter", lambda: next(clock))
     r = shift(night_cheap_morning_expensive(start_k=0.5))
     assert r.reason == "solver" and r.saving_ct == 0 and all_zero(r)
