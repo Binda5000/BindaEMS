@@ -66,7 +66,7 @@ test('Übersicht zeichnet das Diagramm mit Prognosen, System zeigt Lastprognose 
 	);
 	await page.goto('/');
 	await load;
-	const chart = page.locator('section', { hasText: 'Preise und PV heute/morgen' });
+	const chart = page.locator('section', { hasText: 'Preise, PV und Akku heute/morgen' });
 	await expect(chart.locator('canvas').first()).toBeVisible();
 	await expect(chart.locator('.notice.error')).toHaveCount(0);
 
@@ -83,6 +83,20 @@ test('Übersicht zeichnet das Diagramm mit Prognosen, System zeigt Lastprognose 
 	await expect(quality.getByText('letzte 14 Tage')).toBeVisible();
 	await expect(quality.getByRole('columnheader', { name: 'MAE relativ' })).toBeVisible();
 	await expect(quality.getByRole('cell', { name: '0–6 h' }).first()).toBeVisible();
+});
+
+test('Übersicht: Hinweise aufklappen', async ({ page }) => {
+	await login(page, 'gast');
+	await page.goto('/');
+	const bar = page.getByRole('region', { name: 'Hinweise' });
+	await expect(bar).toBeVisible();
+	await expect(bar.getByRole('listitem')).toHaveCount(0);
+	await bar.getByRole('button', { name: 'Anzeigen' }).click();
+	await expect(
+		bar.getByRole('listitem').filter({ hasText: 'MQTT noch nicht verbunden' })
+	).toBeVisible();
+	await bar.getByRole('button', { name: 'Ausblenden' }).click();
+	await expect(bar.getByRole('button', { name: 'Anzeigen' })).toBeVisible();
 });
 
 test('System zeigt die Karte Klimaanlage ohne Werte', async ({ page }) => {

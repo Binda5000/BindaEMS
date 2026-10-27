@@ -4,6 +4,7 @@ import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
 import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
 import drivingJson from '$lib/api/contract/learning-driving.json';
+import historyJson from '$lib/api/contract/history.json';
 import learningStatusJson from '$lib/api/contract/learning-load.json';
 import learningCandidatesJson from '$lib/api/contract/learning-candidates.json';
 import qualityDailyJson from '$lib/api/contract/forecast-quality-daily.json';
@@ -11,6 +12,7 @@ import qualityJson from '$lib/api/contract/forecast-quality.json';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
 import settingsJson from '$lib/api/contract/settings.json';
+import statsDayJson from '$lib/api/contract/stats-day.json';
 import statsMonthJson from '$lib/api/contract/stats-month.json';
 import stateJson from '$lib/api/contract/state.json';
 import systemJson from '$lib/api/contract/system.json';
@@ -19,6 +21,7 @@ import {
 	DaySummarySchema,
 	DecisionsResponseSchema,
 	DrivingStatusSchema,
+	HistoryResponseSchema,
 	LatestDecisionsResponseSchema,
 	LearningStatusSchema,
 	LimitsSchema,
@@ -37,6 +40,7 @@ import {
 	type DecisionsResponse,
 	type DrivingStatus,
 	type DrivingVehicle,
+	type HistoryResponse,
 	type LatestDecisionsResponse,
 	type LearningStatus,
 	type Limits,
@@ -84,6 +88,16 @@ export function daySummary(overrides: Partial<DaySummary> = {}): DaySummary {
 /** Statistik des Oktobers 2026 aus der Demo-Welt, einzelne Felder überschreibbar */
 export function stats(overrides: Partial<Stats> = {}): Stats {
 	return { ...v.parse(StatsSchema, statsMonthJson), ...overrides };
+}
+
+/** Statistik eines Tages (08.10. der Demo-Welt) */
+export function statsDay(): Stats {
+	return v.parse(StatsSchema, statsDayJson);
+}
+
+/** Verlauf von Netz und Akku-SOC am Vormittag des 09.10. (08:00–09:45 in Wien) */
+export function history(): HistoryResponse {
+	return v.parse(HistoryResponseSchema, historyJson);
 }
 
 /** Eine beendete Ladesession der Demo-Welt (die jüngste beendete), Felder überschreibbar */

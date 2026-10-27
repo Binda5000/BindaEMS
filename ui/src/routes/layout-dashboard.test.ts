@@ -1,6 +1,16 @@
 import { render, screen, within } from '@testing-library/svelte';
-import { beforeEach, expect, it, vi } from 'vitest';
-import { latestDecisions, system } from '$lib/testing/fixtures';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { formatPower, formatSoc } from '$lib/format';
+import { live } from '$lib/live.svelte';
+import {
+	coreState,
+	history,
+	latestDecisions,
+	limits,
+	statsDay,
+	system
+} from '$lib/testing/fixtures';
+import { RESPONSE as PLAN_RESPONSE } from '$lib/testing/plan';
 import Page from './+page.svelte';
 
 const { api } = vi.hoisted(() => ({
@@ -12,7 +22,10 @@ const { api } = vi.hoisted(() => ({
 		prices: vi.fn(),
 		forecast: vi.fn(),
 		loadForecast: vi.fn(),
-		latestDecisions: vi.fn()
+		latestDecisions: vi.fn(),
+		plan: vi.fn(),
+		history: vi.fn(),
+		stats: vi.fn()
 	}
 }));
 vi.mock('$lib/api/endpoints', async (original) => ({
@@ -30,11 +43,19 @@ beforeEach(() => {
 		'pricesNow',
 		'prices',
 		'forecast',
-		'loadForecast'
+		'loadForecast',
+		'plan',
+		'history',
+		'stats'
 	] as const) {
 		api[name].mockReturnValue(new Promise(() => {}));
 	}
 	api.system.mockResolvedValue(system());
+});
+
+afterEach(() => {
+	live.state = null;
+	vi.useRealTimers();
 });
 
 function why(): HTMLElement {
@@ -98,9 +119,138 @@ it('das Diagramm bleibt, wenn die Lastprognose scheitert, und nennt den Fehler',
 	api.loadForecast.mockRejectedValue(new ApiError(503, 'Lastprognose nicht erreichbar.'));
 	render(Page);
 	const chart = screen
-		.getByRole('heading', { level: 2, name: 'Preise und PV heute/morgen' })
+		.getByRole('heading', { level: 2, name: 'Preise, PV und Akku heute/morgen' })
 		.closest('section');
-	if (chart === null) throw new Error('Karte „Preise und PV heute/morgen“ fehlt');
+	if (chart === null) throw new Error('Karte „Preise, PV und Akku heute/morgen“ fehlt');
 	expect(await within(chart).findByText('Lastprognose nicht erreichbar.')).toBeInTheDocument();
 	expect(within(chart).getByRole('img', { name: /^Diagramm:/ })).toBeInTheDocument();
+});
+
+// --- Kennzahlen-Leiste ----------------------------------------------------------------------
+
+/** Demo-Uhr: 09.10.2026, 10:00 in Wien – dazu passen Plan und Verlauf der Vertragsdateien */
+const DEMO_NOW = new Date('2026-10-09T08:00:00Z');
+
+/** Verlauf mit allen vier Reihen der Kacheln (PV und Haus aus dem Netz-Verlauf abgeleitet) */
+function fullHistory() {
+	const base = history();
+	const grid = base.series['grid']!;
+	return {
+		...base,
+		series: {
+			...base.series,
+			pv: { ...grid, label: 'PV', points: grid.points.map(([at, w]) => [at, w + 1000]) },
+			house: { ...grid, label: 'Haus', points: grid.points.map(([at, w]) => [at, w + 500]) }
+		}
+	};
+}
+
+function liveData() {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(DEMO_NOW);
+	live.state = coreState();
+	api.latestDecisions.mockResolvedValue({ decisions: [] });
+	api.limits.mockResolvedValue(limits());
+	api.plan.mockResolvedValue(PLAN_RESPONSE);
+	api.history.mockResolvedValue(fullHistory());
+	api.stats.mockResolvedValue(statsDay());
+}
+
+function kpi(id: 'pv' | 'house' | 'grid'): HTMLElement {
+	return screen.getByTestId(`kpi-${id}`);
+}
+
+it('zeigt Akku, Kennzahlen, Woher–Wohin, Autos und Warum?', async () => {
+	liveData();
+	const state = coreState();
+	render(Page);
+
+	const battery = screen.getByRole('region', { name: 'Hausakku' });
+	// formatSoc/formatPower setzen ein geschütztes Leerzeichen, das toHaveTextContent einebnet
+	expect(within(battery).getByTestId('battery-soc').textContent).toBe(
+		formatSoc(state.signals['battery.soc_pct']!.v as number)
+	);
+	expect(await within(battery).findByText(/^Plan: /)).toBeInTheDocument();
+
+	expect(kpi('pv').textContent).toContain(formatPower(state.derived.pv_total_w));
+	expect(kpi('house').textContent).toContain(formatPower(state.derived.house_load_w));
+	expect(kpi('grid')).toHaveTextContent(/^Netz/);
+	// Tageswerte und Mini-Linien
+	expect(await within(kpi('pv')).findByText(/^heute /)).toBeInTheDocument();
+	expect(within(kpi('grid')).getByText(/^heute ↓ .* · ↑ /)).toBeInTheDocument();
+	for (const id of ['pv', 'house', 'grid'] as const) {
+		expect(kpi(id).querySelector('polyline')).not.toBeNull();
+	}
+	expect(screen.getByTestId('price-now')).toBeInTheDocument();
+
+	for (const title of ['Woher kommt der Strom – wohin geht er?', 'Autos', 'Warum?']) {
+		expect(screen.getByRole('heading', { level: 2, name: title })).toBeInTheDocument();
+	}
+	// Autos aus den Grenzen der Anlage
+	const cars = screen.getByRole('heading', { level: 2, name: 'Autos' }).closest('section');
+	if (cars === null) throw new Error('Karte „Autos“ fehlt');
+	const [firstCar] = Object.values(limits().vehicles);
+	expect(await within(cars).findByText(firstCar!.name)).toBeInTheDocument();
+});
+
+it('fragt Plan, Verlauf ab 0 Uhr in Wien bis jetzt und Tageswerte ab', async () => {
+	liveData();
+	render(Page);
+	await screen.findByText(/^Plan: /);
+	expect(api.plan).toHaveBeenCalledTimes(1);
+	expect(api.history).toHaveBeenCalledWith(
+		['pv', 'house', 'grid', 'soc.battery'],
+		{ from: '2026-10-08T22:00:00.000Z', to: '2026-10-09T08:00:00.000Z' },
+		expect.anything()
+	);
+	expect(api.stats).toHaveBeenCalledWith('day', undefined, expect.anything());
+});
+
+it('scheitert der Plan, fehlt nur die Planzeile', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	liveData();
+	api.plan.mockRejectedValue(new ApiError(503, 'Planer nicht erreichbar.'));
+	render(Page);
+	expect(await within(kpi('pv')).findByText(/^heute /)).toBeInTheDocument();
+	await vi.waitFor(() => expect(kpi('pv').querySelector('polyline')).not.toBeNull());
+	const battery = screen.getByRole('region', { name: 'Hausakku' });
+	expect(within(battery).getByTestId('battery-soc')).toHaveTextContent('%');
+	expect(within(battery).queryByText(/^Plan: /)).not.toBeInTheDocument();
+	expect(screen.queryByText('Planer nicht erreichbar.')).not.toBeInTheDocument();
+});
+
+it('scheitert der Verlauf, fehlen nur die Mini-Linien', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	liveData();
+	api.history.mockRejectedValue(new ApiError(503, 'Verlauf nicht erreichbar.'));
+	render(Page);
+	expect(await screen.findByText(/^Plan: /)).toBeInTheDocument();
+	expect(await within(kpi('pv')).findByText(/^heute /)).toBeInTheDocument();
+	for (const id of ['pv', 'house', 'grid'] as const) {
+		expect(kpi(id)).toHaveTextContent(/\d/);
+		expect(kpi(id).querySelector('polyline')).toBeNull();
+	}
+	expect(screen.queryByText('Verlauf nicht erreichbar.')).not.toBeInTheDocument();
+});
+
+it('scheitern die Tageswerte, fehlt nur der Tageswert', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	liveData();
+	api.stats.mockRejectedValue(new ApiError(503, 'Statistik nicht erreichbar.'));
+	render(Page);
+	await vi.waitFor(() => expect(kpi('pv').querySelector('polyline')).not.toBeNull());
+	for (const id of ['pv', 'house', 'grid'] as const) {
+		expect(kpi(id)).not.toHaveTextContent('heute');
+	}
+});
+
+it('zeigt die Hinweis-Leiste über den Kacheln', async () => {
+	api.latestDecisions.mockResolvedValue({ decisions: [] });
+	render(Page);
+	const bar = await screen.findByRole('region', { name: 'Hinweise' });
+	expect(within(bar).getByRole('button', { name: 'Anzeigen' })).toBeInTheDocument();
+	expect(
+		bar.compareDocumentPosition(screen.getByRole('region', { name: 'Hausakku' })) &
+			Node.DOCUMENT_POSITION_FOLLOWING
+	).toBeTruthy();
 });

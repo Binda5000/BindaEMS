@@ -56,6 +56,8 @@
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
+		/* „ct/kWh“ macht den Preis zum längsten Wert der Reihe: Schrift an die Kachelbreite anpassen */
+		container-type: inline-size;
 	}
 
 	.label {
@@ -72,7 +74,7 @@
 	}
 
 	.value {
-		font-size: 1.625rem;
+		font-size: min(1.625rem, 14cqi);
 		font-weight: 700;
 		line-height: 1.2;
 	}

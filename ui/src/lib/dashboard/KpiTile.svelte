@@ -5,7 +5,7 @@
 		label: string;
 		value: string;
 		/** Tageswert o. Ä. unter der Mini-Linie */
-		detail?: string;
+		detail?: string | null;
 		/** CSS-Variable der Kachel, etwa `var(--pv)` */
 		color: string;
 		points?: [number, number][];

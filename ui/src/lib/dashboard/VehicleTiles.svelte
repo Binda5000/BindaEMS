@@ -78,7 +78,7 @@
 		margin: 0;
 		padding: 0;
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
 		gap: 0.75rem;
 	}
 

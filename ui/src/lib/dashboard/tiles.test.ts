@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryResponse } from '$lib/api/schemas';
+import { DASH, formatEnergy, formatPower, NBSP } from '$lib/format';
 import { stats } from '$lib/testing/fixtures';
 import {
 	dayEnergy,
+	dayText,
+	gridDayText,
 	gridLabel,
+	gridPowerText,
 	HISTORY_SERIES,
 	SPARK_WINDOW_MS,
 	sparkLine,
@@ -87,6 +91,33 @@ describe('dayEnergy', () => {
 			importKwh: data.energy.import_kwh,
 			exportKwh: data.energy.export_kwh
 		});
+	});
+});
+
+describe('Texte der Kacheln', () => {
+	it('nennt den Tageswert, ohne Wert nichts', () => {
+		expect(dayText(8.1)).toBe(`heute ${formatEnergy(8.1)}`);
+		expect(dayText(0)).toBe(`heute ${formatEnergy(0)}`);
+		expect(dayText(null)).toBeNull();
+	});
+
+	it('nennt beim Netz Bezug und Einspeisung des Tages', () => {
+		const day = { pvKwh: 8, houseKwh: 9, importKwh: 4, exportKwh: 1.2 };
+		expect(gridDayText(day)).toBe(
+			`heute ↓${NBSP}${formatEnergy(4)} · ↑${NBSP}${formatEnergy(1.2)}`
+		);
+		expect(gridDayText({ ...day, exportKwh: null })).toBe(
+			`heute ↓${NBSP}${formatEnergy(4)} · ↑${NBSP}${DASH}`
+		);
+		expect(gridDayText({ ...day, importKwh: null, exportKwh: null })).toBeNull();
+	});
+
+	it('zeigt die Netzleistung ohne Vorzeichen, die Richtung steht in der Beschriftung', () => {
+		expect(gridPowerText(380)).toBe(formatPower(380));
+		expect(gridPowerText(-900)).toBe(formatPower(900));
+		expect(gridPowerText(null)).toBe(DASH);
+		expect(gridPowerText(undefined)).toBe(DASH);
+		expect(gridPowerText(Number.NaN)).toBe(DASH);
 	});
 });
 

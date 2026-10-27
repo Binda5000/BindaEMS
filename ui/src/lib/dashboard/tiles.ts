@@ -1,5 +1,6 @@
 // Kennzahlen-Kacheln der Übersicht: Verlauf der letzten 2 h, Netz-Beschriftung und Tagesenergie
 import type { HistoryResponse, Stats } from '$lib/api/schemas';
+import { DASH, formatEnergy, formatPower, NBSP } from '$lib/format';
 import { IDLE_W } from './flow';
 
 export const SPARK_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -42,6 +43,25 @@ export function dayEnergy(stats: Stats | null | undefined): DayEnergy {
 		importKwh: energy?.import_kwh ?? null,
 		exportKwh: energy?.export_kwh ?? null
 	};
+}
+
+/** „heute 8,10 kWh“; ohne Tageswert `null` (die Kachel bleibt ohne Zeile) */
+export function dayText(kwh: number | null): string | null {
+	return kwh === null ? null : `heute ${formatEnergy(kwh)}`;
+}
+
+/**
+ * „heute ↓ 4,00 kWh · ↑ 1,20 kWh“ (Bezug, Einspeisung); ohne beide Werte `null`. Pfeil und Wert
+ * hängen mit einem geschützten Leerzeichen zusammen, damit der Umbruch nicht dazwischen fällt.
+ */
+export function gridDayText(day: DayEnergy): string | null {
+	if (day.importKwh === null && day.exportKwh === null) return null;
+	return `heute ↓${NBSP}${formatEnergy(day.importKwh)} · ↑${NBSP}${formatEnergy(day.exportKwh)}`;
+}
+
+/** Netzleistung als Betrag; die Richtung nennt `gridLabel` */
+export function gridPowerText(gridW: number | null | undefined): string {
+	return typeof gridW === 'number' && Number.isFinite(gridW) ? formatPower(Math.abs(gridW)) : DASH;
 }
 
 const SPARK_WIDTH = 100;

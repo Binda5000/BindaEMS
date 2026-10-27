@@ -6,7 +6,8 @@ test('gast meldet sich an und sieht die Übersicht mit Live-Werten', async ({ pa
 	await expect(page).toHaveURL(/\/login\?next=%2F$/);
 	await login(page, 'gast');
 	await expect(page.getByRole('heading', { level: 1, name: 'Übersicht' })).toBeVisible();
-	await expect(page.getByTestId('flow-pv')).toContainText('kW');
+	await expect(page.getByTestId('kpi-pv')).toContainText('kW');
+	await expect(page.getByTestId('battery-soc')).toContainText('%');
 	await expect(page.getByText('live', { exact: true })).toBeVisible();
 	await expect(page.getByRole('navigation').getByRole('link', { name: 'Benutzer' })).toHaveCount(0);
 });
