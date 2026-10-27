@@ -60,6 +60,28 @@ it('sagt, wenn keine Autos eingetragen sind, und verweist zum Laden', () => {
 	expect(screen.getByRole('link', { name: 'Zum Laden' })).toHaveAttribute('href', '/laden');
 });
 
+it('zeigt „Lädt …“, solange die Fahrzeuge fehlen', () => {
+	render(VehicleTiles, { cards: undefined, stale: false, error: null });
+	expect(screen.getByText('Lädt …')).toBeInTheDocument();
+	expect(screen.queryByText('Keine Autos eingetragen.')).not.toBeInTheDocument();
+});
+
+it('nennt bei einem Fehler nur den Fehler, nie „Keine Autos eingetragen.“', () => {
+	for (const cards of [undefined, []]) {
+		const { unmount } = render(VehicleTiles, {
+			cards,
+			stale: false,
+			error: new ApiError(502, 'Server nicht erreichbar (HTTP 502)')
+		});
+		expect(
+			screen.getByText(/Fahrzeuge nicht geladen: Server nicht erreichbar/)
+		).toBeInTheDocument();
+		expect(screen.queryByText('Keine Autos eingetragen.')).not.toBeInTheDocument();
+		expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+		unmount();
+	}
+});
+
 it('zeigt den Fehler', () => {
 	render(VehicleTiles, {
 		cards: [],

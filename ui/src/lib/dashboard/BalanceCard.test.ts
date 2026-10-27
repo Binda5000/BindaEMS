@@ -91,3 +91,9 @@ it('zeigt ohne Messwerte Striche und den Fehler', () => {
 	expect(screen.getByText(/^Quellen · –$/)).toBeInTheDocument();
 	expect(screen.getByText('Keine Verbindung zum Server')).toBeInTheDocument();
 });
+
+it('setzt die Schriftfarbe der PV-Fläche über die Klasse der Art', () => {
+	render(BalanceCard, props());
+	const pv = within(screen.getByTestId('balance-sources')).getByText('PV');
+	expect(pv).toHaveClass('segment', 'pv');
+});

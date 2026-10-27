@@ -24,6 +24,8 @@
 	--battery: #1f6feb;
 	--house: #8250df;
 	--wallbox: #0b7a5a;
+	/* Schrift auf --pv-Flächen: in beiden Themes dunkel (weiß erreicht dort höchstens 2,75 : 1) */
+	--on-pv: #1b1f24;
 	--radius: 12px;
 	--gap: 1rem;
 	--focus: #1f6feb;

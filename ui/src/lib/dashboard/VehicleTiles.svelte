@@ -6,7 +6,8 @@
 	import { ringArc, socNote, type VehicleCard } from './vehicles';
 
 	interface Props {
-		cards: VehicleCard[];
+		/** `undefined`: Fahrzeuge noch nicht geladen */
+		cards: VehicleCard[] | undefined;
 		/** Live-Verbindung veraltet: alle Werte gedämpft */
 		stale: boolean;
 		/** Fahrzeuge (Grenzen der Anlage) nicht geladen */
@@ -19,8 +20,14 @@
 </script>
 
 <Card title="Autos">
-	{#if cards.length === 0}
-		<p class="muted">Keine Autos eingetragen.</p>
+	{#if cards === undefined}
+		{#if !error}
+			<p class="muted">Lädt …</p>
+		{/if}
+	{:else if cards.length === 0}
+		{#if !error}
+			<p class="muted">Keine Autos eingetragen.</p>
+		{/if}
 	{:else}
 		<ul class="cards" class:stale>
 			{#each cards as card (card.id)}

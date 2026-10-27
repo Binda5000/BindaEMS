@@ -40,7 +40,7 @@
 		<div class="bar" data-testid="balance-{id}" aria-hidden="true">
 			{#each segments as segment (segment.id)}
 				<span
-					class="segment"
+					class="segment {segment.kind}"
 					style:flex-grow={segment.share}
 					style:background={COLORS[segment.kind]}
 				>
@@ -117,6 +117,10 @@
 		padding-left: 0.5rem;
 		overflow: hidden;
 		white-space: nowrap;
+	}
+
+	.segment.pv {
+		color: var(--on-pv);
 	}
 
 	.legend {
