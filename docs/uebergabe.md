@@ -125,7 +125,8 @@ einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen
 (`docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md`, 11 Tasks, Task 1 entfällt,
 freigegeben vom Betreiber am 27.10.2026 mit allen 17 Entscheidungen: „Freigeben, Task 1 vorziehen“):
 auf dem Branch `claude/project-thread-x8izsc` (auf dem Stand von `main` mit Übersicht B), **noch nicht
-auf `main`** (Gesamtreview und Zustimmung des Betreibers stehen aus) und nicht ausgerollt. Die app lernt
+auf `main`** (Gesamtreview, Fix-Welle und Re-Review erledigt; die Zustimmung des Betreibers steht aus) und nicht
+ausgerollt; die Liste „Deferred minors 5c“ steht unter „Bewusst offen gelassen“. Die app lernt
 je Betriebsart ein Wärmemodell des Hauses (Grundleistung, Zeitkonstante, Speicher je K; nachts um
 03:50 Uhr, Tabelle `thermal_model`, Migration `0015`), ein zweiter Planungsschritt nach Akku und Autos
 verschiebt den Verbrauch der Klimaanlage im Komfortband in günstige oder PV-reiche Stunden, und der core
@@ -1971,8 +1972,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Ausrollen gemeinsam mit 3d, 4b, 5a und 6a (Punkt 11 unter „Offen an der Anlage“) und die Abnahme über
      28 Tage; „Vorschläge erscheinen mit Konfidenz“ gehört zu ihr.
    - **5c Vorheizen und Vorkühlen:** umgesetzt und je Task geprüft auf dem Branch
-     `claude/project-thread-x8izsc`, **noch nicht auf `main`** (Gesamtreview und Zustimmung des Betreibers
-     stehen aus), nicht ausgerollt (Kurzfassung). Wärmemodell je Betriebsart, zweiter Planungsschritt mit
+     `claude/project-thread-x8izsc`, **noch nicht auf `main`** (Gesamtreview erledigt, Zustimmung des
+     Betreibers steht aus), nicht ausgerollt (Kurzfassung). Wärmemodell je Betriebsart, zweiter Planungsschritt mit
      Vorschau, Planwert an den core, Schalter ab Werk aus. Es folgt das Ausrollen frühestens nach den
      Abnahmen 5a und 5b am 22.11.2026 (Punkt 13 unter „Offen an der Anlage“), dann die Abnahme Teil A
      (14 Tage Vorschau) und nach der Abnahme 6a und der Entscheidung des Betreibers Teil B (14 Tage live).
@@ -3703,3 +3704,49 @@ die Fix-Welle behoben hat, ist durchgestrichen.
     120 s, den Akku-SOC des Tages fürs Diagramm alle 5 bis 10 min.
 - **Task 6 (Doku):** ~~Spec und `betrieb.md` erwähnen nicht, dass die Vorschau der Hinweis-Leiste aufgeklappt entfällt.~~
   (erledigt 27.10.2026, Fix-Welle)
+
+Aufgeschobene Kleinigkeiten aus Plan 5c (Deferred minors 5c), aus den Reviews der Tasks 2 bis 12, dem Gesamtreview und
+dem Re-Review der Fix-Welle. Keine davon gefährdet die Anlage: Das Wärmemodell und die Verschiebung erreichen die
+Safety-Schicht nie, der Schalter „Vorheizen und Vorkühlen“ ist ab Werk aus, und die Klimaanlage bleibt im Dry-Run. Laut
+Gesamtreview muss keine vor der Integration behoben werden; die Lücke beim Seed der Betriebsbits gehört vor die
+Kühlsaison 2027.
+
+- **Daten und Modell:**
+  - Die Betriebsbits stehen nur bei Änderung in InfluxDB `status` (90 Tage). Liegt die letzte Änderung länger zurück,
+    fehlt der Seed, und der Anteil „läuft“ ist unbekannt (im Betriebshandbuch beschrieben; vor der Kühlsaison 2027
+    beheben).
+  - `pv_w` ist eine Teilsumme, wenn nur ein Teil der PV-Reihen in einem Slot einen Wert hat (`thermal_data.py`);
+    `SLOT_S` ist unbenutzt, `_pv` setzt 15 min fest statt `STEP`.
+  - Die Speicherkapazität aus Ereignissen liegt bauartbedingt etwa 20 % zu tief (die Summe endet bei 0,3 K; die
+    Grenzen fangen das ab); der Anteil „läuft“ übergeht Viertelstunden mit 20 bis 80 % und ist für taktende Geräte
+    eher zu hoch; der Beginn einer Auskühl-Phase enthält bis zu 20 % Laufzeit und den schnellen Abfall der Luft, τ
+    liegt damit etwas zu tief; `s` kommt ohne Prüfung, ob PV überhaupt schwankt (nur R² wacht).
+  - Eine Betriebsart ohne Slots meldet `few_days` mit 0 Tagen (`no_data` nur bei leerer Liste); die Karte
+    „Wärmemodell“ schreibt bei einem Tag „1 Tage“.
+  - Gespeicherte Parameter brauchen genau die Felder von `ModeModel`: Kommt ein Feld dazu, sind alte Zeilen bis zum
+    nächsten Lauf nicht lesbar (der Dienst rechnet dann neu).
+  - `computed_at` ohne `ensure_utc`; kein Test für `run()` über Start und Nachtlauf; kein Schutz gegen `start_run`
+    nach `close`; „aktuell“ auch, wenn beide Betriebsarten nicht taugen; der Test der Migration `0015` prüft die
+    Spalte `mode` nicht.
+- **Verschiebung (zweiter Planungsschritt):**
+  - Nach einem teuren Block kann das Haus unter dem Soll bleiben, solange die Energiebedingung Spielraum hat.
+  - Das Minimum-LP für `E_min` begrenzt nur noch die Basis und könnte entfallen (ein Lösen weniger).
+  - Die Untergrenze aus der Basis kostet echte Verschiebungen außerhalb des Solls bis etwa 5 %; das Optimum der Basis
+    ist nicht eindeutig; Tests pinnen genaue Stufenmuster (brüchig bei einer neuen HiGHS-Version).
+  - Eine reine Absenkung ab Start 0 muss vorgeheizt enden (E ≥ 0, vorsichtig).
+  - Der Plan kann während einer Verschiebung zwischen „ok“ und „lohnt nicht“ wechseln (keine Hysterese; im
+    Betriebshandbuch beschrieben).
+  - Läuft HiGHS über die äußere Zeitgrenze (10 s), meldet der Schritt `solver`, der Thread rechnet aber zu Ende.
+- **Plan und Auslöser:** Der Auslöser „Betriebsart geändert“ wiederholt sich alle 5 min, solange kein Plan da ist;
+  `current()` wird im Worker-Thread gelesen (GIL-sicher); `_thermal_settings` ist Zustand der Instanz (nur
+  nacheinander laufende Pläne).
+- **core:** `note_raised` verlängert nach einem späten Senden auch die Wartezeit von 6a (nur länger); `note_accepted`
+  und Echo können bei einer Handänderung auseinanderlaufen (sicher); eine Überschuss-Stufe aus einem positiven Plan
+  bleibt unter einem negativen Plan, bis Bezug oder SOC sie abbauen; Regel 6 (Netzbezug) greift nur über dem Plan
+  (Idee für später: geplanter Bezug `import_w` in der Absicht).
+- **HA und API:** Ein HA-Benutzer mit Bedienrechten kann den Schalter umlegen (so gewollt, Präzisierung 15);
+  `set_thermal_plan` wiederholt die Schleife von `set_grid_charge`.
+- **UI:** Die Karte „Wärmemodell“ zeigt kurz „Lädt …“ und verschwindet bei 404, dann neuer Versuch alle 30 s ohne
+  Ende; im System-Abschnitt stehen „−“ (U+2212) und „-“ nebeneinander, dazu „0,0 K bis“; der 404-Test hängt am
+  Timing.
+- **Doku:** Die Toleranz in Abnahme B1 (±0,5 K um das Band) lässt sich unterschiedlich lesen; einige lange Zeilen.
