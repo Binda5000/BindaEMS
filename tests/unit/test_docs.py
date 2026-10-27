@@ -1066,7 +1066,7 @@ def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
 
 
 # Plattformen der Tabellen im Handbuch
-HA_PLATFORMS = {"sensor", "binary_sensor", "switch", "number", "text", "button"}
+HA_PLATFORMS = {"sensor", "binary_sensor", "switch", "number", "time", "button"}
 
 
 def _documented_entities(section: str) -> dict[str, tuple[str, str]]:

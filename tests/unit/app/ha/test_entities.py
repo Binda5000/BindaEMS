@@ -901,7 +901,7 @@ def local(moment: datetime) -> str:
 
 
 def test_target_soc_number_and_departure_time(cfg) -> None:
-    number, time = config_of(cfg, "tesla_target_soc"), config_of(cfg, "tesla_departure")
+    number, departure = config_of(cfg, "tesla_target_soc"), config_of(cfg, "tesla_departure")
     assert (number["name"], number["min"], number["max"], number["step"]) == (
         "Ziel-SOC",
         20.0,
@@ -912,8 +912,8 @@ def test_target_soc_number_and_departure_time(cfg) -> None:
         "%",
         "bindaems/cmd/tesla_target_soc",
     )
-    assert "pattern" not in time
-    assert (time["name"], time["command_topic"], time["state_topic"]) == (
+    assert "pattern" not in departure
+    assert (departure["name"], departure["command_topic"], departure["state_topic"]) == (
         "Abfahrtszeit",
         "bindaems/cmd/tesla_departure",
         "bindaems/state/tesla_departure",

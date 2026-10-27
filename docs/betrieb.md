@@ -572,7 +572,7 @@ vorn. Die Warnung „Ziel-SOC unerreichbar“ gilt für alle Fahrzeuge.
 | Objekt-ID | Name | Plattform | Wert |
 |---|---|---|---|
 | `tesla_target_soc` | Ziel-SOC | number | das Ziel der Absicht in % (20 bis 100, Schritt 1); schreibend |
-| `tesla_departure` | Abfahrtszeit | text | die tägliche Abfahrt der Absicht, `HH:MM` (Muster `^([01]\d\|2[0-3]):[0-5]\d$`); schreibend |
+| `tesla_departure` | Abfahrtszeit | time | die tägliche Abfahrt der Absicht; Zustand `HH:MM:00`, Befehl `HH:MM` oder `HH:MM:SS` (die Sekunden fallen weg); schreibend |
 | `tesla_done_by` | Fertig um | sensor | wann das Auto voraussichtlich am Ziel ist (Zeitstempel) |
 | `tesla_target_reachable` | Ziel erreichbar | sensor | „ja“ oder „nein“ (Geräteklasse „enum“); Attribute `expected_soc_pct` (Ladestand an der Abfahrt, eine Nachkommastelle), `departure_at` (die nächste Abfahrt, Ortszeit) und `soc_source` (`measured`, `estimated` oder `assumed`) |
 | `problem_target_unreachable` | Ziel-SOC unerreichbar | binary_sensor | an, wenn ein Auto im Modus „Geplant“ sein Ziel nicht erreicht; Attribut `vehicles` mit den Namen dieser Autos |
