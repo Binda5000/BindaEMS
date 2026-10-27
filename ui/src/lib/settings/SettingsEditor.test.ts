@@ -285,7 +285,9 @@ it('speichert Schalter und Sensoren des Lastmodells mit den übrigen Einstellung
 			'binary_sensor.anwesenheit'
 		],
 		// der Abschnitt Fahrverhalten bleibt unverändert erhalten
-		driving: current.settings.learning.driving
+		driving: current.settings.learning.driving,
+		// ebenso der Abschnitt Vorheizen und Vorkühlen
+		thermal: current.settings.learning.thermal
 	});
 	expect(loadCandidates).toHaveBeenCalledTimes(1);
 });

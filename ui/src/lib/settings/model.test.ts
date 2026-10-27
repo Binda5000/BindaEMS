@@ -447,7 +447,9 @@ it('übernimmt Schalter und Sensoren des Lastmodells', () => {
 		load_model_enabled: false,
 		ha_sensors: ['person.anna', 'sensor.aussentemperatur'],
 		// der Abschnitt Fahrverhalten bleibt unverändert erhalten
-		driving: current.learning.driving
+		driving: current.learning.driving,
+		// ebenso der Abschnitt Vorheizen und Vorkühlen
+		thermal: current.learning.thermal
 	});
 	expect(result.settings.learning.driving).toEqual({
 		return_reserve_pct: 20,
