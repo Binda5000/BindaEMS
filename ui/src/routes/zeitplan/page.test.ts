@@ -281,7 +281,7 @@ describe('Vorheizen und Vorkühlen', () => {
 		renderPage('viewer', withThermal({ saving_ct: 12 }));
 		await screen.findByRole('heading', { name: 'Vorheizen und Vorkühlen' });
 		const card = within(thermalCard());
-		expect(card.getByText('Vorschau: Vorheizen/Vorkühlen spräche etwa 12 ct.')).toBeVisible();
+		expect(card.getByText('Vorschau: Vorheizen/Vorkühlen würde etwa 12 ct sparen.')).toBeVisible();
 		const table = card.getByRole('table');
 		expect(
 			within(table)

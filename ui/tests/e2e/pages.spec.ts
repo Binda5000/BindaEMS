@@ -142,7 +142,7 @@ test('Wärmemodell, Vorschau im Zeitplan und Einstellungen passen bei 360 px ohn
 	await page.goto('/zeitplan');
 	const shift = card('Vorheizen und Vorkühlen');
 	await expect(
-		shift.getByText('Vorschau: Vorheizen/Vorkühlen spräche etwa 18,4 ct.')
+		shift.getByText('Vorschau: Vorheizen/Vorkühlen würde etwa 18,4 ct sparen.')
 	).toBeVisible();
 	await expect(shift.getByRole('columnheader', { name: 'Klima' })).toBeVisible();
 	await expect(shift.getByRole('cell', { name: '+1,0 K' })).toBeVisible();

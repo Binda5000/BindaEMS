@@ -126,7 +126,7 @@ export function planThermalLine(thermal: PlanThermal): string {
 	if (thermal.active) return `Vorheizen/Vorkühlen aktiv: spart etwa ${saving}.`;
 	switch (thermal.reason) {
 		case 'ok':
-			return `Vorschau: Vorheizen/Vorkühlen spräche etwa ${saving}.`;
+			return `Vorschau: Vorheizen/Vorkühlen würde etwa ${saving} sparen.`;
 		case 'off':
 			return 'Vorheizen und Vorkühlen ist aus.';
 		case 'no_model':

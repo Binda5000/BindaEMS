@@ -154,7 +154,7 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
   - `implausible_tau`: „Die Zeitkonstante {τ} h ist unplausibel (4 bis 200 h).“
   - `no_data`: „Noch keine Daten der Klimaanlage.“
   Fuß „Berechnet am {TT.MM. HH:MM}.“, Taste „Jetzt neu berechnen“ („Berechnung läuft …“).
-- **Zeitplan:** Spalte „Klima“ mit „+1,0 K“ / „−0,5 K“ / „–“; Zeile über der Tabelle: aktiv „Vorheizen/Vorkühlen aktiv: spart etwa {x} ct.“, Vorschau „Vorschau: Vorheizen/Vorkühlen spräche etwa {x} ct.“ (nur mit Schalter aus), sonst nach `reason`: `off` „Vorheizen und Vorkühlen ist aus.“, `no_model` „Kein taugliches Wärmemodell für {Betriebsart}.“, `mode` „Die Klimaanlage heizt oder kühlt gerade nicht.“, `not_worth` „Verschieben lohnt sich in diesem Plan nicht.“, `solver` „Die Verschiebung ließ sich nicht berechnen.“
+- **Zeitplan:** Spalte „Klima“ mit „+1,0 K“ / „−0,5 K“ / „–“; Zeile über der Tabelle: aktiv „Vorheizen/Vorkühlen aktiv: spart etwa {x} ct.“, Vorschau „Vorschau: Vorheizen/Vorkühlen würde etwa {x} ct sparen.“ (nur mit Schalter aus), sonst nach `reason`: `off` „Vorheizen und Vorkühlen ist aus.“, `no_model` „Kein taugliches Wärmemodell für {Betriebsart}.“, `mode` „Die Klimaanlage heizt oder kühlt gerade nicht.“, `not_worth` „Verschieben lohnt sich in diesem Plan nicht.“, `solver` „Die Verschiebung ließ sich nicht berechnen.“
 - **Grundcodes:** `KLIMA_MEHR` „Vorheizen um {k} K, weil Strom jetzt günstig ist oder PV übrig bleibt.“ (beim Kühlen „Vorkühlen um {k} K, …“); `KLIMA_WENIGER` „Heizung {k} K tiefer, weil Strom jetzt teuer ist.“ (beim Kühlen „Kühlung {k} K schwächer, …“).
 - **Grund im Entscheidungslog** `thermal_plan`: „Klimaanlage folgt dem Plan ({k} K).“
 - **Karte „Klimaanlage“** (System): Zeile „Plan“ „{k} K bis {HH:MM}“ oder „kein Planwert“.
@@ -591,7 +591,7 @@ git commit -m "feat(app): Vorheizen und Vorkühlen in Home Assistant"
 ```ts
 it('zeigt je Betriebsart Zeitkonstante und Speicher', ...)
 it('nennt den Grund, wenn das Modell nicht taugt', ...)  // „Noch zu wenig Tage mit Heizen: 9 von 14.“
-it('zeigt im Zeitplan die Spalte Klima und die Vorschau', ...)  // „Vorschau: … spräche etwa 12 ct.“
+it('zeigt im Zeitplan die Spalte Klima und die Vorschau', ...)  // „Vorschau: … würde etwa 12 ct sparen.“
 it('zeigt in der Karte Klimaanlage den Planwert', ...)
 it('lehnt ein Komfortband außerhalb der Schritte ab', ...)
 it('passt bei 360 px ohne waagrechte Scrollleiste', ...)

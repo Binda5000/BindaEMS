@@ -116,7 +116,9 @@ describe('planThermalLine', () => {
 	};
 
 	it('zeigt die Vorschau und die aktive Verschiebung mit der Ersparnis', () => {
-		expect(planThermalLine(preview)).toBe(`Vorschau: Vorheizen/Vorkühlen spräche etwa 12${NB}ct.`);
+		expect(planThermalLine(preview)).toBe(
+			`Vorschau: Vorheizen/Vorkühlen würde etwa 12${NB}ct sparen.`
+		);
 		expect(planThermalLine({ ...preview, active: true, saving_ct: 18.4 })).toBe(
 			`Vorheizen/Vorkühlen aktiv: spart etwa 18,4${NB}ct.`
 		);
