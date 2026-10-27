@@ -263,10 +263,10 @@ def test_cooling_mirrors_heating() -> None:
 
 
 def test_stored_heat_at_start_is_used() -> None:
-    inp = shift_input([slot(i, import_ct=40.0) for i in range(16)], start_k=1.0)
+    inp = night_cheap_morning_expensive(start_k=1.0)
     r = shift(inp)
     assert r.reason == "ok" and r.saving_ct > MIN_SAVING_CT
-    assert r.slots[0].steps == 2 and sum(s.thermal_w for s in r.slots) < 0
+    assert r.slots[0].steps == 2 and store(inp, r)[-1] >= -TOL_KWH
 
 
 def test_empty_slots_are_not_worth() -> None:
@@ -299,11 +299,67 @@ def test_base_above_max_allows_no_up() -> None:
     assert all(s.thermal_w <= 0 and s.grid_w == 0 for s in r.slots)
 
 
-def test_infeasible_store_is_a_solver_result() -> None:
+def test_infeasible_store_is_not_worth() -> None:
     # unter dem Soll gestartet, nie in Betrieb: S_end ≥ 0 ist nicht zu erreichen
     slots = [slot(i, on_share=0.0) for i in range(8)]
     r = shift(shift_input(slots, start_k=-0.5))
-    assert r.reason == "solver" and r.saving_ct == 0 and len(r.slots) == 8 and all_zero(r)
+    assert r.reason == "not_worth" and r.saving_ct == 0 and len(r.slots) == 8 and all_zero(r)
+
+
+def test_replanning_mid_setback_keeps_it() -> None:
+    """Neu geplant ab Slot 31 des Vorheiz-Falls (noch 40 ct, Haus schon abgesenkt): Den Rückweg
+    zum Soll zahlt auch die Grundlinie, die Absenkung im teuren Slot lohnt weiter."""
+    inp = night_cheap_morning_expensive()
+    first = shift(inp)
+    start_k = store(inp, first)[31] / inp.c_kwh_per_k
+    assert start_k == pytest.approx(-0.405, abs=0.01)
+    r = shift(replace(inp, start_k=start_k, slots=inp.slots[31:]))
+    assert r.reason == "ok" and r.saving_ct > MIN_SAVING_CT
+    assert r.slots[0].steps < 0 and r.slots[0].thermal_w < 0
+
+
+def test_saving_is_measured_against_the_baseline() -> None:
+    # vorgeheizt gestartet, ab jetzt gleicher Preis: Die gespeicherte Wärme zu nutzen ist schon
+    # die Grundlinie, eine Verschiebung bringt nichts mehr
+    r = shift(shift_input([slot(i) for i in range(32)], start_k=1.0))
+    assert r.reason == "not_worth" and 0 <= r.saving_ct < MIN_SAVING_CT
+
+
+def test_export_slots_save_only_the_feed_in_price() -> None:
+    # nur Slots mit Einspeisung und zugleich Bezug (oder Entladung): Mehrverbrauch aus der
+    # Einspeisung und Minderverbrauch am Bezug im selben Slot heben sich in S auf und sparen nichts
+    slots = [slot(i, export_w=600.0, feed_in_ct=5.0) for i in range(4)]
+    r = shift(shift_input(slots))
+    assert r.reason == "not_worth" and all_zero(r)
+    slots = [replace(s, discharge_w=800.0, import_w=0.0) for s in slots]
+    r = shift(shift_input(slots))
+    assert r.reason == "not_worth" and all_zero(r)
+
+
+def test_step_bounds_round_down() -> None:
+    r = shift(night_cheap_morning_expensive(up_k=0.8, down_k=0.8))
+    assert all(-1 <= s.steps <= 1 for s in r.slots)
+
+
+def test_negative_saving_is_reported_as_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    inp = night_cheap_morning_expensive()
+    zeros = [thermal_shift.ShiftedSlot(s.start, 0.0, 0.0, 0) for s in inp.slots]
+    monkeypatch.setattr(thermal_shift, "_solve", lambda *_args, **_kwargs: (zeros, 0.5))
+    assert shift(inp) == ShiftResult(slots=zeros, saving_ct=0.0, reason="not_worth")
+
+
+def test_infeasible_baseline_is_not_worth(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[float, float]] = []
+    original = thermal_shift._solve
+
+    def second_infeasible(inp: ShiftInput, lo: float, hi: float, limit: float) -> Any:
+        calls.append((lo, hi))
+        return original(inp, lo, hi, limit) if len(calls) == 1 else "infeasible"
+
+    monkeypatch.setattr(thermal_shift, "_solve", second_infeasible)
+    r = shift(night_cheap_morning_expensive(start_k=0.5))
+    assert calls == [(-1.0, 2.0), (0.0, 1.0)]  # Hauptlauf im Band, Grundlinie [0, S₋₁]
+    assert r.reason == "not_worth" and r.saving_ct == 0 and all_zero(r)
 
 
 def boom(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -338,7 +394,17 @@ def test_time_limit_reaches_the_solver(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pulp, "HiGHS", spy)
     shift(night_cheap_morning_expensive(), time_limit_s=3.0)
     shift(night_cheap_morning_expensive())
-    assert seen == [3.0, 5.0]
+    assert seen == [3.0, 5.0]  # ohne Abweichung jetzt kostet die Grundlinie 0, kein zweiter Lauf
+    seen.clear()
+    shift(night_cheap_morning_expensive(start_k=0.5), time_limit_s=3.0)
+    assert len(seen) == 2 and seen[0] == 3.0 and 0 < seen[1] <= 3.0  # die Grundlinie erbt den Rest
+
+
+def test_no_time_left_for_the_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = iter([0.0, 6.0])
+    monkeypatch.setattr(thermal_shift, "perf_counter", lambda: next(clock))
+    r = shift(night_cheap_morning_expensive(start_k=0.5))
+    assert r.reason == "solver" and r.saving_ct == 0 and all_zero(r)
 
 
 @pytest.mark.parametrize(

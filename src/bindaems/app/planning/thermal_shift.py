@@ -19,30 +19,36 @@ Je Slot ``up_x`` (Mehrverbrauch aus geplanter Einspeisung), ``up_g`` (aus dem Ne
   ``S_end ≥ 0``;
 - ``up_x ≤ export_w``; ``up_g = 0``, wenn ``discharge_w > 50`` (kein Vorheizen aus dem Akku),
   sonst ``up_g ≤ max(0, budget_w − import_w)``, ohne Budget unbegrenzt;
-  ``up_x + up_g ≤ max(0, max_w − base_w)``; ``dn_g ≤ import_w``, ``dn_b ≤ discharge_w``,
-  ``dn_g + dn_b + dn_x ≤ base_w``; bei einem Laufanteil unter 0,8 alle fünf 0;
-- **Energiebedingung** ``S_{−1} + Σ (up − dn) · Δ / 1000 ≥ 0``: Die Verschiebung braucht im
-  Horizont mindestens so viel Strom, wie sie dem Speicher entnimmt. Ohne sie lohnte sich dauerndes
-  Absenken schon bei gleichem Preis, weil ``a`` ein abgesenktes Haus (``S < 0``) ohne Strom zum
-  Soll zurückführt; das wäre Sparen am Komfort, keine Verschiebung;
+  ``up_x + up_g ≤ max(0, max_w − base_w)``; ``dn_g ≤ import_w``, ``dn_b ≤ discharge_w``, beide
+  0 in einem Slot mit Einspeisung (``export_w > CLEAN_W``): Dort spart Minderverbrauch nur den
+  Einspeisepreis (``dn_x``), sonst höben sich ``up_x`` und ``dn_g``/``dn_b`` im selben Slot in
+  ``S`` auf und buchten eine Ersparnis, die es nicht gibt; ``dn_g + dn_b + dn_x ≤ base_w``; bei
+  einem Laufanteil unter 0,8 alle fünf 0;
+- **Energiebedingung** ``Σ (up − dn) · Δ / 1000 ≥ −max(0, S_{−1})``: Die Verschiebung braucht im
+  Horizont mindestens so viel Strom, wie sie an gespeicherter Wärme vorfindet und entnimmt. Ohne
+  sie lohnte sich dauerndes Absenken schon bei gleichem Preis, weil ``a`` ein abgesenktes Haus
+  (``S < 0``) ohne Strom zum Soll zurückführt; das wäre Sparen am Komfort, keine Verschiebung.
+  Ein Defizit beim Start (``S_{−1} < 0``) verlangt keinen Strom über ``E ≥ 0`` hinaus: Aus
+  ``S_{−1} + E = S_end + (1 − a) · Σ S_{t−1}`` folgt, dass ``S_{−1} + E ≥ 0`` mit ``S ≤ 0`` nie
+  zu erfüllen wäre und die Grundlinie unlösbar machte;
 - Ziel ``min Σ Δ/1000 · (feed_in · up_x + (import + margin) · up_g − import · dn_g
   − end_value · dn_b − feed_in · dn_x)``, ``feed_in = 0`` ohne Einspeisepreis.
 
-Mehr- und Minderverbrauch im selben Slot heben sich in ``S`` auf. Das LP setzt deshalb einen Plan
-voraus, der in einem Slot nicht zugleich einspeist und zu einem höheren Preis bezieht oder aus
-dem Akku entlädt, dessen Restwert über dem Einspeisepreis liegt; sonst buchte es eine Ersparnis,
-die es nicht gibt.
-
-Der unverschobene Plan kostet in diesem Modell 0; ``saving_ct`` ist minus der Zielwert. Spart der
-Horizont weniger als ``MIN_SAVING_CT``, lohnt die Verschiebung nicht (``not_worth``, alle Slots
-0). Ohne optimale Lösung, bei Zeitlimit oder Fehler des Solvers ist das Ergebnis ``solver``,
-ebenfalls ohne Verschiebung. Ohne Slots ist es ``not_worth`` mit leerer Liste.
+**Grundlinie:** Weicht das Haus jetzt ab (``S_{−1} ≠ 0``), muss der Rückweg zum Soll ohnehin
+bezahlt werden, und gespeicherte Wärme lässt sich ohnehin nutzen. Dasselbe LP mit dem Band
+``[min(0, S_{−1}), max(0, S_{−1})]`` (keine neue Abweichung) gibt die Kosten der Grundlinie, im
+Rest des Zeitlimits; ohne Abweichung kostet sie 0 und wird nicht gerechnet.
+``saving_ct = Kosten der Grundlinie − Kosten`` (ct). Spart der Horizont weniger als
+``MIN_SAVING_CT``, lohnt die Verschiebung nicht (``not_worth``, alle Slots 0, ``saving_ct`` nie
+negativ). Ist einer der beiden Läufe unlösbar, ist keine Verschiebung möglich (``not_worth``,
+``saving_ct`` 0). Ohne optimale Lösung, bei Zeitlimit oder Fehler des Solvers ist das Ergebnis
+``solver``, ebenfalls ohne Verschiebung. Ohne Slots ist es ``not_worth`` mit leerer Liste.
 
 Je Slot ``thermal_w = up − dn``, ``grid_w = up_g`` (höchstens ``thermal_w``, falls ein
 gleichwertiges Optimum Mehr- und Minderverbrauch im selben Slot hat; Reste des Solvers unter
 1e-6 W sind 0) und ``steps``: ``S_t / C / 0,5`` auf ganze Stufen gerundet, genau dazwischen
-Richtung 0 wie der Versatz in ``core/safety/ranges.py``, begrenzt auf
-``[−round(down_k/0,5), round(up_k/0,5)]``.
+Richtung 0 wie der Versatz in ``core/safety/ranges.py``, begrenzt auf ganze Stufen im Band
+``[−⌊down_k/0,5⌋, ⌊up_k/0,5⌋]``.
 
 Das Modul ist rein: Es liest weder Plan noch Einstellungen noch Wärmemodell; ``ShiftInput`` baut
 der Aufrufer. Untaugliche Modellwerte (``C``, ``τ``, ``max_w`` nicht endlich und positiv, Band,
@@ -56,6 +62,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from time import perf_counter
 from typing import Any, Final, Literal
 
 import pulp
@@ -125,21 +132,52 @@ class ShiftResult:
     reason: Literal["ok", "not_worth", "solver"]
 
 
+_Solved = tuple[list[ShiftedSlot], float]  # Verschiebung und Kosten des Laufs in ct
+
+
 def shift(inp: ShiftInput, time_limit_s: float = TIME_LIMIT_S) -> ShiftResult:
     """Rechnet die Verschiebung; ``ValueError`` bei untauglichen Modellwerten."""
     _validate(inp)
     if not inp.slots:
         return ShiftResult(slots=[], saving_ct=0.0, reason="not_worth")
-    try:
-        solved = _solve(inp, time_limit_s)
-    except Exception:  # Solver und Modellaufbau dürfen die Planung nie anhalten
-        solved = None
-    if solved is None:
-        return _unshifted(inp, 0.0, "solver")
-    shifted, saving_ct = solved
+    started = perf_counter()
+    c = inp.c_kwh_per_k
+    start_kwh = _start_kwh(inp)
+    main = _attempt(inp, -inp.down_k * c, inp.up_k * c, time_limit_s)
+    if isinstance(main, str):
+        return _unshifted(inp, 0.0, main)
+    shifted, cost_ct = main
+    baseline_ct = 0.0  # ohne Abweichung jetzt bleibt die Grundlinie bei 0
+    if start_kwh != 0:
+        left_s = time_limit_s - (perf_counter() - started)
+        if left_s <= 0:
+            return _unshifted(inp, 0.0, "solver")
+        baseline = _attempt(inp, min(0.0, start_kwh), max(0.0, start_kwh), left_s)
+        if isinstance(baseline, str):
+            return _unshifted(inp, 0.0, baseline)
+        baseline_ct = baseline[1]
+    saving_ct = baseline_ct - cost_ct + 0.0  # + 0.0 macht aus −0,0 eine 0,0
     if saving_ct < MIN_SAVING_CT:
-        return _unshifted(inp, saving_ct, "not_worth")
+        return _unshifted(inp, max(0.0, saving_ct), "not_worth")
     return ShiftResult(slots=shifted, saving_ct=saving_ct, reason="ok")
+
+
+def _attempt(
+    inp: ShiftInput, lo_kwh: float, hi_kwh: float, time_limit_s: float
+) -> _Solved | Literal["not_worth", "solver"]:
+    """Ein Lauf des LP; unlösbar heißt „keine Verschiebung möglich“ (``not_worth``), jeder andere
+    Fehlschlag ``solver``."""
+    try:
+        solved = _solve(inp, lo_kwh, hi_kwh, time_limit_s)
+    except Exception:  # Solver und Modellaufbau dürfen die Planung nie anhalten
+        return "solver"
+    if solved == "infeasible":
+        return "not_worth"
+    return solved
+
+
+def _start_kwh(inp: ShiftInput) -> float:
+    return min(max(inp.start_k, -inp.down_k), inp.up_k) * inp.c_kwh_per_k
 
 
 def _validate(inp: ShiftInput) -> None:
@@ -166,10 +204,13 @@ def _unshifted(
     return ShiftResult(slots=slots, saving_ct=saving_ct, reason=reason)
 
 
-def _solve(inp: ShiftInput, time_limit_s: float) -> tuple[list[ShiftedSlot], float] | None:
+def _solve(
+    inp: ShiftInput, lo_kwh: float, hi_kwh: float, time_limit_s: float
+) -> _Solved | Literal["infeasible", "solver"]:
+    """Das LP mit dem Speicher im Band ``[lo_kwh, hi_kwh]``: Verschiebung und Kosten in ct."""
     c = inp.c_kwh_per_k
     a = math.exp(-_DT_H / inp.tau_h)
-    start_kwh = min(max(inp.start_k, -inp.down_k), inp.up_k) * c
+    start_kwh = _start_kwh(inp)
     s_prev: Any = start_kwh
     prob = pulp.LpProblem("thermal_shift", pulp.LpMinimize)
     terms: list[pulp.LpAffineExpression] = []
@@ -177,6 +218,7 @@ def _solve(inp: ShiftInput, time_limit_s: float) -> tuple[list[ShiftedSlot], flo
     rows: list[tuple[pulp.LpVariable, ...]] = []
     for t, item in enumerate(inp.slots):
         running = item.on_share >= MIN_ON_SHARE
+        exporting = item.export_w > CLEAN_W  # Minderverbrauch spart dort nur den Einspeisepreis
         if item.discharge_w > DISCHARGE_W:
             grid_cap: float | None = 0.0  # kein Vorheizen aus dem Akku
         elif item.budget_w is not None:
@@ -185,12 +227,12 @@ def _solve(inp: ShiftInput, time_limit_s: float) -> tuple[list[ShiftedSlot], flo
             grid_cap = None
         up_x = _flow(prob, f"up_x_{t}", item.export_w, running=running)
         up_g = _flow(prob, f"up_g_{t}", grid_cap, running=running)
-        dn_g = _flow(prob, f"dn_g_{t}", item.import_w, running=running)
-        dn_b = _flow(prob, f"dn_b_{t}", item.discharge_w, running=running)
+        dn_g = _flow(prob, f"dn_g_{t}", 0.0 if exporting else item.import_w, running=running)
+        dn_b = _flow(prob, f"dn_b_{t}", 0.0 if exporting else item.discharge_w, running=running)
         dn_x = _flow(prob, f"dn_x_{t}", item.base_w, running=running)
         prob += up_x + up_g <= max(0.0, inp.max_w - item.base_w), f"up_max_{t}"
         prob += dn_g + dn_b + dn_x <= max(0.0, item.base_w), f"dn_max_{t}"
-        s = prob.add_variable(f"s_{t}", lowBound=-inp.down_k * c, upBound=inp.up_k * c)
+        s = prob.add_variable(f"s_{t}", lowBound=lo_kwh, upBound=hi_kwh)
         change = up_x + up_g - dn_g - dn_b - dn_x
         prob += s == a * s_prev + change * _KWH, f"store_{t}"
         prob += s - s_prev <= STEP_K * c, f"step_{t}"
@@ -209,13 +251,16 @@ def _solve(inp: ShiftInput, time_limit_s: float) -> tuple[list[ShiftedSlot], flo
         rows.append((up_x, up_g, dn_g, dn_b, dn_x, s))
         s_prev = s
     prob += s_prev >= 0, "store_end"
-    prob += start_kwh + pulp.lpSum(net) >= 0, "energy"
+    prob += pulp.lpSum(net) >= -max(0.0, start_kwh), "energy"
     prob += pulp.lpSum(terms)
 
     prob.solve(pulp.HiGHS(msg=False, timeLimit=time_limit_s))
+    if prob.status == pulp.LpStatusInfeasible:
+        return "infeasible"
     if prob.status != pulp.LpStatusOptimal or prob.sol_status != pulp.LpSolutionOptimal:
-        return None
-    lo, hi = -round(inp.down_k / STEP_K), round(inp.up_k / STEP_K)
+        return "solver"
+    lo = -math.floor(inp.down_k / STEP_K + 1e-9)
+    hi = math.floor(inp.up_k / STEP_K + 1e-9)
     shifted: list[ShiftedSlot] = []
     for item, (up_x, up_g, dn_g, dn_b, dn_x, s) in zip(inp.slots, rows, strict=True):
         up = _value(up_x) + _value(up_g)
@@ -228,7 +273,7 @@ def _solve(inp: ShiftInput, time_limit_s: float) -> tuple[list[ShiftedSlot], flo
                 steps=_steps(_value(s) / c / STEP_K, lo, hi),
             )
         )
-    return shifted, 0.0 - float(pulp.value(prob.objective))  # 0.0 − macht aus −0,0 eine 0,0
+    return shifted, float(pulp.value(prob.objective))
 
 
 def _flow(prob: pulp.LpProblem, name: str, upper: float | None, *, running: bool) -> Any:
