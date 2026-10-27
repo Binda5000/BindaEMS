@@ -110,6 +110,8 @@ Winternacht ohne PV. Abweichungen vom Plan:
   nimmt Netz für Mehrverbrauch nur in Slots, in denen der Akku nicht entlädt (Entscheidung 8). Mit
   Victron im Dry-Run deckte der Akku sonst jede Last, auch die geplante; das spielt
   ``klima-plan-akku`` ab ``BATTERY_COVERS_S`` durch (``_BatteryCovers``).
+- Endet der Plan (``klima-plan-ende``), gehen die geplanten Stufen im selben Zyklus auf 0
+  (Grund ``thermal_plan``); nur Stufen aus dem Überschuss blieben für 6a.
 - In ``klima-plan-vorheizen`` folgt der teure Block nach drei Viertelstunden
   (``EXPENSIVE_S``), in ``klima-plan-ende`` gilt der einzige Plan nur ``PLAN_ENDS_S`` statt der
   45 min eines Plans der app; danach fällt die app aus. So bleiben die Läufe kurz.
@@ -3525,7 +3527,7 @@ PLAN_UP: Final[ShiftSlot] = (2, 2 * SHIFT_GRID_W, "neutral")
 BATTERY_COVERS_S: Final = 25 * MINUTE_S  # „klima-plan-akku“: ab hier deckt der Akku die Last
 GUARD_WITHIN_S: Final = 6 * MINUTE_S  # … und binnen so vieler Sekunden geht eine Stufe zurück
 PLAN_ENDS_S: Final = 20 * MINUTE_S  # „klima-plan-ende“: so lange gilt der einzige Plan
-SIXA_WITHIN_S: Final = 10 * MINUTE_S  # … danach ist der Versatz binnen so vieler Sekunden 0
+PLAN_END: Final = "Ende des Plans"
 WINTER_NIGHT: Final = datetime(2026, 12, 16, 6, tzinfo=LOCAL_TZ).astimezone(UTC)
 
 
@@ -3689,7 +3691,7 @@ def _backs_off(from_s: int, codes: frozenset[str], within_s: int) -> Check:
 
 def _without_plan_from(from_s: int) -> Check:
     """Nach der Sekunde ``from_s`` nennt die Regelung keinen Planwert, und keine Entscheidung an
-    die Klimaanlage nennt ``thermal_plan``."""
+    die Klimaanlage außer 0 nennt ``thermal_plan`` (die 0 zum Ende des Plans nennt ihn)."""
 
     def find(result: SimResult) -> list[str]:
         found = [
@@ -3700,13 +3702,15 @@ def _without_plan_from(from_s: int) -> Check:
         found += [
             f"Die Entscheidung bei {t} s nennt thermal_plan."
             for d in _at(result.decisions, KLIMA_ACTUATOR)
-            if (t := _second(result, d.ts)) > from_s and "thermal_plan" in d.codes
+            if (t := _second(result, d.ts)) > from_s
+            and "thermal_plan" in d.codes
+            and finite_number(d.requested) != 0
         ]
         return found
 
     return Check(
         f"Nach {de(from_s / MINUTE_S)} min nennt die Regelung keinen Planwert und keine "
-        "Entscheidung thermal_plan.",
+        "Entscheidung außer 0 thermal_plan.",
         find,
     )
 
@@ -3778,6 +3782,7 @@ def _klima_plan_akku() -> Scenario:
                 _offset_at_the_end(0.0),
                 TOWARDS_MORE,
                 STEP_RULE,
+                NEVER_REJECTED,
             )
         ),
         thermal=True,
@@ -3785,11 +3790,10 @@ def _klima_plan_akku() -> Scenario:
 
 
 def _klima_plan_ende() -> Scenario:
-    """Planwert +2, dann läuft der Plan ab und die app schweigt: Die Strategie ist die aus 6a, der
-    SOC unter der Schwelle und der Netzbezug holen den Versatz zurück auf 0."""
+    """Planwert +2, dann läuft der Plan ab und die app schweigt: Im selben Zyklus gehen die
+    geplanten Stufen auf 0 (kein Vorheizen ohne Plan, Entscheidung 8), danach gilt 6a."""
     start, duration_s, seed = WINTER_NIGHT, PLAN_ENDS_S + 15 * MINUTE_S, 42
     slots = tuple((q, PLAN_UP) for q in range(PLAN_SLOTS))
-    sixa = frozenset({"thermal_battery", "thermal_back"})
     return Scenario(
         name="klima-plan-ende",
         title="Plan der Klimaanlage läuft ab",
@@ -3809,10 +3813,8 @@ def _klima_plan_ende() -> Scenario:
             (
                 _reached_before(2 * KLIMA_STEP_K, PLAN_ENDS_S),
                 _without_plan_from(PLAN_ENDS_S),
-                _backs_off(PLAN_ENDS_S, sixa, SIXA_WITHIN_S),
-                _only_zero_from(
-                    _second_of(PLAN_ENDS_S + SIXA_WITHIN_S), "10 min nach dem Ende des Plans"
-                ),
+                _zero_in_the_second(_second_of(PLAN_ENDS_S), PLAN_END, "thermal_plan"),
+                _only_zero_from(_second_of(PLAN_ENDS_S), PLAN_END),
                 _offset_at_the_end(0.0),
                 TOWARDS_MORE,
             )

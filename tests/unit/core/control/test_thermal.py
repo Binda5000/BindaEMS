@@ -802,10 +802,15 @@ def test_surplus_may_exceed_plan(strategy: ThermalStrategy) -> None:
     assert strategy.step(planned(1, now=3003)) == ThermalWish(1, "thermal_plan")
 
 
-def test_surplus_before_the_plan_stays_above_it(strategy: ThermalStrategy) -> None:
-    # Stufen aus dem Überschuss, bevor es einen Planwert gab, gelten als Stufen über dem Plan
+def test_surplus_before_the_plan_stays_above_it(klima: CoeOffsetConfig) -> None:
+    # Stufen aus dem Überschuss, bevor es einen positiven Planwert gab, gelten als Stufen über ihm
+    strategy = ThermalStrategy(klima)
     climb(strategy, 2)
-    assert strategy.step(planned(0, now=1300)) == ThermalWish(2, "thermal_more")
+    assert strategy.step(planned(1, now=1300)) == ThermalWish(2, "thermal_more")
+    # bei einem Planwert von höchstens 0 nicht (Fix-Runde 1): Der Plan holt sie zurück
+    other = ThermalStrategy(klima)
+    climb(other, 2)
+    assert other.step(planned(0, now=1300)) == ThermalWish(0, "thermal_plan")
 
 
 def test_import_threshold_adds_planned_grid(strategy: ThermalStrategy) -> None:
@@ -873,7 +878,8 @@ def test_unknown_battery_power_holds_the_plan(strategy: ThermalStrategy) -> None
 
 def test_battery_guard_only_for_a_positive_plan(strategy: ThermalStrategy) -> None:
     # Planwert 0 mit einer Stufe aus dem Überschuss: wie 6a die SOC-Schwelle, keine Entladung
-    climb(strategy, 1)
+    strategy.step(planned(0, now=0, export_w=900))
+    assert strategy.step(planned(0, now=600, export_w=900)) == ThermalWish(1, "thermal_more")
     strategy.step(planned(0, now=700, battery_discharge_w=1000))
     assert strategy.step(planned(0, now=1100, battery_discharge_w=1000)).steps == 1
     assert strategy.step(planned(0, now=1101, soc_pct=50)) == ThermalWish(0, "thermal_battery")
@@ -935,3 +941,88 @@ def test_plan_down_goes_before_cars_and_battery(
     strategy.step(planned(3, now=600))
     strategy.step(planned(3, now=1200))  # +3
     assert strategy.step(planned(-2, now=1300, **changes)) == ThermalWish(0, "thermal_plan")
+
+
+# --- Fix-Runde 1 ------------------------------------------------------------------------------
+
+
+def test_surplus_does_not_lift_a_negative_plan(strategy: ThermalStrategy) -> None:
+    # Planwert −2 erreicht, dann 900 W Einspeisung über Stunden: Stufen aus dem Überschuss zählen
+    # nur über max(Planwert, 0); unter 0 gehört der Bereich dem Plan, der Wunsch bleibt −2
+    strategy.step(planned(-2, now=0))
+    strategy.step(planned(-2, now=600))  # −2
+    for now in range(700, 9001, 100):
+        assert strategy.step(planned(-2, now=now, export_w=900)).steps == -2, now
+    # bei Planwert 0 nimmt der Überschuss wieder Stufen über 0
+    strategy.step(planned(0, now=9001, export_w=900))  # 0 (sofort, der Betrag sinkt)
+    assert strategy.step(planned(0, now=9601, export_w=900)) == ThermalWish(1, "thermal_more")
+
+
+def test_positive_6a_steps_do_not_hold_a_negative_plan(strategy: ThermalStrategy) -> None:
+    # 6a steht bei +2, dann beginnt ein Planwert −2: sofort 0, dann −1 und −2 je Intervall
+    climb(strategy, 2)  # +2 bei 1200
+    assert strategy.step(planned(-2, now=1300)) == ThermalWish(0, "thermal_plan")
+    assert strategy.step(planned(-2, now=1800)) == ThermalWish(-1, "thermal_plan")
+    assert strategy.step(planned(-2, now=2400)) == ThermalWish(-2, "thermal_plan")
+
+
+def test_surplus_steps_clear_when_the_wish_falls_to_the_plan(strategy: ThermalStrategy) -> None:
+    # +2 aus Planwert +1 und einer Stufe Überschuss; die Autos nehmen eine Stufe: Der Wunsch
+    # steht wieder beim Planwert, und die Stufe aus dem Überschuss ist verbraucht
+    strategy.step(planned(1, now=0, export_w=900))
+    strategy.step(planned(1, now=600, export_w=900))  # +2 (Überschuss)
+    assert strategy.step(planned(1, now=601, unmet_cars_w=230)) == ThermalWish(1, "thermal_cars")
+    # der Planwert sinkt auf 0: kein Überschuss mehr darüber, also 0
+    assert strategy.step(planned(0, now=602)) == ThermalWish(0, "thermal_plan")
+
+
+def test_end_of_the_plan_drops_planned_steps_at_once(strategy: ThermalStrategy) -> None:
+    # Entscheidung 8: Endet der Planwert (abgelaufen, keine Absicht, andere Betriebsart), gehen die
+    # geplanten Stufen sofort auf 0, auch mit SOC über der Schwelle und einem Akku, der die Last
+    # deckt; nur Stufen aus dem Überschuss bleiben für 6a
+    strategy.step(planned(2, now=0))
+    strategy.step(planned(2, now=600))  # +2
+    covering = dict(soc_pct=95.0, battery_discharge_w=1000.0)
+    assert strategy.step(planned(None, now=601, **covering)) == ThermalWish(0, "thermal_plan")
+    assert strategy.step(planned(None, now=5000, **covering)).steps == 0
+
+
+def test_end_of_the_plan_keeps_the_surplus_steps(strategy: ThermalStrategy) -> None:
+    strategy.step(planned(1, now=0, export_w=900))
+    strategy.step(planned(1, now=600, export_w=900))  # +2: Planwert +1 und eine Stufe Überschuss
+    assert strategy.step(planned(None, now=601)) == ThermalWish(1, "thermal_plan")
+    # danach 6a: Totband, die Stufe bleibt
+    assert strategy.step(planned(None, now=2000)) == ThermalWish(1, "thermal_plan")
+
+
+def test_no_surplus_step_while_the_battery_discharges_under_a_positive_plan(
+    strategy: ThermalStrategy,
+) -> None:
+    # Einspeisung 900 W und zugleich 1000 W Entladung: weder Plan noch Überschuss steigen
+    both = dict(export_w=900, battery_discharge_w=1000)
+    for now in (0, 600, 1200, 1800):
+        assert strategy.step(planned(2, now=now, **both)).steps == 0, now
+    # ohne Entladung steigen beide wieder
+    assert strategy.step(planned(2, now=1801, export_w=900)) == ThermalWish(1, "thermal_plan")
+
+
+def test_planned_property_is_the_clamped_plan_value(klima: CoeOffsetConfig) -> None:
+    narrow = ThermalStrategy(klima.model_copy(update={"max_offset_k": 1.0}))
+    narrow.step(planned(6, now=0))
+    assert narrow.planned == 2
+    narrow.step(planned(-6, now=1))
+    assert narrow.planned == -2
+    narrow.step(planned(None, now=2))
+    assert narrow.planned is None
+
+
+def test_a_later_send_moves_the_step_timer(strategy: ThermalStrategy) -> None:
+    # Ging die Erhöhung erst später hinaus (Schreibvorgang offen), zählt die Wartezeit ab dem
+    # Senden: die Safety-Schicht rechnet ab dort
+    strategy.step(planned(2, now=0))  # +1, entschieden bei 0
+    strategy.note_raised(5.0)  # gesendet bei 5
+    assert strategy.step(planned(2, now=600)).steps == 1
+    assert strategy.step(planned(2, now=605)) == ThermalWish(2, "thermal_plan")
+    strategy.note_raised(1.0)  # früher als die letzte Erhöhung: ändert nichts
+    assert strategy.step(planned(3, now=1204)).steps == 2
+    assert strategy.step(planned(3, now=1205)).steps == 3

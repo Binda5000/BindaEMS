@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Final
 
-from bindaems.core.control.actuator import matches
+from bindaems.core.control.actuator import OFFSET_SAME_K, matches
 from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed, cycle_wanted_w
 from bindaems.core.control.charge_inputs import ChargeInputs, WallboxObs
 from bindaems.core.control.charge_modes import Effective, effective_of
@@ -77,7 +77,7 @@ from bindaems.core.control.thermal import (
     offset_for,
 )
 from bindaems.core.safety.limits import HardLimits
-from bindaems.core.safety.types import Outcome, Verdict
+from bindaems.core.safety.types import SENDABLE, Outcome, Verdict
 from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import (
     THERMAL_PREFIX,
@@ -178,6 +178,10 @@ class _Thermal:
         self.base_w: float | None = None
         self.base_mode: ThermalMode | None = None
         self.spare_w: float | None = None
+        # der zuletzt angenommene eigene Versatz und die Zeit des letzten ``thermal_step``: für die
+        # Wartezeit der Strategie ab dem Senden einer Erhöhung (``ThermalStrategy.note_raised``)
+        self.accepted_k: float | None = None
+        self.now: float | None = None
         self._base_at: float | None = None  # Zeit der letzten Messung in ``base_w``
         self._zero_since: float | None = None  # seit wann der Versatz 0 ist
 
@@ -187,6 +191,17 @@ class _Thermal:
         self.strategy.reset()
         self.confirmed = None
         self.apart_since = None
+        self.accepted_k = None
+
+    def note_accepted(self, value_k: float) -> None:
+        """Die Safety-Schicht nahm den eigenen Versatz ``value_k`` an. Erhöht er den Betrag
+        gegenüber dem zuletzt angenommenen (oder wechselt das Vorzeichen), merkt sie sich die Zeit
+        als letzte Erhöhung; die Strategie zählt ihre Wartezeit ebenfalls ab dort."""
+        before = self.accepted_k or 0.0
+        raised = value_k * before < 0 or abs(value_k) > abs(before) + OFFSET_SAME_K
+        if value_k != 0 and raised and self.now is not None:
+            self.strategy.note_raised(self.now)
+        self.accepted_k = value_k
 
     def freeable_w(self, seen: ThermalInputs, *, wish_steps: int) -> float:
         """Die Leistung in W, die die Strategie freigeben könnte, ginge sie auf Versatz 0 zurück
@@ -259,6 +274,9 @@ class Regulation:
             for name, device in cfg.thermal.devices.items()
             if isinstance(device, CoeOffsetConfig)
         }
+        # Der Planwert gilt dem ersten Gerät der Art ``coe_offset``, für das die app plant
+        # (``thermal_device`` der app); jedes weitere bekommt keinen
+        self._planned_device = next(iter(self._thermal), None)
         self._thermal_last = LastValues()  # die letzten eigenen Versätze der Klimaanlagen
         self._thermal_health: dict[str, dict[str, Any]] = {}  # je Klimaanlage des letzten ``step``
         # je Klimaanlage der Versatz, den der letzte ``thermal_step`` entschied (Ruling R26)
@@ -395,7 +413,8 @@ class Regulation:
             if active is not None and active.soc_end_pct is not None:
                 gate = active.soc_end_pct
             acting = seen.controllable and not seen.locked
-            planned = _planned_steps(slot, seen.mode)
+            device.now = seen.mono_now
+            planned = _planned_steps(slot, seen.mode) if name == self._planned_device else None
             wish = device.strategy.step(
                 ThermalObs(
                     now=seen.mono_now,
@@ -419,13 +438,13 @@ class Regulation:
             offset = offset_for(wish, seen.mode, device.step_k)
             targets[name] = offset + 0.0  # aus -0.0 wird 0.0
             device.learn(seen, offset)
-            health[name] = _thermal_json(wish, hint, device, planned)
+            health[name] = _thermal_json(wish, hint, device, device.strategy.planned)
             if not acting or blocked or not self._thermal_last.changed(key, offset):
                 continue
             command = self._thermal_last.command(actuator, _OFFSET, offset, (wish.reason,))
             facts = {"thermal_steps": float(wish.steps), "export_w": export_w, "soc_pct": soc}
-            if planned is not None:
-                facts["planned_steps"] = float(planned)
+            if device.strategy.planned is not None:
+                facts["planned_steps"] = float(device.strategy.planned)
             found.append(ControlCommand(command, facts))
         self._thermal_health = health
         self._thermal_targets = targets
@@ -475,6 +494,9 @@ class Regulation:
             self.charger.note_verdict(command, verdict, not_sent=not_sent)
             return
         self._thermal_last.judged(command, verdict, not_sent=not_sent)
+        applied = None if verdict is None else finite_number(verdict.value)
+        if applied is not None and verdict is not None and verdict.outcome in SENDABLE:
+            device.note_accepted(applied)
         rejected = verdict is not None and verdict.outcome == Outcome.REJECTED
         if rejected and command.value != 0:
             device.reset()

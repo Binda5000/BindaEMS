@@ -1684,3 +1684,51 @@ def test_regulation_import_threshold_takes_the_planned_grid(reg_with_klima, cfg)
     assert klima_run(reg_with_klima, cfg, 610, 1500, grid_w=1200.0, intent=plan) == []
     found = klima_run(reg_with_klima, cfg, 1510, 1810, grid_w=1800.0, intent=plan)
     assert offsets(found) == [(1810, 0.0, ("thermal_back",))]
+
+
+# --- Fix-Runde 1 ----------------------------------------------------------------------------------
+
+
+def with_devices(cfg: Config, **devices: CoeOffsetConfig) -> Config:
+    thermal = cfg.thermal.model_copy(update={"devices": devices})
+    return cfg.model_copy(update={"thermal": thermal})
+
+
+def klima_device(cfg: Config) -> CoeOffsetConfig:
+    device = cfg.thermal.devices["klima"]
+    assert isinstance(device, CoeOffsetConfig)
+    return device
+
+
+def test_a_delayed_send_moves_the_step_timer(reg_with_klima, cfg) -> None:
+    # Die Erhöhung auf +1,0 K entscheidet die Strategie bei 600 s, ein offener Schreibvorgang hält
+    # sie bis 610 s zurück; die Safety-Schicht zählt ab 610 s. Die nächste Erhöhung kommt darum
+    # erst bei 1210 s, nicht schon bei 1200 s (dort lehnte die Schrittregel sie ab).
+    run = dict(mode="heizen", grid_w=1500.0, intent=heat_plan(3))
+    assert offsets(klima_run(reg_with_klima, cfg, 0, 590, **run)) == [(0, 0.5, ("thermal_plan",))]
+    assert klima(reg_with_klima, cfg, 600, blocked=frozenset({OFFSET_KEY}), echo=0.5, **run) == []
+    found = klima_run(reg_with_klima, cfg, 610, 1210, **run)
+    assert offsets(found) == [(610, 1.0, ("thermal_plan",)), (1210, 1.5, ("thermal_plan",))]
+
+
+def test_only_the_first_device_follows_the_plan(cfg) -> None:
+    # Die app plant für das erste Gerät der Art coe_offset (``thermal_device``); jedes weitere
+    # bekommt keinen Planwert
+    device = klima_device(cfg)
+    two = with_devices(cfg, klima=device, klima2=device)
+    regulation = Regulation(two, HardLimits.from_config(two), started=T0)
+    charge = inputs(two, grid_obs=grid(grid_w=1500.0, soc=95.0), intent=heat_plan(2))
+    seen = ThermalInputs(True, "heizen", True, False, charge.now.timestamp())
+    given = RegulationInputs(charge, thermal={"klima": seen, "klima2": seen})
+    regulation.step(given)
+    regulation.thermal_step(given)
+    health = regulation.health(T0)["thermal"]
+    assert (health["klima"]["planned"], health["klima"]["wish"]) == (2, 1)
+    assert (health["klima2"]["planned"], health["klima2"]["wish"]) == (None, 0)
+
+
+def test_health_planned_is_clamped_to_the_band(cfg) -> None:
+    narrow = with_devices(cfg, klima=klima_device(cfg).model_copy(update={"max_offset_k": 1.0}))
+    regulation = Regulation(narrow, HardLimits.from_config(narrow), started=T0)
+    klima(regulation, narrow, 0, mode="heizen", intent=heat_plan(6))
+    assert klima_health(regulation)["planned"] == 2

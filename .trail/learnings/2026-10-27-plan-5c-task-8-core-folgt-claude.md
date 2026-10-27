@@ -18,7 +18,9 @@ touches:
 - „Zurück bei Netzbezug“ (Regel 6) nimmt mit Planwert nur Stufen über dem Planwert zurück. Nachts hält der Akku, das Haus bezieht 2–3 kW aus dem Netz; mit `import_above_w + thermal_grid_w` gegen den ganzen Netzbezug holte Regel 6 jedes geplante Vorheizen nach 5 min zurück (der core kennt den geplanten Bezug des Hauses nicht). Entscheidung 9 nennt Regel 6 auch nicht unter den Regeln „vor dem Planwert“.
 - Planwert nach unten (`_rule_plan_down`) steht vor Autos und Akku: Fällt der Plan von +3 auf −2, griff sonst zuerst die SOC-Regel (Plan ≤ 0 → 6a-Schwelle) mit nur einer Stufe (`thermal_battery` in klima-plan-vorheizen).
 - Über 0 hinweg geht der Wunsch erst auf 0, das Negative im nächsten Zyklus: Die Schrittregel (`safety/offset.py`) lehnt +1 → −0,5 ab, und eine Ablehnung setzt die Strategie zurück.
-- Stufen aus dem Überschuss über dem Plan merkt `ThermalStrategy._above`; sonst zöge der Plan sie sofort zurück und der Überschuss pendelte.
+- Stufen aus dem Überschuss merkt `ThermalStrategy._above`, aber nur über `max(Planwert, 0)` (Fix-Runde 1): Zählten sie unter einem negativen Planwert mit, blieb der Wunsch bei −1 statt −2 hängen, und positive 6a-Stufen hielten einen Planwert −2 bei 0 fest.
+- Endet der Planwert (abgelaufen, keine Absicht, andere Betriebsart), gehen geplante Stufen sofort auf 0 (`thermal_plan`); sonst heizte nachts der Akku, bis die SOC-Schwelle greift (Entscheidung 8).
+- Die Wartezeit der Strategie zählt ab dem Senden einer Erhöhung (`_Thermal.note_accepted` → `ThermalStrategy.note_raised`): Hielt ein offener Schreibvorgang den Befehl zurück, rechnete die Safety-Schicht (`raised_at`) später als die Strategie und lehnte die nächste Stufe ab.
 - `thermal_plan` hat `{k}` im Text; `decision_text` setzt den Versatz der Entscheidung ein (der Planwert selbst ist nur in `inputs.planned_steps`: die Aufrufer im core dürfen sich nicht ändern).
 
 ## Watch out

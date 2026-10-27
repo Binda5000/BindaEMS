@@ -5405,21 +5405,27 @@ rechnet die app aus Preis und Plan; der core entscheidet mit den Echtzeitwerten.
 
 **Planwert (Vorheizen und Vorkühlen, seit Plan 5c).** Ist „Vorheizen und Vorkühlen“ an, nennt der
 Plan je Slot einen Planwert in Stufen (positiv: mehr Leistung) und den Netzbezug, den er dafür
-vorsieht. Der core folgt ihm nur, wenn der Plan für die Betriebsart gilt, in der die Klimaanlage
-gerade läuft (ein Plan fürs Heizen wirkt nie beim Kühlen); ohne gültigen Slot, ohne Planwert und
-bei abgelaufenem Plan gelten die Regeln oben unverändert. Mit Planwert:
+vorsieht. Der Planwert gilt dem ersten Gerät der Art `coe_offset` in `thermal.devices` (für das die
+app plant). Der core folgt ihm nur, wenn der Plan für die Betriebsart gilt, in der die Klimaanlage
+gerade läuft (ein Plan fürs Heizen wirkt nie beim Kühlen). Endet der Planwert (Plan abgelaufen,
+keine gültige Absicht, andere Betriebsart), gehen geplante Stufen im selben Zyklus auf 0 (Grund
+`thermal_plan`); nur Stufen aus dem Überschuss bleiben, und es gelten die Regeln oben unverändert,
+wie ohne gültigen Slot oder ohne Planwert. Mit Planwert:
 
 - Nach oben (mehr Leistung) geht der Wunsch eine Stufe je 10 min zum Planwert, nach unten sofort,
   noch vor den Autos und dem Akku. Ein Vorzeichenwechsel geht über 0, und auch ins Negative
-  steigt der Betrag nur eine Stufe je 10 min (die Schrittregel).
+  steigt der Betrag nur eine Stufe je 10 min (die Schrittregel; ging eine Erhöhung wegen eines
+  offenen Schreibvorgangs später hinaus, zählen die 10 min ab dem Senden).
 - Vor dem Planwert gehen weiter: sofort 0 (Regel 1), Spitze und Phasenlast (Regel 2) und die
   Autos (Regel 3). Statt der SOC-Schwelle gilt bei einem Planwert über 0 der **Akku-Wächter**:
   Entlädt der Akku 5 min lang ohne Unterbrechung mindestens 300 W, geht der Wunsch eine Stufe
   zurück, und so je weitere 5 min; solange er so viel entlädt oder seine Leistung unbekannt ist,
   steigt der Plan nicht. Kein Vorheizen aus dem Akku.
-- „Mehr“ bei echtem Überschuss (Regel 5) darf über den Planwert hinaus; „zurück“ (Regel 6) rechnet
-  mit `strategy.import_above_w` plus dem geplanten Netzbezug und nimmt nur solche Stufen über dem
-  Planwert zurück. Den Netzbezug des Hauses (etwa nachts, wenn der Akku hält) sieht der core nicht
+- „Mehr“ bei echtem Überschuss (Regel 5) darf über den Planwert hinaus, aber nur oberhalb von 0
+  und des Planwerts (einen negativen Planwert hebt Überschuss nicht an) und bei positivem Planwert
+  nicht, solange der Akku mindestens 300 W entlädt; „zurück“ (Regel 6) rechnet mit
+  `strategy.import_above_w` plus dem geplanten Netzbezug und nimmt nur solche Stufen aus dem
+  Überschuss zurück. Den Netzbezug des Hauses (etwa nachts, wenn der Akku hält) sieht der core nicht
   als Fehler des Plans.
 - Der Hinweis „weniger“ (Regel 7) und sein Ende wirken nicht, solange es einen Planwert gibt.
 
@@ -5703,7 +5709,7 @@ im UI, „Warum?“). Der Grund beschreibt den Wunsch der Strategie, nicht jeden
 | `thermal_stale` | Keine Werte der Klimaanlage, Versatz 0 | Die Werte sind veraltet (länger als `stale_after_s` kein Paket): sofort 0. Solange die Quelle fehlt, erzeugt die Regelung keinen Befehl; die 0 geht vom Adapter hinaus. Im Log steht der Eintrag erst, wenn die Werte zurückkehren und der Versatz vorher nicht 0 war. |
 | `thermal_no_echo` | Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0 | Die Werte kommen an, aber der Aktor ist nicht steuerbar: Das Echo des Versatzes (Analog 3) fehlt oder ist veraltet, oder die Klimaanlage ist gesperrt. Sofort 0. |
 | `thermal_off` | Klimaanlage aus oder lüftet, Versatz 0 | Betriebsart `aus`, `lueften` oder `unbekannt`, oder der Zustand DEGRADED: Versatz 0. Auch der Anfangsgrund nach einem Start: Der erste Eintrag nach dem Start ist meist eine 0 mit diesem Grund. |
-| `thermal_plan` | Klimaanlage folgt dem Plan ({k} K) | Seit Plan 5c: Der Wunsch folgt dem Planwert für Vorheizen oder Vorkühlen. `{k}` ist der Versatz der Entscheidung, etwa „Klimaanlage folgt dem Plan (+0,5 K)“; den Planwert selbst nennen die Eingaben (`planned_steps`). |
+| `thermal_plan` | Klimaanlage folgt dem Plan ({k} K) | Seit Plan 5c: Der Wunsch folgt dem Planwert für Vorheizen oder Vorkühlen; auch die 0 beim Ende des Planwerts. `{k}` ist der Versatz der Entscheidung, etwa „Klimaanlage folgt dem Plan (+0,5 K)“; den Planwert selbst nennen die Eingaben (`planned_steps`). |
 
 Ein Eintrag lautet etwa
 `Klimaanlage (PV-Überschuss in die Klimaanlage): Sollwertversatz −0,5 K – gesendet und bestätigt.`
@@ -5985,8 +5991,8 @@ Beginn kein Auto an, und die Klimaanlage ist live.
 | `klima-spitze` | Spitze droht beim Heizen, 40 min | 15.12.2026 ab 11:00, PV konstant, Multi auf „Nur Laden“, die Klimaanlage heizt mit 1500 W, ohne Versatz 1,6 kW Einspeisung, Ziel des 15-min-Wächters 5 kW; ab 30 min zieht das Haus 8 kW mehr | Vor 30 min +1 K; in der ersten Sekunde, in der der Wächter Druck macht, bekommt die UVR 0 K, und die Regelung wünscht 0 Stufen mit `thermal_peak`; danach bekommt die UVR nur 0 K. |
 | `klima-teuer-heizen` | Teurer Strom beim Heizen, 1 h | 15.12.2026 ab 18:00, keine PV, Akku 60 %, die Klimaanlage heizt mit 1500 W; zu Beginn und alle 15 min ein Plan mit `EIGENVERBRAUCH` und dem Hinweis „weniger“ für die Klimaanlage | Genau zwei Schritte von −0,5 K im Abstand von mindestens 600 s; der Versatz liegt zwischen −1 K und 0 K; jede Entscheidung an die Klimaanlage nennt `thermal_less`. |
 | `klima-plan-vorheizen` | Vorheizen in der billigen Nacht, 75 min | 16.12.2026 ab 06:00, keine PV, Akku 60 % auf „Nur Laden“, die Klimaanlage heizt mit 1500 W; zu Beginn und alle 15 min ein Plan mit Planwert +3 (600 W aus dem Netz), ab 06:45 −2 mit dem Hinweis „weniger“ | Vor 45 min +1,5 K; zu Beginn des teuren Blocks bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach −1 K; der Versatz liegt zwischen −1 K und +1,5 K; jede Erhöhung des Betrags ist eine Stufe, geht nicht über 0 hinweg und kommt mindestens 600 s nach der vorigen; die Safety-Schicht lehnt nichts ab; jede Entscheidung außer 0 nennt `thermal_plan`. |
-| `klima-plan-akku` | Akku deckt das geplante Vorheizen, 40 min | wie `klima-plan-vorheizen`, mit Planwert +2 in jedem Slot; ab 25 min darf der Akku entladen und deckt mit Victron im Dry-Run die ganze Last | Vor 25 min +1 K; danach geht der Versatz binnen 360 s zurück, nur mit `thermal_battery`, und wird nie größer; am Ende 0 K; kein Versatz gegen „mehr“; die Schrittregel hält. |
-| `klima-plan-ende` | Plan der Klimaanlage läuft ab, 35 min | wie `klima-plan-akku` ohne Entladung; ein einziger Plan mit Planwert +2, gültig 20 min, danach kommt keiner mehr | Vor 20 min +1 K; danach nennt die Regelung keinen Planwert und keine Entscheidung `thermal_plan`, der Versatz geht wie in 6a zurück (`thermal_battery` oder `thermal_back`) und ist 10 min nach dem Ende 0 K; kein Versatz gegen „mehr“. |
+| `klima-plan-akku` | Akku deckt das geplante Vorheizen, 40 min | wie `klima-plan-vorheizen`, mit Planwert +2 in jedem Slot; ab 25 min darf der Akku entladen und deckt mit Victron im Dry-Run die ganze Last | Vor 25 min +1 K; danach geht der Versatz binnen 360 s zurück, nur mit `thermal_battery`, und wird nie größer; am Ende 0 K; kein Versatz gegen „mehr“; die Schrittregel hält; die Safety-Schicht lehnt nichts ab. |
+| `klima-plan-ende` | Plan der Klimaanlage läuft ab, 35 min | wie `klima-plan-akku` ohne Entladung; ein einziger Plan mit Planwert +2, gültig 20 min, danach kommt keiner mehr | Vor 20 min +1 K; am Ende des Plans bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach nur 0 K; die Regelung nennt keinen Planwert mehr und keine Entscheidung außer 0 `thermal_plan`; kein Versatz gegen „mehr“. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

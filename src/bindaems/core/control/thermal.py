@@ -158,10 +158,11 @@ class ThermalStrategy:
     **Mit Planwert** (``planned_steps``, Plan 5c, Entscheidung 9) gilt diese Rangfolge:
 
     1. und 2. wie oben
-    P↓. Plan nach unten: Liegt der Wunsch über dem Planwert (und den Stufen aus dem Überschuss,
-       Regel 5), folgt er sofort; ein Vorzeichenwechsel geht über 0, und eine Erhöhung des
-       Betrags ins Negative braucht das Intervall seit der letzten (die Schrittregel der
-       Safety-Schicht). Die Regel steht vor 3 und 4, die nur eine Stufe zurückgehen.
+    P↓. Plan nach unten: Liegt der Wunsch über dem Planwert (und den Stufen aus dem Überschuss
+       über ``max(Planwert, 0)``, Regel 5), folgt er sofort; ein Vorzeichenwechsel geht über 0,
+       und eine Erhöhung des Betrags ins Negative braucht das Intervall seit der letzten (die
+       Schrittregel der Safety-Schicht; ging eine Erhöhung später hinaus, zählt
+       ``note_raised``). Die Regel steht vor 3 und 4, die nur eine Stufe zurückgehen.
     3. wie oben
     4. Bei einem Planwert über 0 statt der SOC-Schwelle der Akku-Wächter: Entlädt der Akku
        ``DISCHARGE_GUARD_W`` seit ``DISCHARGE_GUARD_S`` ohne Unterbrechung, geht ein positiver
@@ -171,12 +172,18 @@ class ThermalStrategy:
        Intervall. Eine neue positive Stufe des Plans braucht: kein Druck, kein offener
        Wagenbedarf und einen Akku mit bekannter Leistung, der weniger als
        ``DISCHARGE_GUARD_W`` entlädt; die SOC-Schwelle gilt für geplante Stufen nicht.
-    5. mehr wie oben, auch über den Planwert hinaus. Solche Stufen bleiben über dem Planwert,
-       auch wenn er sich ändert; Stufen aus 6a vor dem ersten Planwert zählen ebenso.
-    6. zurück: Netzbezug über ``import_above_w + planned_grid_w``; nur Stufen über dem Planwert
-       gehen so zurück (Regel 6 steht unter dem Plan).
+    5. mehr wie oben, auch über den Planwert hinaus, aber erst ab ``max(Planwert, 0)`` und bei
+       einem positiven Planwert nicht, solange der Akku ``DISCHARGE_GUARD_W`` entlädt. Solche
+       Stufen bleiben über ``max(Planwert, 0)``, auch wenn er sich ändert; Stufen aus 6a vor
+       einem positiven Planwert zählen ebenso, vor einem Planwert von höchstens 0 nicht.
+    6. zurück: Netzbezug über ``import_above_w + planned_grid_w``; nur Stufen über
+       ``max(Planwert, 0)`` gehen so zurück (Regel 6 steht unter dem Plan).
     7. und „weniger endet“ entfallen: Der Hinweis ``weniger`` wirkt nicht, solange es einen
        Planwert gibt.
+
+    Endet der Planwert (abgelaufen, keine Absicht, andere Betriebsart), gehen geplante positive
+    Stufen im selben Zyklus auf 0 (Grund ``thermal_plan``, nach den Regeln 1 und 2); nur die
+    Stufen aus dem Überschuss bleiben, und es gilt 6a.
     """
 
     def __init__(self, cfg: CoeOffsetConfig) -> None:
@@ -203,6 +210,18 @@ class ThermalStrategy:
         """Der Wunsch des letzten ``step``; vor dem ersten und nach ``reset`` 0."""
         return self._wish
 
+    @property
+    def planned(self) -> int | None:
+        """Der Planwert des letzten ``step``, auf ``±max_offset_k`` begrenzt; ``None`` ohne."""
+        return self._planned
+
+    def note_raised(self, now: float) -> None:
+        """Eine Erhöhung des Betrags ging erst zur monotonen Sekunde ``now`` hinaus (etwa nach
+        einem offenen Schreibvorgang): Die Wartezeit der nächsten zählt ab dort, wie die der
+        Schrittregel der Safety-Schicht. Ein früherer Zeitpunkt ändert nichts."""
+        if self._last_increase is None or now > self._last_increase:
+            self._last_increase = now
+
     def reset(self) -> None:
         """Zurück in den Anfangszustand: Wunsch 0 und keine laufende Zeit."""
         self._wish = _INITIAL
@@ -215,7 +234,7 @@ class ThermalStrategy:
     def step(self, obs: ThermalObs) -> ThermalWish:
         """Ein Zyklus: der Wunsch nach der ersten Regel, die greift, sonst der alte."""
         previous_mode, self._mode = self._mode, obs.mode
-        planned = self._take_plan(obs)
+        planned, kept = self._take_plan(obs)
         reset_reason = _reset_reason(obs, previous_mode)
         if reset_reason is not None:
             return self._zero(reset_reason)
@@ -223,6 +242,11 @@ class ThermalStrategy:
         if pressure and self._wish.steps > 0:
             return self._zero("thermal_peak")
         self._track(obs)
+        if kept is not None and self._wish.steps > kept:
+            # Ende des Planwerts: geplante Stufen sofort auf 0, nur die aus dem Überschuss bleiben
+            # (Entscheidung 8: kein Vorheizen aus dem Akku, bis die SOC-Schwelle greift)
+            self._move(kept, "thermal_plan", obs.now)
+            return self._wish
         # Druck, offener Wagenbedarf und ein Akku unter der Schwelle sperren neue positive Stufen
         allow_up = not pressure and not _cars_unmet(obs) and _gate_met(obs)
         if planned is None:
@@ -247,24 +271,30 @@ class ThermalStrategy:
             if rule(obs, allow_up):
                 break
         if planned is not None:
-            self._above = max(0, min(self._above, self._wish.steps - planned))
+            self._above = max(0, min(self._above, self._wish.steps - max(planned, 0)))
         return self._wish
 
-    def _take_plan(self, obs: ThermalObs) -> int | None:
-        """Der Planwert dieses Zyklus, auf ``±max_offset_k`` begrenzt, und die Stufen über ihm.
+    def _take_plan(self, obs: ThermalObs) -> tuple[int | None, int | None]:
+        """Der Planwert dieses Zyklus, auf ``±max_offset_k`` begrenzt, und die Stufen aus dem
+        Überschuss; endet der Planwert in diesem Zyklus, dazu diese Stufen (sonst ``None``).
 
-        Beginnt ein Planwert, zählen die Stufen des Wunschs über ihm als Stufen aus dem Überschuss
-        (der Wunsch stammt aus 6a); ohne Planwert gibt es keine.
+        Stufen aus dem Überschuss zählen nur über ``max(Planwert, 0)``. Beginnt ein positiver
+        Planwert, zählen die Stufen des Wunschs über ihm als solche (der Wunsch stammt aus 6a);
+        bei einem Planwert von höchstens 0 keine: Dann holt der Plan auch positive Stufen aus 6a
+        zurück. Ohne Planwert gibt es keine.
         """
         planned = obs.planned_steps
+        kept = None
         if planned is not None:
             planned = max(-self._max_steps, min(self._max_steps, planned))
             if self._planned is None:
-                self._above = max(0, self._wish.steps - max(planned, 0))
+                self._above = max(0, self._wish.steps - planned) if planned > 0 else 0
         else:
+            if self._planned is not None:
+                kept = self._above
             self._above = 0
         self._planned = planned
-        return planned
+        return planned, kept
 
     def _zero(self, reason: str) -> ThermalWish:
         self._wish = ThermalWish(0, reason)
@@ -354,7 +384,8 @@ class ThermalStrategy:
         Stufen aus dem Überschuss, ein positiver sofort bis dorthin, höchstens bis 0 (ein
         Vorzeichenwechsel geht über 0); ein Wunsch von höchstens 0 eine Stufe je Intervall."""
         steps, now = self._wish.steps, obs.now
-        ceiling = min(self._max_steps, planned + self._above)
+        ceiling = planned if self._above == 0 else max(planned, 0) + self._above
+        ceiling = min(self._max_steps, ceiling)
         if steps <= ceiling:
             return False
         target = max(ceiling, 0) if steps > 0 else steps - 1
@@ -390,10 +421,13 @@ class ThermalStrategy:
         target = steps + 1
         if (target > 0 and not allow_up) or not self._may_move(target, obs.now):
             return False
+        planned = self._planned
+        if planned is not None and not _surplus_may_rise(obs, steps, planned):
+            return False
         self._export_since = obs.now
         self._move(target, "thermal_more", obs.now)
-        if self._planned is not None:
-            self._above = max(0, target - self._planned)
+        if planned is not None:
+            self._above = max(0, target - max(planned, 0))
         return True
 
     def _rule_import(self, obs: ThermalObs, allow_up: bool) -> bool:
@@ -401,7 +435,7 @@ class ThermalStrategy:
         # nur Stufen über ihm zurück
         if not _elapsed_since(self._import_since, obs.now, _IMPORT_HOLD_S):
             return False
-        if self._planned is not None and self._wish.steps <= self._planned:
+        if self._planned is not None and self._wish.steps <= max(self._planned, 0):
             return False
         self._import_since = obs.now
         self._move(self._wish.steps - 1, "thermal_back", obs.now)
@@ -468,6 +502,15 @@ def _plan_may_rise(obs: ThermalObs) -> bool:
     pressure = obs.peak_pressure or obs.phase_pressure
     known = obs.battery_discharge_w is not None
     return not pressure and not _cars_unmet(obs) and known and not _discharging(obs)
+
+
+def _surplus_may_rise(obs: ThermalObs, steps: int, planned: int) -> bool:
+    """Regel 5 mit Planwert: Stufen aus dem Überschuss nur ab ``max(Planwert, 0)`` (darunter
+    gehört der Bereich dem Plan) und bei einem positiven Planwert nicht, solange der Akku
+    ``DISCHARGE_GUARD_W`` entlädt."""
+    if steps < max(planned, 0):
+        return False
+    return not (planned > 0 and _discharging(obs))
 
 
 def _gate_met(obs: ThermalObs) -> bool:

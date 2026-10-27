@@ -544,7 +544,11 @@ def test_plan_ende_names_no_plan_after_its_end(cfg: Config) -> None:
     name = "klima-plan-ende"
     rule = check(name, "keinen Planwert")
     during = {1100: thermal("heizen", planned=2), 1200: thermal("heizen")}
-    decisions = [decision(name, 1100, 1.0, "thermal_plan"), decision(name, 1201, 0.5, "x")]
+    decisions = [
+        decision(name, 1100, 1.0, "thermal_plan"),
+        decision(name, 1201, 0.0, "thermal_plan"),  # die 0 zum Ende des Plans
+        decision(name, 1202, 0.5, "x"),
+    ]
     assert rule.find(run(cfg, name, during, 1300, decisions=decisions)) == []
     after = {1100: thermal("heizen", planned=2), 1201: thermal("heizen", planned=2)}
     late = [decision(name, 1300, 0.5, "thermal_plan")]
