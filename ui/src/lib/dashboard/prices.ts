@@ -1,5 +1,6 @@
 // Strompreis jetzt und die Stufen der nächsten 3 h (Drittel der Spanne); Prognosen fürs Diagramm
 import type { PricesNow } from '$lib/api/schemas';
+import { formatCt, formatTime } from '$lib/format';
 import { addDays, localRange, parseIso, todayVienna } from '$lib/time';
 
 export type PriceLevel = 'low' | 'mid' | 'high';
@@ -60,4 +61,18 @@ export function cheapestNext(
 	});
 	const slot = summary.next[best];
 	return slot ? { start: slot.start, ct: slot.ct, now: best === 0 } : null;
+}
+
+/** „am günstigsten um 10:15“ bzw. „jetzt am günstigsten“; ohne Slots `null` */
+export function cheapestText(summary: PriceSummary): string | null {
+	const cheapest = cheapestNext(summary);
+	if (!cheapest) return null;
+	return cheapest.now ? 'jetzt am günstigsten' : `am günstigsten um ${formatTime(cheapest.start)}`;
+}
+
+/** Beschriftung der Mini-Balken: die Spanne der nächsten 3 h */
+export function priceRangeText(summary: PriceSummary): string {
+	const prices = summary.next.map((slot) => slot.ct);
+	if (prices.length === 0) return 'Preise der nächsten 3 Stunden';
+	return `Preise der nächsten 3 Stunden: ${formatCt(Math.min(...prices))} bis ${formatCt(Math.max(...prices))}`;
 }

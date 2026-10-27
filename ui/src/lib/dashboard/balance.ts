@@ -1,6 +1,7 @@
 // „Woher – Wohin“: zwei Balken mit den Quellen und dem Verbrauch der Anlage (Vorzeichen wie in `Derived`)
 import type { Derived } from '$lib/api/schemas';
-import { IDLE_W } from './flow';
+import { formatPower, DASH } from '$lib/format';
+import { IDLE_W, type FlowConsumer } from './flow';
 
 export type BalanceKind = 'pv' | 'grid' | 'battery' | 'house' | 'wallbox' | 'export';
 
@@ -84,4 +85,18 @@ export function balance(
 		[derived.house_load_w, derived.battery_w, derived.grid_w, ...wallboxW].some(known)
 	);
 	return { sources, sinks, sourcesW, sinksW };
+}
+
+/** Segmente erst ab diesem Anteil beschriften; kleinere stehen nur in der Liste darunter */
+export const LABEL_MIN_SHARE = 0.15;
+
+/** „Küche 230 W · Obergeschoss 600 W“ für „Im Haus“; ohne Verbraucher `null` */
+export function houseText(consumers: FlowConsumer[]): string | null {
+	if (consumers.length === 0) return null;
+	return consumers
+		.map(
+			(consumer) =>
+				`${consumer.name} ${consumer.powerW === null ? DASH : formatPower(consumer.powerW)}`
+		)
+		.join(' · ');
 }

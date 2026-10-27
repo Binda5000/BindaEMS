@@ -3,7 +3,7 @@ import type { CoreState, VehicleHealth, WallboxHealth } from '$lib/api/schemas';
 import { modeLabel } from '$lib/charging/view';
 import { formatPower } from '$lib/format';
 import { coreState, derived, limits, reading } from '$lib/testing/fixtures';
-import { vehicleCards } from './vehicles';
+import { ringArc, socNote, vehicleCards, type VehicleCard } from './vehicles';
 
 const labels = { evcs: 'EVCS', twc: 'Garage' };
 
@@ -172,5 +172,34 @@ describe('vehicleCards', () => {
 			wallboxes: [wallbox('twc', 'tesla'), wallbox('evcs', null)]
 		};
 		expect(vehicleCards(state(), limits(), health, labels).some((card) => card.guest)).toBe(false);
+	});
+});
+
+describe('Ring und SOC-Hinweis', () => {
+	const card = (changes: Partial<VehicleCard>): VehicleCard => ({
+		id: 'tesla',
+		name: 'Tesla',
+		socPct: 70,
+		socQuality: 'ok',
+		guest: false,
+		status: 'nicht angesteckt',
+		mode: null,
+		...changes
+	});
+
+	it('nennt veraltete und fehlende Ladestände, beim Gast nichts', () => {
+		expect(socNote(card({}))).toBeNull();
+		expect(socNote(card({ socQuality: 'stale' }))).toBe('SOC veraltet');
+		expect(socNote(card({ socPct: null, socQuality: 'missing' }))).toBe('kein SOC');
+		expect(socNote(card({ socPct: null, socQuality: 'missing', guest: true }))).toBeNull();
+	});
+
+	it('misst den Bogen des Rings, begrenzt auf 0–100 %', () => {
+		const full = 2 * Math.PI * 25;
+		expect(ringArc(100)).toBeCloseTo(full);
+		expect(ringArc(50)).toBeCloseTo(full / 2);
+		expect(ringArc(150)).toBeCloseTo(full);
+		expect(ringArc(-5)).toBe(0);
+		expect(ringArc(null)).toBe(0);
 	});
 });

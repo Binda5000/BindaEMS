@@ -81,3 +81,18 @@ export function vehicleCards(
 	}
 	return cards;
 }
+
+const RING_RADIUS = 25;
+
+/** Länge des gefüllten Bogens (Umfang bei 100 %) für den Ladestand; ohne Wert 0 */
+export function ringArc(pct: number | null): number {
+	if (pct === null) return 0;
+	return (Math.min(100, Math.max(0, pct)) / 100) * 2 * Math.PI * RING_RADIUS;
+}
+
+/** „SOC veraltet“ / „kein SOC“; beim Gast und bei gültigem Wert `null` */
+export function socNote(card: VehicleCard): string | null {
+	if (card.guest) return null;
+	if (card.socQuality === 'stale') return 'SOC veraltet';
+	return card.socQuality === 'missing' ? 'kein SOC' : null;
+}

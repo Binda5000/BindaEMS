@@ -30,3 +30,24 @@ export function noticesFrom(system: SystemResponse | undefined): Notice[] {
 		.filter((notice) => !seen.has(notice.text) && seen.add(notice.text))
 		.sort((a, b) => RANK[a.level] - RANK[b.level]); // stabil: Reihenfolge innerhalb bleibt
 }
+
+export interface NoticeSummary {
+	/** „1 Hinweis“, „3 Hinweise“ */
+	count: string;
+	/** die ersten zwei Texte, mit „ · “ getrennt */
+	preview: string;
+	/** Stufe des schwersten Hinweises */
+	level: Notice['level'];
+}
+
+/** Zeile der Hinweis-Leiste; `null` ohne Hinweise */
+export function noticeSummary(notices: Notice[]): NoticeSummary | null {
+	const [first, ...rest] = notices;
+	if (!first) return null;
+	const worst = notices.reduce((a, b) => (RANK[b.level] < RANK[a.level] ? b : a), first);
+	return {
+		count: notices.length === 1 ? '1 Hinweis' : `${notices.length} Hinweise`,
+		preview: [first, ...rest.slice(0, 1)].map((notice) => notice.text).join(' · '),
+		level: worst.level
+	};
+}

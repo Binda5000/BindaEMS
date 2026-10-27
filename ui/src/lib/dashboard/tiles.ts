@@ -43,3 +43,32 @@ export function dayEnergy(stats: Stats | null | undefined): DayEnergy {
 		exportKwh: energy?.export_kwh ?? null
 	};
 }
+
+const SPARK_WIDTH = 100;
+const SPARK_TOP = 2;
+const SPARK_BOTTOM = 22; // 24 hoch, 2 Rand für die Linienstärke
+
+function trim(value: number): number {
+	return Number(value.toFixed(2));
+}
+
+/** Punkte der Polylinie (`x,y x,y …`) auf 100 × 24, größter Wert oben; unter zwei Punkten `null` */
+export function sparkLine(points: [number, number][]): string | null {
+	if (points.length < 2) return null;
+	const times = points.map(([at]) => at);
+	const values = points.map(([, value]) => value);
+	const t0 = Math.min(...times);
+	const timeSpan = Math.max(...times) - t0;
+	const v0 = Math.min(...values);
+	const valueSpan = Math.max(...values) - v0;
+	return points
+		.map(([at, value]) => {
+			const x = timeSpan > 0 ? ((at - t0) / timeSpan) * SPARK_WIDTH : 0;
+			const y =
+				valueSpan > 0
+					? SPARK_BOTTOM - ((value - v0) / valueSpan) * (SPARK_BOTTOM - SPARK_TOP)
+					: (SPARK_TOP + SPARK_BOTTOM) / 2;
+			return `${trim(x)},${trim(y)}`;
+		})
+		.join(' ');
+}

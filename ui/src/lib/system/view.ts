@@ -179,8 +179,12 @@ export function vatText(status: PriceStatus): string {
 	return word;
 }
 
-/** „vor 40 s“, ab 2 min „vor 3 min“ */
+/** „vor 45 s“, ab 120 s „vor 12 min“, ab 120 min „vor 3 h“, ab 48 h „vor 2 Tagen“ */
 export function ageText(ageS: number | null): string {
 	if (ageS === null) return DASH;
-	return ageS < 120 ? `vor ${ageS} s` : `vor ${Math.floor(ageS / 60)} min`;
+	const minutes = Math.floor(ageS / 60);
+	const hours = Math.floor(minutes / 60);
+	if (ageS < 120) return `vor ${ageS} s`;
+	if (minutes < 120) return `vor ${minutes} min`;
+	return hours < 48 ? `vor ${hours} h` : `vor ${Math.floor(hours / 24)} Tagen`;
 }

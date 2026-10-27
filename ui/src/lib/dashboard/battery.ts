@@ -1,6 +1,6 @@
 // Akku-Kachel der Übersicht: Ladestand, Leistung, Reserve und der Ausblick aus dem Plan
 import type { CoreState, Limits, PlanResponse, PlanSlot } from '$lib/api/schemas';
-import { formatSoc, formatTime } from '$lib/format';
+import { DASH, formatNumberMax, formatPower, formatSoc, formatTime, NBSP } from '$lib/format';
 import { parseIso } from '$lib/time';
 import { IDLE_W } from './flow';
 import type { SocQuality } from './socs';
@@ -109,4 +109,37 @@ export function outlookText(outlook: PlanOutlook): string {
 	if (outlook.trend === 'hold') return `hält ${soc}`;
 	const verb = outlook.trend === 'up' ? 'steigt' : 'sinkt';
 	return `${verb} bis ${soc} um ${formatTime(outlook.at)}`;
+}
+
+/** „lädt 1,00 kW“, „entlädt 800 W“, „ruht“; unbekannt ist ein Strich */
+export function powerText(view: BatteryView): string {
+	switch (view.direction) {
+		case 'charge':
+			return `lädt ${formatPower(view.powerW)}`;
+		case 'discharge':
+			return `entlädt ${formatPower(view.powerW)}`;
+		case 'idle':
+			return 'ruht';
+		case 'unknown':
+			return DASH;
+	}
+}
+
+/** „≈ 16,5 von 30 kWh“; ohne SOC oder nutzbare Kapazität `null` */
+export function energyText(view: BatteryView): string | null {
+	if (view.kwh === null || view.usableKwh === null) return null;
+	return `≈ ${formatNumberMax(view.kwh, 1)} von ${formatNumberMax(view.usableKwh, 1)}${NBSP}kWh`;
+}
+
+/** Beschriftung des Batteriesymbols für Screenreader */
+export function batteryLabel(view: BatteryView): string {
+	const level = view.pct === null ? 'ohne Messwert' : formatSoc(view.pct);
+	const reserve = view.reservePct === null ? '' : `, Reserve ${formatSoc(view.reservePct)}`;
+	return `Hausakku ${level}${reserve}`;
+}
+
+/** „Netzladen erlaubt“ / „Netzladen aus“; unbekannt `null` */
+export function gridChargeText(allowed: boolean | null): string | null {
+	if (allowed === null) return null;
+	return allowed ? 'Netzladen erlaubt' : 'Netzladen aus';
 }

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { PriceSlot } from '$lib/api/schemas';
-import { cheapestNext, forecastForChart, priceSummary } from './prices';
+import {
+	cheapestNext,
+	cheapestText,
+	forecastForChart,
+	priceRangeText,
+	priceSummary
+} from './prices';
 
 const slot = (minute: number, ct: number, extra: Partial<PriceSlot> = {}): PriceSlot => ({
 	start: new Date(Date.UTC(2026, 9, 9, 8, minute)).toISOString(),
@@ -94,5 +100,23 @@ describe('cheapestNext', () => {
 
 	it('ohne Preise gibt es keinen günstigsten Slot', () => {
 		expect(cheapestNext(summaryOf([]))).toBeNull();
+	});
+});
+
+describe('Texte der Preis-Kachel', () => {
+	const data = (ct: number[]) =>
+		priceSummary({ now: slot(0, ct[0] ?? 0), next_3h: ct.map((c, i) => slot(i * 15, c)) });
+
+	it('nennt den günstigsten Slot oder „jetzt“', () => {
+		expect(cheapestText(data([30, 20, 25]))).toBe('am günstigsten um 10:15');
+		expect(cheapestText(data([10, 20, 25]))).toBe('jetzt am günstigsten');
+		expect(cheapestText(data([]))).toBeNull();
+	});
+
+	it('fasst die Spanne der nächsten 3 h zusammen', () => {
+		expect(priceRangeText(data([30, 20, 25]))).toMatch(
+			/^Preise der nächsten 3 Stunden: 20,00\sct\/kWh bis 30,00\sct\/kWh$/
+		);
+		expect(priceRangeText(data([]))).toBe('Preise der nächsten 3 Stunden');
 	});
 });

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryResponse } from '$lib/api/schemas';
 import { stats } from '$lib/testing/fixtures';
-import { dayEnergy, gridLabel, HISTORY_SERIES, SPARK_WINDOW_MS, sparkPoints } from './tiles';
+import {
+	dayEnergy,
+	gridLabel,
+	HISTORY_SERIES,
+	SPARK_WINDOW_MS,
+	sparkLine,
+	sparkPoints
+} from './tiles';
 
 const NOW = Date.UTC(2026, 9, 9, 12, 0);
 const MINUTE = 60_000;
@@ -80,5 +87,31 @@ describe('dayEnergy', () => {
 			importKwh: data.energy.import_kwh,
 			exportKwh: data.energy.export_kwh
 		});
+	});
+});
+
+describe('sparkLine', () => {
+	it('skaliert Zeit und Wert auf 100 × 24, größter Wert oben', () => {
+		expect(
+			sparkLine([
+				[0, 0],
+				[10, 10],
+				[20, 5]
+			])
+		).toBe('0,22 50,2 100,12');
+	});
+
+	it('zeichnet eine gleichbleibende Reihe in der Mitte', () => {
+		expect(
+			sparkLine([
+				[0, 7],
+				[10, 7]
+			])
+		).toBe('0,12 100,12');
+	});
+
+	it('braucht mindestens zwei Punkte', () => {
+		expect(sparkLine([])).toBeNull();
+		expect(sparkLine([[0, 1]])).toBeNull();
 	});
 });

@@ -4,6 +4,7 @@ import { coreState, reading, system } from '$lib/testing/fixtures';
 import {
 	actuatorModeLabel,
 	actuatorNotes,
+	ageText,
 	heartbeatLabel,
 	liveConditions,
 	needsEvccConfirmation,
@@ -181,4 +182,23 @@ it('needsEvccConfirmation gilt nicht für die Klimaanlage', () => {
 	expect(needsEvccConfirmation(['thermal.klima'])).toBe(false);
 	expect(needsEvccConfirmation(['victron', 'thermal.klima'])).toBe(false);
 	expect(needsEvccConfirmation(['thermal.klima', 'wallbox.evcs'])).toBe(true);
+});
+
+it('ageText nennt Sekunden, Minuten, Stunden und Tage', () => {
+	expect(
+		[0, 45, 119, 120, 720, 7199, 7200, 10_800, 172_799, 172_800, 259_200].map(ageText)
+	).toEqual([
+		'vor 0 s',
+		'vor 45 s',
+		'vor 119 s',
+		'vor 2 min',
+		'vor 12 min',
+		'vor 119 min',
+		'vor 2 h',
+		'vor 3 h',
+		'vor 47 h',
+		'vor 2 Tagen',
+		'vor 3 Tagen'
+	]);
+	expect(ageText(null)).toBe('–');
 });

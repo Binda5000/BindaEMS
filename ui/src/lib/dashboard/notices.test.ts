@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { expect, it } from 'vitest';
 import { SystemResponseSchema } from '$lib/api/schemas';
 import { system } from '$lib/testing/fixtures';
-import { noticesFrom } from './notices';
+import { noticeSummary, noticesFrom } from './notices';
 
 const since = '2026-10-09T08:00:00+00:00';
 
@@ -42,4 +42,26 @@ it('ordnet Fehler vor Warnungen und entfernt Doppeltes', () => {
 
 it('ohne Systemdaten gibt es keine Hinweise', () => {
 	expect(noticesFrom(undefined)).toEqual([]);
+});
+
+it('fasst Hinweise zusammen: Anzahl, die ersten zwei Texte, schwerste Stufe', () => {
+	expect(noticeSummary([])).toBeNull();
+	expect(noticeSummary([{ level: 'info', text: 'Nur ein Hinweis' }])).toEqual({
+		count: '1 Hinweis',
+		preview: 'Nur ein Hinweis',
+		level: 'info'
+	});
+	expect(
+		noticeSummary([
+			{ level: 'info', text: 'A' },
+			{ level: 'error', text: 'B' },
+			{ level: 'warning', text: 'C' }
+		])
+	).toEqual({ count: '3 Hinweise', preview: 'A · B', level: 'error' });
+	expect(
+		noticeSummary([
+			{ level: 'info', text: 'A' },
+			{ level: 'warning', text: 'B' }
+		])?.level
+	).toBe('warning');
 });

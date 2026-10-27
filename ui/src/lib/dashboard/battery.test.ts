@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { CoreState, PlanResponse, PlanSlot } from '$lib/api/schemas';
-import { formatSoc } from '$lib/format';
+import { formatPower, formatSoc } from '$lib/format';
 import { parseIso } from '$lib/time';
 import { coreState, derived, limits, reading } from '$lib/testing/fixtures';
 import { RESPONSE, iso, slot } from '$lib/testing/plan';
-import { batteryView, outlookText, planOutlook } from './battery';
+import {
+	batteryLabel,
+	batteryView,
+	energyText,
+	gridChargeText,
+	outlookText,
+	planOutlook,
+	powerText
+} from './battery';
 
 const NOW = parseIso(iso('12:00')) as number;
 
@@ -187,5 +195,39 @@ describe('outlookText', () => {
 		expect(outlookText({ trend: 'hold', socPct: 55, at: iso('12:15') })).toBe(
 			`hält ${formatSoc(55)}`
 		);
+	});
+});
+
+describe('Texte der Akku-Kachel', () => {
+	const view = (batteryW: number | null, soc = reading(55)) =>
+		batteryView(socState(soc, batteryW), limits(), null, NOW);
+
+	it('nennt Richtung und Leistung, ruhend und unbekannt', () => {
+		expect(powerText(view(1000))).toBe(`lädt ${formatPower(1000)}`);
+		expect(powerText(view(-800))).toBe(`entlädt ${formatPower(800)}`);
+		expect(powerText(view(5))).toBe('ruht');
+		expect(powerText(view(null))).toBe('–');
+	});
+
+	it('rechnet „≈ 16,5 von 30 kWh“, ohne Wert nichts', () => {
+		expect(energyText(view(0))).toMatch(/^≈ 16,5 von 30\skWh$/);
+		expect(energyText(view(0, reading(55, 'invalid')))).toBeNull();
+		expect(energyText(batteryView(socState(reading(55)), null, null, NOW))).toBeNull();
+	});
+
+	it('beschriftet das Symbol mit Ladestand und Reserve', () => {
+		expect(batteryLabel(view(0))).toBe(`Hausakku ${formatSoc(55)}, Reserve ${formatSoc(20)}`);
+		expect(batteryLabel(view(0, reading(55, 'invalid')))).toBe(
+			`Hausakku ohne Messwert, Reserve ${formatSoc(20)}`
+		);
+		expect(batteryLabel(batteryView(socState(reading(55)), null, null, NOW))).toBe(
+			`Hausakku ${formatSoc(55)}`
+		);
+	});
+
+	it('sagt, ob Netzladen erlaubt ist; unbekannt fehlt', () => {
+		expect(gridChargeText(true)).toBe('Netzladen erlaubt');
+		expect(gridChargeText(false)).toBe('Netzladen aus');
+		expect(gridChargeText(null)).toBeNull();
 	});
 });

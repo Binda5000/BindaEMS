@@ -13,3 +13,14 @@ it('markiert veraltete und ungültige Werte', () => {
 	expect(screen.getByText('ungültig')).toBeInTheDocument();
 	expect(screen.getByText('vor 40 s')).toBeInTheDocument();
 });
+
+it('nennt das Alter in Stunden und Tagen', () => {
+	render(SignalTable, {
+		rows: [
+			{ name: 'a', value: '1', quality: 'ok', ageS: 10_800 },
+			{ name: 'b', value: '2', quality: 'ok', ageS: 172_800 }
+		]
+	});
+	expect(screen.getByText('vor 3 h')).toBeInTheDocument();
+	expect(screen.getByText('vor 2 Tagen')).toBeInTheDocument();
+});

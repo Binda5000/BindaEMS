@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { formatPower } from '$lib/format';
 import { derived } from '$lib/testing/fixtures';
-import { balance } from './balance';
+import { balance, houseText, LABEL_MIN_SHARE } from './balance';
 
 const labels = { evcs: 'EVCS', twc: 'Garage' };
 
@@ -108,5 +109,22 @@ describe('balance', () => {
 		);
 		expect(ids(result.sources)).toEqual(['grid']);
 		expect(result.sinks).toEqual([]);
+	});
+});
+
+describe('houseText', () => {
+	it('listet die Verbraucher mit Leistung, fehlende als Strich', () => {
+		expect(
+			houseText([
+				{ id: 'a', name: 'Küche', color: null, powerW: 230 },
+				{ id: 'b', name: 'Keller', color: null, powerW: null },
+				{ id: 'other', name: 'Sonstiges', color: null, powerW: 342 }
+			])
+		).toBe(`Küche ${formatPower(230)} · Keller – · Sonstiges ${formatPower(342)}`);
+		expect(houseText([])).toBeNull();
+	});
+
+	it('beschriftet Segmente ab 15 %', () => {
+		expect(LABEL_MIN_SHARE).toBe(0.15);
 	});
 });

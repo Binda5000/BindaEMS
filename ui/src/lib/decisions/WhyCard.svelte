@@ -32,13 +32,14 @@
 		<ul>
 			{#each decisions as decision (decision.id)}
 				<li>
-					<div class="head">
+					<span class="line">
 						<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">
 							{names[decision.actuator] ?? decision.actuator}
 						</a>
-						<span class="muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
-					</div>
-					<p>{decision.text}</p>
+						<span class="sep" aria-hidden="true">·</span>
+						<span class="text">{decision.text}</span>
+					</span>
+					<span class="age muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
 				</li>
 			{/each}
 		</ul>
@@ -52,35 +53,40 @@
 		margin: 0;
 		padding: 0;
 		display: grid;
-		gap: 0.75rem;
+		gap: 0.25rem;
 	}
 
-	.head {
+	li {
 		display: flex;
 		flex-wrap: wrap;
 		justify-content: space-between;
+		align-items: baseline;
 		gap: 0 0.75rem;
+	}
+
+	.line {
+		flex: 1 1 16rem;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.line a {
 		font-weight: 600;
 	}
 
-	.head .muted {
-		font-weight: 400;
+	.age {
+		white-space: nowrap;
 	}
 
 	/* Verweise mindestens 44 px hoch */
-	.head a,
+	li a,
 	.more a {
 		display: inline-flex;
 		align-items: center;
 		min-height: 2.75rem;
 	}
 
-	li p {
-		margin: 0;
-		overflow-wrap: anywhere;
-	}
-
 	.more {
-		margin: 0.75rem 0 0;
+		margin: 0.5rem 0 0;
 	}
 </style>
