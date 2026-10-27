@@ -107,7 +107,8 @@ Dazu legt die Regelung fest:
   Überschuss; der Rest geht an die übrigen Autos (zu ``unmet_surplus_w`` zählt ein Auto in Sofort
   ohnehin nicht). Boost und die anderen Modi bleiben ungekappt, ein ungeregelter Ladepunkt (der
   Gast am Wall Connector) ebenso, sein Zuschlag bleibt ``max_a``. Begrenzt das Limit den Strom,
-  trägt der Befehl nach ``mode_now`` den Grund ``now_limit``; begrenzt ein Wächter darunter, steht
+  trägt der Befehl nach ``mode_now`` den Grund ``now_limit``, danach den Grund eines Wächters, der
+  zwischen Limit und ungekapptem Höchststrom liegt; begrenzt ein Wächter darunter, steht nur
   dessen Grund. Eine Senkung wegen des Limits ist nie dringend; was die Sicherung allein verlangt,
   bleibt es (``_urgent``).
 - Ladelimit (Plan 4b, Präzisierung 9; ``ChargeLimits``): Mit ``charge_limit_sync`` bekommt ein
@@ -1312,7 +1313,7 @@ class ChargeController:
         may_start = not minimum and (situation.carries or situation.charging is True)
         if inputs.controllable.get(actuator) is not True:
             if charge and may_start and situation.plugged is True:
-                return self._wake(point.vehicle, actuator, situation, blocked)
+                return self._wake(point, actuator, situation, blocked)
             return []
         head = situation.head
         against = minimum and not charge and situation.charging is True and not situation.unclear
@@ -1333,7 +1334,7 @@ class ChargeController:
             value, reasons = point.min_a, (*head, OVERLOAD)
         else:
             value = _current_a(point, situation.wanted, situation.limit)
-            reasons = (*head, *_why(situation))
+            reasons = (*head, *_why(situation, point.max_a))
         urgent = minimum or _urgent(situation, point, value, present_a, situation.wanted)
         held = not urgent and self._reserved(
             point, actuator, inputs, value=value, present_a=present_a, limit=situation.limit
@@ -1414,16 +1415,17 @@ class ChargeController:
         return round(watts / (self._limits.voltage_v * len(point.phases)), 9)
 
     def _wake(
-        self, key: str, actuator: str, situation: _Situation, blocked: frozenset[Key]
+        self, point: ChargePoint, actuator: str, situation: _Situation, blocked: frozenset[Key]
     ) -> list[Command]:
         """Der Weckstart (Design 7.1): Die Gründe sind die eines Starts, danach ``wake``.
 
         ``wake_command`` entscheidet, ob und wann er kommt; die Gründe baut die Regelung.
         """
         resumed = (RESUME_AFTER_OUTAGE,) if situation.resume else ()
-        reasons = (*situation.head, *_why(situation), *resumed, WAKE)
+        reasons = (*situation.head, *_why(situation, point.max_a), *resumed, WAKE)
+        tesla = self._tesla[point.vehicle]
         return wake_command(
-            self._last, self._tesla[key], self._now, self._wall_now, actuator, reasons, blocked
+            self._last, tesla, self._now, self._wall_now, actuator, reasons, blocked
         )
 
     def _hold(
@@ -1437,9 +1439,10 @@ class ChargeController:
         """Kein „Laden an/aus“, nur eine Senkung (Präzisierungen 4 und 5).
 
         So bei unbekanntem Ansteckzustand und solange die Zuordnung unklar ist: Der Strom sinkt
-        nur, wenn der Wächter, die Grenze des 15-min-Wächters, das Sofort-Limit (Grund
-        ``now_limit``, wenn kein Wächter darunter kappt) oder die Überlast weniger als den
-        bekannten Ist-Strom erlaubt, nie unter ``min_a``.
+        nur, wenn der Wächter, die Grenze des 15-min-Wächters, das Sofort-Limit oder die Überlast
+        weniger als den bekannten Ist-Strom erlaubt, nie unter ``min_a``. Begrenzt das Limit den
+        Wert (kein Wächter darunter), steht ``now_limit``, und liegt der Wächter unter dem
+        Höchststrom ohne Limit, danach auch sein Grund (``_limit_reasons``).
         """
         if present_a is None or (actuator, _CURRENT) in blocked:
             return []
@@ -1449,7 +1452,8 @@ class ChargeController:
         else:
             value = _current_a(point, point.max_a, situation.limit)  # ohne Wunsch
             by_limit = situation.capped and situation.limit >= point.max_a
-            reasons = (*situation.head, NOW_LIMIT if by_limit else situation.cause.value)
+            why = _limit_reasons(situation) if by_limit else (situation.cause.value,)
+            reasons = (*situation.head, *why)
             urgent = _urgent(situation, point, value, present_a, point.max_a)  # ohne Wunsch
         if value >= present_a or not self._changed((actuator, _CURRENT), float(value)):
             return []
@@ -1625,14 +1629,17 @@ def _tessie_w(tessie: VehicleObs, volts: float) -> float | None:
     return finite_number(tessie.actual_current_a * tessie.phases * volts)
 
 
-def _why(situation: _Situation) -> tuple[str, ...]:
+def _why(situation: _Situation, max_a: int) -> tuple[str, ...]:
     """Der Grund nach dem Modus-Code, wenn das Auto lädt und keine Überlast herrscht.
 
     ``pv_surplus``, wenn der Wert aus dem Anteil kommt (in PV, Min+PV oder „Geplant“ ohne festen
     Bedarf liegt der Wunsch nicht über der Grenze) oder die Zeiten von PV-Überschuss gerade
-    gestartet haben; sonst der Grund der Grenze (``GuardCause``, auch ``peak_guard``), wenn sie
-    kappt; sonst ``now_limit``, wenn das Sofort-Limit den Höchststrom senkt (Plan Sofort-Limit,
-    Entscheidung 8); sonst keiner.
+    gestartet haben; sonst, wenn das Sofort-Limit den Wert begrenzt (gekappt, Wunsch und Grenze
+    nicht unter dem gekappten Höchststrom ``max_a``), ``now_limit`` und, liegt die Grenze unter dem
+    Höchststrom ohne Limit, danach ihr Grund (``_limit_reasons``; Plan Sofort-Limit, Entscheidung
+    8): so an der EVCS wie am Wall Connector, wo das Fenster noch mehr wünschen kann; sonst der
+    Grund der Grenze (``GuardCause``, auch ``peak_guard``), wenn sie kappt; sonst ``now_limit``,
+    wenn das Sofort-Limit den Höchststrom senkt; sonst keiner.
 
     Mit festem Bedarf in „Geplant“ steht zuerst sein Grund (``plan_power``, ``latest_start``),
     danach der Grund der Grenze, wenn sie kappt, sonst ``pv_surplus``, wenn der Anteil den Wunsch
@@ -1651,11 +1658,23 @@ def _why(situation: _Situation) -> tuple[str, ...]:
     )
     if from_share or situation.decision.reason == PV_SURPLUS:
         return (PV_SURPLUS,)
+    if situation.capped and min(situation.wanted, situation.limit) >= max_a:  # nur in Sofort
+        return _limit_reasons(situation)
     if situation.limit < situation.wanted:
         return (situation.cause.value,)
-    if situation.capped:  # nur in Sofort
+    if situation.capped:
         return (NOW_LIMIT,)
     return ()
+
+
+def _limit_reasons(situation: _Situation) -> tuple[str, ...]:
+    """Die Gründe, wenn das Sofort-Limit den Wert begrenzt: ``now_limit``, danach der Grund der
+    Grenze, wenn sie unter dem Höchststrom ohne Limit liegt (sie senkte dann auch ohne Limit;
+    Plan Sofort-Limit, Entscheidung 8)."""
+    uncapped_a = situation.uncapped_a
+    if uncapped_a is not None and situation.limit < uncapped_a:
+        return (NOW_LIMIT, situation.cause.value)
+    return (NOW_LIMIT,)
 
 
 def _current_a(point: ChargePoint, wanted: int, limit: int) -> int:

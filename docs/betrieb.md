@@ -2499,7 +2499,9 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   Wächter kappen weiter darunter. Ändert sich das Limit während des Ladens, folgt der Strom im
   nächsten Regelzyklus (beim Tesla im Rahmen der Befehlslimits von Tessie). Kappt das Limit, trägt der
   Befehl nach „Sofort“ den Grund „Sofort-Limit“ (`now_limit`); kappt ein Wächter darunter, steht
-  dessen Grund. Ein Gast wird nur an der EVCS begrenzt.
+  dessen Grund. Liegt ein Wächter zwischen Limit und vollem Strom (etwa Limit 10 A, Phasenwächter
+  12 A), stehen beide: „Sofort-Limit“, danach der Grund des Wächters. Ein Gast wird nur an der EVCS
+  begrenzt.
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
@@ -3278,7 +3280,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `mode_pv`, `mode_min_pv`, `mode_now`, `mode_off`, `mode_planned` | PV-Überschuss, Min+PV, Sofort, Aus, Geplant | der Lademodus des Fahrzeugs |
 | `boost` | Boost | Ein Boost gilt (er steht an Stelle des Modus). |
 | `pv_surplus` | Überschuss | Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten des PV-Überschusses haben einen Start oder Stopp ergeben. |
-| `now_limit` | Sofort-Limit | Das Sofort-Limit (Höchststrom des Autos, „Laderegelung“, „Lademodi“) senkt den Strom in „Sofort“; kappt ein Wächter darunter, steht dessen Grund. |
+| `now_limit` | Sofort-Limit | Das Sofort-Limit (Höchststrom des Autos, „Laderegelung“, „Lademodi“) senkt den Strom in „Sofort“; kappt ein Wächter darunter, steht dessen Grund; liegt ein Wächter zwischen Limit und vollem Strom, steht sein Grund danach. |
 | `phase_limit` | Phasengrenze | Der Wächter kappt am Ziel der Sicherung (Sofort, Boost). |
 | `import_limit` | Importlimit | Der Wächter kappt am Importlimit (PV-Überschuss, Min+PV). |
 | `reserve_guard` | Schutz der USV-Reserve | Sofort oder Boost richtet sich wegen eines niedrigen SOC am Importlimit aus. |
