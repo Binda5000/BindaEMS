@@ -939,8 +939,12 @@ def test_receive_needs_the_mandatory_channels() -> None:
 
 def test_object_ids_include_thermal_entities(cfg) -> None:
     ids = ha_object_ids(cfg)
-    assert {f"thermal_klima_{s}" for s in ("offset", "mode", "power", "wish")} <= set(ids)
+    suffixes = ("offset", "mode", "power", "wish", "planned_offset")
+    assert {f"thermal_klima_{s}" for s in suffixes} <= set(ids)
+    assert "thermal_plan" in ids  # der globale Schalter „Vorheizen und Vorkühlen“
     assert len(ids) == len(set(ids))
+    bare = cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
+    assert "thermal_plan" not in ha_object_ids(bare)  # ohne Klimaanlage nichts davon
 
 
 def test_a_vehicle_key_must_not_collide_with_a_thermal_entity(tmp_path) -> None:

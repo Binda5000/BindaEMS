@@ -1157,6 +1157,29 @@ def test_driving_entities_in_the_guide_exist() -> None:
         assert name in controls
 
 
+def test_thermal_plan_entities_in_the_guide_exist() -> None:
+    # „Vorheizen und Vorkühlen (Phase 5c)“, Unterabschnitt „Home Assistant“: Objekt-ID, Name und
+    # Plattform wie die Entitäten der app; Schalter und Sensor stehen auch in den Tabellen von
+    # Abschnitt 7, der Schalter mit der Wirkung auf `learning.thermal.enabled`.
+    _check_entities_exist(
+        _documented_entities("Vorheizen und Vorkühlen (Phase 5c)"),
+        {"thermal_plan", "thermal_klima_planned_offset"},
+    )
+    section = " ".join(_guide_section("Vorheizen und Vorkühlen (Phase 5c)").split())
+    for topic in (
+        "`learning.thermal.enabled`",
+        "Quelle „ha“, Urheber `home-assistant`",
+        "„Vorheizen und Vorkühlen ein“",
+        "„Vorheizen und Vorkühlen aus“",
+        "0,5 K",
+        "negativ beim Kühlen",
+    ):
+        assert topic in section, topic
+    guide = " ".join(_guide_section("7. Home Assistant über MQTT").split())
+    assert "| Vorheizen und Vorkühlen | Schalter |" in guide
+    assert "| Klima Geplanter Versatz (`thermal_<Schlüssel>_planned_offset`) | K |" in guide
+
+
 def test_support_entities_in_the_guide_exist() -> None:
     # „Akku-Unterstützung bedienen“: der Schalter und die Zahl (Plattform `number`) mit Namen wie
     # in der app; die Bedienelemente der Tabelle in Abschnitt 7 nennen dieselben Namen.
@@ -1359,10 +1382,11 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
     # die Sensoren in Home Assistant: Name und Kennung je Sensor des Beispiels
     cfg = load_config(Path("deploy/config.example.yaml"))
     handbook = Path("docs/betrieb.md").read_text(encoding="utf-8")
-    sensors = [s for s in build_entities(cfg) if s.object_id.startswith(HA_THERMAL_PREFIX)]
-    assert len(sensors) == 4
+    device = f"{HA_THERMAL_PREFIX}klima_"  # der Schalter „Vorheizen und Vorkühlen“ gehört zu 5c
+    sensors = [s for s in build_entities(cfg) if s.object_id.startswith(device)]
+    assert len(sensors) == 5
     for spec in sensors:
-        suffix = spec.object_id.rsplit("_", 1)[1]
+        suffix = spec.object_id.removeprefix(device)
         row = f"| {spec.name} (`{HA_THERMAL_PREFIX}<Schlüssel>_{suffix}`) |"
         assert row in handbook, spec.name
     # die Flags der Werkzeuge im Kapitel gibt es

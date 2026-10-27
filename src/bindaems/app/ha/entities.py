@@ -32,12 +32,14 @@ from bindaems.app.learning.driving_profile import (
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.execution import ExecutionState, execution_state
 from bindaems.app.planning.explain import slot_text
+from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import full_power_w
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import (
     ASSIGNMENT_AUTOMATIC,
+    HA_THERMAL_PLAN_ID,
     HA_THERMAL_PREFIX,
     THERMAL_DEFAULT_LABEL,
     Config,
@@ -160,6 +162,8 @@ class HaInputs:
     auto_target: Mapping[str, bool] = field(default_factory=dict)
     # Health ``thermal``: je Gerät (Schlüssel aus ``config.yaml``) die Werte der Klimaanlage
     thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    # Plan 5c: Schalter „Vorheizen und Vorkühlen“ (``learning.thermal.enabled``); None = unbekannt
+    thermal_plan_enabled: bool | None = None
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -251,6 +255,33 @@ def _thermal_mode(name: str) -> Callable[[HaInputs], str]:
 
 def _thermal_number(name: str, key: str, decimals: int) -> Callable[[HaInputs], str]:
     return lambda inputs: fmt(_number(_thermal_item(name, inputs).get(key)), decimals)
+
+
+def _thermal_planned_offset(name: str) -> Callable[[HaInputs], str]:
+    """Der Versatz in K, den der Plan im laufenden Slot an den core gibt (Plan 5c, Task 10).
+
+    Stufen des Slots mal 0,5 K, beim Kühlen mit umgekehrtem Vorzeichen (mehr Kühlen heißt
+    niedrigerer Sollwert). Der Wert gilt nur, wenn er auch gesendet wird: ``plan.thermal.active``
+    und der Schalter, wie ihn der Sender liest (``intent_plan``); sonst und für jedes andere Gerät
+    als ``plan.thermal.device`` ist es 0.
+    """
+
+    def value(inputs: HaInputs) -> str:
+        plan, slot = inputs.plan, inputs.plan_now
+        thermal = plan.thermal if plan is not None else None
+        if (
+            thermal is None
+            or not thermal.active
+            or not inputs.thermal_plan_enabled
+            or thermal.device != name
+            or slot is None
+            or slot.thermal_steps is None
+        ):
+            return fmt(0.0, 1)
+        steps = -slot.thermal_steps if thermal.mode == "kuehlen" else slot.thermal_steps
+        return fmt(steps * STEP_K, 1)
+
+    return value
 
 
 def _competitor(inputs: HaInputs) -> str:
@@ -1219,6 +1250,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             ),
             EntitySpec(f"{oid}_occupant", "sensor", "Fahrzeug", device, _occupant(key)),
         ]
+    if cfg.thermal.devices:  # ohne Klimaanlage gibt es auch den Schalter nicht
+        entities.append(
+            _control(
+                HA_THERMAL_PLAN_ID,
+                "switch",
+                "Vorheizen und Vorkühlen",
+                main,
+                lambda i: on_off(i.thermal_plan_enabled),
+            )
+        )
     for key, thermal in cfg.thermal.devices.items():
         # Sensoren des Systems (Hauptgerät). Der Standardname „Klimaanlage“ heißt kurz „Klima“
         # (Plan 6a, Entscheidung 12); ein eigener Name steht ganz davor („Büro Versatz“).
@@ -1251,6 +1292,15 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 main,
                 _thermal_number(key, "wish", 0),
                 state_class="measurement",  # ganze Stufen, ohne Einheit
+            ),
+            EntitySpec(
+                f"{oid}_planned_offset",
+                "sensor",
+                f"{title} Geplanter Versatz",
+                main,
+                _thermal_planned_offset(key),
+                unit="K",
+                state_class="measurement",
             ),
         ]
     ids = [spec.object_id for spec in entities]
@@ -1331,6 +1381,7 @@ def build_inputs(
     month_kwh: Mapping[str, float | None] | None = None,
     driving_profiles: Mapping[str, VehicleProfile] | None = None,
     auto_target: Mapping[str, bool] | None = None,
+    thermal_plan_enabled: bool | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -1421,6 +1472,7 @@ def build_inputs(
         ),
         driving_profiles=dict(driving_profiles or {}),
         auto_target=dict(auto_target or {}),
+        thermal_plan_enabled=thermal_plan_enabled,
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

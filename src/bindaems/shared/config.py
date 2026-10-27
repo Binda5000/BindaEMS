@@ -89,7 +89,9 @@ HA_WALLBOX_SUFFIXES = ("power", "assignment", "occupant")
 # Sensoren je Klimaanlage: ``thermal_<Schlüssel>_<Endung>`` (Plan 6a, Entscheidung 12). Das Präfix
 # hält sie getrennt von Fahrzeugen und Wallboxes mit ähnlichem Schlüssel.
 HA_THERMAL_PREFIX = "thermal_"
-HA_THERMAL_SUFFIXES = ("offset", "mode", "power", "wish")
+HA_THERMAL_SUFFIXES = ("offset", "mode", "power", "wish", "planned_offset")
+# Schalter „Vorheizen und Vorkühlen“ (Plan 5c): einer für das System, nur mit Klimaanlage
+HA_THERMAL_PLAN_ID = "thermal_plan"
 # CoE-Einheiten, die in Zehnteln kommen: 1 = °C, 7 = K (Plan 6a, Entscheidung 10)
 _TENTHS_UNITS = (1, 7)
 # Stufe des Sollwertversatzes in K (Plan 6a, Präzisierung 2: nur 0,5 K)
@@ -816,6 +818,8 @@ def ha_object_ids(cfg: Config) -> list[str]:
     for key in cfg.thermal.devices:
         oid = f"{HA_THERMAL_PREFIX}{ha_object_id(key)}"
         ids += [f"{oid}_{suffix}" for suffix in HA_THERMAL_SUFFIXES]
+    if cfg.thermal.devices:
+        ids.append(HA_THERMAL_PLAN_ID)
     return ids
 
 

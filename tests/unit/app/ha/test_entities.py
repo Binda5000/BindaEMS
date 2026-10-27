@@ -33,7 +33,7 @@ from bindaems.app.prices.service import PriceService
 from bindaems.app.stats.service import TodayStats
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
-from bindaems.shared.plan import BatteryIntent, PlanVehicle
+from bindaems.shared.plan import BatteryIntent, PlanThermal, PlanVehicle
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 
 
@@ -117,10 +117,12 @@ def test_entities_from_config(cfg) -> None:
         "twc_power",
         "twc_assignment",
         "twc_occupant",
+        "thermal_plan",
         "thermal_klima_offset",
         "thermal_klima_mode",
         "thermal_klima_power",
         "thermal_klima_wish",
+        "thermal_klima_planned_offset",
     ]
     names = {e.object_id: e.device.name for e in build_entities(cfg)}
     assert (names["egolf_soc"], names["twc_power"]) == (
@@ -1146,7 +1148,9 @@ THERMAL_HEALTH: dict[str, Any] = {
 def test_thermal_entities_exist_only_for_configured_devices(cfg) -> None:
     ids = {e.object_id for e in build_entities(cfg)}
     assert {f"thermal_klima_{s}" for s in ("offset", "mode", "power", "wish")} <= ids
+    assert {"thermal_plan", "thermal_klima_planned_offset"} <= ids
     bare = cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
+    # ohne Klimaanlage gibt es auch den Schalter „Vorheizen und Vorkühlen“ nicht
     assert not any(e.object_id.startswith("thermal_") for e in build_entities(bare))
 
 
@@ -1436,3 +1440,133 @@ def test_build_inputs_takes_the_driving_values(
     assert inputs.driving_profiles == profiles and inputs.auto_target == {"tesla": True}
     plain = build_inputs(live, price_service, store, forecast_service, T_APP)
     assert (plain.driving_profiles, plain.auto_target) == ({}, {})
+
+
+# Vorheizen und Vorkühlen (Plan 5c, Task 10): der Schalter und der geplante Versatz
+
+
+def _thermal_plan(
+    *, mode: str = "heizen", active: bool = True, device: str = "klima", steps: int | None = 2
+) -> Any:
+    """Ein gültiger Plan mit ``thermal`` und dem Planwert ``steps`` im laufenden Slot."""
+    plan = sample_plan("2026-10-09T08:00:00+00:00", ["08:00", "08:15"])
+    thermal = PlanThermal(
+        device=device,
+        mode=mode,  # type: ignore[arg-type]
+        active=active,
+        saving_ct=1.0,
+        model_computed_at=None,
+        reason="ok",
+    )
+    slots = [plan.slots[0].model_copy(update={"thermal_steps": steps}), plan.slots[1]]
+    return plan.model_copy(update={"thermal": thermal, "slots": slots})
+
+
+def _offset_inputs(plan: Any, *, enabled: bool | None = True) -> HaInputs:
+    return sample_inputs(
+        plan=plan, plan_now=plan.slots[0], plan_next=plan.slots[1], thermal_plan_enabled=enabled
+    )
+
+
+def test_thermal_plan_switch_shows_the_setting(cfg) -> None:
+    assert state(cfg, "thermal_plan", sample_inputs(thermal_plan_enabled=True)) == "ON"
+    assert state(cfg, "thermal_plan", sample_inputs(thermal_plan_enabled=False)) == "OFF"
+    assert state(cfg, "thermal_plan", sample_inputs()) == "None"  # Einstellung unbekannt
+
+
+def test_thermal_plan_switch_discovery_payload(cfg) -> None:
+    spec = entity(cfg, "thermal_plan")
+    assert (spec.component, spec.command, spec.device) == (
+        "switch",
+        True,
+        entity(cfg, "regulation").device,
+    )
+    topic, payload = discovery(spec, cfg.homeassistant.mqtt)
+    data = json.loads(payload)
+    assert topic == "homeassistant/switch/bindaems/thermal_plan/config"
+    assert data["name"] == "Vorheizen und Vorkühlen"
+    assert data["unique_id"] == "bindaems_thermal_plan"
+    assert data["state_topic"] == "bindaems/state/thermal_plan"
+    assert data["command_topic"] == "bindaems/cmd/thermal_plan"
+    assert (data["payload_on"], data["payload_off"]) == ("ON", "OFF")
+
+
+def test_planned_offset_follows_current_slot(cfg) -> None:
+    # Heizen, +2 Stufen im laufenden Slot: +1,0 K; der nächste Slot zählt nicht
+    plan = _thermal_plan(steps=2)
+    assert state(cfg, "thermal_klima_planned_offset", _offset_inputs(plan)) == "1.0"
+    later = plan.model_copy(
+        update={"slots": [plan.slots[0].model_copy(update={"thermal_steps": -3}), plan.slots[1]]}
+    )
+    assert state(cfg, "thermal_klima_planned_offset", _offset_inputs(later)) == "-1.5"
+    # kein Planwert im Slot: 0, ebenso ohne gültigen Plan
+    assert (
+        state(cfg, "thermal_klima_planned_offset", _offset_inputs(_thermal_plan(steps=None)))
+        == "0.0"
+    )
+    assert (
+        state(cfg, "thermal_klima_planned_offset", sample_inputs(thermal_plan_enabled=True))
+        == "0.0"
+    )
+
+
+def test_planned_offset_in_cooling_is_negative(cfg) -> None:
+    plan = _thermal_plan(mode="kuehlen", steps=3)
+    assert state(cfg, "thermal_klima_planned_offset", _offset_inputs(plan)) == "-1.5"
+    negative = _thermal_plan(mode="kuehlen", steps=-1)  # Kühlen mit Schritt zurück: wärmer
+    assert state(cfg, "thermal_klima_planned_offset", _offset_inputs(negative)) == "0.5"
+
+
+def test_planned_offset_is_zero_unless_the_core_gets_the_value(cfg) -> None:
+    # Schalter aus, unbekannt oder Plan nur als Vorschau (``active`` falsch): der core bekommt
+    # nichts, der Sensor zeigt 0
+    plan = _thermal_plan(steps=2)
+    for inputs in (
+        _offset_inputs(plan, enabled=False),
+        _offset_inputs(plan, enabled=None),
+        _offset_inputs(_thermal_plan(steps=2, active=False)),
+    ):
+        assert state(cfg, "thermal_klima_planned_offset", inputs) == "0.0"
+    # ein Plan ohne ``thermal`` (keine Klimaanlage beim Planen)
+    bare = plan.model_copy(update={"thermal": None})
+    assert state(cfg, "thermal_klima_planned_offset", _offset_inputs(bare)) == "0.0"
+
+
+def test_planned_offset_is_zero_for_other_thermal_devices(cfg) -> None:
+    device = cfg.thermal.devices["klima"]
+    two = cfg.model_copy(
+        update={
+            "thermal": cfg.thermal.model_copy(
+                update={"devices": {"klima": device, "buero": device}}
+            )
+        }
+    )
+    inputs = _offset_inputs(_thermal_plan(steps=2, device="buero"))
+    assert state(two, "thermal_buero_planned_offset", inputs) == "1.0"
+    assert state(two, "thermal_klima_planned_offset", inputs) == "0.0"
+
+
+def test_planned_offset_discovery_payload(cfg) -> None:
+    data = config_of(cfg, "thermal_klima_planned_offset")
+    assert data["name"] == "Klima Geplanter Versatz"
+    assert (data["unit_of_measurement"], data["state_class"]) == ("K", "measurement")
+    assert "device_class" not in data and "command_topic" not in data
+    assert data["unique_id"] == "bindaems_thermal_klima_planned_offset"
+    device = cfg.thermal.devices["klima"].model_copy(update={"label": "Büro"})
+    custom = cfg.model_copy(
+        update={"thermal": cfg.thermal.model_copy(update={"devices": {"klima": device}})}
+    )
+    assert config_of(custom, "thermal_klima_planned_offset")["name"] == "Büro Geplanter Versatz"
+
+
+def test_build_inputs_takes_the_thermal_plan_setting(
+    live, price_service, store, forecast_service
+) -> None:
+    assert (
+        build_inputs(live, price_service, store, forecast_service, T_APP).thermal_plan_enabled
+        is None
+    )
+    inputs = build_inputs(
+        live, price_service, store, forecast_service, T_APP, thermal_plan_enabled=True
+    )
+    assert inputs.thermal_plan_enabled is True

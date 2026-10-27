@@ -274,6 +274,7 @@ Prüfschritte, je Zeile der Tabelle:
 | Netzladen erlaubt | „BindaEMS“ | Zeitplan | ☐ | ☐ |
 | Akku-Unterstützung erlaubt | „BindaEMS“ | Laden, „Akku-Unterstützung“ | ☐ | ☐ |
 | Unterstützungsschwelle | „BindaEMS“ | Laden, „Akku-Unterstützung“ | ☐ | ☐ |
+| Vorheizen und Vorkühlen (nur mit Klimaanlage) | „BindaEMS“ | Einstellungen (nur Admin), Abschnitt „Vorheizen und Vorkühlen“ | ☐ | ☐ |
 | Neu planen | „BindaEMS“ | Zeitplan, Anlass „Neu planen“ | ☐ | – (Taste ohne Zustand) |
 
 Ein ungültiger Wert aus Home Assistant (etwa Ziel-SOC 10 oder Abfahrtszeit „7 Uhr“) ändert nichts und

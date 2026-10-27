@@ -71,6 +71,11 @@ class FakePlanning:
             raise self.error
         self.calls.append(("set_grid_charge", on, actor, source))
 
+    def set_thermal_plan(self, on, *, actor, source):
+        if self.error is not None:
+            raise self.error
+        self.calls.append(("set_thermal_plan", on, actor, source))
+
     def request(self, trigger) -> None:
         self.calls.append(("request", trigger))
 
@@ -386,6 +391,36 @@ async def test_grid_charge_switch_command(handler, planning, intents, payload, o
     assert intents.applied == []
 
 
+@pytest.mark.parametrize(("payload", "on"), [("ON", True), ("OFF", False)])
+async def test_thermal_plan_switch_command(handler, planning, intents, payload, on) -> None:
+    await handler("thermal_plan", payload)
+    assert planning.calls == [("set_thermal_plan", on, "home-assistant", "ha")]
+    assert intents.applied == []
+
+
+async def test_unknown_thermal_plan_payload_is_rejected(handler, planning, rejections) -> None:
+    await handler("thermal_plan", "VIELLEICHT")
+    assert planning.calls == []
+    assert rejections.texts == [
+        PREFIX + "Unbekannter Befehl „VIELLEICHT“ für „Vorheizen und Vorkühlen“."
+    ]
+
+
+async def test_thermal_plan_version_conflict_is_rejected(handler, planning, rejections) -> None:
+    planning.error = VersionConflictError(5)
+    await handler("thermal_plan", "ON")
+    assert rejections.texts == [PREFIX + str(VersionConflictError(5))]
+
+
+async def test_thermal_plan_is_unknown_without_a_thermal_device(
+    cfg, intents, rejections, clock, planning
+) -> None:
+    bare = cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
+    handler = HaCommandHandler(bare, intents, rejections, clock, planning)  # type: ignore[arg-type]
+    await handler("thermal_plan", "ON")
+    assert planning.calls == [] and rejections.texts == []
+
+
 async def test_replan_button_requests_manual(handler, planning) -> None:
     await handler("replan", "PRESS")
     assert planning.calls == [("request", "manual")]
@@ -419,6 +454,7 @@ async def test_other_planning_error_is_logged_not_raised(handler, planning, reje
 
 async def test_without_planning_the_plan_commands_are_unknown(bare_handler, rejections) -> None:
     await bare_handler("grid_charge", "ON")
+    await bare_handler("thermal_plan", "ON")
     await bare_handler("replan", "PRESS")
     assert rejections.texts == []
 

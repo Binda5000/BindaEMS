@@ -1,7 +1,8 @@
 """Befehle aus Home Assistant (Plan 2d, Präzisierung 15).
 
 Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Ziel-SOC und Abfahrt,
-Boost, Zuordnung, Gast-Modus, Akku-Unterstützung und die Automatik für Ziel und Abfahrt.
+Boost, Zuordnung, Gast-Modus, Akku-Unterstützung, die Automatik für Ziel und Abfahrt und
+Vorheizen und Vorkühlen.
 Live-Schaltung (``SetActuators``) und Vorrang (``SetPriority``) gibt es hier nicht.
 Jeder Befehl wird eine ``Change`` an den ``IntentService``; was Home Assistant sendet, kann nichts
 außer diesen Änderungen auslösen. Ein ungültiger oder abgelehnter Befehl ändert nichts und wird
@@ -41,7 +42,7 @@ from bindaems.app.control.routes import CONFLICT, CORE_DOWN
 from bindaems.app.core_link import CoreUnavailableError
 from bindaems.app.ha.entities import AUTOMATIC, GUEST_MODE_LABELS, MODE_LABELS, object_id
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
-from bindaems.shared.config import Config
+from bindaems.shared.config import HA_THERMAL_PLAN_ID, Config
 from bindaems.shared.control import TARGET_SOC_MAX, TARGET_SOC_MIN, SupportIntent
 from bindaems.shared.numbers import de
 from bindaems.shared.plan import PlanTrigger
@@ -64,6 +65,8 @@ class PlanningCommands(Protocol):
 
     def set_grid_charge(self, on: bool, *, actor: str, source: Source) -> SettingsVersion: ...
 
+    def set_thermal_plan(self, on: bool, *, actor: str, source: Source) -> SettingsVersion: ...
+
     def request(self, trigger: PlanTrigger) -> None: ...
 
 
@@ -76,6 +79,13 @@ class AutomationCommands(Protocol):
 @dataclass(frozen=True)
 class SetGridCharge:
     """Schalter „Netzladen erlaubt“."""
+
+    on: bool
+
+
+@dataclass(frozen=True)
+class SetThermalPlan:
+    """Schalter „Vorheizen und Vorkühlen“."""
 
     on: bool
 
@@ -108,7 +118,15 @@ class SetAutoTarget:
 
 
 # was ein Befehl aus Home Assistant bewirken kann
-Command = Change | SetGridCharge | Replan | SupportSwitch | SupportThreshold | SetAutoTarget
+Command = (
+    Change
+    | SetGridCharge
+    | SetThermalPlan
+    | Replan
+    | SupportSwitch
+    | SupportThreshold
+    | SetAutoTarget
+)
 
 
 class Refused(Exception):
@@ -212,6 +230,9 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
     def grid_charge(payload: str) -> SetGridCharge | None:
         return SetGridCharge(payload == ON) if payload in (ON, OFF) else None
 
+    def thermal_plan(payload: str) -> SetThermalPlan | None:
+        return SetThermalPlan(payload == ON) if payload in (ON, OFF) else None
+
     def auto_target(key: str) -> Callable[[str], SetAutoTarget | None]:
         return lambda payload: SetAutoTarget(key, payload == ON) if payload in (ON, OFF) else None
 
@@ -238,6 +259,10 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
     }
     if planning:
         table["grid_charge"] = _Command("Netzladen erlaubt", grid_charge, option=False)
+        if cfg.thermal.devices:  # ohne Klimaanlage gibt es den Schalter nicht
+            table[HA_THERMAL_PLAN_ID] = _Command(
+                "Vorheizen und Vorkühlen", thermal_plan, option=False
+            )
         table["replan"] = _Command(
             "Neu planen", lambda payload: Replan() if payload == PRESS else None, option=False
         )
@@ -328,9 +353,13 @@ class HaCommandHandler:
         elif isinstance(change, SetGridCharge) and planning is not None:
             # blockiert (Datenbank): nicht in der Ereignisschleife
             await asyncio.to_thread(planning.set_grid_charge, change.on, actor=ACTOR, source=SOURCE)
+        elif isinstance(change, SetThermalPlan) and planning is not None:
+            await asyncio.to_thread(
+                planning.set_thermal_plan, change.on, actor=ACTOR, source=SOURCE
+            )
         elif isinstance(change, Replan) and planning is not None:
             planning.request("manual")
-        elif not isinstance(change, SetGridCharge | Replan):
+        elif not isinstance(change, SetGridCharge | SetThermalPlan | Replan):
             await self._intents.apply(change, actor=ACTOR, source=SOURCE)
 
     async def _support(self, change: SupportSwitch | SupportThreshold) -> SetSupport:

@@ -402,3 +402,44 @@ async def test_plan_has_thermal_fields(client_as, planning, monkeypatch):
     monkeypatch.setattr(planning, "current", lambda: shifted.model_copy(update={"thermal": bare}))
     body = client.get("/api/plan").json()["plan"]["thermal"]
     assert (body["model_computed_at"], body["reason"]) == (None, "no_model")
+
+
+def test_thermal_plan_switch_creates_a_settings_version(planning, settings_service, audit):
+    version = planning.set_thermal_plan(True, actor="home-assistant", source="ha")
+    current = settings_service.current()
+    assert version == current and current.settings.learning.thermal.enabled is True
+    assert (current.actor, current.source, current.comment) == (
+        "home-assistant",
+        "ha",
+        "Vorheizen und Vorkühlen ein",
+    )
+    entry = next(e for e in audit.recent() if e.action == "settings.update")
+    assert (entry.actor, entry.source) == ("home-assistant", "ha")
+    assert planning.pending() == "settings"  # die Einstellung löst die Neuplanung aus
+    planning.set_thermal_plan(False, actor="home-assistant", source="ha")
+    assert settings_service.current().comment == "Vorheizen und Vorkühlen aus"
+
+
+def test_thermal_plan_same_value_creates_no_version(planning, settings_service):
+    before = settings_service.current().version
+    assert planning.set_thermal_plan(False, actor="x", source="ha").version == before
+    assert settings_service.current().version == before
+
+
+def test_thermal_plan_keeps_the_other_thermal_settings(planning, settings_service):
+    planning.set_thermal_plan(True, actor="x", source="ha")
+    thermal = settings_service.current().settings.learning.thermal
+    assert thermal.enabled and thermal.heat_up_k == 1.5 and thermal.margin_ct == 2.0
+
+
+def test_thermal_plan_retries_once_on_conflict(planning, settings_service, monkeypatch):
+    conflict_once(monkeypatch, settings_service)
+    version = planning.set_thermal_plan(True, actor="x", source="ha")
+    assert version.settings.learning.thermal.enabled
+    assert settings_service.current().version == version.version
+
+
+def test_thermal_plan_conflict_after_retry_raises(planning, settings_service, monkeypatch):
+    conflict_always(monkeypatch, settings_service)
+    with pytest.raises(VersionConflictError):
+        planning.set_thermal_plan(True, actor="x", source="ha")

@@ -329,6 +329,35 @@ class PlanningService:
                     raise
         raise AssertionError("unerreichbar")  # pragma: no cover - die Schleife kehrt zurück
 
+    def set_thermal_plan(self, on: bool, *, actor: str, source: Source) -> SettingsVersion:
+        """Schalter „Vorheizen und Vorkühlen“ (``learning.thermal.enabled``) als neue
+        Einstellungsversion (blockiert: Datenbank).
+
+        Kommentar „Vorheizen und Vorkühlen ein“ bzw. „… aus“; die Einstellungen sind relevant für
+        die Planung und lösen die Neuplanung aus. Wiederholung bei Versionskonflikt wie bei
+        ``set_grid_charge``.
+        """
+        for attempt in (1, 2):
+            current = self._settings.current()
+            thermal = current.settings.learning.thermal
+            if thermal.enabled == on:
+                return current
+            learning = current.settings.learning.model_copy(
+                update={"thermal": thermal.model_copy(update={"enabled": on})}
+            )
+            try:
+                return self._settings.update(
+                    current.settings.model_copy(update={"learning": learning}),
+                    base_version=current.version,
+                    actor=actor,
+                    source=source,
+                    comment="Vorheizen und Vorkühlen ein" if on else "Vorheizen und Vorkühlen aus",
+                )
+            except VersionConflictError:
+                if attempt == 2:
+                    raise
+        raise AssertionError("unerreichbar")  # pragma: no cover - die Schleife kehrt zurück
+
     async def run(self) -> None:
         """Plant beim Start, zur Viertelstunde und auf Auslöser; prüft alle ``WATCH_S`` s.
 

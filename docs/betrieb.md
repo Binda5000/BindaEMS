@@ -543,6 +543,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Klima Betriebsart (`thermal_<Schlüssel>_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
 | Klima Leistung (`thermal_<Schlüssel>_power`) | W | elektrische Leistung der Klimaanlage laut UVR; „unbekannt“ ohne Wert |
 | Klima Wunsch (`thermal_<Schlüssel>_wish`) | – | der Leistungswunsch der Strategie in ganzen Stufen (positiv: mehr Leistung, negativ: weniger); „unbekannt“, solange die Regelung ruht |
+| Klima Geplanter Versatz (`thermal_<Schlüssel>_planned_offset`) | K | seit Plan 5c der Versatz, den der Plan im laufenden Slot an die Klimaanlage gibt (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“, „Home Assistant“); 0, wenn der Plan nichts sendet; eine Nachkommastelle |
 | Ladeleistung (Gerät „BindaEMS EVCS“ / „BindaEMS Wall Connector“) | W | je Wallbox |
 | Fahrzeug (Gerät der Wallbox) | – | je Wallbox der Name des Fahrzeugs, „Gast“ oder „keins“ |
 
@@ -580,10 +581,11 @@ steht die Quelle „ha“.
 | Netzladen erlaubt | Schalter | die Einstellung „Netzladen erlaubt“ (Abschnitt „Planung“); jede Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
 | Akku-Unterstützung erlaubt | Schalter | erlaubt oder sperrt die Unterstützung der Autos aus dem Akku (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Unterstützungsschwelle | Zahl | die Schwelle in %, von der USV-Reserve bis 100 (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
+| Vorheizen und Vorkühlen | Schalter | die Einstellung `learning.thermal.enabled` (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“); nur mit einer Klimaanlage in der `config.yaml`; ab Werk aus. Eine Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
 | Neu planen | Taste | löst eine Neuplanung aus |
 
 Die Bedienelemente stehen am Gerät des Fahrzeugs bzw. der Wallbox, Regelbetrieb, Gast-Lademodus,
-Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
+Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle, Vorheizen und Vorkühlen und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
 
 - **Befehle** kommen über `bindaems/cmd/<Objekt>`. Eine gehaltene (retained) Nachricht auf diesen
   Topics ignoriert die app: Sie käme sonst bei jeder Verbindung wieder.
@@ -4801,6 +4803,32 @@ Abschnitt laden mit den Standardwerten.
 - **Wirkung:** Jede Änderung des Abschnitts löst einen neuen Plan aus (Anlass „Einstellungen“). Der
   Schalter wirkt auf den Plan, den die app dem core übergibt; das Verhalten des core steht im
   Abschnitt „Klimaanlage (Phase 6a)“, „Planwert“.
+
+### Home Assistant
+
+Seit Plan 5c gibt es zwei Entitäten am Gerät „BindaEMS“, beide nur mit einer Klimaanlage in der
+`config.yaml`. Die Objekt-ID des Sensors steht hier für den Schlüssel `klima` der
+Beispielkonfiguration; bei einem anderen Gerät steht dessen Schlüssel dazwischen, bei einem eigenen
+Namen (`label`) steht er statt „Klima“ vorn.
+
+| Objekt-ID | Name | Plattform | Wert |
+|---|---|---|---|
+| `thermal_plan` | Vorheizen und Vorkühlen | switch | „an“, wenn `learning.thermal.enabled` an ist; schreibend, mit den Rechten von „Bedienen“ (Quelle „ha“, Urheber `home-assistant`) |
+| `thermal_klima_planned_offset` | Klima Geplanter Versatz | sensor | der Versatz des laufenden Slots in K (Einheit „K“, Zustandsklasse „Messwert“, eine Nachkommastelle) |
+
+- **Schalter:** Er setzt dasselbe Feld wie der Schalter in den Einstellungen und geht denselben Weg:
+  eine neue Version der Einstellungen mit dem Kommentar „Vorheizen und Vorkühlen ein“ bzw.
+  „Vorheizen und Vorkühlen aus“ (Quelle „ha“, Urheber `home-assistant`), dazu der Eintrag
+  `settings.update` im Änderungsprotokoll. Weil die Einstellung für die Planung zählt, folgt eine
+  Neuplanung (Anlass „Einstellungen geändert“). Steht der Schalter schon so, entsteht keine neue
+  Version; bei gleichzeitiger Änderung wiederholt die app einmal auf der neuen Version.
+- **Geplanter Versatz:** Stufen des laufenden Slots mal 0,5 K, negativ beim Kühlen (mehr Kühlen
+  heißt niedrigerer Sollwert), zum Beispiel +2 Stufen beim Heizen = 1,0 K und +3 Stufen beim Kühlen
+  = −1,5 K. Der Sensor zeigt nur, was die app wirklich an den core sendet: Der Plan muss die
+  Verschiebung aktiv haben (`thermal.active`) **und** der Schalter muss an sein. Sonst, ohne
+  gültigen Plan, ohne Planwert im Slot und für jede Klimaanlage außer der des Plans
+  (`thermal.device`) ist der Wert 0. Das Echo der UVR zeigt „Klima Versatz“; er folgt dem Plan nach
+  den Stufenregeln des core, nicht sofort.
 
 ### API für das Wärmemodell
 

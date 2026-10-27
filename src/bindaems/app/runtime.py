@@ -560,6 +560,9 @@ class AppRuntime:
         auto_target = self._auto_targets()  # nach einem Befehl gleich der neue Schalter
         if auto_target != inputs.auto_target:
             inputs = replace(inputs, auto_target=auto_target)
+        thermal_plan = self.settings.current().settings.learning.thermal.enabled  # ebenso
+        if thermal_plan != inputs.thermal_plan_enabled:
+            inputs = replace(inputs, thermal_plan_enabled=thermal_plan)
         cached = self.intents.cached()  # nach einem Befehl gleich die neue Absicht zeigen
         if cached is None or cached == inputs.intent:
             return inputs
@@ -588,6 +591,7 @@ class AppRuntime:
             month_kwh=cached.month_kwh,
             driving_profiles=self.driving.profiles(),
             auto_target=self._auto_targets(),
+            thermal_plan_enabled=settings.learning.thermal.enabled,
         )
 
     async def _ha_intent(self) -> Intent | None:

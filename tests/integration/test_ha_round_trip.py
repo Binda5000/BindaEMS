@@ -37,8 +37,10 @@ class Case:
     payload: str
     effect: Callable[[World], bool]
     published: str | None = None
-    api: tuple[str, dict[str, Any]] | None = None
+    # Pfad und Rumpf der Änderung über die API; der Rumpf darf von der Welt abhängen
+    api: tuple[str, dict[str, Any] | Callable[[World], dict[str, Any]]] | None = None
     shown: str | None = None
+    user: str = "bedienen"  # wer die Änderung über die API macht; die Einstellungen nur ein Admin
 
 
 class Rejections:
@@ -57,6 +59,14 @@ def _intent(world: World) -> Intent:
 
 def _vehicle(world: World, key: str) -> VehicleIntent:
     return _intent(world).vehicles.get(key, VehicleIntent())
+
+
+def _thermal_plan_off(world: World) -> dict[str, Any]:
+    current = world.app.settings.current()
+    thermal = current.settings.learning.thermal.model_copy(update={"enabled": False})
+    learning = current.settings.learning.model_copy(update={"thermal": thermal})
+    settings = current.settings.model_copy(update={"learning": learning})
+    return {"base_version": current.version, "settings": settings.model_dump(mode="json")}
 
 
 def _cases(cfg: Config) -> dict[str, Case]:
@@ -78,6 +88,15 @@ def _cases(cfg: Config) -> dict[str, Case]:
             lambda w: w.app.settings.current().settings.planning.grid_charge_allowed,
             api=("/api/plan/grid-charge", {"on": False}),
             shown="OFF",
+        ),
+        # die Einstellung „Vorheizen und Vorkühlen“ ist ab Werk aus; die API schreibt die ganze
+        # Einstellung der aktuellen Version und schaltet sie wieder aus
+        "thermal_plan": Case(
+            "ON",
+            lambda w: w.app.settings.current().settings.learning.thermal.enabled,
+            api=("/api/settings", _thermal_plan_off),
+            shown="OFF",
+            user="admin",
         ),
         "battery_support": Case(
             "OFF",
@@ -182,11 +201,15 @@ async def test_every_command_entity_round_trips(world) -> None:
     )
     await publisher._publish_states(transport, force=True)
     client = TestClient(app.app, base_url="https://testserver")
-    login = await asyncio.to_thread(
-        client.post, "/api/auth/login", json={"username": "bedienen", "password": DEMO_PASSWORD}
-    )
-    assert login.status_code == 200, login.text
-    csrf = {"X-CSRF-Token": client.cookies["bindaems_csrf"]}
+    signed_in: list[Any] = []  # (Benutzer, CSRF-Kopf) der Sitzung des Clients
+
+    async def login(user: str) -> dict[str, str]:
+        reply = await asyncio.to_thread(
+            client.post, "/api/auth/login", json={"username": user, "password": DEMO_PASSWORD}
+        )
+        assert reply.status_code == 200, reply.text
+        return {"X-CSRF-Token": client.cookies["bindaems_csrf"]}
+
     lock = asyncio.Lock()
     for spec in entities:
         if not spec.command:
@@ -205,6 +228,11 @@ async def test_every_command_entity_round_trips(world) -> None:
         assert transport.published_state(oid) == published, oid
         assert case.api is not None and case.shown is not None, oid
         path, body = case.api
+        if callable(body):
+            body = body(world)
+        if not signed_in or signed_in[0][0] != case.user:  # der Client trägt nur eine Sitzung
+            signed_in[:] = [(case.user, await login(case.user))]
+        csrf = signed_in[0][1]
         reply = await asyncio.to_thread(client.put, path, json=body, headers=csrf)
         assert reply.status_code == 200, (oid, reply.text)
         await publisher._publish_states(transport, force=False)
