@@ -79,12 +79,16 @@ def vehicle_json(car: PlanVehicle) -> dict[str, Any]:
     }
 
 
-def thermal_json(thermal: PlanThermal) -> dict[str, Any]:
-    """Vorheizen und Vorkühlen im Plan (Plan 5c, Präzisierung 7); die Ersparnis in ct auf 0,1."""
+def thermal_json(thermal: PlanThermal, *, enabled: bool) -> dict[str, Any]:
+    """Vorheizen und Vorkühlen im Plan (Plan 5c, Präzisierung 7); die Ersparnis in ct auf 0,1.
+
+    ``active`` gilt nur mit dem Schalter von jetzt (``enabled``, ``learning.thermal``): Ohne ihn
+    sendet die app keinen Planwert, auch wenn der gespeicherte Plan noch „aktiv“ sagt (etwa nach
+    dem Ausschalten mit gescheitertem neuen Plan)."""
     return {
         "device": thermal.device,
         "mode": thermal.mode,
-        "active": thermal.active,
+        "active": thermal.active and enabled,
         "saving_ct": round(thermal.saving_ct, 1),
         "model_computed_at": (
             thermal.model_computed_at.isoformat() if thermal.model_computed_at is not None else None
@@ -93,7 +97,7 @@ def thermal_json(thermal: PlanThermal) -> dict[str, Any]:
     }
 
 
-def plan_json(plan: Plan, *, valid: bool) -> dict[str, Any]:
+def plan_json(plan: Plan, *, valid: bool, thermal_enabled: bool) -> dict[str, Any]:
     return {
         "id": plan.id,
         "created_at": plan.created_at.isoformat(),
@@ -112,7 +116,9 @@ def plan_json(plan: Plan, *, valid: bool) -> dict[str, Any]:
         "baseline_cost_eur": _euro(plan.baseline_cost_ct),
         "issues": list(plan.issues),
         "vehicles": [vehicle_json(car) for car in plan.vehicles],
-        "thermal": thermal_json(plan.thermal) if plan.thermal is not None else None,
+        "thermal": (
+            None if plan.thermal is None else thermal_json(plan.thermal, enabled=thermal_enabled)
+        ),
         "slots": [slot_json(slot) for slot in plan.slots],
     }
 
@@ -136,7 +142,8 @@ def planning_router(
         component = service.component_status()
         plan = service.current()
         valid = plan is not None and plan.valid_at(clock.now())
-        allowed = settings.current().settings.planning.grid_charge_allowed
+        current = settings.current().settings
+        allowed = current.planning.grid_charge_allowed
         state = execution_state(
             plan,
             valid=valid,
@@ -152,7 +159,11 @@ def planning_router(
                 "running": service.status().running,
             },
             "grid_charge_allowed": allowed,
-            "plan": plan_json(plan, valid=valid) if plan is not None else None,
+            "plan": (
+                plan_json(plan, valid=valid, thermal_enabled=current.learning.thermal.enabled)
+                if plan is not None
+                else None
+            ),
             "execution": {"state": state, "text": text} if text is not None else None,
         }
 

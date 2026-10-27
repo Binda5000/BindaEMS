@@ -404,6 +404,33 @@ async def test_plan_has_thermal_fields(client_as, planning, monkeypatch):
     assert (body["model_computed_at"], body["reason"]) == (None, "no_model")
 
 
+async def test_plan_thermal_active_needs_the_switch_now(client_as, planning, monkeypatch):
+    # Nach dem Ausschalten mit gescheitertem neuen Plan sagt der gespeicherte Plan noch „aktiv“;
+    # gesendet wird ohne Schalter nichts, also meldet ``GET /api/plan`` auch nicht „aktiv“
+    stored = await planning.replan("manual")
+    assert stored is not None
+    thermal = PlanThermal(
+        device="klima",
+        mode="heizen",
+        active=True,
+        saving_ct=8.0,
+        model_computed_at=stored.created_at,
+        reason="ok",
+    )
+    monkeypatch.setattr(planning, "current", lambda: stored.model_copy(update={"thermal": thermal}))
+    client = client_as("viewer")
+    planning.set_thermal_plan(True, actor="test", source="ui")
+    assert client.get("/api/plan").json()["plan"]["thermal"]["active"] is True
+    planning.set_thermal_plan(False, actor="test", source="ui")
+    body = client.get("/api/plan").json()["plan"]["thermal"]
+    assert (body["active"], body["reason"], body["saving_ct"]) == (False, "ok", 8.0)
+    # ein nicht aktiver Plan wird auch mit Schalter an nicht aktiv
+    planning.set_thermal_plan(True, actor="test", source="ui")
+    preview = thermal.model_copy(update={"active": False})
+    monkeypatch.setattr(planning, "current", lambda: stored.model_copy(update={"thermal": preview}))
+    assert client.get("/api/plan").json()["plan"]["thermal"]["active"] is False
+
+
 def test_thermal_plan_switch_creates_a_settings_version(planning, settings_service, audit):
     version = planning.set_thermal_plan(True, actor="home-assistant", source="ha")
     current = settings_service.current()

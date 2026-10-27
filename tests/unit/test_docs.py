@@ -1642,11 +1642,12 @@ def test_guide_describes_the_thermal_plan_fields_and_migration() -> None:
         model_computed_at=None,
         reason="ok",
     )
-    for key in thermal_json(thermal):
+    for key in thermal_json(thermal, enabled=True):
         assert f"`{key}`" in text, key
     reasons = re.findall(r"^\| `(\w+)` \| .* \|$", section.split("| `thermal.reason`")[1], re.M)
     assert reasons == list(get_args(ThermalReason))
     assert "**Vorschau**" in text and "`KLIMA_MEHR`" in text and "`KLIMA_WENIGER`" in text
+    assert "Die Antwort prüft den Schalter von jetzt" in text
     # Migration 0015 und Tabelle
     migration = Path("src/bindaems/app/db/migrations/versions/v0015_thermal_model.py")
     assert 'revision = "0015"' in migration.read_text("utf-8")

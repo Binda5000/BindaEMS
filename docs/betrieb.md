@@ -4909,10 +4909,13 @@ Namen (`label`) steht er statt „Klima“ vorn.
   `device`, `mode` (die Betriebsart beim Planen: `heizen`, `kuehlen`, `lueften`, `aus` oder
   `unbekannt`), `active`, `saving_ct` (Ersparnis der Verschiebung über den ganzen Plan in ct, nie
   negativ), `model_computed_at` (Stand des Modells der Betriebsart, `null` ohne) und `reason`.
-  `active` heißt, die Verschiebung geht an den core: der Schalter ist an und `reason` ist `ok`. Mit
-  Schalter aus steht bei `reason` `ok` die **Vorschau**, jeder andere Grund wird dann `off`. Die Slots
-  tragen die Verschiebung immer, wenn `reason` `ok` ist, die Grundcodes `KLIMA_MEHR` und
-  `KLIMA_WENIGER` (Abschnitt „Planung“, „Gründe“) aber nur, wenn sie an den core geht.
+  `active` heißt, die Verschiebung geht an den core: der Schalter ist an und `reason` ist `ok`.
+  Die Antwort prüft den Schalter von jetzt: Schaltest du ihn aus und scheitert der neue Plan, sagt
+  der gespeicherte Plan noch „aktiv“, `GET /api/plan` aber `active` `false` (gesendet wird ohne
+  Schalter nichts). Mit Schalter aus steht bei `reason` `ok` die **Vorschau**, jeder andere Grund
+  wird dann `off`. Die Slots tragen die Verschiebung immer, wenn `reason` `ok` ist, die Grundcodes
+  `KLIMA_MEHR` und `KLIMA_WENIGER` (Abschnitt „Planung“, „Gründe“) aber nur, wenn sie an den core
+  geht.
 
 | `thermal.reason` | Bedeutung |
 |---|---|
