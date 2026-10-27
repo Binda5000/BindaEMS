@@ -131,6 +131,7 @@ def model(**changes: object) -> ModeModel:
         "max_w": 6000.0,
         "usable": True,
         "reason": "ok",
+        "gap_w_per_k": 3000.0,
     }
     values.update(changes)
     return ModeModel(**values)  # type: ignore[arg-type]
@@ -180,12 +181,27 @@ def test_fit_recovers_u_and_tau_from_synthetic_house() -> None:
 def test_fit_reports_all_numbers_of_the_synthetic_house() -> None:
     m = fit_mode(synthetic(days=21, tau_h=40, u=120), "heizen")
     assert m.mode == "heizen" and m.days == 21 and m.episodes == 21
-    # Sonne senkt die Leistung beim Heizen. Genauer ist ``s`` nicht: Das Nachheizen nach der
-    # Auskühl-Phase fällt in den letzten 0,5 K in die Anpassung und hebt die Leistung ohne PV
-    assert m.pv_w_per_kw is not None and m.pv_w_per_kw < 0
+    # Das Nachheizen nach der Auskühl-Phase fällt in den letzten 0,5 K in die Anpassung; der
+    # Regelabstand nimmt es auf, ``s`` und ``b`` bleiben die des Hauses
+    assert m.pv_w_per_kw == pytest.approx(-SOLAR_W_PER_KW, rel=0.1)
+    assert m.base_w == pytest.approx(FAN_W, rel=0.15)
+    assert m.gap_w_per_k == pytest.approx(GAIN_W_PER_K, rel=0.1)
     assert m.base_w is not None and m.r2 is not None and m.r2 >= 0.8
     assert m.c_model_kwh_per_k == m.c_kwh_per_k and m.events == 0 and m.event_error_pct is None
     assert m.max_w == pytest.approx(MAX_W + FAN_W, rel=0.05)
+
+
+@pytest.mark.parametrize(
+    ("mode", "solar"), [("heizen", -SOLAR_W_PER_KW), ("kuehlen", SOLAR_W_PER_KW)]
+)
+def test_fit_recovers_base_power_of_steady_house(mode: str, solar: float) -> None:
+    """Ohne Auskühl-Phasen hält die Anlage den Sollwert; Regelabstand konstant 0, also k = 0."""
+    m = fit_mode(synthetic(days=21, tau_h=40, u=120, mode=mode, off_days=()), mode)  # type: ignore[arg-type]
+    assert m.reason == "few_episodes"
+    assert m.u_w_per_k == pytest.approx(120, rel=0.05)
+    assert m.pv_w_per_kw == pytest.approx(solar, rel=0.05)
+    assert m.base_w == pytest.approx(FAN_W, rel=0.05)
+    assert m.gap_w_per_k == 0.0
 
 
 def test_model_is_json_serialisable() -> None:
@@ -326,9 +342,10 @@ def test_cooling_uses_outdoor_minus_setpoint() -> None:
     assert m.usable and m.reason == "ok"
     assert m.u_w_per_k == pytest.approx(120, rel=0.1) and m.tau_h == pytest.approx(40, rel=0.15)
     # Sonne erhöht die Leistung beim Kühlen
-    assert m.pv_w_per_kw is not None and m.pv_w_per_kw > 0
+    assert m.pv_w_per_kw == pytest.approx(SOLAR_W_PER_KW, rel=0.1)
+    assert m.base_w == pytest.approx(FAN_W, rel=0.15)
     heating = fit_mode(slots, "heizen")
-    assert heating.reason == "few_days" and heating.days == 0 and heating.episodes == 0
+    assert heating.reason == "few_days" and heating.days == 0 and heating.episodes == m.episodes
 
 
 # --- Versatz-Ereignisse -----------------------------------------------------------------------
@@ -502,49 +519,53 @@ def test_episode_across_dst_uses_utc_hours() -> None:
     start = local(date(2026, 10, 25), 0)
     slots = _free_float(start, 7.0)
     assert slots[-1].start + SLOT == local(date(2026, 10, 25), 6)
-    (episode,) = free_float_episodes(slots, "heizen")
+    (episode,) = free_float_episodes(slots)
     assert episode.start == start and episode.hours == 7.0
     assert episode.tau_h == pytest.approx(40.0, rel=1e-6)
 
 
 def test_episode_needs_two_hours_without_running() -> None:
     start = local(FIRST_DAY, 0)
-    assert len(free_float_episodes(_free_float(start, 2.0), "heizen")) == 1
-    assert free_float_episodes(_free_float(start, 1.75), "heizen") == []
+    assert len(free_float_episodes(_free_float(start, 2.0))) == 1
+    assert free_float_episodes(_free_float(start, 1.75)) == []
 
 
 def test_episode_breaks_at_gaps_sun_and_small_difference() -> None:
     start = local(FIRST_DAY, 0)
     base = _free_float(start, 6.0)
     with_gap = base[:10] + base[11:]
-    assert [e.hours for e in free_float_episodes(with_gap, "heizen")] == [2.5, 3.25]
+    assert [e.hours for e in free_float_episodes(with_gap)] == [2.5, 3.25]
     sunny = [replace(s, pv_w=50.0) if i == 10 else s for i, s in enumerate(base)]
-    assert [e.hours for e in free_float_episodes(sunny, "heizen")] == [2.5, 3.25]
+    assert [e.hours for e in free_float_episodes(sunny)] == [2.5, 3.25]
     unknown_pv = [replace(s, pv_w=None) if i == 10 else s for i, s in enumerate(base)]
-    assert [e.hours for e in free_float_episodes(unknown_pv, "heizen")] == [2.5, 3.25]
+    assert [e.hours for e in free_float_episodes(unknown_pv)] == [2.5, 3.25]
     close = [replace(s, outdoor_c=s.actual_c - 2.9) if i == 10 else s for i, s in enumerate(base)]
-    assert [e.hours for e in free_float_episodes(close, "heizen")] == [2.5, 3.25]
+    assert [e.hours for e in free_float_episodes(close)] == [2.5, 3.25]
     unknown_run = [replace(s, running=None) if i == 10 else s for i, s in enumerate(base)]
-    assert [e.hours for e in free_float_episodes(unknown_run, "heizen")] == [2.5, 3.25]
+    assert [e.hours for e in free_float_episodes(unknown_run)] == [2.5, 3.25]
 
 
-def test_episode_direction_follows_mode() -> None:
-    """Beim Heizen kühlt das Haus aus (innen wärmer), beim Kühlen wärmt es sich auf."""
+def test_episodes_count_by_magnitude_for_both_modes() -> None:
+    """Der Abstand zählt als Betrag: Auch beim Kühlen zählt eine Phase, in der es außen kälter
+    ist als innen (etwa eine kühle Sommernacht), und umgekehrt."""
     start = local(FIRST_DAY, 0)
-    cooling_down = _free_float(start, 4.0)
-    assert len(free_float_episodes(cooling_down, "heizen")) == 1
-    assert free_float_episodes(cooling_down, "kuehlen") == []
-    warming = [replace(s, outdoor_c=40.0) for s in cooling_down]
-    assert free_float_episodes(warming, "heizen") == []
-    assert len(free_float_episodes(warming, "kuehlen")) == 1
+    colder_outside = _free_float(start, 4.0)  # innen 21 °C, außen 5 °C
+    warmer_outside = [
+        replace(s, actual_c=40.0 - 16.0 * math.exp(-(i * 0.25) / 40), outdoor_c=40.0)
+        for i, s in enumerate(colder_outside)
+    ]
+    for slots in (colder_outside, warmer_outside):
+        (episode,) = free_float_episodes(slots)
+        assert episode.tau_h == pytest.approx(40.0, rel=1e-6)
+        for mode in ("heizen", "kuehlen"):
+            m = fit_mode(slots, mode)  # type: ignore[arg-type]
+            assert m.episodes == 1 and m.tau_h == pytest.approx(40.0, rel=1e-6)
 
 
 def test_episodes_ignore_slot_order() -> None:
     start = local(FIRST_DAY, 0)
     slots = _free_float(start, 4.0)
-    assert free_float_episodes(list(reversed(slots)), "heizen") == free_float_episodes(
-        slots, "heizen"
-    )
+    assert free_float_episodes(list(reversed(slots))) == free_float_episodes(slots)
 
 
 # --- Profil -----------------------------------------------------------------------------------

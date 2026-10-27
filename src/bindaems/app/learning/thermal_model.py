@@ -3,12 +3,15 @@
 Ein Speicher erster Ordnung, grau gerechnet aus den Viertelstunden der Klimaanlage
 (``ThermalSlot``):
 
-- **Grundleistung** ``P₀ = max(0, u · ΔT + s · pv_kw + b)``, kleinste Quadrate über die Slots, in
-  denen die Anlage in der Betriebsart läuft, der Versatz 0 ist und Ist und Soll höchstens 0,5 K
-  auseinander liegen. ``ΔT`` ist beim Heizen Soll ohne Versatz minus außen, beim Kühlen außen
-  minus Soll; ``s`` hat ein freies Vorzeichen.
+- **Grundleistung** ``P₀ = max(0, u · ΔT + s · pv_kw + b)``, kleinste Quadrate
+  ``p_w ≈ u · ΔT + s · pv_kw + k · Abstand + b`` über die Slots, in denen die Anlage in der
+  Betriebsart läuft, der Versatz 0 ist und Ist und Soll höchstens 0,5 K auseinander liegen.
+  ``ΔT`` ist beim Heizen Soll ohne Versatz minus außen, beim Kühlen außen minus Soll; der
+  Regelabstand ist beim Heizen Soll ohne Versatz minus Ist, beim Kühlen Ist minus Soll. Er nimmt
+  die Mehrleistung beim Nachheizen in den letzten 0,5 K auf, die sonst ``s`` und ``b`` verzerrt;
+  ``P₀`` gilt am Sollwert (Abstand 0). ``s`` hat ein freies Vorzeichen.
 - **Zeitkonstante** ``τ``: je Auskühl-Phase (Anlage läuft mindestens 2 h nicht, PV unter 50 W,
-  Abstand innen–außen mindestens 3 K in Richtung der Betriebsart) eine Gerade durch
+  Abstand innen–außen mindestens 3 K, in beiden Betriebsarten als Betrag) eine Gerade durch
   ``ln |T_innen − T_außen|`` über der Zeit in Stunden (UTC, auch über die Zeitumstellung),
   ``τ = −1 / Steigung``; maßgeblich ist der Median der Phasen.
 - **Speicher** ``C = τ · u / 1000`` in kWh Strom je K; ab drei Versatz-Ereignissen der Median
@@ -70,6 +73,8 @@ EVENT_C_MAX: Final = 1.5
 OFFSET_TOL_K: Final = 0.05
 
 MAX_W_PERCENTILE: Final = 95.0
+# Streuung darunter gilt in der Anpassung als konstant (kW PV bzw. K Regelabstand)
+CONSTANT_TOL: Final = 1e-6
 
 
 @dataclass(frozen=True)
@@ -112,6 +117,7 @@ class ModeModel:
     max_w: float | None
     usable: bool
     reason: Reason
+    gap_w_per_k: float | None  # Mehrleistung je K Regelabstand (nur in der Anpassung)
 
 
 @dataclass(frozen=True)
@@ -130,11 +136,12 @@ class _Fit:
     s: float
     b: float
     r2: float | None
+    k: float = 0.0
 
 
 def _delta_t(mode: Mode, inner_c: float, outdoor_c: float) -> float:
-    """Temperaturdifferenz in Richtung der Betriebsart: beim Heizen innen minus außen, beim
-    Kühlen außen minus innen."""
+    """Differenz in Richtung der Betriebsart: beim Heizen ``inner_c − outdoor_c``, beim Kühlen
+    umgekehrt (für ``ΔT`` Soll und außen, für den Regelabstand Soll und Ist)."""
     return inner_c - outdoor_c if mode == "heizen" else outdoor_c - inner_c
 
 
@@ -171,12 +178,13 @@ def _mode_days(slots: Sequence[ThermalSlot], mode: Mode) -> int:
 
 
 def _fit_base(slots: Sequence[ThermalSlot], mode: Mode) -> _Fit | None:
-    """Kleinste Quadrate ``p_w ≈ u · ΔT + s · pv_kw + b`` über die tauglichen Slots.
+    """Kleinste Quadrate ``p_w ≈ u · ΔT + s · pv_kw + k · Abstand + b`` über die tauglichen
+    Slots.
 
-    Ändert sich die PV in den Slots nicht, ist ``s`` nicht bestimmbar und bleibt 0 (die PV trägt
-    dann im Bereich der Daten nichts bei). Ist ``u`` nicht bestimmbar (gleiche Differenz in allen
-    Slots), gibt es keine Anpassung."""
-    rows: list[tuple[float, float, float]] = []
+    Ändert sich die PV oder der Regelabstand in den Slots nicht, ist ``s`` bzw. ``k`` nicht
+    bestimmbar und bleibt 0 (die Größe trägt dann im Bereich der Daten nichts bei). Ist ``u``
+    nicht bestimmbar (gleiche Differenz in allen Slots), gibt es keine Anpassung."""
+    rows: list[tuple[float, float, float, float]] = []
     for slot in slots:
         base = _base_setpoint(slot)
         if (
@@ -190,43 +198,51 @@ def _fit_base(slots: Sequence[ThermalSlot], mode: Mode) -> _Fit | None:
             or abs(slot.actual_c - slot.setpoint_c) > FIT_MAX_GAP_K
         ):
             continue
-        rows.append((_delta_t(mode, base, slot.outdoor_c), slot.pv_w / 1000, slot.power_w))
+        rows.append(
+            (
+                _delta_t(mode, base, slot.outdoor_c),
+                slot.pv_w / 1000,
+                _delta_t(mode, base, slot.actual_c),
+                slot.power_w,
+            )
+        )
     if not rows:
         return None
     data = np.array(rows, dtype=float)
-    delta, pv_kw, power = data[:, 0], data[:, 1], data[:, 2]
-    with_pv = bool(np.ptp(pv_kw) > 0)
-    columns = [delta, pv_kw, np.ones_like(delta)] if with_pv else [delta, np.ones_like(delta)]
-    design = np.column_stack(columns)
+    delta, power = data[:, 0], data[:, 3]
+    # ΔT immer, PV und Regelabstand nur, wenn sie sich ändern; der Achsenabschnitt zuletzt
+    optional = [index for index in (1, 2) if np.ptp(data[:, index]) > CONSTANT_TOL]
+    design = np.column_stack([delta, *(data[:, index] for index in optional), np.ones_like(delta)])
     coef, _, rank, _ = np.linalg.lstsq(design, power, rcond=None)
     if rank < design.shape[1]:
         return None
-    u = float(coef[0])
-    s = float(coef[1]) if with_pv else 0.0
-    b = float(coef[-1])
+    named = dict(zip(optional, (float(c) for c in coef[1:-1]), strict=True))
     residual = power - design @ coef
     ss_tot = float(np.sum((power - power.mean()) ** 2))
     r2 = 1 - float(np.sum(residual**2)) / ss_tot if ss_tot > 0 else None
-    return _Fit(u=u, s=s, b=b, r2=r2)
+    return _Fit(
+        u=float(coef[0]), s=named.get(1, 0.0), b=float(coef[-1]), r2=r2, k=named.get(2, 0.0)
+    )
 
 
 def _p0(fit: _Fit, mode: Mode, setpoint_c: float, outdoor_c: float, pv_w: float) -> float:
+    """Grundleistung am Sollwert: Regelabstand 0, ``k`` zählt nicht."""
     return max(0.0, fit.u * _delta_t(mode, setpoint_c, outdoor_c) + fit.s * pv_w / 1000 + fit.b)
 
 
-def _free_float(slot: ThermalSlot, mode: Mode) -> bool:
+def _free_float(slot: ThermalSlot) -> bool:
     return (
         slot.running is False
         and slot.pv_w is not None
         and slot.pv_w < EPISODE_MAX_PV_W
-        and _delta_t(mode, slot.actual_c, slot.outdoor_c) >= EPISODE_MIN_DIFF_K
+        and abs(slot.actual_c - slot.outdoor_c) >= EPISODE_MIN_DIFF_K
     )
 
 
-def _episode(run: Sequence[ThermalSlot], mode: Mode) -> Episode:
+def _episode(run: Sequence[ThermalSlot]) -> Episode:
     first = run[0].start
     hours = np.array([(s.start - first).total_seconds() / 3600 for s in run])
-    logs = np.array([math.log(_delta_t(mode, s.actual_c, s.outdoor_c)) for s in run])
+    logs = np.array([math.log(abs(s.actual_c - s.outdoor_c)) for s in run])
     design = np.column_stack([hours, np.ones_like(hours)])
     (slope, _), *_ = np.linalg.lstsq(design, logs, rcond=None)
     tau_h = -1 / float(slope) if slope < 0 else math.inf
@@ -234,24 +250,25 @@ def _episode(run: Sequence[ThermalSlot], mode: Mode) -> Episode:
     return Episode(start=first, hours=span, tau_h=tau_h)
 
 
-def free_float_episodes(slots: Sequence[ThermalSlot], mode: Mode) -> list[Episode]:
-    """Die Auskühl-Phasen der Betriebsart (beim Kühlen: Aufwärm-Phasen), nach Beginn sortiert.
+def free_float_episodes(slots: Sequence[ThermalSlot]) -> list[Episode]:
+    """Die Auskühl- und Aufwärm-Phasen, nach Beginn sortiert.
 
     Eine Phase ist eine lückenlose Folge von Viertelstunden, in denen die Anlage nicht läuft
-    (``running`` falsch, nicht unbekannt), die PV unter 50 W liegt und der Abstand innen–außen in
-    Richtung der Betriebsart mindestens 3 K ist; sie zählt ab 2 h."""
+    (``running`` falsch, nicht unbekannt), die PV unter 50 W liegt und der Betrag des Abstands
+    innen–außen mindestens 3 K ist; sie zählt ab 2 h. Die Zeitkonstante ist eine Eigenschaft des
+    Hauses: Beide Betriebsarten nehmen dieselben Phasen (Entscheidung 4, Präzisierung 5)."""
     episodes: list[Episode] = []
     run: list[ThermalSlot] = []
 
     def close() -> None:
         if len(run) * SLOT_H >= EPISODE_MIN_H:
-            episodes.append(_episode(run, mode))
+            episodes.append(_episode(run))
         run.clear()
 
     for slot in _ordered(slots):
         if run and not _follows(run[-1], slot):
             close()
-        if _free_float(slot, mode):
+        if _free_float(slot):
             run.append(slot)
         else:
             close()
@@ -389,7 +406,7 @@ def fit_mode(slots: Sequence[ThermalSlot], mode: Mode) -> ModeModel:
     ordered = _ordered(slots)
     days = _mode_days(ordered, mode)
     fit = _fit_base(ordered, mode)
-    episodes = free_float_episodes(ordered, mode)
+    episodes = free_float_episodes(ordered)
     tau_all = statistics.median(e.tau_h for e in episodes) if episodes else None
     tau_h = tau_all if tau_all is not None and math.isfinite(tau_all) else None
     c_model = tau_h * fit.u / 1000 if fit is not None and fit.u > 0 and tau_h is not None else None
@@ -411,6 +428,7 @@ def fit_mode(slots: Sequence[ThermalSlot], mode: Mode) -> ModeModel:
         max_w=percentile(powers, MAX_W_PERCENTILE) if powers else None,
         usable=reason == "ok",
         reason=reason,
+        gap_w_per_k=fit.k if fit is not None else None,
     )
     if fit is None:
         return model
