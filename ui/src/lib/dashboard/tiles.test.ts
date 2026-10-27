@@ -83,6 +83,15 @@ describe('dayEnergy', () => {
 		expect(dayEnergy(undefined)).toEqual(empty);
 	});
 
+	it('ohne erfasste Viertelstunden (coverage 0) fehlen alle Werte, statt 0 kWh zu zeigen', () => {
+		expect(dayEnergy({ ...stats(), coverage: 0 })).toEqual({
+			pvKwh: null,
+			houseKwh: null,
+			importKwh: null,
+			exportKwh: null
+		});
+	});
+
 	it('übernimmt die vier Felder aus der Statistik', () => {
 		const data = stats();
 		expect(dayEnergy(data)).toEqual({

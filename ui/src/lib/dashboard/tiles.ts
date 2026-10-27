@@ -35,8 +35,9 @@ export interface DayEnergy {
 	exportKwh: number | null;
 }
 
+/** Tagesenergie aus der Statistik; ohne erfasste Viertelstunden (`coverage` 0) fehlen alle Werte statt 0 */
 export function dayEnergy(stats: Stats | null | undefined): DayEnergy {
-	const energy = stats?.energy;
+	const energy = stats && stats.coverage > 0 ? stats.energy : undefined;
 	return {
 		pvKwh: energy?.pv_kwh ?? null,
 		houseKwh: energy?.house_kwh ?? null,
