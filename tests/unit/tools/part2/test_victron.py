@@ -1425,6 +1425,23 @@ async def test_a_forced_release_that_was_never_sent_names_the_send_error(victron
     )
 
 
+# Kein Akku ins Auto nach einer Rückfrage: Während sie offen ist, steht der Adapter des Cerbo
+
+
+async def test_the_car_step_waits_for_the_cerbo_after_a_question(victron_session) -> None:
+    # An der Anlage (27.10.2026): Die EVCS lud, doch gleich nach einer Rückfrage waren die Werte des
+    # Cerbo veraltet, und der Schritt fand „kein Laden an der EVCS“: vor seiner Rückfrage (nach der
+    # zum Netzladen) und danach. Die Frische ist hier 0,1 s, die Konsole hält den Event-Loop 0,15 s.
+    session, cerbo = victron_session(
+        answers=ONLY_CAR, state=CAR, plant=covered, freshness_s=0.1, stall_s=0.15
+    )
+    findings = await run_victron(session, session.cfg, timings=FAST)
+    assert step(findings, "Kein Akku ins Auto") == Finding(
+        "17.2-4", "Kein Akku ins Auto", "ok", "Akku entlädt höchstens 30 W"
+    )
+    assert setpoints(cerbo)[-2:] == [3700.0, None]
+
+
 # Kein Akku ins Auto: geschrieben wird der Wert, den der Betreiber bestätigt hat
 
 

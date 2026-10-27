@@ -565,7 +565,7 @@ class _VictronSteps:
     async def _car(self) -> None:
         """Entlädt der Akku nicht ins Auto, wenn der Override die Ladeleistung der EVCS deckt?"""
         title = "Kein Akku ins Auto"
-        power = self._evcs_w()
+        power = await self._charging_w()
         if power is None or power <= CAR_MIN_W:
             self._record(title, "info", SKIPPED_NO_CAR, item=CAR_ITEM)
             return
@@ -581,7 +581,7 @@ class _VictronSteps:
             return
         # Die Rückfrage kann lange gedauert haben. Lädt das Auto nicht mehr, entfällt der Schritt;
         # sonst geht genau der bestätigte Wert hinaus, auch wenn sich die Leistung geändert hat.
-        now = self._evcs_w()
+        now = await self._charging_w()
         if now is None or now <= CAR_MIN_W:
             self._record(title, "info", SKIPPED_NO_CAR, item=CAR_ITEM)
             return
@@ -596,9 +596,18 @@ class _VictronSteps:
         """Der Override für ``power_w`` Ladeleistung: in ganzen Watt, nie über der Obergrenze."""
         return float(max(0, min(round(power_w), math.floor(self._ceiling))))
 
-    def _evcs_w(self) -> float | None:
+    async def _charging_w(self) -> float | None:
+        """Die Leistung aller EVCS, sobald der Cerbo sie meldet; höchstens ``confirm_s`` gewartet.
+
+        Während einer Rückfrage steht der Event-Loop und mit ihm der Adapter des Cerbo. Danach
+        gelten seine Messwerte als veraltet, bis er sich wieder meldet; ohne das Warten fände der
+        Schritt gleich nach einer Rückfrage kein Laden, obwohl ein Auto lädt.
+        """
+        await self._session.wait_for(lambda snap: self._evcs_w(snap) is not None, self._t.confirm_s)
+        return self._evcs_w(self._session.snapshot())
+
+    def _evcs_w(self, snap: Snapshot) -> float | None:
         """Die Leistung aller EVCS zusammen; ``None``, wenn keine einen Messwert meldet."""
-        snap = self._session.snapshot()
         powers = [finite_number(snap.ok(f"wallbox.{key}.power_w")) for key in self._evcs]
         known = [power for power in powers if power is not None]
         return sum(known) if known else None

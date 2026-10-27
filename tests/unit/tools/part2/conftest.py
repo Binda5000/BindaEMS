@@ -500,9 +500,9 @@ class FakeCerbo:
         self.connected = True
         self.store.set_connected("victron", True)
         if republish_s > 0:
-            asyncio.get_running_loop().call_later(republish_s, self._republish)
+            asyncio.get_running_loop().call_later(republish_s, self.republish)
         else:
-            self._republish()
+            self.republish()
 
     def restart(
         self,
@@ -524,7 +524,8 @@ class FakeCerbo:
                 down_s, partial(self.reconnect, republish_s=republish_s)
             )
 
-    def _republish(self) -> None:
+    def republish(self) -> None:
+        """Der Cerbo meldet alle Werte erneut, wie nach dem Verbinden."""
         for name, value in dict(self.values).items():
             self.put(name, value)
 
@@ -554,6 +555,11 @@ def victron_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeCerbo]
     Text) eine Handlung zu, die nach einem Ja am Cerbo geschieht; ``asked`` sammelt die gestellten
     Rückfragen; ``config`` ersetzt die Beispielkonfiguration; ``resend_s`` und ``unattended`` (wie
     ``--yes``) gehen an die Sitzung.
+
+    ``freshness_s`` ist die Frische der Messwerte des Cerbo (sonst 600 s, an der Anlage 5 s). Mit
+    ``stall_s`` meldet sich der Cerbo laufend (alle 0,02 s ein Lebenszeichen wie seine vielen
+    Nachrichten), der Event-Loop steht während jeder Rückfrage so lange wie an der Konsole, und
+    der Cerbo meldet sich erst kurz nach der Antwort wieder.
     """
 
     def build(
@@ -561,6 +567,8 @@ def victron_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeCerbo]
         answers: Sequence[bool] = (),
         state: Mapping[str, Value] | None = None,
         without: Sequence[str] = (),
+        freshness_s: float = 600.0,
+        stall_s: float = 0.0,
         null_clears: bool = True,
         follow: bool = True,
         accept: bool = True,
@@ -575,13 +583,22 @@ def victron_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeCerbo]
         store = StateStore(SystemClock())
         # wie der Adapter: aktivitätsbasiert und mit Neuverbinden ungültig; die Frische ist hier
         # lang, damit ein langsamer Lauf die Messwerte nicht altern lässt
-        store.register_source("victron", 600.0, activity_based=True, invalidate_on_reconnect=True)
+        store.register_source(
+            "victron", freshness_s, activity_based=True, invalidate_on_reconnect=True
+        )
         store.set_connected("victron", True)
         cerbo = FakeCerbo(store, follow=follow, accept=accept, null_clears=null_clears, plant=plant)
         start = {name: value for name, value in VICTRON_START.items() if name not in without}
         for name, value in (start | dict(state or {})).items():
             cerbo.put(name, value)
         replies = iter(answers)
+        if stall_s > 0:
+
+            def alive() -> None:
+                store.touch("victron")
+                asyncio.get_running_loop().call_later(0.02, alive)
+
+            asyncio.get_running_loop().call_later(0.02, alive)
 
         def ask(question: str) -> bool:
             if asked is not None:
@@ -589,6 +606,9 @@ def victron_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeCerbo]
             reply = next(replies)
             if reply and react is not None and question in react:
                 react[question](cerbo)
+            if stall_s > 0:
+                time.sleep(stall_s)  # der Betreiber liest; der Adapter steht mit dem Event-Loop
+                asyncio.get_running_loop().call_later(0.02, cerbo.republish)
             return reply
 
         actuator = VictronActuator(cerbo.send, lambda: cerbo.connected)
