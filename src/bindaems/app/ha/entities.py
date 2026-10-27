@@ -290,26 +290,35 @@ def _target_soc_state(key: str) -> Callable[[HaInputs], str]:
     return value
 
 
+def _now_max_text(limit: int | None, low: int, high: int) -> str:
+    """Das Limit im angebotenen Bereich der Zahl: ohne Limit (``None``) und ab ``high`` dieses,
+    unter ``low`` dieses (wie ``nowLimitChoice`` im UI). Ein gespeicherter Wert außerhalb, etwa
+    nach einem gesenkten ``max_a``, ergäbe sonst einen Zustand, den HA nicht annimmt."""
+    return str(high if limit is None or limit >= high else max(limit, low))
+
+
 def _now_max_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
-    """Höchststrom in „Sofort“ in A; ohne Limit (``None``) zeigt HA den Höchststrom des Autos."""
+    """Höchststrom in „Sofort“ in A im Bereich ``min_a`` bis ``max_a`` des Autos; ohne Limit
+    (``None``) zeigt HA den Höchststrom des Autos (``_now_max_text``)."""
+    vehicle = cfg.vehicles[key]
 
     def value(inputs: HaInputs) -> str:
         if inputs.intent is None:
             return UNKNOWN
         limit = inputs.intent.vehicles.get(key, VehicleIntent()).now_max_a
-        return str(cfg.vehicles[key].max_a if limit is None else limit)
+        return _now_max_text(limit, vehicle.min_a, vehicle.max_a)
 
     return value
 
 
-def _guest_now_max_state(high: int) -> Callable[[HaInputs], str]:
-    """Wie ``_now_max_state`` für Gäste; ohne Limit gilt das obere Ende des EVCS-Bereichs."""
+def _guest_now_max_state(span: tuple[int, int]) -> Callable[[HaInputs], str]:
+    """Wie ``_now_max_state`` für Gäste, im EVCS-Bereich ``span``; ohne Limit gilt sein oberes
+    Ende."""
 
     def value(inputs: HaInputs) -> str:
         if inputs.intent is None:
             return UNKNOWN
-        limit = inputs.intent.guest.now_max_a
-        return str(high if limit is None else limit)
+        return _now_max_text(inputs.intent.guest.now_max_a, *span)
 
     return value
 
@@ -905,7 +914,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 "number",
                 "Gast-Sofort-Höchststrom",
                 main,
-                _guest_now_max_state(span[1]),
+                _guest_now_max_state(span),
                 unit="A",
                 command=True,
                 min=float(span[0]),

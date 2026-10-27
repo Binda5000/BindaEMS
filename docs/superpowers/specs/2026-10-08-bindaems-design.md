@@ -1975,7 +1975,7 @@ pv:
 - Erwartete Autos haben in HA weder „Fertig um“ noch „Ziel erreichbar“ (9.3).
 
 **Stand Plan Sofort-Limit** (`docs/superpowers/plans/2026-10-27-sofort-ladelimit.md`, Entscheidungen 1, 5 und 7; Betrieb: `docs/betrieb.md`, Abschnitt 7): Zwei Zahlen dazu (`app/ha/entities.py`, `commands.py`), Plattform `number` wie `<Fahrzeug>_target_soc`, Einheit `A`, Schritt 1; keine neue Plattform, die ACL bleibt.
-- **Je Fahrzeug:** `<Fahrzeug>_now_max_a` Zahl „Sofort-Höchststrom“ (Bereich `min_a` bis `max_a` des Fahrzeugs). Der Zustand ist `now_max_a` der Absicht, bei `None` (volle Leistung) das `max_a` des Fahrzeugs; der Befehl mit dem `max_a` speichert `None`. Ein Wert außerhalb des Bereichs wird abgelehnt (Zustand neu veröffentlicht, Meldung `bindaems_ha_command`).
+- **Je Fahrzeug:** `<Fahrzeug>_now_max_a` Zahl „Sofort-Höchststrom“ (Bereich `min_a` bis `max_a` des Fahrzeugs). Der Zustand ist `now_max_a` der Absicht, bei `None` (volle Leistung) das `max_a` des Fahrzeugs, immer im Bereich der Zahl wie die Auswahl im UI (ein gespeicherter Wert ab `max_a` zeigt `max_a`, einer unter `min_a` zeigt `min_a`, etwa nach einem gesenkten `max_a` in `config.yaml`); der Befehl mit dem `max_a` speichert `None`. Ein Wert außerhalb des Bereichs wird abgelehnt (Zustand neu veröffentlicht, Meldung `bindaems_ha_command`).
 - **Für Gäste:** `guest_now_max_a` Zahl „Gast-Sofort-Höchststrom“ am Gerät „BindaEMS“, Bereich vom kleinsten `min_a` bis zum größten `max_a` aller EVCS, nur mit einer EVCS in `config.yaml` (am Wall Connector hat ein Gast keinen Aktor). Gleiche Regeln wie beim Fahrzeug.
 
 ---

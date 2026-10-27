@@ -987,6 +987,25 @@ def test_guest_now_max_a_number_uses_the_evcs_range(cfg) -> None:
     assert state(cfg, "guest_now_max_a", sample_inputs(intent=None)) == "None"
 
 
+@pytest.mark.parametrize(
+    ("stored", "shown"), [(32, "16"), (16, "16"), (3, "5")], ids=["above", "max", "below"]
+)
+def test_now_max_a_state_stays_in_the_advertised_range(cfg, stored, shown) -> None:
+    # Ein gespeicherter Wert außerhalb von min..max (etwa nach einem gesenkten ``max_a``) erscheint
+    # wie im UI (``nowLimitChoice``) geklemmt: ab dem Höchststrom dieser, unter dem Mindeststrom
+    # dieser; HA lehnt sonst den Zustand außerhalb des angebotenen Bereichs ab.
+    intent = Intent(version=2, vehicles={"tesla": VehicleIntent(now_max_a=stored)})
+    assert state(cfg, "tesla_now_max_a", sample_inputs(intent=intent)) == shown
+
+
+@pytest.mark.parametrize(
+    ("stored", "shown"), [(32, "16"), (16, "16"), (1, "6")], ids=["above", "max", "below"]
+)
+def test_guest_now_max_a_state_stays_in_the_evcs_range(cfg, stored, shown) -> None:
+    intent = Intent(version=2, guest=GuestIntent(now_max_a=stored))
+    assert state(cfg, "guest_now_max_a", sample_inputs(intent=intent)) == shown
+
+
 def test_guest_now_max_a_is_missing_without_an_evcs(cfg) -> None:
     data = cfg.model_dump(mode="json")
     del data["wallboxes"]["evcs"]
