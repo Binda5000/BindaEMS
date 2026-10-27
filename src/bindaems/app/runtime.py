@@ -474,6 +474,8 @@ class AppRuntime:
                     guard,
                     self.driving,
                     self.automation,
+                    self.thermal_model,
+                    self.settings,
                 ),
                 ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),

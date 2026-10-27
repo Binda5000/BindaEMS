@@ -18,6 +18,8 @@ from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 from tests.unit.app.learning.conftest import FakeReader
 from tests.unit.app.learning.test_driving_auto import commuter
 from tests.unit.app.learning.test_driving_service import put_row
+from tests.unit.app.learning.test_thermal_service import DEVICE, HOUSE, FakeRead
+from tests.unit.app.learning.test_thermal_service import NOW as THERMAL_NOW
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.consumers.values import NOT_CONFIGURED
@@ -29,8 +31,15 @@ from bindaems.app.learning.driving_auto import DrivingAutomation
 from bindaems.app.learning.driving_service import DrivingService
 from bindaems.app.learning.ha_sensors import HaSensorReader, SensorCandidate
 from bindaems.app.learning.registry import ModelRegistry
-from bindaems.app.learning.routes import RECOMPUTE_RUNNING, TRAINING_RUNNING, learning_router
+from bindaems.app.learning.routes import (
+    NO_THERMAL_DEVICE,
+    RECOMPUTE_RUNNING,
+    TRAINING_RUNNING,
+    learning_router,
+)
 from bindaems.app.learning.service import LoadModelService
+from bindaems.app.learning.thermal_service import ThermalModelService
+from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.settings.service import SettingsService
 from bindaems.shared.config import Config
 from bindaems.shared.timeutil import ManualClock
@@ -123,8 +132,25 @@ def automation(
 
 
 @pytest.fixture
-def client(make_client, model, sensors, load, guard, driving, automation) -> TestClient:
-    return make_client(learning_router(model, sensors, load, guard, driving, automation))  # type: ignore[arg-type]
+def thermal(engine: Engine) -> ThermalModelService:
+    """Der echte Dienst für die Klimaanlage ``klima``; gelesen wird aus dem erfundenen Haus."""
+    return ThermalModelService(
+        reader=FakeReader(),  # type: ignore[arg-type]
+        weather=WeatherArchive(engine),
+        engine=engine,
+        device=DEVICE,
+        clock=ManualClock(THERMAL_NOW),
+        read=FakeRead(HOUSE),
+    )
+
+
+@pytest.fixture
+def client(
+    make_client, model, sensors, load, guard, driving, automation, thermal, settings_service
+) -> TestClient:
+    return make_client(
+        learning_router(model, sensors, load, guard, driving, automation, thermal, settings_service)  # type: ignore[arg-type]
+    )
 
 
 @pytest.fixture
@@ -217,7 +243,7 @@ def test_candidates_without_ha_database(client_as) -> None:
 
 
 def test_candidates_without_reader_name_the_reason(
-    make_client, model, load, guard, auth, driving, automation
+    make_client, model, load, guard, auth, driving, automation, settings_service
 ) -> None:
     # Datenbank benannt, aber kein Leser: sonst hielte der Editor alle Sensoren für verschwunden
     client = make_client(
@@ -228,6 +254,8 @@ def test_candidates_without_reader_name_the_reason(
             guard,
             driving,
             automation,  # type: ignore[arg-type]
+            None,
+            settings_service,
         )
     )
     client.headers.update(login_as(client, auth, "admin", "admin"))
@@ -238,14 +266,23 @@ def test_candidates_without_reader_name_the_reason(
 
 
 def test_candidates_list_entities_and_units(
-    make_client, model, load, guard, auth, driving, automation
+    make_client, model, load, guard, auth, driving, automation, settings_service
 ) -> None:
     found = [
         SensorCandidate("sensor.aussentemperatur", "°C"),
         SensorCandidate("person.chris", None),
     ]
     client = make_client(
-        learning_router(model, StubSensors(found, None), load, guard, driving, automation)  # type: ignore[arg-type]
+        learning_router(
+            model,
+            StubSensors(found, None),
+            load,
+            guard,
+            driving,
+            automation,  # type: ignore[arg-type]
+            None,
+            settings_service,
+        )
     )
     client.headers.update(login_as(client, auth, "admin", "admin"))
     assert client.get("/api/learning/candidates").json() == {
@@ -429,3 +466,122 @@ def test_recompute_while_running_is_409(client, auth, driving, fake_reader, monk
             time.sleep(0.01)
         assert not driving.running()
         assert client.post("/api/learning/driving/recompute").status_code == 202
+
+
+# --- Wärmemodell der Klimaanlage (Plan 5c, Präzisierung 9 und 12) -------------------------------
+
+THERMAL_KEYS = ["enabled", "computed_at", "running", "status", "modes"]
+MODE_KEYS = ["mode", "model", "usable", "reason", "text", "computed_at"]
+
+
+def thermal_on(settings_service: SettingsService, *, enabled: bool = True) -> None:
+    current = settings_service.current()
+    learning = current.settings.learning
+    thermal_settings = learning.thermal.model_copy(update={"enabled": enabled})
+    settings_service.update(
+        current.settings.model_copy(
+            update={"learning": learning.model_copy(update={"thermal": thermal_settings})}
+        ),
+        base_version=current.version,
+        actor="test",
+        source="cli",
+    )
+
+
+async def test_thermal_status_for_readers(client_as, thermal, settings_service) -> None:
+    assert await thermal.recompute() is True
+    client = client_as("viewer")
+    body = client.get("/api/learning/thermal").json()
+    assert list(body) == THERMAL_KEYS
+    assert body["enabled"] is False  # ab Werk aus: der Schalter kommt aus den Einstellungen
+    assert body["running"] is False
+    assert body["computed_at"] == THERMAL_NOW.isoformat()
+    assert body["status"] == {"ok": True, "text": "Wärmemodell berechnet am 23.11. 03:50."}
+    heating, cooling = body["modes"]
+    assert list(heating) == MODE_KEYS and list(cooling) == MODE_KEYS
+    assert (heating["mode"], heating["usable"], heating["reason"]) == ("heizen", True, "ok")
+    assert heating["text"] == "Modell taugt." and heating["model"]["mode"] == "heizen"
+    assert heating["computed_at"] == THERMAL_NOW.isoformat()
+    assert (cooling["mode"], cooling["usable"], cooling["reason"]) == ("kuehlen", False, "few_days")
+    assert cooling["text"] == "Noch zu wenig Tage mit Kühlen: 0 von 14."
+    assert {k: v for k, v in body.items() if k != "enabled"} == thermal.status()
+    thermal_on(settings_service)
+    assert client.get("/api/learning/thermal").json()["enabled"] is True
+
+
+def test_thermal_status_without_a_state_names_both_modes(client_as) -> None:
+    body = client_as("viewer").get("/api/learning/thermal").json()
+    assert body["computed_at"] is None and body["status"]["ok"] is True
+    assert [(m["mode"], m["model"], m["reason"]) for m in body["modes"]] == [
+        ("heizen", None, "no_data"),
+        ("kuehlen", None, "no_data"),
+    ]
+
+
+def test_thermal_status_needs_login(client) -> None:
+    assert client.get("/api/learning/thermal").status_code == 401
+    assert client.post("/api/learning/thermal/recompute").status_code == 401
+
+
+@pytest.mark.parametrize("role", ["viewer", "operator"])
+def test_thermal_recompute_needs_admin(client_as, thermal, monkeypatch, role) -> None:
+    called: list[int] = []
+    monkeypatch.setattr(thermal, "start_run", lambda: called.append(1) or True)
+    response = client_as(role).post("/api/learning/thermal/recompute")
+    assert response.status_code == 403 and called == []
+
+
+def test_admin_starts_the_thermal_recompute(client_as, thermal, monkeypatch) -> None:
+    monkeypatch.setattr(thermal, "start_run", lambda: True)
+    response = client_as("admin").post("/api/learning/thermal/recompute")
+    assert response.status_code == 202 and response.json() == {"started": True}
+
+
+def test_thermal_recompute_while_running_is_409(client, auth, thermal, monkeypatch) -> None:
+    release = threading.Event()
+
+    async def slow(*args: Any, **kwargs: Any) -> None:
+        await asyncio.to_thread(release.wait, 5)
+
+    monkeypatch.setattr(thermal, "_compute", slow)
+    with client:  # eine Ereignisschleife für alle Anfragen
+        client.headers.update(login_as(client, auth, "admin", "admin"))
+        first = client.post("/api/learning/thermal/recompute")
+        assert first.status_code == 202 and thermal.running
+        assert client.get("/api/learning/thermal").json()["running"] is True
+        again = client.post("/api/learning/thermal/recompute")
+        assert again.status_code == 409
+        assert again.json() == {"detail": RECOMPUTE_RUNNING}
+        release.set()
+        for _ in range(200):
+            if not thermal.running:
+                break
+            time.sleep(0.01)
+        assert not thermal.running
+        assert client.post("/api/learning/thermal/recompute").status_code == 202
+
+
+def test_thermal_status_without_device_is_404(
+    make_client, model, sensors, load, guard, auth, driving, automation, settings_service
+) -> None:
+    # ohne Klimaanlage der Art ``coe_offset`` gibt es den Dienst nicht: beide Endpunkte melden es
+    client = make_client(
+        learning_router(
+            model,
+            sensors,
+            load,
+            guard,
+            driving,
+            automation,  # type: ignore[arg-type]
+            None,
+            settings_service,
+        )
+    )
+    client.headers.update(login_as(client, auth, "admin", "admin"))
+    for response in (
+        client.get("/api/learning/thermal"),
+        client.post("/api/learning/thermal/recompute"),
+    ):
+        assert response.status_code == 404
+        assert response.json() == {"detail": NO_THERMAL_DEVICE}
+    assert NO_THERMAL_DEVICE == "Keine Klimaanlage eingerichtet."

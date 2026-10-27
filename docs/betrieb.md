@@ -226,6 +226,48 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Update mit Plan 5c (Vorheizen und Vorkühlen):** Plan 5c ändert core und app; beide rollen
+  gemeinsam aus, mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Migration `0015` legt die
+  Tabelle `thermal_model` an; **sichere die Datenbank vorher** (`/backup/vor-plan-5c.sqlite3`). Der
+  Schalter „Vorheizen und Vorkühlen“ ist ab Werk aus. Die Beschreibung steht im Abschnitt
+  „Vorheizen und Vorkühlen (Phase 5c)“.
+- **Rollback auf einen Stand vor Plan 5c:** Die Migration `0015` der app ist beim Start gelaufen; eine
+  ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Core und app gehen gemeinsam
+  zurück, auf dasselbe Tag, mit **Regelbetrieb aus** (System → „Bedienung“) vor dem Wechsel und erst
+  danach wieder an. Es gibt zwei Wege für die Datenbank:
+  - **Datenbank zurückführen (empfohlen, die übrigen Daten bleiben):** Noch mit dem Image von Plan 5c,
+    also bevor du das Tag änderst, setzt du die Datenbank auf den Stand `0014`:
+
+    ```bash
+    cd /opt/bindaems
+    docker compose stop ems-app
+    docker compose run --rm --no-deps --entrypoint python ems-app -c '
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+    from bindaems.app.db.engine import MIGRATIONS_DIR, open_database
+    engine = open_database(Path("/data/bindaems.sqlite3"))
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0014")
+    engine.dispose()
+    print("Datenbank auf Stand 0014")'
+    ```
+
+    Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app). Verloren
+    gehen nur die Daten von Plan 5c: die gelernten Wärmemodelle (`thermal_model`) und der Abschnitt
+    `learning.thermal` der Einstellungen (Schalter, Komfortband, Marge); alles andere bleibt, die ältere
+    app liest die Einstellungen ohne Warnung. Der Befehl braucht das Image mit Plan 5c; das ältere Image
+    kennt die Migration `0015` nicht und kann sie nicht zurücknehmen.
+  - **Kopie vor dem Ausrollen einspielen** (`/backup/vor-plan-5c.sqlite3`, Wiederherstellen wie in
+    Abschnitt 9): Das setzt die **ganze** Datenbank der app auf den Stand vor dem Ausrollen zurück, mit
+    den Folgen wie beim Rollback vor Plan 5a. Diesen Weg nimmst du nur, wenn das Zurückführen scheitert.
+  - Ein core vor Plan 5c liest die Absicht eines core ab 5c nicht, sobald sie einen Plan trägt (jeder
+    Slot trägt jetzt `thermal_steps`, `thermal_grid_w` und `thermal_mode`; die Modelle verbieten
+    unbekannte Felder). Er startet dann ohne Absicht mit dem Alarm `intent.file`, wie beim Rollback
+    vor Plan 4b. Setze die Absicht danach neu (Bedienung oder `PUT /v1/intent`).
 - **Rollback auf einen Stand vor Plan 5b:** Die Migration `0014` der app ist beim Start gelaufen; eine
   ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Core und app gehen gemeinsam
   zurück, auf dasselbe Tag, mit **Regelbetrieb aus** (System → „Bedienung“) vor dem Wechsel und erst
@@ -4678,6 +4720,123 @@ einer laufenden geplanten Ladung nichts ändert und (4) ein erwartetes Auto im Z
 Anstecken durch das echte ersetzt wird (einmal an der Anlage beobachtet). Die Checkliste führt die
 Schritte auf.
 
+## Vorheizen und Vorkühlen (Phase 5c)
+
+Seit Plan 5c lernt die app aus den Betriebsdaten der Klimaanlage ein **Wärmemodell** des Hauses, je
+Betriebsart (Heizen, Kühlen) eines: wie viel Strom die Klimaanlage beim Sollwert grundsätzlich
+braucht, wie schnell das Haus auskühlt und wie viel Wärme es je Kelvin speichert. Daraus kann der Plan
+**Vorheizen und Vorkühlen** ableiten: Er nutzt das Haus als Wärmespeicher und verschiebt den
+Verbrauch der Klimaanlage in günstige Stunden oder in solche mit PV-Überschuss. Das Modell und die
+Klimaanlage meint immer das **erste Gerät der Art `coe_offset`** unter `thermal.devices` in der
+`config.yaml`; ohne ein solches gibt es nichts davon (keine Komponente, keine Karte, die Aufrufe
+unten antworten mit 404). **Unbekannt bleibt unbekannt:** Ohne Daten gibt es kein Modell, ohne
+Modell keine Verschiebung, ohne bekannte Betriebsart keinen Planwert, nie einen Ersatzwert. Der
+Schalter „Vorheizen und Vorkühlen“ ist ab Werk **aus**; der Plan zeigt die Verschiebung dann nur als
+Vorschau. Gelernte Werte erreichen die Safety-Schicht nie und ändern keine harte Grenze (Spec 10.5);
+das Komfortband liegt immer innerhalb von `max_offset_k`.
+
+### Ablauf und Komponente
+
+- **Berechnung:** Jede Nacht um **03:50 Uhr** (Ortszeit, nach dem Lastmodell um 03:15 und dem
+  Fahrverhalten um 03:40, vor der Sicherung um 04:00), beim Start und mit der Taste „Jetzt neu
+  berechnen“ (nur Admin) liest die app die Viertelstunden der Klimaanlage der letzten 28 Tage aus
+  InfluxDB (Messwerte und Betriebsbits) und legt je Betriebsart eine Zeile in der Tabelle
+  `thermal_model` ab (Modell ohne Profile in `params`, das Profil in `profile`); behalten werden 70
+  Tage. Während eines Laufs steht auf der Taste „Berechnung läuft …“; ein zweiter Start ist nicht
+  möglich. Scheitert das Lesen oder Rechnen, gilt der letzte Stand weiter. **Ein neues Modell löst
+  neu planen aus** (Anlass „Klimaanlage geändert“, höchstens alle 5 min, Abschnitt „Planung“).
+- **Das Modell einer Betriebsart** besteht aus der **Grundleistung** (Watt je Kelvin Temperaturdifferenz
+  zwischen Sollwert und außen, dazu ein Anteil je kW PV und ein fester Anteil), der **Zeitkonstante** τ
+  (aus den Auskühl-Phasen, in denen die Klimaanlage nicht lief) und dem **Speicher** `C` (kWh Strom je
+  K): zuerst aus Grundleistung und τ, ab 3 Versatz-Ereignissen im Live-Betrieb nachgeführt (Median
+  der Ereignisse, begrenzt auf das 0,5- bis 1,5-Fache des ersten Werts). Dazu kommt das **Profil**:
+  der Sollwert ohne Versatz und der Anteil der Zeit, in der die Anlage lief, je Wochentaggruppe (Mo–Fr,
+  Sa, So/Feiertag) und Viertelstunde über 14 Tage; verschoben wird nur in Viertelstunden mit einem
+  Laufanteil von mindestens 0,8.
+- **Wann ein Modell taugt:** mindestens 14 Tage mit der Betriebsart, 3 Auskühl-Phasen, `R²` der
+  Grundleistung von mindestens 0,5 und eine Zeitkonstante zwischen 4 und 200 h. Das Modell einer
+  Betriebsart, die nicht taugt, steht trotzdem mit seinen Zahlen im Status; der Plan verschiebt mit
+  ihm nichts. Der Grund (`reason`) und sein Satz (`text`):
+
+| `reason` | Satz |
+|---|---|
+| `ok` | „Modell taugt.“ |
+| `few_days` | „Noch zu wenig Tage mit {Betriebsart}: {n} von 14.“ |
+| `few_episodes` | „Noch zu wenig Auskühl-Phasen: {n} von 3.“ |
+| `poor_fit` | „Die Grundleistung passt noch nicht (R² {r}, nötig 0,5).“ |
+| `implausible_tau` | „Die Zeitkonstante {τ} h ist unplausibel (4 bis 200 h).“ |
+| `no_data` | „Noch keine Daten der Klimaanlage.“ |
+
+- **Komponente `thermal_model`** unter **System** → „Komponenten“: „Wärmemodell aktuell“, „Noch
+  keine Daten der Klimaanlage“ (normal, bis die ersten Tage vorliegen; Status in Ordnung) oder
+  „Wärmemodell fehlgeschlagen: {Fehler}“ (Status nicht in Ordnung; das letzte Modell gilt weiter).
+- **Datenbank:** Die Migration `0015` legt die Tabelle `thermal_model` an (`computed_at` in UTC,
+  `device`, `mode`, `params`, `profile`, `usable`, `reason`, ein Index auf `device`, `mode`,
+  `computed_at`) und ändert keine vorhandene Tabelle. **Sichere die Datenbank vor dem Ausrollen**
+  (`/backup/vor-plan-5c.sqlite3`, wie vor `0013` und `0014`); eine ältere app startet mit der
+  Migration nicht (Abschnitt 4, „Rollback auf einen Stand vor Plan 5c“).
+
+### Einstellungen (`learning.thermal`)
+
+Der Abschnitt „Vorheizen und Vorkühlen“ der **Einstellungen** (Rolle „Admin“, wie alle Einstellungen,
+über `PUT /api/settings`). Die Bereiche prüft die app beim Speichern; ältere Einstellungen ohne den
+Abschnitt laden mit den Standardwerten.
+
+| Feld | Standard | Bereich | Bedeutung |
+|---|---|---|---|
+| `enabled` | aus | an oder aus | Schalter „Vorheizen und Vorkühlen“. Aus: Der Plan rechnet die Verschiebung als Vorschau mit, an den core geht sie nicht. |
+| `heat_up_k` | 1,5 | 0 bis 3 K | Heizen: wie weit der Plan **vorheizen** darf (über den Sollwert ohne Versatz) |
+| `heat_down_k` | 1,0 | 0 bis 2 K | Heizen: wie weit er **absenken** darf (unter den Sollwert) |
+| `cool_up_k` | 1,5 | 0 bis 3 K | Kühlen: wie weit er **vorkühlen** darf (unter den Sollwert) |
+| `cool_down_k` | 1,0 | 0 bis 2 K | Kühlen: wie weit das Haus **wärmer werden** darf (über den Sollwert) |
+| `margin_ct` | 2,0 | 0 bis 20 ct/kWh | Mindestvorteil bei Netzbezug: Strom aus dem Netz für Vorheizen oder Vorkühlen kostet beim Planen diesen Aufschlag |
+
+- **Schritte von 0,5 K:** Die vier Werte des Komfortbands sind Vielfache von 0,5 (die Klimaanlage
+  setzt den Versatz in diesen Schritten). Jeden anderen Wert lehnt die app mit 422 und dem Text „Das
+  Komfortband geht in Schritten von 0,5 K.“ ab; ein Wert außerhalb des Bereichs gibt den üblichen
+  Bereichsfehler.
+- **Das Band ist nie weiter als `max_offset_k`:** Je Richtung gilt der kleinere Wert aus der
+  Einstellung und `max_offset_k` der Klimaanlage in der `config.yaml`, auf ein Vielfaches von 0,5 K
+  abgerundet. Die harte Grenze von ±3 K bleibt in der Safety-Schicht.
+- **Wirkung:** Jede Änderung des Abschnitts löst einen neuen Plan aus (Anlass „Einstellungen“). Der
+  Schalter wirkt auf den Plan, den die app dem core übergibt; das Verhalten des core steht im
+  Abschnitt „Klimaanlage (Phase 6a)“, „Planwert“.
+
+### API für das Wärmemodell
+
+- `GET /api/learning/thermal` (ab „Lesen“): `enabled` (der Schalter aus den Einstellungen),
+  `computed_at` (der jüngste Stand), `running`, `status` (`ok`, `text`) und `modes`, immer zwei
+  Einträge in der Reihenfolge `heizen`, `kuehlen`. Je Betriebsart: `mode`, `model` (die Zahlen des
+  Modells: `days`, `u_w_per_k`, `pv_w_per_kw`, `base_w`, `r2`, `tau_h`, `episodes`, `c_kwh_per_k`,
+  `c_model_kwh_per_k`, `events`, `event_error_pct`, `max_w`, `usable`, `reason`, `gap_w_per_k`; Zahlen,
+  die sich nicht bestimmen lassen, sind `null`), `usable`, `reason`, `text` und `computed_at`. Eine
+  Betriebsart ohne Stand fehlt nicht: `model` und `computed_at` sind `null`, `reason` ist `no_data`.
+  Alle Zeitstempel sind ISO 8601 in UTC. Ohne Klimaanlage der Art `coe_offset` antwortet die app mit
+  404 „Keine Klimaanlage eingerichtet.“.
+- `POST /api/learning/thermal/recompute` (nur Admin, Antwort 202 `{"started": true}`): rechnet im
+  Hintergrund neu. Läuft schon eine Berechnung, antwortet die app mit 409 „Berechnung läuft schon.“;
+  ohne Klimaanlage mit 404 wie oben.
+- `GET /api/plan` (ab „Lesen“) nennt seit Plan 5c zusätzlich: je Slot `thermal_w` (Mehr- oder
+  Minderverbrauch der Klimaanlage in W, negativ für weniger), `thermal_grid_w` (der Teil aus dem
+  Netz, in W) und `thermal_steps` (der Versatz in Stufen zu 0,5 K am Ende des Slots; `null` ohne
+  Verschiebung), und im Plan `thermal`: `null` ohne Klimaanlage der Art `coe_offset`, sonst
+  `device`, `mode` (die Betriebsart beim Planen: `heizen`, `kuehlen`, `lueften`, `aus` oder
+  `unbekannt`), `active`, `saving_ct` (Ersparnis der Verschiebung über den ganzen Plan in ct, nie
+  negativ), `model_computed_at` (Stand des Modells der Betriebsart, `null` ohne) und `reason`.
+  `active` heißt, die Verschiebung geht an den core: der Schalter ist an und `reason` ist `ok`. Mit
+  Schalter aus steht bei `reason` `ok` die **Vorschau**, jeder andere Grund wird dann `off`. Die Slots
+  tragen die Verschiebung immer, wenn `reason` `ok` ist, die Grundcodes `KLIMA_MEHR` und
+  `KLIMA_WENIGER` (Abschnitt „Planung“, „Gründe“) aber nur, wenn sie an den core geht.
+
+| `thermal.reason` | Bedeutung |
+|---|---|
+| `ok` | Es gibt eine Verschiebung, die sich lohnt (mindestens 2 ct über den Plan). |
+| `off` | Der Schalter ist aus, und es gibt keine Vorschau (sonst stünde dort ein anderer Grund). |
+| `no_model` | Für die Betriebsart gibt es kein taugliches Wärmemodell. |
+| `mode` | Die Klimaanlage heizt oder kühlt gerade nicht (oder die Betriebsart ist unbekannt). |
+| `not_worth` | Verschieben spart in diesem Plan weniger als 2 ct. |
+| `solver` | Die Verschiebung ließ sich nicht berechnen oder war unplausibel; der Plan gilt ohne sie. |
+
 ## Planung
 
 Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der
@@ -5158,6 +5317,8 @@ Für Skripte, mit Sitzung und Rolle wie das UI:
   `config.yaml`, in W, nur Autos mit Leistung über 0); `plan.vehicles` fasst jedes geplante Auto
   zusammen (Ziel, Abfahrt, Ladestand zu Beginn und „angenommen“, geplante Energie, erwarteter
   Ladestand, `finish_at` und `reachable`), leer ohne Auto im Modus „Geplant“.
+  Seit Plan 5c kommen je Slot `thermal_w`, `thermal_grid_w` und `thermal_steps` und im Plan
+  `thermal` dazu (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“, „API für das Wärmemodell“).
 - `GET /api/plan/review?day=JJJJ-MM-TT` (ab „Lesen“, ohne `day` heute): Plan gegen Ist je
   vergangener Viertelstunde des Tages (`slots` mit `planned` und `actual`, `null` ohne Plan bzw.
   ohne Abrechnung) und die Summen (`totals`). Tage vor den letzten 30 und künftige Tage ergeben 422.

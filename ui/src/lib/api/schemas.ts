@@ -1063,6 +1063,70 @@ export const DrivingStatusSchema = v.object({
 });
 export type DrivingStatus = v.InferOutput<typeof DrivingStatusSchema>;
 
+// --- Wärmemodell der Klimaanlage (Plan 5c) -------------------------------------------------
+
+export const ThermalModeSchema = v.picklist(['heizen', 'kuehlen']);
+export type ThermalMode = v.InferOutput<typeof ThermalModeSchema>;
+
+/** Warum das Modell einer Betriebsart (noch) nicht taugt; `ok` taugt */
+export const ThermalModelReasonSchema = v.picklist([
+	'ok',
+	'few_days',
+	'few_episodes',
+	'poor_fit',
+	'implausible_tau',
+	'no_data'
+]);
+export type ThermalModelReason = v.InferOutput<typeof ThermalModelReasonSchema>;
+
+/** Das Modell einer Betriebsart; Zahlen, die sich nicht bestimmen lassen, sind `null` */
+export const ThermalModelSchema = v.object({
+	mode: ThermalModeSchema,
+	days: v.number(),
+	/** Grundleistung: W je K Temperaturdifferenz, W je kW PV und konstanter Anteil in W */
+	u_w_per_k: NullableNumber,
+	pv_w_per_kw: NullableNumber,
+	base_w: NullableNumber,
+	r2: NullableNumber,
+	/** Zeitkonstante in h und Auskühl-Phasen, aus denen sie stammt */
+	tau_h: NullableNumber,
+	episodes: v.number(),
+	/** Speicher in kWh Strom je K; `c_model_kwh_per_k` der Wert aus Grundleistung und Zeitkonstante */
+	c_kwh_per_k: NullableNumber,
+	c_model_kwh_per_k: NullableNumber,
+	/** Versatz-Ereignisse im Betrieb, aus denen der Speicher nachgeführt wird, und ihr Fehler in % */
+	events: v.number(),
+	event_error_pct: NullableNumber,
+	max_w: NullableNumber,
+	usable: v.boolean(),
+	reason: ThermalModelReasonSchema,
+	gap_w_per_k: NullableNumber
+});
+export type ThermalModel = v.InferOutput<typeof ThermalModelSchema>;
+
+/** Eine Betriebsart ohne Stand hat `model` und `computed_at` `null` (Grund `no_data`); `text` ist der
+ * fertige Satz zum Zustand */
+export const ThermalModeStatusSchema = v.object({
+	mode: ThermalModeSchema,
+	model: v.nullable(ThermalModelSchema),
+	usable: v.boolean(),
+	reason: ThermalModelReasonSchema,
+	text: v.string(),
+	computed_at: v.nullable(Iso)
+});
+export type ThermalModeStatus = v.InferOutput<typeof ThermalModeStatusSchema>;
+
+/** `GET /api/learning/thermal` (404 ohne Klimaanlage); `enabled` ist der Schalter „Vorheizen und
+ * Vorkühlen“ */
+export const ThermalStatusSchema = v.object({
+	enabled: v.boolean(),
+	computed_at: v.nullable(Iso),
+	running: v.boolean(),
+	status: v.object({ ok: v.boolean(), text: v.string() }),
+	modes: v.array(ThermalModeStatusSchema)
+});
+export type ThermalStatus = v.InferOutput<typeof ThermalStatusSchema>;
+
 export const DaySummarySchema = v.object({
 	date: DateText,
 	slots: v.number(),

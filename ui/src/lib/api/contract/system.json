@@ -295,7 +295,8 @@
           "reason": "thermal_stale",
           "hint": "neutral",
           "base_w": null,
-          "spare_w": 0
+          "spare_w": 0,
+          "planned": null
         }
       }
     }
@@ -346,7 +347,7 @@
     {
       "name": "thermal_model",
       "ok": true,
-      "message": "Noch keine Daten der Klimaanlage",
+      "message": "Wärmemodell aktuell",
       "since": null,
       "details": {}
     },

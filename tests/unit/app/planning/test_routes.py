@@ -13,6 +13,7 @@ from tests.plan_helpers import planned_health, sample_inputs, sample_plan, vehic
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.routes import planning_router
 from bindaems.app.settings.service import SettingsService, VersionConflictError
+from bindaems.shared.plan import PlanThermal
 
 USERS = {"viewer": "gast", "operator": "bedienen", "admin": "admin"}
 
@@ -100,6 +101,9 @@ async def test_get_plan_shape(client_as, planning):
         "budget_kw",
         "support_soc_pct",
         "ev_w",
+        "thermal_w",
+        "thermal_steps",
+        "thermal_grid_w",
         "codes",
         "text",
     }
@@ -121,9 +125,14 @@ async def test_get_plan_shape(client_as, planning):
         "baseline_cost_eur",
         "issues",
         "vehicles",
+        "thermal",
         "slots",
     }
     assert plan["vehicles"] == [] and plan["slots"][0]["ev_w"] == {}
+    # ohne Klimaanlage: kein Block, keine Verschiebung in den Slots
+    assert plan["thermal"] is None
+    assert (plan["slots"][0]["thermal_w"], plan["slots"][0]["thermal_steps"]) == (0.0, None)
+    assert plan["slots"][0]["thermal_grid_w"] == 0.0
 
 
 async def test_get_plan_values_follow_the_plan(client_as, planning):
@@ -354,3 +363,42 @@ def test_review_rejects_days_outside_30_days(client_as):
     assert api.get("/api/plan/review?day=2026-09-15").status_code == 422  # zu alt
     assert api.get("/api/plan/review?day=2026-09-16").status_code == 200  # 30 Tage zurück
     assert api.get("/api/plan/review?day=gestern").status_code == 422
+
+
+async def test_plan_has_thermal_fields(client_as, planning, monkeypatch):
+    stored = await planning.replan("manual")
+    assert stored is not None
+    computed = stored.created_at - timedelta(hours=7)
+    slots = [
+        slot.model_copy(update={"thermal_w": watts, "thermal_grid_w": grid, "thermal_steps": steps})
+        for slot, (watts, grid, steps) in zip(
+            stored.slots, [(1200.0, 300.0, 2), (-450.0, 0.0, -1), (0.0, 0.0, 0)], strict=False
+        )
+    ] + stored.slots[3:]
+    thermal = PlanThermal(
+        device="klima",
+        mode="heizen",
+        active=False,
+        saving_ct=12.345,
+        model_computed_at=computed,
+        reason="ok",
+    )
+    shifted = stored.model_copy(update={"slots": slots, "thermal": thermal})
+    monkeypatch.setattr(planning, "current", lambda: shifted)
+    client = client_as("viewer")
+    plan = client.get("/api/plan").json()["plan"]
+    assert plan["thermal"] == {
+        "device": "klima",
+        "mode": "heizen",
+        "active": False,
+        "saving_ct": 12.3,  # auf 0,1 ct gerundet
+        "model_computed_at": computed.isoformat(),
+        "reason": "ok",
+    }
+    got = [(s["thermal_w"], s["thermal_grid_w"], s["thermal_steps"]) for s in plan["slots"][:4]]
+    assert got == [(1200.0, 300.0, 2), (-450.0, 0.0, -1), (0.0, 0.0, 0), (0.0, 0.0, None)]
+    # ohne Wärmemodell: ``model_computed_at`` bleibt leer
+    bare = thermal.model_copy(update={"model_computed_at": None, "reason": "no_model"})
+    monkeypatch.setattr(planning, "current", lambda: shifted.model_copy(update={"thermal": bare}))
+    body = client.get("/api/plan").json()["plan"]["thermal"]
+    assert (body["model_computed_at"], body["reason"]) == (None, "no_model")

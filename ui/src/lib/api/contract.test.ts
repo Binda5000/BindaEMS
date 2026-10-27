@@ -27,6 +27,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'learning-load': s.LearningStatusSchema,
 	'learning-candidates': s.SensorCandidatesSchema,
 	'learning-driving': s.DrivingStatusSchema,
+	'learning-thermal': s.ThermalStatusSchema,
 	'ledger-days': v.array(s.DaySummarySchema),
 	'ledger-checks': s.LedgerChecksSchema,
 	'stats-day': s.StatsSchema,

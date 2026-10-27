@@ -19,7 +19,7 @@ from bindaems.app.planning.review import review
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.planning.store import KEEP_PLANS, PlanStore
 from bindaems.app.settings.service import SettingsService, VersionConflictError
-from bindaems.shared.plan import Plan, PlanSlot, PlanVehicle
+from bindaems.shared.plan import Plan, PlanSlot, PlanThermal, PlanVehicle
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, local_day_slots
 
 
@@ -50,6 +50,9 @@ def slot_json(slot: PlanSlot) -> dict[str, Any]:
         "budget_kw": slot.budget_kw,
         "support_soc_pct": slot.support_soc_pct,
         "ev_w": dict(slot.ev_w),
+        "thermal_w": slot.thermal_w,
+        "thermal_steps": slot.thermal_steps,
+        "thermal_grid_w": slot.thermal_grid_w,
         "codes": [reason.code for reason in slot.reasons],
         "text": slot_text(slot),
     }
@@ -76,6 +79,20 @@ def vehicle_json(car: PlanVehicle) -> dict[str, Any]:
     }
 
 
+def thermal_json(thermal: PlanThermal) -> dict[str, Any]:
+    """Vorheizen und Vorkühlen im Plan (Plan 5c, Präzisierung 7); die Ersparnis in ct auf 0,1."""
+    return {
+        "device": thermal.device,
+        "mode": thermal.mode,
+        "active": thermal.active,
+        "saving_ct": round(thermal.saving_ct, 1),
+        "model_computed_at": (
+            thermal.model_computed_at.isoformat() if thermal.model_computed_at is not None else None
+        ),
+        "reason": thermal.reason,
+    }
+
+
 def plan_json(plan: Plan, *, valid: bool) -> dict[str, Any]:
     return {
         "id": plan.id,
@@ -95,6 +112,7 @@ def plan_json(plan: Plan, *, valid: bool) -> dict[str, Any]:
         "baseline_cost_eur": _euro(plan.baseline_cost_ct),
         "issues": list(plan.issues),
         "vehicles": [vehicle_json(car) for car in plan.vehicles],
+        "thermal": thermal_json(plan.thermal) if plan.thermal is not None else None,
         "slots": [slot_json(slot) for slot in plan.slots],
     }
 

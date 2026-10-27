@@ -10,12 +10,16 @@ erlaubt.
 from __future__ import annotations
 
 import asyncio
+import copy
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import respx
@@ -62,9 +66,12 @@ from bindaems.app.learning.features import TrainingSet, feature_names, local_mid
 from bindaems.app.learning.ha_sensors import _CANDIDATES_QUERY
 from bindaems.app.learning.model import MIN_ROWS, TrainedModel, train
 from bindaems.app.learning.service import TrainingResult
+from bindaems.app.learning.thermal_model import ModeModel, ModeProfile
 from bindaems.app.ledger.checks import EXPORT_COUNTER, IMPORT_COUNTER
 from bindaems.app.planning.process import solve_inline
 from bindaems.app.planning.service import plan_once
+from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
+from bindaems.app.planning.thermal_stage import apply_thermal
 from bindaems.app.prices.store import SlotRow
 from bindaems.app.runtime import AppRuntime
 from bindaems.app.tariff.calc import import_price
@@ -977,6 +984,116 @@ async def _driving(app: AppRuntime) -> None:
     app.automation.on_manual_target("tesla", next_departure(DEMO_DEPARTURE, T_DEMO))
 
 
+THERMAL_COMPUTED_AT = datetime(2026, 10, 9, 1, 50, tzinfo=UTC)  # 03:50 Ortszeit, der Lauf der Nacht
+THERMAL_SETPOINT_C = 21.0  # Sollwert ohne Versatz, rund um die Uhr (keine Nachtabsenkung)
+
+
+def _thermal_models() -> dict[Any, tuple[ModeModel, ModeProfile]]:
+    """Wärmemodell wie nach dem Lauf der Nacht (Plan 5c): Heizen mit 21 Tagen taugt, Kühlen hat
+    erst 6 Tage (der Sommer ist vorbei) und taugt noch nicht. Alle Werte sind erfunden."""
+    heating = ModeModel(
+        mode="heizen",
+        days=21,
+        u_w_per_k=82.0,
+        pv_w_per_kw=-24.0,
+        base_w=65.0,
+        r2=0.81,
+        tau_h=38.0,
+        episodes=9,
+        c_kwh_per_k=2.4,
+        c_model_kwh_per_k=3.1,
+        events=4,
+        event_error_pct=-22.6,
+        max_w=2300.0,
+        usable=True,
+        reason="ok",
+        gap_w_per_k=140.0,
+    )
+    cooling = ModeModel(
+        mode="kuehlen",
+        days=6,
+        u_w_per_k=58.0,
+        pv_w_per_kw=-15.0,
+        base_w=30.0,
+        r2=0.38,
+        tau_h=None,
+        episodes=0,
+        c_kwh_per_k=None,
+        c_model_kwh_per_k=None,
+        events=0,
+        event_error_pct=None,
+        max_w=1500.0,
+        usable=False,
+        reason="few_days",
+        gap_w_per_k=60.0,
+    )
+    keys = [(group, quarter) for group in range(3) for quarter in range(96)]
+    profile = ModeProfile(
+        setpoint_c=dict.fromkeys(keys, THERMAL_SETPOINT_C), on_share=dict.fromkeys(keys, 1.0)
+    )
+    return {
+        "heizen": (heating, profile),
+        "kuehlen": (cooling, ModeProfile(setpoint_c={}, on_share={})),
+    }
+
+
+async def _thermal(app: AppRuntime) -> None:
+    """Wärmemodell der Klimaanlage wie nach dem Lauf der Nacht: beide Stände liegen in der
+    Datenbank und werden wie beim Start geladen."""
+    assert app.thermal_model is not None
+    app.thermal_model._store(_thermal_models(), THERMAL_COMPUTED_AT)
+    await app.thermal_model.load_stored()
+
+
+# Vorschau der Demo: (erster Slot, Anzahl, Stufen, Mehr- oder Minderverbrauch in W, davon Netz in W)
+# im Plan von 10:00 Ortszeit; vorheizen, wenn der Strom günstig ist und Budget bleibt, absenken im
+# teuren Abend, wenn der Akku entlädt
+_DEMO_SHIFT: Sequence[tuple[int, int, int, float, float]] = (
+    (14, 1, 1, 1100.0, 1100.0),
+    (15, 9, 1, 60.0, 0.0),
+    (24, 1, 2, 1400.0, 1400.0),
+    (25, 1, 2, 150.0, 150.0),
+    (26, 2, 2, -300.0, 0.0),
+    (28, 4, 1, -300.0, 0.0),
+    (36, 4, -1, -250.0, 0.0),
+)
+
+
+def _demo_shift(inp: ShiftInput) -> ShiftResult:
+    """Eine feste Verschiebung statt des Optimierers: Die Preise der Demo liegen so eng, dass sich
+    echtes Verschieben nicht lohnt (Grund „lohnt nicht“); die Vorschau soll aber gefüllt sein. Der
+    Rest des zweiten Planungsschritts (Prüfung, Slots, ``Plan.thermal``) läuft echt."""
+    rows = {
+        start + n: (steps, watts, grid)
+        for start, count, steps, watts, grid in _DEMO_SHIFT
+        for n in range(count)
+    }
+    slots = [
+        ShiftedSlot(slot.start, rows[i][1], rows[i][2], rows[i][0])
+        if i in rows
+        else ShiftedSlot(slot.start, 0.0, 0.0, 0)
+        for i, slot in enumerate(inp.slots)
+    ]
+    return ShiftResult(slots=slots, saving_ct=18.4, reason="ok")
+
+
+@contextmanager
+def _heating(app: AppRuntime) -> Iterator[None]:
+    """Die Klimaanlage heizt, solange der Plan entsteht: Die Anlage ist in der Demo nicht
+    verbunden (Betriebsart „unbekannt“), der Plan braucht die Betriebsart für die Vorschau. Die
+    Antworten der API zeigen danach wieder den Health der Demo."""
+    health = app.live.health
+    assert health is not None
+    heating = copy.deepcopy(health)
+    entry = heating["thermal"]["klima"]
+    entry.update(mode="heizen", running=True, actual_c=20.6, base_setpoint_c=THERMAL_SETPOINT_C)
+    app.live.health = heating
+    try:
+        yield
+    finally:
+        app.live.health = health
+
+
 async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
     """Ein Plan um 09:01 neben dem von 10:00, damit „Plan gegen Ist“ für 09:00 bis 10:00 Plan
     und Ist zeigt.
@@ -1185,7 +1302,16 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         await _learning(app)
         # Plan aus den Prognosen und Preisen; der Solver läuft im selben Prozess (wie in Tests)
         app.planning._solver = solve_inline
-        plan = await app.planning.replan("start")
+        await _thermal(app)
+        # Schalter aus: der Plan zeigt die Verschiebung der Klimaanlage nur als Vorschau
+        with (
+            _heating(app),
+            patch(
+                "bindaems.app.planning.service.apply_thermal",
+                partial(apply_thermal, shift_fn=_demo_shift),
+            ),
+        ):
+            plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
         await _driving(app)

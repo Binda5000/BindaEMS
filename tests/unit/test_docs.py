@@ -2,6 +2,7 @@ import importlib.util
 import json
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -974,7 +975,6 @@ def test_operations_guide_describes_planning() -> None:
 def test_plan_reasons_in_the_guide_match_the_code() -> None:
     # Die Tabelle der Grundcodes nennt jeden ReasonCode mit dem Satz, den das UI zeigt; ein
     # Code, den es nicht gibt, steht nirgends im Abschnitt.
-    from typing import get_args
 
     from bindaems.app.planning.explain import sentence
     from bindaems.shared.plan import Reason, ReasonCode
@@ -1046,7 +1046,6 @@ def _ts_labels(source: str, name: str) -> dict[str, str]:
 
 def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
     # Auslöser und Quellen stehen mit dem Wortlaut aus ``ui/src/lib/plan/model.ts`` im Abschnitt.
-    from typing import get_args
 
     from bindaems.shared.plan import PlanSource, PlanTrigger
 
@@ -1469,3 +1468,173 @@ def test_guide_describes_the_driving_behaviour() -> None:
         assert f"| `{status.state}` | „{expected}“ |" in "\n".join(
             line.strip() for line in _guide_section("Fahrverhalten (Phase 5b)").splitlines()
         ), status.state
+
+
+def test_guide_describes_the_thermal_model_endpoints_and_component() -> None:
+    # Plan 5c, Task 9: Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“ mit Nachtlauf, Komponente,
+    # Gründen des Modells, beiden Aufrufen samt Rolle und Fehlertexten; die Sätze stehen im Code.
+    from dataclasses import fields, replace
+
+    from bindaems.app.learning.routes import NO_THERMAL_DEVICE, RECOMPUTE_RUNNING
+    from bindaems.app.learning.thermal_model import ModeModel, Reason
+    from bindaems.app.learning.thermal_service import (
+        COMPONENT,
+        KEEP_DAYS,
+        NO_DATA,
+        RUN_AT,
+        reason_text,
+    )
+
+    section = _guide_section("Vorheizen und Vorkühlen (Phase 5c)")
+    text = " ".join(section.split())
+    assert (RUN_AT.hour, RUN_AT.minute, KEEP_DAYS, COMPONENT) == (3, 50, 70, "thermal_model")
+    assert NO_THERMAL_DEVICE == "Keine Klimaanlage eingerichtet."
+    for topic in (
+        "**03:50 Uhr**",
+        "nach dem Lastmodell um 03:15 und dem Fahrverhalten um 03:40, vor der Sicherung um 04:00",
+        "behalten werden 70 Tage",
+        "Jetzt neu berechnen",
+        "Berechnung läuft …",
+        "Scheitert das Lesen oder Rechnen, gilt der letzte Stand weiter",
+        "löst neu planen aus",
+        "Komponente `thermal_model`",
+        f"„{NO_DATA}“",
+        "Wärmemodell aktuell",
+        "Wärmemodell fehlgeschlagen: {Fehler}",
+        "`GET /api/learning/thermal` (ab „Lesen“)",
+        "`POST /api/learning/thermal/recompute` (nur Admin, Antwort 202",
+        f"409 „{RECOMPUTE_RUNNING}“",
+        f"404 „{NO_THERMAL_DEVICE}“",
+        "`GET /api/plan` (ab „Lesen“) nennt seit Plan 5c zusätzlich",
+        "erste Gerät der Art `coe_offset`",
+        "ab Werk **aus**",
+    ):
+        assert topic in text, topic
+    # jedes Feld des Modells steht in der Beschreibung der Antwort
+    for field in fields(ModeModel):
+        assert f"`{field.name}`" in text, field.name
+    # die Sätze der Gründe stehen in der Tabelle wie im Code
+    base = ModeModel(
+        mode="heizen",
+        days=9,
+        u_w_per_k=80.0,
+        pv_w_per_kw=None,
+        base_w=None,
+        r2=0.25,
+        tau_h=3.0,
+        episodes=2,
+        c_kwh_per_k=None,
+        c_model_kwh_per_k=None,
+        events=0,
+        event_error_pct=None,
+        max_w=None,
+        usable=False,
+        reason="few_days",
+        gap_w_per_k=None,
+    )
+    shown: dict[str, str] = {}
+    for reason in ("ok", "few_days", "few_episodes", "poor_fit", "implausible_tau", "no_data"):
+        sentence = reason_text(replace(base, reason=reason, usable=reason == "ok"))
+        sentence = sentence.replace("Heizen", "{Betriebsart}").replace("3,0 h", "{τ} h")
+        sentence = sentence.replace("0,25", "{r}").replace("2 von", "{n} von")
+        shown[reason] = sentence.replace("9 von", "{n} von")
+    assert set(shown) == set(get_args(Reason))
+    assert shown["few_days"] == "Noch zu wenig Tage mit {Betriebsart}: {n} von 14."
+    for reason, sentence in shown.items():
+        assert f"| `{reason}` | „{sentence}“ |" in section, reason
+
+
+def test_guide_describes_the_thermal_settings() -> None:
+    # Die Tabelle der Einstellungen `learning.thermal` nennt Felder, Standardwerte und Bereiche wie
+    # das Modell, dazu die Regel der 0,5-K-Schritte mit ihrem Fehlertext und die Kappung am Versatz.
+    from pydantic import ValidationError
+
+    from bindaems.app.planning.thermal_stage import band
+    from bindaems.shared.settings import LearningSettings, ThermalPlanSettings
+
+    section = _guide_section("Vorheizen und Vorkühlen (Phase 5c)")
+    rows = {
+        cells[0].strip("`"): cells[1:]
+        for line in section.splitlines()
+        if line.startswith("| `")
+        and (cells := [cell.strip() for cell in line.strip().strip("|").split("|")])
+        and cells[0].strip("`") in ThermalPlanSettings.model_fields
+    }
+    assert set(rows) == set(ThermalPlanSettings.model_fields)
+    defaults = ThermalPlanSettings()
+    assert defaults.enabled is False and rows["enabled"][0] == "aus"
+    for name, bounds in (
+        ("heat_up_k", "0 bis 3 K"),
+        ("heat_down_k", "0 bis 2 K"),
+        ("cool_up_k", "0 bis 3 K"),
+        ("cool_down_k", "0 bis 2 K"),
+        ("margin_ct", "0 bis 20 ct/kWh"),
+    ):
+        assert rows[name][0] == str(getattr(defaults, name)).replace(".", ","), name
+        assert rows[name][1] == bounds, name
+    # die Bereiche gelten wirklich: Grenzen erlaubt, knapp darüber nicht
+    ThermalPlanSettings(heat_up_k=3.0, heat_down_k=2.0, cool_up_k=0.0, margin_ct=20.0)
+    for bad in ({"heat_up_k": 3.5}, {"heat_down_k": 2.5}, {"cool_up_k": -0.5}, {"margin_ct": 21}):
+        with pytest.raises(ValidationError):
+            ThermalPlanSettings(**bad)
+    message = "Das Komfortband geht in Schritten von 0,5 K."
+    with pytest.raises(ValidationError, match=message):
+        ThermalPlanSettings(heat_up_k=1.2)
+    text = " ".join(section.split())
+    assert f"„{message}“" in text and "mit 422" in text
+    # ältere Einstellungen ohne den Abschnitt laden mit den Standardwerten
+    assert LearningSettings.model_validate({}).thermal == defaults
+    assert "ältere Einstellungen ohne den Abschnitt laden mit den Standardwerten" in text
+    # das Band bleibt innerhalb von `max_offset_k`, auf 0,5 K abgerundet
+    assert band("heizen", ThermalPlanSettings(), max_offset_k=1.2) == (1.0, 1.0)
+    assert "`max_offset_k`" in text and "auf ein Vielfaches von 0,5 K abgerundet" in text
+
+
+def test_guide_describes_the_thermal_plan_fields_and_migration() -> None:
+    # `GET /api/plan` und die Reihen des Handbuchs: jedes neue Feld und jeder Grund steht da; die
+    # Migration `0015` legt die Tabelle an, die das Handbuch beschreibt.
+    from tests.plan_helpers import sample_plan
+
+    from bindaems.app.db.schema import thermal_model
+    from bindaems.app.planning.routes import slot_json, thermal_json
+    from bindaems.shared.plan import PlanThermal, ThermalReason
+
+    section = _guide_section("Vorheizen und Vorkühlen (Phase 5c)")
+    text = " ".join(section.split())
+    plan = sample_plan("2026-10-09T08:00:00+00:00", ["08:00"])
+    new_slot_keys = {"thermal_w", "thermal_grid_w", "thermal_steps"}
+    assert new_slot_keys <= set(slot_json(plan.slots[0]))
+    for key in new_slot_keys:
+        assert f"`{key}`" in text, key
+    thermal = PlanThermal(
+        device="klima",
+        mode="heizen",
+        active=False,
+        saving_ct=1.0,
+        model_computed_at=None,
+        reason="ok",
+    )
+    for key in thermal_json(thermal):
+        assert f"`{key}`" in text, key
+    reasons = re.findall(r"^\| `(\w+)` \| .* \|$", section.split("| `thermal.reason`")[1], re.M)
+    assert reasons == list(get_args(ThermalReason))
+    assert "**Vorschau**" in text and "`KLIMA_MEHR`" in text and "`KLIMA_WENIGER`" in text
+    # Migration 0015 und Tabelle
+    migration = Path("src/bindaems/app/db/migrations/versions/v0015_thermal_model.py")
+    assert 'revision = "0015"' in migration.read_text("utf-8")
+    assert "`0015`" in text and "`thermal_model`" in text
+    for column in thermal_model.c.keys():
+        if column != "id":
+            assert f"`{column}`" in text, column
+    assert "/backup/vor-plan-5c.sqlite3" in text
+    update = " ".join(_guide_section("4. Bedienung").split())
+    for topic in (
+        "Update mit Plan 5c (Vorheizen und Vorkühlen)",
+        "Rollback auf einen Stand vor Plan 5c",
+        "`0015`",
+        'command.downgrade(config, "0014")',
+        "Datenbank auf Stand 0014",
+        "/backup/vor-plan-5c.sqlite3",
+        "`learning.thermal`",
+    ):
+        assert topic in update, topic

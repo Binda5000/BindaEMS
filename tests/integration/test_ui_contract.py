@@ -54,6 +54,7 @@ GET_ENDPOINTS = {
     "learning-load": "/api/learning/load",
     "learning-candidates": "/api/learning/candidates",
     "learning-driving": "/api/learning/driving",
+    "learning-thermal": "/api/learning/thermal",
     "ledger-days": "/api/ledger/days?from=2026-09-24&to=2026-10-09",
     "ledger-checks": "/api/ledger/checks?from=2026-10-02&to=2026-10-08",
     "stats-day": "/api/stats?period=day&date=2026-10-08",
@@ -354,6 +355,38 @@ async def test_demo_world_has_driving_behaviour(cfg, tmp_path) -> None:
         "paused_until": None,
         "last_set_at": None,
     }
+
+
+async def test_demo_world_has_a_thermal_model(cfg, tmp_path) -> None:
+    # Grundlage der Karte „Wärmemodell“ und der Vorschau im Zeitplan (Plan 5c): ein Heizmodell, das
+    # taugt, ein Kühlmodell mit zu wenig Tagen und ein Plan mit Vorschau; der Schalter ist aus
+    world = await build_world(cfg, tmp_path)
+    try:
+
+        def fetch() -> tuple[dict[str, Any], dict[str, Any]]:
+            client = TestClient(world.app.app, base_url="https://testserver")
+            login = client.post(
+                "/api/auth/login", json={"username": "admin", "password": DEMO_PASSWORD}
+            )
+            assert login.status_code == 200, login.text
+            return client.get("/api/learning/thermal").json(), client.get("/api/plan").json()
+
+        body, plan_body = await asyncio.to_thread(fetch)
+    finally:
+        world.close()
+    assert body["enabled"] is False and body["running"] is False
+    assert body["status"] == {"ok": True, "text": "Wärmemodell berechnet am 09.10. 03:50."}
+    heating, cooling = body["modes"]
+    assert (heating["mode"], heating["usable"], heating["reason"]) == ("heizen", True, "ok")
+    assert heating["text"] == "Modell taugt." and heating["model"]["events"] == 4
+    assert (cooling["mode"], cooling["usable"], cooling["reason"]) == ("kuehlen", False, "few_days")
+    assert cooling["text"] == "Noch zu wenig Tage mit Kühlen: 6 von 14."
+    plan = plan_body["plan"]
+    assert plan["thermal"]["reason"] == "ok" and plan["thermal"]["active"] is False
+    assert plan["thermal"]["saving_ct"] > 0 and plan["thermal"]["mode"] == "heizen"
+    steps = [slot["thermal_steps"] for slot in plan["slots"]]
+    assert max(steps) > 0 > min(steps)  # vorheizen und absenken
+    assert all("KLIMA_MEHR" not in slot["codes"] for slot in plan["slots"])  # nur Vorschau
 
 
 async def test_reprice_keeps_the_demo_costs(cfg, tmp_path) -> None:
