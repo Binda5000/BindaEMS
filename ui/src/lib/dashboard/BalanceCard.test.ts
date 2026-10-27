@@ -92,6 +92,33 @@ it('zeigt ohne Messwerte Striche und den Fehler', () => {
 	expect(screen.getByText('Keine Verbindung zum Server')).toBeInTheDocument();
 });
 
+it('ohne PV-Wert: Kopfzeile mit Strich, „PV –“ in der Liste', () => {
+	render(
+		BalanceCard,
+		props({
+			balance: balance(
+				derived({
+					pv_total_w: null,
+					grid_w: 380,
+					battery_w: 0,
+					house_load_w: null,
+					wallbox_w: { evcs: 0, twc: 0 }
+				}),
+				labels
+			)
+		})
+	);
+	expect(screen.getByText(/^Quellen · –$/)).toBeInTheDocument();
+	expect(screen.getByText(/^Verbrauch · –$/)).toBeInTheDocument();
+	const sources = within(screen.getByTestId('balance-sources-list')).getAllByRole('listitem');
+	expect(sources.map((item) => item.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+		'Netz 380 W',
+		'PV –'
+	]);
+	const sinks = within(screen.getByTestId('balance-sinks-list')).getAllByRole('listitem');
+	expect(sinks.map((item) => item.textContent?.replace(/\s+/g, ' ').trim())).toEqual(['Haus –']);
+});
+
 it('setzt die Schriftfarbe der PV-Fläche über die Klasse der Art', () => {
 	render(BalanceCard, props());
 	const pv = within(screen.getByTestId('balance-sources')).getByText('PV');

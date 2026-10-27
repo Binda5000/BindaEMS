@@ -59,7 +59,9 @@ describe('balance', () => {
 			sources: [],
 			sinks: [],
 			sourcesW: null,
-			sinksW: null
+			sinksW: null,
+			sourcesUnknown: [],
+			sinksUnknown: []
 		});
 	});
 
@@ -74,7 +76,90 @@ describe('balance', () => {
 			}),
 			{}
 		);
-		expect(result).toEqual({ sources: [], sinks: [], sourcesW: null, sinksW: null });
+		expect(result).toMatchObject({ sources: [], sinks: [], sourcesW: null, sinksW: null });
+		expect(ids(result.sourcesUnknown)).toEqual(['pv', 'grid', 'battery']);
+		expect(ids(result.sinksUnknown)).toEqual(['house', 'battery', 'export']);
+	});
+
+	it('PV unbekannt (core: dann auch Haus): keine Teilsumme, der Zweig steht als unbekannt da', () => {
+		const result = balance(
+			derived({
+				pv_total_w: null,
+				grid_w: 380,
+				battery_w: -200,
+				house_load_w: null,
+				wallbox_w: { evcs: 0, twc: 1380 }
+			}),
+			labels
+		);
+		expect(result.sourcesW).toBeNull();
+		expect(ids(result.sources)).toEqual(['grid', 'battery']);
+		expect(result.sourcesUnknown).toEqual([{ id: 'pv', label: 'PV', kind: 'pv' }]);
+		expect(result.sinksW).toBeNull();
+		expect(ids(result.sinks)).toEqual(['wallbox:twc']);
+		expect(result.sinksUnknown).toEqual([{ id: 'house', label: 'Haus', kind: 'house' }]);
+	});
+
+	it('Haus unbekannt: nur der Verbrauch ohne Summe', () => {
+		const result = balance(
+			derived({
+				pv_total_w: 3230,
+				grid_w: 380,
+				battery_w: 1000,
+				house_load_w: null,
+				wallbox_w: { evcs: 0, twc: 1380 }
+			}),
+			labels
+		);
+		expect(result.sourcesW).toBe(3610);
+		expect(result.sourcesUnknown).toEqual([]);
+		expect(result.sinksW).toBeNull();
+		expect(ids(result.sinksUnknown)).toEqual(['house']);
+	});
+
+	it('Wallbox oder Netz unbekannt: die betroffenen Seiten ohne Summe', () => {
+		const wallbox = balance(
+			derived({
+				pv_total_w: 3230,
+				grid_w: 380,
+				battery_w: 1000,
+				house_load_w: 1230,
+				wallbox_w: { evcs: null, twc: 1380 }
+			}),
+			labels
+		);
+		expect(wallbox.sourcesW).toBe(3610);
+		expect(wallbox.sinksW).toBeNull();
+		expect(wallbox.sinksUnknown).toEqual([{ id: 'wallbox:evcs', label: 'EVCS', kind: 'wallbox' }]);
+
+		const grid = balance(
+			derived({
+				pv_total_w: 3230,
+				grid_w: null,
+				battery_w: 1000,
+				house_load_w: 1230,
+				wallbox_w: { twc: 1000 }
+			}),
+			labels
+		);
+		expect([grid.sourcesW, grid.sinksW]).toEqual([null, null]);
+		expect(grid.sourcesUnknown.map((item) => item.label)).toEqual(['Netz']);
+		expect(grid.sinksUnknown.map((item) => item.label)).toEqual(['Einspeisung']);
+	});
+
+	it('eine Wallbox nur in den Einstellungen (nicht im core) macht die Summe nicht unbekannt', () => {
+		const result = balance(
+			derived({
+				pv_total_w: 5,
+				grid_w: 0,
+				battery_w: 0,
+				house_load_w: 10,
+				wallbox_w: { twc: 0 }
+			}),
+			labels
+		);
+		expect(result.sinksW).toBe(0);
+		expect(result.sinksUnknown).toEqual([]);
 	});
 
 	it('Ruhe überall ergibt Summen von 0 ohne Segmente', () => {
@@ -88,7 +173,14 @@ describe('balance', () => {
 			}),
 			labels
 		);
-		expect(result).toEqual({ sources: [], sinks: [], sourcesW: 0, sinksW: 0 });
+		expect(result).toEqual({
+			sources: [],
+			sinks: [],
+			sourcesW: 0,
+			sinksW: 0,
+			sourcesUnknown: [],
+			sinksUnknown: []
+		});
 	});
 
 	it('Wallbox ohne Namen erscheint mit ihrem Schlüssel', () => {

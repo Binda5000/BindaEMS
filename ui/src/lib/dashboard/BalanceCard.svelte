@@ -8,7 +8,8 @@
 		houseText,
 		type Balance,
 		type BalanceKind,
-		type BalanceSegment
+		type BalanceSegment,
+		type BalanceUnknown
 	} from './balance';
 	import type { FlowConsumer } from './flow';
 
@@ -34,7 +35,13 @@
 	const inHouse = $derived(houseText(consumers));
 </script>
 
-{#snippet bar(id: string, title: string, total: number | null, segments: BalanceSegment[])}
+{#snippet bar(
+	id: string,
+	title: string,
+	total: number | null,
+	segments: BalanceSegment[],
+	unknown: BalanceUnknown[]
+)}
 	<div class="side">
 		<span class="caption">{title} · {formatPower(total)}</span>
 		<div class="bar" data-testid="balance-{id}" aria-hidden="true">
@@ -48,13 +55,20 @@
 				</span>
 			{/each}
 		</div>
-		{#if segments.length > 0}
+		{#if segments.length > 0 || unknown.length > 0}
 			<ul class="legend" data-testid="balance-{id}-list">
 				{#each segments as segment (segment.id)}
 					<li>
 						<span class="dot" style:background={COLORS[segment.kind]}></span>
 						{segment.label}
 						<span class="power">{formatPower(segment.powerW)}</span>
+					</li>
+				{/each}
+				{#each unknown as item (item.id)}
+					<li>
+						<span class="dot" style:background={COLORS[item.kind]}></span>
+						{item.label}
+						<span class="power">{DASH}</span>
 					</li>
 				{/each}
 			</ul>
@@ -66,8 +80,8 @@
 
 <Card title="Woher kommt der Strom – wohin geht er?">
 	<div class="body" class:stale>
-		{@render bar('sources', 'Quellen', balance.sourcesW, balance.sources)}
-		{@render bar('sinks', 'Verbrauch', balance.sinksW, balance.sinks)}
+		{@render bar('sources', 'Quellen', balance.sourcesW, balance.sources, balance.sourcesUnknown)}
+		{@render bar('sinks', 'Verbrauch', balance.sinksW, balance.sinks, balance.sinksUnknown)}
 		{#if inHouse}
 			<p class="house">Im Haus: {inHouse}</p>
 		{/if}
