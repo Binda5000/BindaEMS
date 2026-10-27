@@ -5,6 +5,8 @@ import type {
 	ForecastSlot,
 	HistoryResponse,
 	LoadForecast,
+	Plan,
+	PlanSlot,
 	PriceSlot,
 	Stats
 } from '$lib/api/schemas';
@@ -16,6 +18,7 @@ import {
 	formatEnergy,
 	formatEur,
 	formatNumber,
+	formatSoc,
 	formatTime
 } from '$lib/format';
 import type { DailyPoint } from '$lib/forecast/view';
@@ -120,12 +123,22 @@ const bandFormat: ValueFormat = (height, point) => {
 	return typeof upper === 'number' ? `${kw(upper - height)} bis ${kw(upper)}` : kw(height);
 };
 
+/** Geplanter SOC je Slot: er gilt am Ende des Slots, der Punkt liegt dort */
+export function slotEndSocPoints(slots: PlanSlot[]): Point[] {
+	return slots.map((slot): Point => [epoch(slot.start) + SLOT_MS, slot.soc_pct]);
+}
+
+/**
+ * Preise und PV heute und morgen. Mit `battery` kommen der gemessene Akku-SOC (`[Zeit, %]`) und,
+ * solange der Plan gilt, der geplante SOC ab jetzt dazu, beide auf einer unsichtbaren Achse 0–100 %.
+ */
 export function priceForecastOption(
 	prices: PriceSlot[],
 	forecast: ForecastSlot[],
 	load: LoadForecast | null,
 	nowIso: string,
-	palette: Palette
+	palette: Palette,
+	battery?: { measured: [number, number][]; plan: Plan | null }
 ): EChartsCoreOption {
 	const now = parseIso(nowIso);
 	const loadSlots = load?.slots ?? [];
@@ -225,6 +238,34 @@ export function priceForecastOption(
 			itemStyle: { color: palette.load }
 		});
 	}
+	if (battery && battery.measured.length > 0) {
+		series.push({
+			id: 'soc',
+			name: 'Akku-SOC',
+			type: 'line',
+			yAxisIndex: 2,
+			showSymbol: false,
+			data: battery.measured,
+			lineStyle: { color: palette.text, width: 2 },
+			itemStyle: { color: palette.text }
+		});
+	}
+	const planSlots = battery?.plan?.valid
+		? battery.plan.slots.filter((slot) => now === null || epoch(slot.start) + SLOT_MS > now)
+		: [];
+	if (planSlots.length > 0) {
+		series.push({
+			id: 'soc_plan',
+			name: 'Akku-Plan',
+			type: 'line',
+			yAxisIndex: 2,
+			showSymbol: false,
+			data: slotEndSocPoints(planSlots),
+			lineStyle: { color: palette.text, type: 'dashed' },
+			itemStyle: { color: palette.text }
+		});
+	}
+	const hasSoc = series.some((s) => s.yAxisIndex === 2);
 	const base = baseOption(palette) as { legend: object };
 	return {
 		...base,
@@ -241,12 +282,16 @@ export function priceForecastOption(
 				'PV P25': null,
 				'PV P25–P75': bandFormat,
 				'PV-Prognose': kw,
-				Lastprognose: kw
+				Lastprognose: kw,
+				'Akku-SOC': formatSoc,
+				'Akku-Plan': formatSoc
 			})
 		},
 		yAxis: [
 			valueAxis('ct/kWh', palette),
-			valueAxis('kW', palette, forecast.length > 0 || loadSlots.length > 0)
+			valueAxis('kW', palette, forecast.length > 0 || loadSlots.length > 0),
+			// SOC ohne eigene Beschriftung; die Achse bleibt unsichtbar, nur die Linien zählen
+			...(hasSoc ? [{ ...valueAxis('%', palette, false), min: 0, max: 100 }] : [])
 		],
 		series
 	};

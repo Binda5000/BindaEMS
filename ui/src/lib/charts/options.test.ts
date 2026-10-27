@@ -1,7 +1,9 @@
 import type { BarSeriesOption, LineSeriesOption, YAXisComponentOption } from 'echarts';
 import { describe, expect, it } from 'vitest';
 import type { LoadForecast, PriceSlot } from '$lib/api/schemas';
+import { formatSoc } from '$lib/format';
 import { stats } from '$lib/testing/fixtures';
+import { PLAN } from '$lib/testing/plan';
 import {
 	axisTooltip,
 	historyOption,
@@ -164,6 +166,82 @@ describe('Preise und Prognose', () => {
 		expect(text).not.toContain('1,25');
 		expect(text).not.toContain('PV P25:');
 		expect(text).toContain('PV-Prognose');
+	});
+});
+
+describe('Preise und Prognose mit Akku', () => {
+	const PRICES = [slot('2026-10-09T08:00:00+00:00', 13.44)];
+	const NOW = '2026-10-09T08:05:00+00:00';
+	const MEASURED: [number, number][] = [
+		[at(-30), 40],
+		[at(-15), 42]
+	];
+	const plan = { ...PLAN, valid: true };
+	const run = (battery?: { measured: [number, number][]; plan: typeof plan | null }, now = NOW) =>
+		priceForecastOption(PRICES, [], null, now, palette, battery);
+	const find = (option: ReturnType<typeof run>, id: string) =>
+		(option.series as LineSeriesOption[]).find((s) => s.id === id);
+
+	it('lässt ohne Akku Reihen und Achsen wie bisher', () => {
+		const option = run();
+		expect((option.series as LineSeriesOption[]).map((s) => s.id)).toEqual(['import', 'feed_in']);
+		expect((option.yAxis as unknown[]).length).toBe(2);
+	});
+
+	it('zeichnet gemessenen SOC und Plan auf einer dritten, unsichtbaren Achse von 0 bis 100', () => {
+		const option = run({ measured: MEASURED, plan });
+		const soc = find(option, 'soc') as LineSeriesOption;
+		const planned = find(option, 'soc_plan') as LineSeriesOption;
+		expect([soc.name, soc.yAxisIndex, soc.data]).toEqual(['Akku-SOC', 2, MEASURED]);
+		expect([planned.name, planned.yAxisIndex]).toEqual(['Akku-Plan', 2]);
+		expect(soc.lineStyle).toMatchObject({ color: palette.text, width: 2 });
+		expect(planned.lineStyle).toMatchObject({ color: palette.text, type: 'dashed' });
+		const axes = option.yAxis as { name?: string; show?: boolean; min?: number; max?: number }[];
+		expect(axes).toHaveLength(3);
+		expect(axes.slice(0, 2).map((axis) => axis.name)).toEqual(['ct/kWh', 'kW']);
+		expect(axes[2]).toMatchObject({ show: false, min: 0, max: 100 });
+	});
+
+	it('legt Plan-Punkte ans Ende des Slots und nimmt nur Slots ab jetzt', () => {
+		const slots = PLAN.slots;
+		const start = Date.parse(slots[0].start);
+		// jetzt mitten im zweiten Slot: der erste Slot ist vorbei, der zweite läuft noch
+		const now = new Date(start + 20 * 60_000).toISOString();
+		const planned = find(run({ measured: [], plan }, now), 'soc_plan') as LineSeriesOption;
+		const expected = slots
+			.filter((s) => Date.parse(s.start) + 900_000 > start + 20 * 60_000)
+			.map((s) => [Date.parse(s.start) + 900_000, s.soc_pct]);
+		expect(expected.length).toBe(slots.length - 1);
+		expect(planned.data).toEqual(expected);
+	});
+
+	it('lässt den Plan weg, wenn er nicht mehr gilt oder fehlt', () => {
+		for (const stale of [{ ...plan, valid: false }, null]) {
+			const option = run({ measured: MEASURED, plan: stale });
+			expect(find(option, 'soc_plan')).toBeUndefined();
+			expect(find(option, 'soc')).toBeDefined();
+			expect((option.yAxis as unknown[]).length).toBe(3);
+		}
+	});
+
+	it('nimmt die Legende und den Tooltip mit Akku-SOC und Akku-Plan', () => {
+		const option = run({ measured: MEASURED, plan });
+		expect((option.legend as { data: string[] }).data).toEqual(
+			expect.arrayContaining(['Akku-SOC', 'Akku-Plan'])
+		);
+		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+		const text = formatter([
+			{ seriesName: 'Akku-SOC', value: [at(0), 41.6] },
+			{ seriesName: 'Akku-Plan', value: [at(0), 55] }
+		]);
+		expect(text).toContain(formatSoc(41.6));
+		expect(text).toContain(formatSoc(55));
+	});
+
+	it('zeigt ohne Messwerte und ohne Plan keine Akku-Reihen', () => {
+		const option = run({ measured: [], plan: null });
+		expect((option.series as LineSeriesOption[]).map((s) => s.id)).toEqual(['import', 'feed_in']);
+		expect((option.legend as { data: string[] }).data).not.toContain('Akku-SOC');
 	});
 });
 

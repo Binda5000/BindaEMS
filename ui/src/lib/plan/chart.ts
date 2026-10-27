@@ -8,6 +8,7 @@ import {
 	axisTooltip,
 	baseOption,
 	kw,
+	slotEndSocPoints,
 	valueAxis,
 	type ValueFormat
 } from '$lib/charts/options';
@@ -181,7 +182,7 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			yAxisIndex: 0,
 			showSymbol: false,
 			// der SOC gilt am Ende des Slots
-			data: plan.slots.map((slot): Point => [epoch(slot.start) + SLOT_MS, slot.soc_pct]),
+			data: slotEndSocPoints(plan.slots),
 			lineStyle: { color: palette.series[2] ?? palette.importPrice, width: 2 },
 			itemStyle: { color: palette.series[2] ?? palette.importPrice },
 			markArea: { silent: true, data: areas } as LineSeriesOption['markArea'],
