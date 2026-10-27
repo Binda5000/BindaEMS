@@ -1,6 +1,6 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { PriceSlot } from '$lib/api/schemas';
-import { forecastForChart, priceSummary } from './prices';
+import { cheapestNext, forecastForChart, priceSummary } from './prices';
 
 const slot = (minute: number, ct: number, extra: Partial<PriceSlot> = {}): PriceSlot => ({
 	start: new Date(Date.UTC(2026, 9, 9, 8, minute)).toISOString(),
@@ -71,4 +71,28 @@ it('zeigt die PV-Prognose für heute und morgen, auch bevor die Preise für morg
 	expect(shown[0]?.start).toBe('2026-10-08T22:00:00.000Z'); // heute 00:00 in Wien
 	expect(shown.at(-1)?.start).toBe('2026-10-10T21:45:00.000Z'); // morgen 23:45 in Wien
 	expect(shown).toHaveLength(2 * 96);
+});
+
+describe('cheapestNext', () => {
+	const summaryOf = (cts: number[]) =>
+		priceSummary({ now: slot(0, cts[0] ?? 0), next_3h: cts.map((ct, i) => slot(15 * i, ct)) });
+
+	it('liefert den niedrigsten Preis der nächsten 3 h', () => {
+		const summary = summaryOf([14, 13, 11.5, 12, 15]);
+		expect(cheapestNext(summary)).toEqual({ start: summary.next[2]?.start, ct: 11.5, now: false });
+	});
+
+	it('nimmt bei Gleichstand den frühesten Slot', () => {
+		const summary = summaryOf([14, 11, 12, 11]);
+		expect(cheapestNext(summary)?.start).toBe(summary.next[1]?.start);
+	});
+
+	it('meldet „jetzt“, wenn der erste Slot am günstigsten ist', () => {
+		const summary = summaryOf([10, 11, 12]);
+		expect(cheapestNext(summary)).toEqual({ start: summary.next[0]?.start, ct: 10, now: true });
+	});
+
+	it('ohne Preise gibt es keinen günstigsten Slot', () => {
+		expect(cheapestNext(summaryOf([]))).toBeNull();
+	});
 });

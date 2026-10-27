@@ -49,3 +49,15 @@ export function forecastForChart<T extends { start: string }>(forecast: T[], now
 		return start !== null && start >= from && start < to;
 	});
 }
+
+/** Günstigster Slot der nächsten 3 h (bei Gleichstand der früheste); `now`, wenn es der erste ist */
+export function cheapestNext(
+	summary: PriceSummary
+): { start: string; ct: number; now: boolean } | null {
+	let best = -1;
+	summary.next.forEach((slot, index) => {
+		if (best < 0 || slot.ct < (summary.next[best]?.ct ?? Infinity)) best = index;
+	});
+	const slot = summary.next[best];
+	return slot ? { start: slot.start, ct: slot.ct, now: best === 0 } : null;
+}

@@ -10,17 +10,25 @@ export interface SocEntry {
 	quality: SocQuality;
 }
 
+/** Ladestand eines Signals; ungültig oder fehlend ist `missing`, nie 0 % */
+export function socReading(
+	state: CoreState | null | undefined,
+	signal: string
+): { pct: number | null; quality: SocQuality } {
+	const reading = state?.signals[signal];
+	if (!reading || reading.q === 'invalid' || typeof reading.v !== 'number') {
+		return { pct: null, quality: 'missing' };
+	}
+	return { pct: reading.v, quality: reading.q === 'ok' ? 'ok' : 'stale' };
+}
+
 function entry(
 	state: CoreState | null | undefined,
 	id: string,
 	label: string,
 	signal: string
 ): SocEntry {
-	const reading = state?.signals[signal];
-	if (!reading || reading.q === 'invalid' || typeof reading.v !== 'number') {
-		return { id, label, pct: null, quality: 'missing' };
-	}
-	return { id, label, pct: reading.v, quality: reading.q === 'ok' ? 'ok' : 'stale' };
+	return { id, label, ...socReading(state, signal) };
 }
 
 export function socEntries(
