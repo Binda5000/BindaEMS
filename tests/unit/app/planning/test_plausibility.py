@@ -571,3 +571,34 @@ def test_fallback_ignores_expected_cars() -> None:
     # Nur das erwartete Auto: der Ersatzplan rechnet wie ohne Autos
     alone = plan_once(inputs.model_copy(update={"vehicles": [tesla]}), failed)
     assert alone.vehicles == [] and all(s.ev_w == {} for s in alone.slots)
+
+
+# --- Vorheizen und Vorkühlen (Plan 5c) ------------------------------------------------------
+
+
+def test_plausibility_flags_steps_outside_band() -> None:
+    from tests.plan_helpers import sample_plan
+
+    from bindaems.app.planning.plausibility import check_thermal
+
+    plan = sample_plan("2026-10-16T10:01:00+00:00", ["10:00", "10:15", "10:30"])
+
+    def slots(*steps: int | None) -> list[Any]:
+        return [
+            slot.model_copy(update={"thermal_steps": s})
+            for slot, s in zip(plan.slots, steps, strict=True)
+        ]
+
+    # Band +1,5 / −1,0 K: Stufen −2 bis 3
+    assert check_thermal(slots(3, -2, None), up_k=1.5, down_k=1.0) == []
+    assert check_thermal(slots(None, None, None), up_k=0.0, down_k=0.0) == []
+    assert check_thermal(slots(1, 4, 5), up_k=1.5, down_k=1.0) == [
+        "Versatz der Klimaanlage außerhalb des Bands um 12:15"
+    ]
+    assert check_thermal(slots(0, 0, -3), up_k=1.5, down_k=1.0) == [
+        "Versatz der Klimaanlage außerhalb des Bands um 12:30"
+    ]
+    # nie über ±6 Stufen, auch mit breiterem Band
+    assert check_thermal(slots(7, 0, 0), up_k=5.0, down_k=5.0) != []
+    assert check_thermal(slots(-7, 0, 0), up_k=5.0, down_k=5.0) != []
+    assert check_thermal(slots(6, -6, 0), up_k=5.0, down_k=5.0) == []

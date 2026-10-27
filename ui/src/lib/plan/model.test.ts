@@ -73,7 +73,8 @@ it('names intents, triggers and sources in German', () => {
 		month_peak: 'neue Monatsspitze',
 		settings: 'Einstellungen geändert',
 		manual: 'Neu planen',
-		vehicles: 'Fahrzeug geändert'
+		vehicles: 'Fahrzeug geändert',
+		thermal: 'Klimaanlage geändert'
 	});
 	expect(SOURCE_LABELS).toEqual({ optimizer: 'Optimierer', fallback: 'Ersatzplan' });
 });

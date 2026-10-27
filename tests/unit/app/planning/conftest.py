@@ -46,13 +46,18 @@ def _pv_w(slot: datetime) -> float:
 
 
 class FakeForecast:
-    """Ersatz für PV- und Lastprognose: nur ``latest()``."""
+    """Ersatz für PV- und Lastprognose: ``latest()`` und die Lufttemperatur je Slot
+    (``temperatures()``, anfangs leer)."""
 
     def __init__(self, forecast: Any) -> None:
         self.forecast = forecast
+        self.temps: dict[datetime, float] = {}
 
     def latest(self) -> Any:
         return self.forecast
+
+    def temperatures(self) -> dict[datetime, float]:
+        return self.temps
 
 
 @pytest.fixture

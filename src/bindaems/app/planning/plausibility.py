@@ -8,10 +8,14 @@ Geplante Autos (Plan 4b, Präzisierung 15): Die PV-Bilanz zählt die PV ins Auto
 die Ladeleistung 0 oder zwischen ``min_w`` und ``max_w`` (``BALANCE_TOL_W`` Toleranz), und ab dem
 ersten Slot ab der Abfahrt lädt es nicht. Die Befunde gelten je Auto. Ein erwartetes Auto
 (Plan 5b, Präzisierung 10) lädt auch vor dem ersten Slot ab seiner Ankunft nicht.
+
+Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
+Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Final, Literal
@@ -19,8 +23,9 @@ from typing import Final, Literal
 from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult
+from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import charge_window
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.shared.plan import MAX_THERMAL_STEPS, BatteryIntent, BatteryIntentKind, PlanSlot
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
@@ -236,3 +241,16 @@ def check_plan(
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
 
     return [text for _, text in sorted(found.values(), key=lambda entry: entry[0])]
+
+
+def check_thermal(slots: Sequence[PlanSlot], *, up_k: float, down_k: float) -> list[str]:
+    """Befund, wenn ein Slot einen Versatz der Klimaanlage (``thermal_steps``) außerhalb des
+    Komfortbands ``[−down_k / 0,5, up_k / 0,5]`` Stufen oder außerhalb von ±6 Stufen plant; nur
+    der erste solche Slot. Leer, wenn alle passen oder keiner einen Versatz hat."""
+    lo = max(-MAX_THERMAL_STEPS, -math.floor(down_k / STEP_K + 1e-9))
+    hi = min(MAX_THERMAL_STEPS, math.floor(up_k / STEP_K + 1e-9))
+    for slot in slots:
+        steps = slot.thermal_steps
+        if steps is not None and not lo <= steps <= hi:
+            return [f"Versatz der Klimaanlage außerhalb des Bands um {_hhmm(slot.start)}"]
+    return []

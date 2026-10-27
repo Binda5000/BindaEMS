@@ -344,7 +344,11 @@ class AppRuntime:
             support_pct=self._support_soc_pct,
             intent=self.intents.cached,
             driving_profiles=self.driving.profiles,
+            thermal_model=self.thermal_model,
         )
+        if self.thermal_model is not None:
+            # ein neues Wärmemodell plant mit „thermal“ neu (Plan 5c, höchstens alle 5 min)
+            self.thermal_model.on_change(self.planning.thermal_model_changed)
         # nach Planung und Absicht; hört selbst auf neue Pläne und geänderte Einstellungen
         self.plan_sender = PlanSender(
             self.intents, self.planning, self.settings, self.live, self._clock

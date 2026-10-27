@@ -12,6 +12,7 @@ from bindaems.shared.plan import (
     IntentPlanSlot,
     Plan,
     PlanSlot,
+    PlanThermal,
     PlanVehicle,
     Reason,
     expensive_import_ct,
@@ -456,3 +457,88 @@ def test_intent_plan_with_few_slots_never_says_weniger() -> None:
         intents=[{"import_ct": 10.0}, {"import_ct": 20.0}, {"import_ct": 90.0}],
     )
     assert {s.thermal for s in intent_plan(plan, grid_charge_allowed=True).slots} == {"neutral"}
+
+
+# --- Vorheizen und Vorkühlen (Plan 5c, Präzisierung 7) -------------------------------------
+
+
+def _thermal(*, active: bool, reason: str = "ok") -> PlanThermal:
+    return PlanThermal(
+        device="klima",
+        mode="heizen",
+        active=active,
+        saving_ct=12.5,
+        model_computed_at=at(DAY + "01:50:00+00:00"),
+        reason=reason,  # type: ignore[arg-type]
+    )
+
+
+def _shifted(*, active: bool) -> Plan:
+    plan = _stored(DAY + "10:01:00+00:00", ["10:00", "10:15"])
+    first, second = plan.slots
+    slots = [
+        first.model_copy(update={"thermal_w": 900.0, "thermal_grid_w": 899.6, "thermal_steps": 1}),
+        second.model_copy(update={"thermal_w": -400.0, "thermal_grid_w": 0.0, "thermal_steps": -1}),
+    ]
+    return plan.model_copy(update={"slots": slots, "thermal": _thermal(active=active)})
+
+
+def test_plan_without_thermal_is_unchanged() -> None:
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"])
+    assert plan.thermal is None
+    slot = plan.slots[0]
+    assert (slot.thermal_w, slot.thermal_grid_w, slot.thermal_steps) == (0.0, 0.0, None)
+    # alte Pläne ohne die Felder laden mit den Standardwerten
+    raw = plan.model_dump(mode="json")
+    for key in ("thermal_w", "thermal_grid_w", "thermal_steps"):
+        del raw["slots"][0][key]
+    del raw["thermal"]
+    assert Plan.model_validate(raw) == plan
+
+
+def test_plan_thermal_roundtrips_and_validates() -> None:
+    plan = _shifted(active=True)
+    assert Plan.model_validate_json(plan.model_dump_json()) == plan
+    for reason in ("ok", "off", "no_model", "mode", "not_worth", "solver"):
+        assert _thermal(active=False, reason=reason).reason == reason
+    for bad in ({"reason": "kaputt"}, {"saving_ct": -0.1}, {"mode": "warm"}):
+        with pytest.raises(ValidationError):
+            PlanThermal.model_validate({**_thermal(active=True).model_dump(), **bad})
+
+
+def test_shadow_shift_is_not_sent() -> None:
+    sent = intent_plan(_shifted(active=False), grid_charge_allowed=True)
+    assert [(s.thermal_steps, s.thermal_grid_w) for s in sent.slots] == [(None, 0.0)] * 2
+
+
+def test_active_shift_goes_into_intent() -> None:
+    sent = intent_plan(_shifted(active=True), grid_charge_allowed=True)
+    # der Netzbezug auf ganze W gerundet, wie die Leistung der Autos
+    assert [(s.thermal_steps, s.thermal_grid_w) for s in sent.slots] == [(1, 900.0), (-1, 0.0)]
+
+
+def test_old_intent_without_thermal_steps_loads() -> None:
+    old = (
+        '{"start": "2026-10-16T10:00:00+00:00", "intent": {"kind": "EIGENVERBRAUCH"},'
+        ' "budget_kw": 4.5, "import_ct": 31.5, "support_soc_pct": 62.0, "vehicles": {},'
+        ' "thermal": "mehr", "soc_end_pct": 55.0}'
+    )
+    slot = IntentPlanSlot.model_validate_json(old)
+    assert (slot.thermal_steps, slot.thermal_grid_w) == (None, 0.0)
+    assert IntentPlanSlot.model_validate_json(slot.model_dump_json()) == slot
+
+
+def test_intent_thermal_steps_range() -> None:
+    start = at(DAY + "10:00:00+00:00")
+    for steps in (-6, 0, 6):
+        assert IntentPlanSlot(start=start, intent=BatteryIntent(), thermal_steps=steps)
+    for bad in ({"thermal_steps": 7}, {"thermal_steps": -7}, {"thermal_grid_w": -1.0}):
+        with pytest.raises(ValidationError):
+            IntentPlanSlot(start=start, intent=BatteryIntent(), **bad)  # type: ignore[arg-type]
+
+
+def test_thermal_reason_codes_and_trigger_are_accepted() -> None:
+    for code in ("KLIMA_MEHR", "KLIMA_WENIGER"):
+        assert Reason(code=code, params={"mode": "heizen", "k": 0.5}).code == code  # type: ignore[arg-type]
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_copy(update={"trigger": "thermal"})
+    assert Plan.model_validate_json(plan.model_dump_json()).trigger == "thermal"

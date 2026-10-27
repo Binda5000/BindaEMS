@@ -4,7 +4,9 @@ ihre Sätze.
 Der Hauptcode eines Slots folgt der ersten passenden Regel; dazu kommen ``ERSATZPLAN`` an erster
 und ``GESCHAETZT`` an letzter Stelle. Nach dem Hauptcode stehen die Codes der geplanten Autos
 (Plan 4b, Präzisierung 13), im Slot der Ankunft eines erwarteten Autos zuerst ``AUTO_ERWARTET``
-(Plan 5b, Präzisierung 10). Reine Rechnung ohne Zugriff auf Zeit oder Konfiguration.
+(Plan 5b, Präzisierung 10). Eine Verschiebung der Klimaanlage, die an den core geht (Plan 5c),
+nennt ``KLIMA_MEHR`` oder ``KLIMA_WENIGER`` vor ``GESCHAETZT`` (``with_thermal``). Reine Rechnung
+ohne Zugriff auf Zeit oder Konfiguration.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Final
 
 from bindaems.app.planning.battery_model import SimStep, params_of
 from bindaems.app.planning.inputs import PlanInputs
@@ -48,6 +51,22 @@ def _num(params: Params, key: str) -> float:
 
 def _txt(params: Params, key: str) -> str:
     return str(params[key])
+
+
+THERMAL_STEP_K: Final = 0.5  # eine Stufe des Sollwertversatzes in K
+
+
+def _klima_mehr(params: Params) -> str:
+    verb = "Vorkühlen" if _txt(params, "mode") == "kuehlen" else "Vorheizen"
+    k = _de(abs(_num(params, "k")), 1)
+    return f"{verb} um {k} K, weil Strom jetzt günstig ist oder PV übrig bleibt."
+
+
+def _klima_weniger(params: Params) -> str:
+    k = _de(abs(_num(params, "k")), 1)
+    if _txt(params, "mode") == "kuehlen":
+        return f"Kühlung {k} K schwächer, weil Strom jetzt teuer ist."
+    return f"Heizung {k} K tiefer, weil Strom jetzt teuer ist."
 
 
 _SENTENCES: dict[str, Callable[[Params], str]] = {
@@ -98,6 +117,8 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
         f"{_txt(p, 'name')} wird um {_txt(p, 'um')} Uhr mit etwa {_de(_num(p, 'soc'), 0)} % "
         "erwartet (Anwesenheitsprognose)."
     ),
+    "KLIMA_MEHR": _klima_mehr,
+    "KLIMA_WENIGER": _klima_weniger,
 }
 
 
@@ -109,6 +130,28 @@ def sentence(reason: Reason) -> str:
 def slot_text(slot: PlanSlot) -> str:
     """Text eines Slots: die Sätze seiner Codes in Reihenfolge, durch ein Leerzeichen getrennt."""
     return " ".join(sentence(reason) for reason in slot.reasons)
+
+
+def thermal_reason(mode: str, steps: int | None) -> Reason | None:
+    """Grundcode einer Verschiebung der Klimaanlage im Slot (Plan 5c): ``KLIMA_MEHR`` bei
+    ``steps > 0``, ``KLIMA_WENIGER`` bei ``steps < 0``, sonst ``None``. Parameter ``mode``
+    (``heizen`` oder ``kuehlen``) und ``k`` (``steps · 0,5`` in K, mit Vorzeichen; der Satz nennt
+    den Betrag)."""
+    if steps is None or steps == 0:
+        return None
+    code = "KLIMA_MEHR" if steps > 0 else "KLIMA_WENIGER"
+    return Reason(code=code, params={"mode": mode, "k": steps * THERMAL_STEP_K})
+
+
+def with_thermal(reasons: Sequence[Reason], reason: Reason | None) -> list[Reason]:
+    """``reasons`` mit dem Grundcode der Klimaanlage ``reason`` vor einem ``GESCHAETZT`` am Ende
+    (sonst am Ende); ohne ``reason`` unverändert."""
+    result = list(reasons)
+    if reason is None:
+        return result
+    at = len(result) - 1 if result and result[-1].code == "GESCHAETZT" else len(result)
+    result.insert(at, reason)
+    return result
 
 
 def _soc_end_pct(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -> float:

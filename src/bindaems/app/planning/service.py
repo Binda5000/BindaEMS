@@ -9,6 +9,10 @@ Die Schleife ``run`` (Task 10) plant beim Start, zur Minute 1 jeder Viertelstund
 Auslöser (``triggers``): Fingerabdrücke von Preisen und Prognosen, SOC und Monatsspitze gegen den
 Plan, geänderte Einstellungen und ``request``. Anfragen während eines Laufs fallen zu einem
 weiteren Lauf zusammen.
+
+Mit einer Klimaanlage der Art ``coe_offset`` und ihren Wärmemodellen (``thermal_model``, Plan 5c)
+folgt auf jeden Plan der zweite Schritt, Vorheizen und Vorkühlen (``thermal_stage``), bevor er
+gespeichert wird; ohne sie bleibt ``Plan.thermal`` ``None``.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any, Final
 
 import structlog
@@ -31,6 +36,7 @@ from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.learning.driving_profile import VehicleProfile
+from bindaems.app.learning.thermal_service import thermal_device
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.battery_model import params_of, sim_slots, simulate
 from bindaems.app.planning.builder import build_plan
@@ -50,17 +56,22 @@ from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w
 from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
+from bindaems.app.planning.thermal_stage import ThermalModels, apply_thermal, failed
 from bindaems.app.planning.triggers import (
+    THERMAL_REPLAN_MIN_S,
     VEHICLE_REPLAN_MIN_S,
     WATCH_S,
     ExpectedCars,
     Fingerprint,
+    ThermalClass,
     changed,
     expected_cars,
+    health_thermal,
     next_tick,
     peak_rose,
     settings_relevant,
     soc_deviates,
+    thermal_class,
     vehicles_fingerprint,
     vehicles_soft,
 )
@@ -75,7 +86,7 @@ from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, slot_start
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, slot_start
 
 log = structlog.get_logger(__name__)
 
@@ -184,6 +195,7 @@ class PlanningService:
         support_pct: Callable[[], float] | None = None,
         intent: Callable[[], Intent | None] | None = None,
         driving_profiles: Callable[[], Mapping[str, VehicleProfile]] | None = None,
+        thermal_model: ThermalModels | None = None,
     ) -> None:
         self._cfg = cfg
         self._settings = settings
@@ -227,6 +239,15 @@ class PlanningService:
         # angefordert wurde, und wann; ``None`` bis zur ersten Prüfung bzw. Anforderung
         self._limits_seen: tuple[Any, ...] | None = None
         self._limits_at: datetime | None = None
+        # Vorheizen und Vorkühlen (Plan 5c): nur mit Wärmemodellen und einer Klimaanlage der Art
+        # ``coe_offset``. Gemerkt werden die Betriebsart (zusammengefasst), mit der der letzte
+        # Plan rechnete, ein neues Wärmemodell seitdem und die letzte Anforderung „thermal“.
+        device = thermal_device(cfg) if thermal_model is not None else None
+        self._thermal_device = device
+        self._thermal_models = thermal_model if device is not None else None
+        self._thermal_seen: ThermalClass | None = None
+        self._thermal_model_changed = False
+        self._thermal_at: datetime | None = None
 
     def current(self) -> Plan | None:
         """Der zuletzt erzeugte Plan, auch wenn er abgelaufen ist."""
@@ -239,6 +260,11 @@ class PlanningService:
 
     def status(self) -> PlanningStatus:
         return PlanningStatus(self._running, self._unavailable, self._last_error)
+
+    def thermal_model_changed(self) -> None:
+        """Rückruf nach einem neuen Wärmemodell (``ThermalModelService.on_change``): Die nächste
+        Prüfung plant mit ``thermal`` neu, höchstens alle 5 min. Nur aus der Ereignisschleife."""
+        self._thermal_model_changed = True
 
     def pending(self) -> PlanTrigger | None:
         """Der Auslöser, der auf den nächsten Lauf wartet."""
@@ -363,6 +389,8 @@ class PlanningService:
             vehicles_requested = True
         if self._limits_due(vehicles, now, planned=vehicles_requested):
             self.request("vehicles")
+        if self._thermal_due(now):
+            self.request("thermal")
         plan = self._plan
         if plan is not None:
             # Ein Plan wegen des SOC löst im selben Slot nicht erneut aus: Die lineare Erwartung
@@ -397,6 +425,33 @@ class PlanningService:
         ):
             return False
         self._limits_seen, self._limits_at = soft, now
+        return True
+
+    def _thermal_health(self) -> Mapping[str, Any] | None:
+        """Health für die Klimaanlage: nur mit Verbindung zum core (sonst unbekannt)."""
+        return self._live.health if self._live.connected else None
+
+    def _thermal_due(self, now: datetime) -> bool:
+        """Ist ein Lauf „thermal“ fällig (Plan 5c, Präzisierung 8)? Ja, wenn die Betriebsart aus
+        Health (``thermal_class``) eine andere ist als die, mit der der letzte Plan rechnete,
+        oder seitdem ein neues Wärmemodell kam; höchstens alle ``THERMAL_REPLAN_MIN_S`` s. Eine
+        gedrosselte Änderung bleibt fällig, bis die Zeit um ist. Ohne Health gibt es keinen
+        Vergleich, vor dem ersten Plan auch nicht."""
+        device = self._thermal_device
+        if device is None or self._thermal_models is None:
+            return False
+        current = thermal_class(self._thermal_health(), device)
+        mode_changed = (
+            current is not None and self._thermal_seen is not None and current != self._thermal_seen
+        )
+        if not (mode_changed or self._thermal_model_changed):
+            return False
+        if (
+            self._thermal_at is not None
+            and (now - self._thermal_at).total_seconds() < THERMAL_REPLAN_MIN_S
+        ):
+            return False
+        self._thermal_at = now
         return True
 
     def _expected_changed(self, health: Mapping[str, Any] | None, intent: Intent | None) -> bool:
@@ -592,7 +647,7 @@ class PlanningService:
             return None
         self._unavailable = None  # Eingangsdaten vollständig, auch wenn danach etwas scheitert
         result = await self._solve(inputs)
-        plan = plan_once(inputs, result)
+        plan = await self._with_thermal(plan_once(inputs, result), inputs)
         saved = await asyncio.to_thread(self._store.save, plan, inputs)
         self._plan = saved
         self._inputs = inputs
@@ -610,6 +665,37 @@ class PlanningService:
             except Exception:  # ein Zuhörer darf den Lauf nicht scheitern lassen
                 log.exception("Reaktion auf den neuen Plan fehlgeschlagen")
         return saved
+
+    async def _with_thermal(self, plan: Plan, inputs: PlanInputs) -> Plan:
+        """Zweiter Planungsschritt: Vorheizen und Vorkühlen (``thermal_stage``), im Thread. Ohne
+        Wärmemodelle oder Klimaanlage der Plan unverändert (``thermal`` ``None``); ein
+        unerwarteter Fehler gibt den Plan ohne Verschiebung (Grund ``solver``)."""
+        device, models = self._thermal_device, self._thermal_models
+        if device is None or models is None:
+            return plan
+        health = self._thermal_health()
+        entry = health_thermal(health, device)
+        # Dieser Plan kennt Betriebsart und Wärmemodell von jetzt
+        self._thermal_seen = thermal_class(health, device) or "rest"
+        self._thermal_model_changed = False
+        settings = self._settings.current().settings.learning.thermal
+        temperatures = {ensure_utc(slot): t for slot, t in self._forecast.temperatures().items()}
+        try:
+            return await asyncio.to_thread(
+                partial(
+                    apply_thermal,
+                    plan,
+                    device=device,
+                    entry=entry,
+                    models=models,
+                    temperatures=temperatures,
+                    settings=settings,
+                    end_value_ct=inputs.end_value_ct,
+                )
+            )
+        except Exception:  # die Verschiebung darf den Plan nie verhindern
+            log.exception("Vorheizen und Vorkühlen nicht berechnet")
+            return failed(plan, device=device, entry=entry, enabled=settings.enabled)
 
     async def _solve(self, inputs: PlanInputs) -> OptimizerResult:
         try:

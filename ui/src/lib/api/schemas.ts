@@ -1324,7 +1324,9 @@ export const PlanReasonCodeSchema = v.picklist([
 	'ZIEL_SOC_ABFAHRT',
 	'AUTO_WARTET_AUF_PV',
 	'ZIEL_SOC_UNERREICHBAR',
-	'AUTO_ERWARTET'
+	'AUTO_ERWARTET',
+	'KLIMA_MEHR',
+	'KLIMA_WENIGER'
 ]);
 export type PlanReasonCode = v.InferOutput<typeof PlanReasonCodeSchema>;
 
@@ -1338,7 +1340,8 @@ export const PlanTriggerSchema = v.picklist([
 	'month_peak',
 	'settings',
 	'manual',
-	'vehicles'
+	'vehicles',
+	'thermal'
 ]);
 export type PlanTrigger = v.InferOutput<typeof PlanTriggerSchema>;
 

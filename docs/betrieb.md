@@ -4950,7 +4950,8 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl von 50 bis 100“
 (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“ (Vorsichtsfaktor). Gespeicherte Einstellungen ohne
 Gruppe „Planung“ (aus der Zeit vor Plan 3b) laden mit den Standardwerten. Eine Änderung von
-Planung, Tarif oder Einspeisung löst eine Neuplanung aus, eine andere Einstellung nicht.
+Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen löst eine Neuplanung aus, eine andere
+Einstellung nicht.
 
 ### Auslöser
 
@@ -4965,9 +4966,10 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `load_forecast` | neue Lastprognose | die Lastprognose hat eine neue Ausgabe |
 | `soc` | SOC weicht ab | der SOC liegt mehr als 5 Prozentpunkte neben dem Plan (linear im Slot gerechnet); nach einem Plan mit diesem Anlass im selben Slot nicht erneut |
 | `month_peak` | neue Monatsspitze | die Monatsspitze liegt mehr als 0,05 kW über der, die der Plan kennt |
-| `settings` | Einstellungen geändert | Planung, Tarif oder Einspeisung wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
+| `settings` | Einstellungen geändert | Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
 | `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus (ändern sich nur das Ladelimit oder die Quelle des Ladestands, plant die app höchstens alle 5 min neu; Ziel, Abfahrt und die Menge der geplanten Autos lösen sofort aus); außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
+| `thermal` | Klimaanlage geändert | die Betriebsart der Klimaanlage aus Health wechselt zwischen Heizen, Kühlen und dem Rest (Lüften, aus, unbekannt), oder ein neues Wärmemodell liegt vor (seit Plan 5c); höchstens alle 5 min |
 
 Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core ab seinem nächsten
 Zyklus mit ihr. Die app sieht das erst im nächsten Health, das sie abfragt (`intent_version`, bis zu
@@ -5069,6 +5071,8 @@ Zahlen:
 | `AUTO_WARTET_AUF_PV` | e-Golf wartet auf PV-Überschuss (Regel R). | Zusatz: ein Auto im Modus „Geplant“ lädt in diesem Slot vor der Abfahrt nicht, weil Regel R2 das Netzladen begrenzt und ein späterer Slot es aus PV lädt |
 | `ZIEL_SOC_UNERREICHBAR` | e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %. | Zusatz im ersten Slot: der Plan erreicht das Ziel eines Autos im Modus „Geplant“ nicht (Fehlmenge über 0,1 kWh); „nur“ ist der erwartete Ladestand an der Abfahrt; nicht für erwartete Autos |
 | `UNTERSTUETZUNG_RESERVIERT` | Akku-Unterstützung fürs Auto erst ab 70 %, weil der Plan den Akku bis 18:00 Uhr braucht. | Absicht `Eigenverbrauch`; die Schwelle, die der Plan für spätere Entladungen braucht, liegt über der Unterstützungsschwelle; „bis“ ist der Beginn des ersten späteren Slots ohne diesen Bedarf |
+| `KLIMA_MEHR` | Vorheizen um 1,0 K, weil Strom jetzt günstig ist oder PV übrig bleibt. | Zusatz, wenn Vorheizen und Vorkühlen an den core geht (seit Plan 5c): der Plan hält das Haus am Ende des Slots um so viele K über dem Sollwert; beim Kühlen „Vorkühlen um … K“ |
+| `KLIMA_WENIGER` | Heizung 0,5 K tiefer, weil Strom jetzt teuer ist. | Zusatz wie `KLIMA_MEHR`: der Plan lässt das Haus um so viele K unter den Sollwert; beim Kühlen „Kühlung … K schwächer“ |
 | `GESCHAETZT` | Preis geschätzt. | der Preis des Slots ist ein Schätzpreis |
 | `ERSATZPLAN` | Ersatzplan. | der Plan ist ein Ersatzplan |
 

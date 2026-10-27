@@ -55,6 +55,8 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
     "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.4, "um": "06:30"},
     "AUTO_ERWARTET": {"name": "Tesla Model 3", "um": "17:30", "soc": 40.6},
+    "KLIMA_MEHR": {"mode": "heizen", "k": 1.0},
+    "KLIMA_WENIGER": {"mode": "kuehlen", "k": -0.5},
 }
 
 
@@ -127,6 +129,8 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         "AUTO_ERWARTET": (
             "Tesla Model 3 wird um 17:30 Uhr mit etwa 41 % erwartet (Anwesenheitsprognose)."
         ),
+        "KLIMA_MEHR": "Vorheizen um 1,0 K, weil Strom jetzt günstig ist oder PV übrig bleibt.",
+        "KLIMA_WENIGER": "Kühlung 0,5 K schwächer, weil Strom jetzt teuer ist.",
     }
     assert set(expected) == set(get_args(ReasonCode))
     for code, text in expected.items():
@@ -508,3 +512,34 @@ def test_expected_car_waits_for_pv_only_after_arrival() -> None:
     plan = _car_plan(ev_w, [car], pv=[0.0, 0.0, 0.0, 6000.0])
     waits = ["AUTO_WARTET_AUF_PV" in [r.code for r in s.reasons] for s in plan.slots]
     assert waits == [False, False, True, False]
+
+
+# --- Vorheizen und Vorkühlen (Plan 5c) ------------------------------------------------------
+
+
+def test_explain_names_preheat_and_setback() -> None:
+    from bindaems.app.planning.explain import thermal_reason, with_thermal
+
+    more = thermal_reason("heizen", 2)
+    less = thermal_reason("heizen", -1)
+    assert more == Reason(code="KLIMA_MEHR", params={"mode": "heizen", "k": 1.0})
+    assert less == Reason(code="KLIMA_WENIGER", params={"mode": "heizen", "k": -0.5})
+    assert thermal_reason("heizen", 0) is None and thermal_reason("kuehlen", None) is None
+    assert sentence(more) == (
+        "Vorheizen um 1,0 K, weil Strom jetzt günstig ist oder PV übrig bleibt."
+    )
+    assert sentence(less) == "Heizung 0,5 K tiefer, weil Strom jetzt teuer ist."
+    cool_more = thermal_reason("kuehlen", 3)
+    cool_less = thermal_reason("kuehlen", -2)
+    assert cool_more is not None and cool_less is not None
+    assert sentence(cool_more) == (
+        "Vorkühlen um 1,5 K, weil Strom jetzt günstig ist oder PV übrig bleibt."
+    )
+    assert sentence(cool_less) == "Kühlung 1,0 K schwächer, weil Strom jetzt teuer ist."
+    # vor „Preis geschätzt.“ am Ende, sonst am Ende
+    main = Reason(code="EIGENVERBRAUCH")
+    guess = Reason(code="GESCHAETZT")
+    assert with_thermal([main, guess], more) == [main, more, guess]
+    assert with_thermal([main], less) == [main, less]
+    assert with_thermal([main, guess], None) == [main, guess]
+    assert with_thermal([], more) == [more]

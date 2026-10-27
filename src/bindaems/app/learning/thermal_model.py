@@ -450,6 +450,13 @@ def _group(day: date) -> int:
     return next(index for index, group in enumerate(GROUPS) if weekday in group)
 
 
+def profile_key(moment: datetime) -> tuple[int, int]:
+    """Schlüssel ``(Gruppe, lokale Viertelstunde)`` des Profils für den Zeitpunkt ``moment``
+    (Gruppe 0 = Mo–Fr, 1 = Sa, 2 = So/Feiertag), wie ``mode_profile`` zählt."""
+    local = moment.astimezone(LOCAL_TZ)
+    return _group(local.date()), (local.hour * 60 + local.minute) // 15
+
+
 def mode_profile(slots: Sequence[ThermalSlot], mode: Mode, *, today: date) -> ModeProfile:
     """Sollwert ohne Versatz und Laufanteil je Gruppe und lokaler Viertelstunde über die 14
     vollständigen lokalen Tage vor ``today`` (Entscheidung 13).

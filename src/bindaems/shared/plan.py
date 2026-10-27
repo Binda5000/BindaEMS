@@ -70,6 +70,8 @@ ReasonCode = Literal[
     "AUTO_WARTET_AUF_PV",
     "ZIEL_SOC_UNERREICHBAR",
     "AUTO_ERWARTET",
+    "KLIMA_MEHR",
+    "KLIMA_WENIGER",
 ]
 PlanSource = Literal["optimizer", "fallback"]
 PlanTrigger = Literal[
@@ -83,6 +85,7 @@ PlanTrigger = Literal[
     "settings",
     "manual",
     "vehicles",
+    "thermal",
 ]
 SolverStatus = Literal["optimal", "time_limit", "infeasible", "timeout", "error"]
 
@@ -118,6 +121,13 @@ class PlanSlot(_Model):
     budget_kw: Finite | None
     support_soc_pct: Finite | None = None
     ev_w: dict[str, Finite] = Field(default_factory=dict)
+    # Vorheizen und Vorkühlen (Plan 5c, Präzisierung 7): Mehr- (positiv) oder Minderverbrauch der
+    # Klimaanlage in W, davon aus dem Netz, und der Versatz in Stufen am Slotende; ohne
+    # Verschiebung 0, 0 und ``None``. ``import_w``, ``export_w`` und ``cost_ct`` bleiben die des
+    # ersten Planungsschritts. Alte Pläne laden mit diesen Werten.
+    thermal_w: Finite = 0.0
+    thermal_grid_w: NonNegativeW = 0.0
+    thermal_steps: int | None = None
     reasons: list[Reason]
 
 
@@ -158,6 +168,34 @@ class PlanVehicle(_Model):
     arrival_at: AwareDatetime | None = None
 
 
+# Betriebsart der Klimaanlage (Plan 6a, Entscheidung 4); ``unbekannt``, wenn die Bits nicht reichen.
+ThermalMode = Literal["heizen", "kuehlen", "lueften", "aus", "unbekannt"]
+
+# Grund der Verschiebung (Plan 5c, Präzisierung 7)
+ThermalReason = Literal["ok", "off", "no_model", "mode", "not_worth", "solver"]
+
+
+class PlanThermal(_Model):
+    """Vorheizen und Vorkühlen im Plan (Plan 5c, Präzisierung 7).
+
+    - ``device``: die Klimaanlage (erstes Gerät der Art ``coe_offset``)
+    - ``mode``: Betriebsart aus Health beim Planen
+    - ``active``: die Verschiebung geht an den core (Schalter an und ``reason`` ``ok``); sonst ist
+      sie mit ``reason`` ``ok`` nur Vorschau
+    - ``saving_ct``: Ersparnis der Verschiebung über den Horizont, nie negativ
+    - ``model_computed_at``: Stand des Wärmemodells der Betriebsart, ``None`` ohne
+    - ``reason``: ``ok``, ``off`` (Schalter aus und keine Vorschau), ``no_model``, ``mode``
+      (heizt oder kühlt nicht), ``not_worth``, ``solver``
+    """
+
+    device: str
+    mode: ThermalMode
+    active: bool
+    saving_ct: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    model_computed_at: AwareDatetime | None
+    reason: ThermalReason
+
+
 class Plan(_Model):
     id: int | None = None
     created_at: AwareDatetime
@@ -177,6 +215,8 @@ class Plan(_Model):
     issues: list[str]
     trimmed: bool = False
     vehicles: list[PlanVehicle] = Field(default_factory=list)
+    # ``None`` ohne Klimaanlage der Art ``coe_offset``; alte Pläne laden mit ``None`` (Plan 5c)
+    thermal: PlanThermal | None = None
     slots: Annotated[list[PlanSlot], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -208,8 +248,7 @@ class Plan(_Model):
 # Einspeisung, „weniger“ gehört zu den teuersten Stunden, sonst „neutral“.
 ThermalHint = Literal["mehr", "neutral", "weniger"]
 
-# Betriebsart der Klimaanlage (Plan 6a, Entscheidung 4); ``unbekannt``, wenn die Bits nicht reichen.
-ThermalMode = Literal["heizen", "kuehlen", "lueften", "aus", "unbekannt"]
+MAX_THERMAL_STEPS: Final = 6  # Planwert der Klimaanlage in Stufen, im Betrag höchstens
 
 
 class IntentPlanSlot(_Model):
@@ -224,6 +263,11 @@ class IntentPlanSlot(_Model):
     # Alte gespeicherte Absichten kennen beide Felder nicht und laden mit den Standardwerten.
     thermal: ThermalHint = "neutral"
     soc_end_pct: Annotated[float, Field(ge=0, le=100)] | None = None
+    # Planwert der Klimaanlage (Plan 5c, Präzisierung 7): Leistungswunsch in Stufen (positiv mehr)
+    # und der geplante Netzbezug dafür in W; nur bei ``Plan.thermal.active``, sonst ``None`` und
+    # 0. Alte Absichten laden so.
+    thermal_steps: Annotated[int, Field(ge=-MAX_THERMAL_STEPS, le=MAX_THERMAL_STEPS)] | None = None
+    thermal_grid_w: NonNegativeW = 0.0
 
 
 class IntentPlan(_Model):
@@ -295,14 +339,17 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     spätesten Startzeit. Erwartete Autos (``expected``, Plan 5b) fehlen ganz, ohne Leistung und
     ohne Eintrag: Der core bekommt für sie nichts. Je Slot gehen der Hinweis für die Klimaanlage
     (Perzentil über alle Slots des Plans, nicht nur über die gesendeten) und der geplante SOC am
-    Ende (auf 0,1 % gerundet, in 0 bis 100 geklemmt) mit. ``plan.id`` muss gesetzt sein (der
-    Plan ist gespeichert)."""
+    Ende (auf 0,1 % gerundet, in 0 bis 100 geklemmt) mit. Nur wenn ``plan.thermal.active`` ist,
+    gehen der Planwert der Klimaanlage (``thermal_steps``) und sein Netzbezug (auf ganze W
+    gerundet) mit; sonst bleiben sie ``None`` und 0, und der core regelt wie in Plan 6a.
+    ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
     if plan.id is None:
         raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
 
     expensive_ct = expensive_import_ct(plan.slots)
     expected = {car.key for car in plan.vehicles if car.expected}
     cars = [car for car in plan.vehicles if not car.expected]
+    thermal_active = plan.thermal is not None and plan.thermal.active
 
     def binding(slot: PlanSlot) -> IntentPlanSlot:
         intent = slot.intent
@@ -319,6 +366,8 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
             vehicles=planned | powers,
             thermal=thermal_hint(slot, expensive_ct),
             soc_end_pct=min(100.0, max(0.0, round(slot.soc_end_pct, 1))),
+            thermal_steps=slot.thermal_steps if thermal_active else None,
+            thermal_grid_w=float(round(slot.thermal_grid_w)) if thermal_active else 0.0,
         )
 
     kept = [slot for slot in plan.slots if slot.start < plan.valid_until]

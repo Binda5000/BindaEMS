@@ -5,7 +5,10 @@ gegen den Plan und die Monatsspitze gegen den Plan; die Viertelstunde kommt zur 
 Slotbeginn. Einstellungen lösen nur aus, wenn sich Planung, Tarif oder Einspeisung ändern.
 Neu in Plan 4b: ein Fingerabdruck der geplanten Autos (Entscheidung 10). Neu in Plan 5b: die
 Menge der erwarteten Autos (``expected_cars``, Präzisierung 10), die der Dienst mit den
-Eingangsdaten des letzten Plans vergleicht.
+Eingangsdaten des letzten Plans vergleicht. Neu in Plan 5c (Präzisierung 8): Wechselt die
+Betriebsart der Klimaanlage aus Health zwischen ``heizen``, ``kuehlen`` und dem Rest
+(``thermal_class``) oder gibt es ein neues Wärmemodell, plant der Dienst mit ``thermal`` neu,
+höchstens alle ``THERMAL_REPLAN_MIN_S`` Sekunden.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from bindaems.app.control.intent import health_vehicles, trusted
 from bindaems.app.planning.vehicles import PlanVehicleInput
@@ -29,6 +32,8 @@ PEAK_RISE_KW: Final = 0.05
 # Ladelimit und Quelle des Ladestands flattern (der Tesla meldet sie wechselnd): Ein Lauf
 # deswegen höchstens alle 5 min; Menge der Autos, Ziel und Abfahrt planen sofort
 VEHICLE_REPLAN_MIN_S: Final = 300.0
+# Betriebsart der Klimaanlage und neues Wärmemodell: höchstens alle 5 min ein Lauf (Plan 5c)
+THERMAL_REPLAN_MIN_S: Final = 300.0
 # Felder eines Eintrags von ``vehicles_fingerprint`` bis einschließlich Abfahrt; danach folgen
 # die gedrosselten Felder (Ladestand angenommen, Ladelimit)
 _CORE_FIELDS: Final = 5
@@ -176,5 +181,31 @@ def peak_rose(plan: Plan | None, peak_kw: float | None) -> bool:
 
 
 def settings_relevant(old: RuntimeSettings, new: RuntimeSettings) -> bool:
-    """Betrifft die Änderung den Plan (Planung, Tarif oder Einspeisung)?"""
-    return (old.planning, old.tariff, old.feed_in) != (new.planning, new.tariff, new.feed_in)
+    """Betrifft die Änderung den Plan (Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen)?"""
+    return (old.planning, old.tariff, old.feed_in, old.learning.thermal) != (
+        new.planning,
+        new.tariff,
+        new.feed_in,
+        new.learning.thermal,
+    )
+
+
+ThermalClass = Literal["heizen", "kuehlen", "rest"]
+
+
+def health_thermal(health: Mapping[str, Any] | None, device: str) -> Mapping[str, Any] | None:
+    """Der Eintrag der Klimaanlage ``device`` in Health (``thermal.<device>``); ``None`` ohne."""
+    thermal = health.get("thermal") if health is not None else None
+    entry = thermal.get(device) if isinstance(thermal, dict) else None
+    return entry if isinstance(entry, dict) else None
+
+
+def thermal_class(health: Mapping[str, Any] | None, device: str) -> ThermalClass | None:
+    """Die Betriebsart der Klimaanlage aus Health, zusammengefasst zu ``heizen``, ``kuehlen`` und
+    ``rest`` (Lüften, aus, unbekannt, ohne Eintrag); ``None`` ohne Health (dann gibt es keinen
+    Vergleich, wie bei den Autos)."""
+    if health is None:
+        return None
+    entry = health_thermal(health, device)
+    mode = entry.get("mode") if entry is not None else None
+    return mode if mode in ("heizen", "kuehlen") else "rest"

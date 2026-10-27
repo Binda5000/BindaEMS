@@ -29,12 +29,15 @@ from tests.plan_helpers import (
 )
 
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
+from bindaems.app.learning.thermal_model import ModeModel, ModeProfile
+from bindaems.app.planning import thermal_stage
 from bindaems.app.planning.inputs import PlanInputs, PlanningUnavailable
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
+from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.plan import BatteryIntent, PlanTrigger, intent_plan
-from bindaems.shared.settings import PlanningSettings
+from bindaems.shared.settings import PlanningSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
 Solver = Callable[[PlanInputs], Awaitable[OptimizerResult]]
@@ -1060,3 +1063,499 @@ async def test_untrusted_health_does_not_flap_the_expected_cars(service_with, li
         await asyncio.sleep(0.1)
     assert triggers(calls) == ["start"]
     assert [car.expected for car in calls[0].vehicles] == [True]
+
+
+# --- Vorheizen und Vorkühlen (Plan 5c, Task 7) ----------------------------------------------
+
+MODEL_AT = datetime.fromisoformat("2026-10-16T01:50:00+00:00")
+
+
+def heat_model(mode: str = "heizen", *, usable: bool = True) -> ModeModel:
+    """Erfundenes Wärmemodell: 120 W/K, Speicher 3 kWh/K, τ 40 h, höchstens 4 kW."""
+    return ModeModel(
+        mode=mode,  # type: ignore[arg-type]
+        days=20,
+        u_w_per_k=120.0,
+        pv_w_per_kw=0.0,
+        base_w=0.0,
+        r2=0.9,
+        tau_h=40.0,
+        episodes=5,
+        c_kwh_per_k=3.0,
+        c_model_kwh_per_k=4.8,
+        events=0,
+        event_error_pct=None,
+        max_w=4000.0,
+        usable=usable,
+        reason="ok" if usable else "few_days",
+        gap_w_per_k=0.0,
+    )
+
+
+def full_profile(setpoint_c: float = 21.0, on_share: float = 1.0) -> ModeProfile:
+    keys = [(group, quarter) for group in range(3) for quarter in range(96)]
+    return ModeProfile(
+        setpoint_c=dict.fromkeys(keys, setpoint_c), on_share=dict.fromkeys(keys, on_share)
+    )
+
+
+class FakeModels:
+    """Ersatz für ``ThermalModelService``: ``current`` je Betriebsart."""
+
+    def __init__(self, **states: tuple[ModeModel, ModeProfile, datetime]) -> None:
+        self.states = states
+
+    def current(self, mode: str) -> tuple[ModeModel, ModeProfile, datetime] | None:
+        return self.states.get(mode)
+
+
+def heating_models() -> FakeModels:
+    return FakeModels(
+        heizen=(heat_model(), full_profile(), MODEL_AT),
+        kuehlen=(heat_model("kuehlen", usable=False), full_profile(24.0), MODEL_AT),
+    )
+
+
+def thermal_health(mode: str = "heizen", actual_c: float = 21.0, base_c: float = 21.0) -> dict:
+    return {"thermal": {"klima": {"mode": mode, "actual_c": actual_c, "base_setpoint_c": base_c}}}
+
+
+def set_thermal(settings_service, **changes) -> None:
+    current = settings_service.current()
+    learning = current.settings.learning.model_copy(
+        update={"thermal": ThermalPlanSettings(**changes)}
+    )
+    settings_service.update(
+        current.settings.model_copy(update={"learning": learning}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+
+
+@pytest.fixture
+def cold(forecast):
+    """Außentemperatur 5 °C für alle Slots der Prognose."""
+    forecast.temps = dict.fromkeys(forecast.forecast.p50_w, 5.0)
+    return forecast
+
+
+@pytest.fixture
+def small_house(cfg, live):
+    """Ein Akku mit 1 kWh an der Reserve: Mittags speist die PV ein, abends kommt teurer Strom
+    aus dem Netz. Mit dem großen Akku deckt er den Abend, und Verschieben lohnt nicht."""
+    live_signals(live, {"battery.soc_pct": 20.0})
+    return cfg.model_copy(update={"battery": cfg.battery.model_copy(update={"usable_kwh": 1.0})})
+
+
+async def test_plan_without_thermal_is_unchanged(service_with, live, cold):
+    live.health = thermal_health()
+    # ohne Wärmemodelle (keine Klimaanlage der Art ``coe_offset``): kein zweiter Schritt
+    plain = await service_with().replan("manual")
+    assert plain.thermal is None
+    assert all((s.thermal_w, s.thermal_steps) == (0.0, None) for s in plain.slots)
+    # ohne taugliches Modell: der Plan wie ohne, nur mit dem Grund
+    service = service_with(thermal_model=FakeModels())
+    plan = await service.replan("manual")
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.active) == ("off", False)  # Schalter ab Werk aus
+    assert [s.model_dump(exclude={"start"}) for s in plan.slots] == [
+        s.model_dump(exclude={"start"}) for s in plain.slots
+    ]
+
+
+async def test_shadow_shift_is_not_sent(service_with, live, cold, small_house):
+    live.health = thermal_health()
+    service = service_with(cfg=small_house, thermal_model=heating_models())
+    plan = await service.replan("manual")
+    thermal = plan.thermal
+    assert thermal is not None
+    assert (thermal.device, thermal.mode, thermal.reason) == ("klima", "heizen", "ok")
+    assert thermal.active is False and thermal.saving_ct >= 2.0
+    assert thermal.model_computed_at == MODEL_AT
+    # Vorschau: die Slots tragen die Verschiebung, die Erklärung nennt sie nicht
+    assert any(s.thermal_steps for s in plan.slots)
+    assert all(s.thermal_steps is not None for s in plan.slots)
+    codes = {r.code for s in plan.slots for r in s.reasons}
+    assert not codes & {"KLIMA_MEHR", "KLIMA_WENIGER"}
+    sent = intent_plan(plan, grid_charge_allowed=True)
+    assert all((s.thermal_steps, s.thermal_grid_w) == (None, 0.0) for s in sent.slots)
+
+
+async def test_active_shift_goes_into_intent(
+    service_with, live, cold, settings_service, small_house
+):
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+    service = service_with(cfg=small_house, thermal_model=heating_models())
+    plan = await service.replan("manual")
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.active) == ("ok", True)
+    # Vorheizen vor den teuren Abendstunden (18–21 Uhr Ortszeit), Absenken darin
+    expensive = [s for s in plan.slots if s.import_ct > 25]
+    cheap_before = [s for s in plan.slots if s.start < expensive[0].start]
+    assert max(s.thermal_steps or 0 for s in cheap_before) > 0
+    assert min(s.thermal_w for s in expensive) < 0
+    # Plan des ersten Schritts bleibt: Bezug, Einspeisung und Kosten unverändert
+    first = await service_with(cfg=small_house).replan("manual")
+    assert [(s.import_w, s.export_w, s.cost_ct) for s in plan.slots] == [
+        (s.import_w, s.export_w, s.cost_ct) for s in first.slots
+    ]
+    # Grundcodes je Slot mit Versatz
+    for slot in plan.slots:
+        codes = [r.code for r in slot.reasons]
+        if (slot.thermal_steps or 0) > 0:
+            assert "KLIMA_MEHR" in codes
+        elif (slot.thermal_steps or 0) < 0:
+            assert "KLIMA_WENIGER" in codes
+        else:
+            assert not {"KLIMA_MEHR", "KLIMA_WENIGER"} & set(codes)
+    sent = intent_plan(plan, grid_charge_allowed=True)
+    kept = plan.slots[: len(sent.slots)]
+    assert [s.thermal_steps for s in sent.slots] == [s.thermal_steps for s in kept]
+    assert all(s.thermal_steps is not None for s in sent.slots)
+    assert [s.thermal_grid_w for s in sent.slots] == [float(round(s.thermal_grid_w)) for s in kept]
+
+
+@pytest.mark.parametrize("mode", ["lueften", "aus", "unbekannt", None, "warm"])
+async def test_no_thermal_steps_without_known_mode(
+    service_with, live, cold, settings_service, mode
+):
+    set_thermal(settings_service, enabled=True)
+    health = thermal_health()
+    if mode is None:
+        del health["thermal"]["klima"]["mode"]
+    else:
+        health["thermal"]["klima"]["mode"] = mode
+    live.health = health
+    plan = await service_with(thermal_model=heating_models()).replan("manual")
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.active) == ("mode", False)
+    assert plan.thermal.mode == (mode if mode in ("lueften", "aus") else "unbekannt")
+    assert all((s.thermal_w, s.thermal_steps) == (0.0, None) for s in plan.slots)
+
+
+async def test_without_core_connection_the_mode_is_unknown(
+    service_with, live, cold, settings_service
+):
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+    live.connected = False  # Health ist dann alt
+    service = service_with(thermal_model=heating_models())
+    inputs = evening_inputs()
+    plan = await service._with_thermal(plan_once(inputs, solve(inputs)), inputs)
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.mode) == ("mode", "unbekannt")
+
+
+async def test_model_for_other_mode_is_not_used(service_with, live, cold, settings_service):
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health("kuehlen", actual_c=24.0, base_c=24.0)
+    # nur das Heizmodell taugt; die Anlage kühlt: kein Modell
+    plan = await service_with(thermal_model=heating_models()).replan("manual")
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.mode, plan.thermal.active) == (
+        "no_model",
+        "kuehlen",
+        False,
+    )
+    assert plan.thermal.model_computed_at == MODEL_AT  # der Stand des untauglichen Kühlmodells
+    assert all(s.thermal_steps is None for s in plan.slots)
+    # ganz ohne Stand der Betriebsart
+    only_heat = FakeModels(heizen=(heat_model(), full_profile(), MODEL_AT))
+    plan = await service_with(thermal_model=only_heat).replan("manual")
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.model_computed_at) == ("no_model", None)
+
+
+async def test_switch_off_reports_off_unless_preview(service_with, live, cold):
+    live.health = thermal_health("kuehlen")
+    plan = await service_with(thermal_model=heating_models()).replan("manual")
+    assert plan.thermal is not None and plan.thermal.reason == "off"
+
+
+async def test_unexpected_error_keeps_the_plan(service_with, live, cold, monkeypatch):
+    live.health = thermal_health()
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr("bindaems.app.planning.service.apply_thermal", broken)
+    with capture_logs() as logs:
+        plan = await service_with(thermal_model=heating_models()).replan("manual")
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.active) == ("off", False)
+    assert "Vorheizen und Vorkühlen nicht berechnet" in [e["event"] for e in logs]
+
+
+# --- Eingabe der Verschiebung --------------------------------------------------------------
+
+
+def _recording_shift(seen: list[ShiftInput], reason: str = "ok", steps: int = 1):
+    def fake(inp: ShiftInput) -> ShiftResult:
+        seen.append(inp)
+        slots = [ShiftedSlot(s.start, 500.0 * steps, 250.0, steps) for s in inp.slots]
+        return ShiftResult(slots=slots, saving_ct=5.0, reason=reason)  # type: ignore[arg-type]
+
+    return fake
+
+
+def _apply(plan, entry, *, models=None, temps=None, settings=None, shift_fn=None):
+    return thermal_stage.apply_thermal(
+        plan,
+        device="klima",
+        entry=entry,
+        models=models or heating_models(),
+        temperatures=temps if temps is not None else {},
+        settings=settings or ThermalPlanSettings(enabled=True),
+        end_value_ct=17.5,
+        shift_fn=shift_fn or thermal_stage.shift,
+    )
+
+
+def _sample_plan(slots: list[str]):
+    from tests.plan_helpers import sample_plan
+
+    return sample_plan("2026-10-16T10:01:00+00:00", slots)
+
+
+def test_shift_input_from_plan_slots_and_health() -> None:
+    plan = _sample_plan(["10:00", "10:15", "10:30"])
+    first, second, third = plan.slots
+    plan = plan.model_copy(
+        update={
+            "slots": [
+                first.model_copy(
+                    update={"export_w": 800.0, "import_w": 0.0, "pv_w": 2000.0, "budget_kw": 5.5}
+                ),
+                second.model_copy(update={"import_w": 1200.0, "discharge_w": 300.0}),
+                third,
+            ]
+        }
+    )
+    key = thermal_stage.profile_key(first.start)
+    profile = ModeProfile(
+        setpoint_c={key: 21.0, thermal_stage.profile_key(second.start): 20.0},
+        on_share={key: 0.9},  # der zweite Slot hat keinen Laufanteil, der dritte nichts
+    )
+    model = heat_model()
+    temps = {first.start: 5.0, second.start: 6.0, third.start: 7.0}
+    seen: list[ShiftInput] = []
+    _apply(
+        plan,
+        {"mode": "heizen", "actual_c": 21.6, "base_setpoint_c": 21.0},
+        models=FakeModels(heizen=(model, profile, MODEL_AT)),
+        temps=temps,
+        settings=ThermalPlanSettings(enabled=True, heat_up_k=1.0, heat_down_k=0.5, margin_ct=3.0),
+        shift_fn=_recording_shift(seen),
+    )
+    (inp,) = seen
+    assert (inp.mode, inp.c_kwh_per_k, inp.tau_h, inp.max_w) == ("heizen", 3.0, 40.0, 4000.0)
+    assert (inp.up_k, inp.down_k, inp.margin_ct, inp.end_value_ct) == (1.0, 0.5, 3.0, 17.5)
+    assert inp.start_k == pytest.approx(0.6)
+    a, b, c = inp.slots
+    assert a.base_w == pytest.approx(120.0 * 16 * 0.9) and a.on_share == 0.9
+    assert (a.export_w, a.import_w, a.budget_w) == (800.0, 0.0, 5500.0)
+    assert (b.base_w, b.on_share) == (pytest.approx(0.0), 0.0)  # ohne Laufanteil
+    assert (b.import_w, b.discharge_w, b.budget_w) == (1200.0, 300.0, None)
+    assert (c.base_w, c.on_share) == (0.0, 0.0)  # ohne Sollwert
+    assert (a.import_ct, a.feed_in_ct) == (first.import_ct, first.feed_in_ct)
+
+
+def test_slot_without_temperature_is_not_shifted() -> None:
+    plan = _sample_plan(["10:00", "10:15"])
+    seen: list[ShiftInput] = []
+    _apply(
+        plan,
+        {"mode": "heizen"},
+        temps={plan.slots[0].start: 5.0},
+        shift_fn=_recording_shift(seen),
+    )
+    first, second = seen[0].slots
+    assert first.base_w > 0 and first.on_share == 1.0
+    assert (second.base_w, second.on_share) == (0.0, 0.0)  # nie ein Ersatzwert
+    assert seen[0].start_k == 0.0  # ohne Ist und Sollwert
+
+
+def test_cooling_inverts_start_and_keeps_power_steps() -> None:
+    """Beim Kühlen ist vorgekühlt positiv: Ist 23,4 °C bei Soll 24 °C ist ``start_k`` +0,6;
+    die Stufen bleiben Leistung (positiv mehr Kühlen) und gehen so in Slots und Erklärung."""
+    plan = _sample_plan(["10:00", "10:15"])
+    seen: list[ShiftInput] = []
+    models = FakeModels(kuehlen=(heat_model("kuehlen"), full_profile(24.0), MODEL_AT))
+    result = _apply(
+        plan,
+        {"mode": "kuehlen", "actual_c": 23.4, "base_setpoint_c": 24.0},
+        models=models,
+        temps=dict.fromkeys((s.start for s in plan.slots), 32.0),
+        settings=ThermalPlanSettings(enabled=True, cool_up_k=1.5, cool_down_k=1.0),
+        shift_fn=_recording_shift(seen, steps=2),
+    )
+    (inp,) = seen
+    assert inp.mode == "kuehlen" and inp.start_k == pytest.approx(0.6)
+    assert (inp.up_k, inp.down_k) == (1.5, 1.0)
+    assert inp.slots[0].base_w == pytest.approx(120.0 * 8)  # außen − Soll
+    assert [s.thermal_steps for s in result.slots] == [2, 2]
+    reason = [r for r in result.slots[0].reasons if r.code == "KLIMA_MEHR"]
+    assert reason[0].params == {"mode": "kuehlen", "k": 1.0}
+    warm = _apply(
+        plan,
+        {"mode": "kuehlen", "actual_c": 24.5, "base_setpoint_c": 24.0},
+        models=models,
+        temps={},
+        shift_fn=_recording_shift(seen),
+    )
+    assert seen[-1].start_k == pytest.approx(-0.5) and warm.thermal is not None
+    heating = _apply(
+        plan,
+        {"mode": "heizen", "actual_c": 20.5, "base_setpoint_c": 21.0},
+        shift_fn=_recording_shift(seen),
+    )
+    assert seen[-1].start_k == pytest.approx(-0.5) and heating.thermal is not None
+
+
+def test_shift_outside_the_band_is_dropped() -> None:
+    plan = _sample_plan(["10:00", "10:15"])
+    with capture_logs() as logs:
+        result = _apply(
+            plan,
+            {"mode": "heizen"},
+            settings=ThermalPlanSettings(enabled=True, heat_up_k=0.5),
+            shift_fn=_recording_shift([], steps=3),
+        )
+    assert result.thermal is not None
+    assert (result.thermal.reason, result.thermal.active, result.thermal.saving_ct) == (
+        "solver",
+        False,
+        0.0,
+    )
+    assert all(s.thermal_steps is None for s in result.slots)
+    assert "Verschiebung der Klimaanlage verworfen, weil sie unplausibel ist" in [
+        e["event"] for e in logs
+    ]
+
+
+@pytest.mark.parametrize("reason", ["not_worth", "solver"])
+def test_shift_without_result_leaves_the_slots(reason: str) -> None:
+    plan = _sample_plan(["10:00", "10:15"])
+    on = _apply(plan, {"mode": "heizen"}, shift_fn=_recording_shift([], reason=reason))
+    assert on.thermal is not None and on.thermal.reason == reason
+    assert on.slots == plan.slots
+    off = _apply(
+        plan,
+        {"mode": "heizen"},
+        settings=ThermalPlanSettings(),
+        shift_fn=_recording_shift([], reason=reason),
+    )
+    assert off.thermal is not None and (off.thermal.reason, off.thermal.active) == ("off", False)
+
+
+def test_model_with_unusable_values_is_no_model() -> None:
+    plan = _sample_plan(["10:00"])
+    bad = replace(heat_model(), tau_h=None)
+    result = _apply(
+        plan,
+        {"mode": "heizen"},
+        models=FakeModels(heizen=(bad, full_profile(), MODEL_AT)),
+        shift_fn=_recording_shift([]),
+    )
+    assert result.thermal is not None and result.thermal.reason == "no_model"
+
+
+# --- Auslöser „thermal“ ----------------------------------------------------------------------
+
+
+def _stored_runs(service: PlanningService) -> int:
+    plan = service.current()
+    return plan.id or 0 if plan is not None else 0
+
+
+async def test_mode_change_triggers_replan(service_with, live, clock, cold):
+    """Heizen → Lüften plant mit „thermal“ neu; gleich danach Lüften → Heizen erst nach 5 min.
+    Lüften → aus bleibt „Rest“ und löst nichts aus."""
+    live.health = thermal_health("heizen")
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), thermal_model=heating_models()
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        live.health = thermal_health("lueften")
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)
+        live.health = thermal_health("aus")
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2  # Lüften und aus sind beide „Rest“
+        live.health = thermal_health("heizen")
+        clock.advance(timedelta(seconds=60))
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2  # gedrosselt
+        clock.advance(timedelta(seconds=241))
+        await until(lambda: len(calls) == 3)
+        await until(lambda: _stored_runs(service) == 3)
+        await asyncio.sleep(0.1)  # danach geplant: keine weitere Anfrage
+    assert triggers(calls) == ["start", "thermal", "thermal"]
+    plan = service.current()
+    assert plan is not None and plan.thermal is not None and plan.thermal.mode == "heizen"
+
+
+async def test_missing_health_is_no_mode_change(service_with, live, cold):
+    live.health = thermal_health("heizen")
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), thermal_model=heating_models()
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        live.health = None
+        await asyncio.sleep(0.2)
+    assert triggers(calls) == ["start"]
+
+
+async def test_new_model_triggers_replan(service_with, live, clock, cold):
+    live.health = thermal_health("heizen")
+    calls: list[PlanInputs] = []
+    models = FakeModels()
+    service = service_with(solver=recording(calls), sleep=fast_sleep(), thermal_model=models)
+    async with running(service):
+        await until(lambda: _stored_runs(service) == 1)
+        first = service.current()
+        assert first is not None and first.thermal is not None
+        assert (first.thermal.reason, first.thermal.model_computed_at) == ("off", None)
+        models.states = heating_models().states
+        service.thermal_model_changed()
+        await until(lambda: _stored_runs(service) == 2)
+        service.thermal_model_changed()
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2  # höchstens alle 5 min
+        clock.advance(timedelta(seconds=301))
+        await until(lambda: _stored_runs(service) == 3)
+    assert triggers(calls) == ["start", "thermal", "thermal"]
+    plan = service.current()
+    assert plan is not None and plan.thermal is not None
+    assert plan.thermal.model_computed_at == MODEL_AT  # der Plan kennt das neue Modell
+
+
+async def test_without_thermal_model_no_thermal_trigger(service_with, live):
+    live.health = thermal_health("heizen")
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    service.thermal_model_changed()
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        live.health = thermal_health("kuehlen")
+        await asyncio.sleep(0.2)
+    assert triggers(calls) == ["start"]
+
+
+async def test_thermal_switch_replans_as_settings(service_with, settings_service):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        set_thermal(settings_service, enabled=True)
+        await until(lambda: len(calls) == 2)
+    assert triggers(calls) == ["start", "settings"]

@@ -236,3 +236,35 @@ def test_changed_expected_set_triggers_replan():
     golf = planned_car(key="egolf", name="e-Golf", expected=True, arrival_at=ARRIVAL)
     assert expected_cars([car, golf]) == expected_cars([golf, car])
     assert [entry[0] for entry in expected_cars([car, golf])] == ["egolf", "tesla"]
+
+
+# --- Klimaanlage (Plan 5c, Präzisierung 8) --------------------------------------------------
+
+
+def test_thermal_class_groups_the_modes():
+    from bindaems.app.planning.triggers import health_thermal, thermal_class
+
+    def health(mode):
+        return {"thermal": {"klima": {"mode": mode}}}
+
+    assert thermal_class(health("heizen"), "klima") == "heizen"
+    assert thermal_class(health("kuehlen"), "klima") == "kuehlen"
+    for mode in ("lueften", "aus", "unbekannt", None, 3):
+        assert thermal_class(health(mode), "klima") == "rest"
+    assert thermal_class({}, "klima") == "rest"
+    assert thermal_class({"thermal": []}, "klima") == "rest"
+    assert thermal_class({"thermal": {"klima": "heizen"}}, "klima") == "rest"
+    assert thermal_class(health("heizen"), "andere") == "rest"
+    assert thermal_class(None, "klima") is None
+    assert health_thermal(health("heizen"), "klima") == {"mode": "heizen"}
+    assert health_thermal(None, "klima") is None
+
+
+def test_settings_relevant_for_thermal_planning():
+    from bindaems.shared.settings import ThermalPlanSettings
+
+    base = RuntimeSettings()
+    learning = base.learning.model_copy(update={"thermal": ThermalPlanSettings(enabled=True)})
+    assert settings_relevant(base, base.model_copy(update={"learning": learning}))
+    other = base.learning.model_copy(update={"load_model_enabled": False})
+    assert not settings_relevant(base, base.model_copy(update={"learning": other}))

@@ -25,7 +25,8 @@ export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	month_peak: 'neue Monatsspitze',
 	settings: 'Einstellungen geändert',
 	manual: 'Neu planen',
-	vehicles: 'Fahrzeug geändert'
+	vehicles: 'Fahrzeug geändert',
+	thermal: 'Klimaanlage geändert'
 };
 
 export const SOURCE_LABELS = { optimizer: 'Optimierer', fallback: 'Ersatzplan' } as const;

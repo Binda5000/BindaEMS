@@ -997,6 +997,8 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
         "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.0, "um": "06:30"},
         "AUTO_ERWARTET": {"name": "Tesla Model 3", "um": "17:30", "soc": 41.0},
+        "KLIMA_MEHR": {"mode": "heizen", "k": 1.0},
+        "KLIMA_WENIGER": {"mode": "heizen", "k": -0.5},
     }
     assert set(examples) == codes
     section = _guide_section("Planung")
@@ -1023,6 +1025,8 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "AUTO_WARTET_AUF_PV",
         "ZIEL_SOC_UNERREICHBAR",
         "UNTERSTUETZUNG_RESERVIERT",
+        "KLIMA_MEHR",
+        "KLIMA_WENIGER",
         "GESCHAETZT",
         "ERSATZPLAN",
     ]
