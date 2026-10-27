@@ -406,6 +406,7 @@ def test_charging_reasons_have_texts() -> None:
         ("not_taken_retry", "erneut nach „nicht übernommen“"),
         ("assignment_unclear", "Zuordnung unklar"),
         ("resume_after_outage", "Wiederaufnahme nach Ausfall"),
+        ("now_limit", "Sofort-Limit"),  # Plan Sofort-Limit, Entscheidung 8
     ],
 )
 def test_every_charging_reason_is_named_in_german(code: str, expected: str) -> None:

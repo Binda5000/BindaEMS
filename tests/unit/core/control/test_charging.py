@@ -2931,3 +2931,205 @@ def test_overload_level_follows_the_last_step(cfg) -> None:
     assert c.overload_level() >= OverloadLevel.MINIMUM
     c.idle(T0 + timedelta(seconds=4))
     assert c.overload_level() is OverloadLevel.NONE
+
+
+# --- Plan Sofort-Limit: Höchststrom in „Sofort“ je Fahrzeug und für Gäste ------------------------
+
+
+def egolf_now(limit: int | None, version: int = 1, **update) -> Intent:
+    """Die Absicht mit dem e-Golf in Sofort und dem Limit ``limit``; ``update`` ändert die
+    Absicht (etwa den Gast)."""
+    entry = VehicleIntent(mode=ChargeMode.NOW, now_max_a=limit)
+    return Intent(version=version, control=True, vehicles={"egolf": entry}, **update)
+
+
+NOW_LIMIT = ("mode_now", "now_limit")
+
+
+def test_now_limit_caps_the_current_and_names_the_reason(cfg) -> None:
+    # frei 33 − 2 = 31 A: Nicht der Wächter, das Limit 10 A begrenzt den e-Golf.
+    found = controller(cfg).step(inputs(cfg, intent=egolf_now(10)))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 10.0, reasons=NOW_LIMIT),
+        Command("wallbox.evcs", CHARGING, True, reasons=NOW_LIMIT),
+    ]
+
+
+def test_now_limit_never_below_the_point_minimum(cfg) -> None:
+    # Der Tesla an der EVCS (Mindeststrom dort max(6, 5) = 6 A) mit dem Limit 5 A
+    tesla_now = VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs", now_max_a=5)
+    intent = Intent(version=1, control=True, vehicles={"tesla": tesla_now})
+    found = controller(cfg).step(inputs(cfg, intent=intent))
+    currents = [x.command for x in found if x.command.actuator == "wallbox.evcs"]
+    assert currents == [
+        Command("wallbox.evcs", CURRENT, 6.0, reasons=NOW_LIMIT),
+        Command("wallbox.evcs", CHARGING, True, reasons=NOW_LIMIT),
+    ]
+
+
+def test_boost_ignores_the_now_limit(cfg) -> None:
+    # Boost lädt mit voller Leistung (Entscheidung 3); danach gilt in Sofort das Limit, und die
+    # Senkung von 16 auf 8 A ist nicht dringend: Die Sicherung allein verlangt sie nicht.
+    entry = VehicleIntent(mode=ChargeMode.NOW, now_max_a=8, boost_until=T0 + timedelta(hours=1))
+    intent = Intent(version=1, control=True, vehicles={"egolf": entry})
+    c = controller(cfg)
+    found = c.step(inputs(cfg, intent=intent))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=("boost",)),
+        Command("wallbox.evcs", CHARGING, True, reasons=("boost",)),
+    ]
+    accept(c, found)
+    after = c.step(
+        inputs(cfg, s=3601, intent=intent, evcs_obs=AT_16_A, present=at_evcs(16.0, True))
+    )
+    assert [x.command for x in after] == [Command("wallbox.evcs", CURRENT, 8.0, reasons=NOW_LIMIT)]
+
+
+def test_now_limit_leaves_the_rest_of_the_surplus_to_a_pv_car(cfg) -> None:
+    # 9000 W Überschuss (9100 − 100); der e-Golf in Sofort mit 8 A nimmt vorab 8 · 230 · 2 = 3680 W,
+    # dem Tesla in PV am Wall Connector bleiben floor(5320 / 690) = 7 A. Ohne Limit nähme der
+    # e-Golf 7360 W, und die 2 A Rest trügen den Tesla nicht.
+    found = run(
+        controller(cfg),
+        cfg,
+        121,
+        intent=egolf_now(8),
+        grid_obs=grid(grid_w=-9100.0),
+        **TESLA_PLUGGED,
+    )
+    currents = [
+        (t, x.command.actuator, x.command.value) for t, x in found if x.command.kind == CURRENT
+    ]
+    assert currents == [(0, "wallbox.evcs", 8.0), (120, "vehicle.tesla", 7.0)]
+    assert found[0][1].inputs["surplus_w"] == 9000.0
+
+
+def test_now_limit_lowers_unmet_surplus_like_a_full_car(cfg) -> None:
+    # Ein Auto in Sofort zählt nie zum offenen Wunsch (nur PV und Min+PV), auch nicht bis zum
+    # ungekappten Höchststrom: Was über dem Limit frei ist, darf die Klimaanlage nehmen.
+    at_8_a = evcs(charging=True, phase_a={"L1": 8.0, "L2": 8.0, "L3": 0.0}, power_w=3680.0)
+    c = controller(cfg)
+    c.step(inputs(cfg, intent=egolf_now(8), evcs_obs=at_8_a, present=at_evcs(8.0, True)))
+    assert c.unmet_surplus_w() == 0.0
+
+
+def test_now_limit_change_while_charging_lowers_the_current_next_cycle(cfg) -> None:
+    c = controller(cfg)
+    first = c.step(inputs(cfg, **NOW_AT_16_A))
+    assert first[0].command == Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",))
+    accept(c, first)
+    lowered = c.step(
+        inputs(cfg, s=1, intent=egolf_now(10, 2), evcs_obs=AT_16_A, present=at_evcs(16.0, True))
+    )
+    # nicht dringend: Die Sicherung allein verlangt keine Senkung (Entscheidung 6)
+    assert [x.command for x in lowered] == [
+        Command("wallbox.evcs", CURRENT, 10.0, reasons=NOW_LIMIT)
+    ]
+    accept(c, lowered)
+    raised = c.step(
+        inputs(cfg, s=2, intent=egolf_now(12, 3), evcs_obs=AT_16_A, present=at_evcs(10.0, True))
+    )
+    assert [x.command for x in raised] == [
+        Command("wallbox.evcs", CURRENT, 12.0, reasons=NOW_LIMIT)
+    ]
+
+
+def test_guard_below_the_now_limit_keeps_its_own_reason(cfg) -> None:
+    # frei 33 − (40 − 16) = 9 A unter dem Limit 12 A: Grund und Dringlichkeit des Wächters
+    situation = inputs(
+        cfg,
+        intent=egolf_now(12),
+        evcs_obs=AT_16_A,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(l1=40.0, l2=18.0),
+    )
+    found = controller(cfg).step(situation)
+    reasons = ("mode_now", "phase_limit")
+    assert found[0].command == Command("wallbox.evcs", CURRENT, 9.0, urgent=True, reasons=reasons)
+
+
+def test_a_lowering_the_fuse_demands_stays_urgent_below_the_now_limit(cfg) -> None:
+    # frei 33 − (49 − 16) = 0 A: Der Strom geht auf den Mindeststrom 6 A, dringend wie ohne Limit.
+    situation = inputs(
+        cfg,
+        intent=egolf_now(10),
+        evcs_obs=AT_16_A,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(l1=49.0, l2=18.0),
+    )
+    found = controller(cfg).step(situation)
+    reasons = ("mode_now", "phase_limit")
+    assert found[0].command == Command("wallbox.evcs", CURRENT, 6.0, urgent=True, reasons=reasons)
+
+
+def test_now_limit_from_a_stale_intent_above_config_max_is_clamped(cfg) -> None:
+    found = controller(cfg).step(inputs(cfg, intent=egolf_now(32)))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",)),
+        Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",)),
+    ]
+
+
+@pytest.mark.parametrize(("l1", "urgent"), [(18.0, False), (40.0, True)], ids=["limit", "fuse"])
+def test_unknown_plug_state_lowers_to_the_now_limit(cfg, l1, urgent) -> None:  # Präzisierung 4
+    # Bei unbekanntem Ansteckzustand sinkt der Strom auch auf das Limit (10 A), nicht dringend;
+    # kappt der Wächter darunter (bei 40 A auf L1 frei 9 A), mit seinem Grund und dringend.
+    unknown = replace(AT_16_A, connected=None, charging=None, complete=None)
+    situation = inputs(
+        cfg,
+        intent=egolf_now(10),
+        evcs_obs=unknown,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(l1=l1, l2=18.0),
+    )
+    found = controller(cfg).step(situation)
+    expected = (
+        Command("wallbox.evcs", CURRENT, 9.0, urgent=True, reasons=("mode_now", "phase_limit"))
+        if urgent
+        else Command("wallbox.evcs", CURRENT, 10.0, reasons=NOW_LIMIT)
+    )
+    assert [x.command for x in found] == [expected]
+
+
+def test_now_limit_caps_the_tesla_at_the_wall_connector(cfg) -> None:
+    tesla_now = VehicleIntent(mode=ChargeMode.NOW, now_max_a=10)
+    intent = Intent(version=1, control=True, vehicles={"tesla": tesla_now})
+    found = controller(cfg).step(
+        inputs(cfg, intent=intent, evcs_obs=evcs(connected=False), **TESLA_PLUGGED)
+    )
+    assert [x.command for x in found if x.command.actuator == "vehicle.tesla"] == [
+        Command("vehicle.tesla", CURRENT, 10.0, reasons=NOW_LIMIT),
+        Command("vehicle.tesla", CHARGING, True, reasons=NOW_LIMIT),
+    ]
+
+
+def test_guest_now_limit_caps_the_guest_at_the_evcs(cfg) -> None:
+    guest = GuestIntent(mode=ChargeMode.NOW, now_max_a=8)
+    intent = Intent(version=1, control=True, guest=guest)
+    found = controller(cfg).step(inputs(cfg, intent=intent, homes={"egolf": False}))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 8.0, reasons=NOW_LIMIT),
+        Command("wallbox.evcs", CHARGING, True, reasons=NOW_LIMIT),
+    ]
+
+
+def test_guest_now_limit_does_not_touch_a_vehicle(cfg) -> None:
+    intent = egolf_now(None, guest=GuestIntent(mode=ChargeMode.NOW, now_max_a=8))
+    found = controller(cfg).step(inputs(cfg, intent=intent))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",)),
+        Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",)),
+    ]
+
+
+def test_guest_now_limit_at_the_wall_connector_sends_nothing(cfg) -> None:
+    # Am Wall Connector hat ein Gast keinen Aktor (Entscheidung 5): Er bleibt Last, und fällt der
+    # Wall Connector aus, zählt weiter sein voller Höchststrom als Zuschlag (33 − 2 − 16 = 15 A).
+    intent = egolf_now(None, guest=GuestIntent(mode=ChargeMode.NOW, now_max_a=8))
+    c = controller(cfg)
+    first = c.step(inputs(cfg, intent=intent, twc_obs=twc(connected=True), controllable=BOTH))
+    out = c.step(inputs(cfg, s=1, intent=intent, twc_obs=TWC_OUT, controllable=BOTH))
+    assert {x.command.actuator for x in [*first, *out]} == {"wallbox.evcs"}
+    assert c.health()[1]["limit_a"] == 15.0
+    guest = next(car for car in c.cars() if car.wallbox == "twc")
+    assert (guest.vehicle, guest.mode, guest.regulated) == ("guest@twc", Effective.NOW, False)

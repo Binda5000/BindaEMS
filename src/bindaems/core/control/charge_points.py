@@ -2,6 +2,7 @@
 
 - ``ChargePoint``: der Ladepunkt eines Autos an seiner Wallbox in einem Zyklus
 - ``charge_points``: die Ladepunkte je Auto mit Wallbox, in der Reihenfolge der Priorität
+- ``now_capped``: der Ladepunkt mit dem Höchststrom in „Sofort“ (Plan Sofort-Limit)
 - ``reserved_a``: die Zuschläge bei Ausfällen je Phase
 - ``can_charge``, ``cars_w``, ``wanted_a``, ``holding_a``, ``enough``: was ein Auto am Überschuss
   und an der Zuteilung des Wächters wünscht, hält und trägt, in „Geplant“ mit festem Bedarf
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, ChargeInputs, WallboxObs
@@ -69,6 +70,19 @@ def charge_points(
         taken.add(wallbox)
         points[key] = _point(cfg, limits, key, wallbox, vehicles[key].kind, inputs)
     return points
+
+
+def now_capped(point: ChargePoint, max_a: int | None) -> ChargePoint:
+    """Der Ladepunkt mit dem Höchststrom ``max_a`` der Absicht für „Sofort“ (Plan Sofort-Limit).
+
+    Ohne Limit (``None``) derselbe Ladepunkt; sonst ist sein ``max_a`` höchstens das Limit, aber
+    nie unter ``min_a`` (der Mindeststrom des Ladepunkts geht vor) und nie über dem bisherigen
+    ``max_a``: ``min(max_a, max(Limit, min_a))``. So klemmt auch ein Limit über einem später
+    kleineren ``max_a`` in ``config.yaml`` auf den Strombereich des Ladepunkts.
+    """
+    if max_a is None:
+        return point
+    return replace(point, max_a=min(point.max_a, max(max_a, point.min_a)))
 
 
 def _point(
@@ -184,7 +198,8 @@ def wanted_a(
     reserved_w: float = 0.0,
     voltage_v: float | None = None,
 ) -> int:
-    """Der Wunsch eines Autos, das laden kann: Sofort und Boost ``max_a``, sonst der Anteil.
+    """Der Wunsch eines Autos, das laden kann: Sofort und Boost ``max_a``, in Sofort mit Limit
+    gekappt (``now_capped``), sonst der Anteil.
 
     PV wünscht den Anteil, ohne Wert 0; Min+PV den Anteil, mindestens ``min_a``. „Geplant“ mit
     festem Bedarf ``reserved_w`` (in W) wünscht ``max(ceil(reserved_w / (U · n)), Anteil)`` im
