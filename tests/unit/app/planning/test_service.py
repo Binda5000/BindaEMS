@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -1295,6 +1296,41 @@ async def test_unexpected_error_keeps_the_plan(
     )
     assert all(s.thermal_steps is None for s in plan.slots)
     assert "Vorheizen und Vorkühlen nicht berechnet" in [e["event"] for e in logs]
+
+
+async def test_hanging_stage_is_bounded_and_keeps_the_plan(
+    service_with, live, cold, monkeypatch, settings_service
+):
+    # Plan 3b rechnet den Optimierer im Kindprozess, damit ein hängender Solver die app nicht
+    # blockiert; der zweite Schritt läuft im Thread und bekommt eine äußere Grenze
+    from bindaems.app.planning import service as service_module
+    from bindaems.app.planning.thermal_shift import TIME_LIMIT_S
+
+    assert service_module.THERMAL_STAGE_TIMEOUT_S == TIME_LIMIT_S + 5.0
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+    release = threading.Event()
+
+    def hanging(*args, **kwargs):
+        release.wait(10)
+        raise RuntimeError("zu spät")
+
+    monkeypatch.setattr(service_module, "apply_thermal", hanging)
+    monkeypatch.setattr(service_module, "THERMAL_STAGE_TIMEOUT_S", 0.05)
+    try:
+        with capture_logs() as logs:
+            plan = await asyncio.wait_for(
+                service_with(thermal_model=heating_models()).replan("manual"), timeout=5
+            )
+    finally:
+        release.set()
+    assert plan.thermal is not None
+    assert (plan.thermal.reason, plan.thermal.active) == ("solver", False)
+    assert all(s.thermal_steps is None for s in plan.slots)  # der Plan des ersten Schritts gilt
+    assert (
+        "Vorheizen und Vorkühlen nach der Zeitgrenze abgebrochen, der Plan gilt ohne Verschiebung"
+        in [e["event"] for e in logs]
+    )
 
 
 async def test_error_reading_the_temperatures_degrades_like_the_rest(

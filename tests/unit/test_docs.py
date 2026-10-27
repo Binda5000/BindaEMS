@@ -1668,6 +1668,23 @@ def test_guide_describes_the_thermal_plan_fields_and_migration() -> None:
         assert topic in update, topic
 
 
+def test_guide_names_the_outer_bound_of_the_thermal_stage() -> None:
+    # Fix-Welle 5c (M2): Der zweite Schritt läuft im Thread mit äußerer Grenze; das Handbuch
+    # nennt sie und den Satz im Log wie der Code.
+    from bindaems.app.planning.service import THERMAL_STAGE_MARGIN_S, THERMAL_STAGE_TIMEOUT_S
+    from bindaems.app.planning.thermal_shift import TIME_LIMIT_S
+
+    text = " ".join(_guide_section("Vorheizen und Vorkühlen (Phase 5c)").split())
+    assert (TIME_LIMIT_S, THERMAL_STAGE_MARGIN_S, THERMAL_STAGE_TIMEOUT_S) == (5.0, 5.0, 10.0)
+    for topic in (
+        "Zeitlimit 5 s",
+        "länger als **10 s** (Zeitlimit von HiGHS plus 5 s Reserve)",
+        "„Vorheizen und Vorkühlen nach der Zeitgrenze abgebrochen, der Plan gilt ohne "
+        "Verschiebung“",
+    ):
+        assert topic in text, topic
+
+
 def _plan_thermal_lines() -> list[str]:
     """Die Sätze von ``planThermalLine`` (UI) mit den Platzhaltern des Handbuchs."""
     source = Path("ui/src/lib/learning/thermal.ts").read_text(encoding="utf-8")

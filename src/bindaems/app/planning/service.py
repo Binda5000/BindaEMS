@@ -56,6 +56,7 @@ from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w
 from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
+from bindaems.app.planning.thermal_shift import TIME_LIMIT_S as THERMAL_TIME_LIMIT_S
 from bindaems.app.planning.thermal_stage import ThermalModels, apply_thermal, failed
 from bindaems.app.planning.triggers import (
     THERMAL_REPLAN_MIN_S,
@@ -93,6 +94,11 @@ log = structlog.get_logger(__name__)
 
 COMPONENT: Final = "planning"
 FINGERPRINT_WINDOW: Final = timedelta(hours=48)
+# Äußere Grenze des zweiten Schritts (Vorheizen und Vorkühlen) im Thread: Zeitlimit von HiGHS und
+# eine Reserve für Aufbau und Auswertung. Ein hängender Solver hält so den Plan nicht auf (der
+# Thread läuft weiter, bis er endet; der Plan des ersten Schritts gilt ohne Verschiebung).
+THERMAL_STAGE_MARGIN_S: Final = 5.0
+THERMAL_STAGE_TIMEOUT_S: Final = THERMAL_TIME_LIMIT_S + THERMAL_STAGE_MARGIN_S
 
 
 @dataclass(frozen=True)
@@ -705,7 +711,8 @@ class PlanningService:
     async def _with_thermal(self, plan: Plan, inputs: PlanInputs) -> Plan:
         """Zweiter Planungsschritt: Vorheizen und Vorkühlen (``thermal_stage``), im Thread. Ohne
         Wärmemodelle oder Klimaanlage der Plan unverändert (``thermal`` ``None``); ein
-        unerwarteter Fehler gibt den Plan ohne Verschiebung (Grund ``solver``)."""
+        unerwarteter Fehler und ein Lauf über ``THERMAL_STAGE_TIMEOUT_S`` geben den Plan ohne
+        Verschiebung (Grund ``solver``)."""
         device, models = self._thermal_device, self._thermal_models
         if device is None or models is None:
             return plan
@@ -721,23 +728,32 @@ class PlanningService:
             temperatures = {
                 ensure_utc(slot): t for slot, t in self._forecast.temperatures().items()
             }
-            return await asyncio.to_thread(
-                partial(
-                    apply_thermal,
-                    plan,
-                    device=device,
-                    max_offset_k=self._thermal_max_k,
-                    entry=entry,
-                    models=models,
-                    temperatures=temperatures,
-                    settings=settings,
-                    end_value_ct=inputs.end_value_ct,
-                )
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    partial(
+                        apply_thermal,
+                        plan,
+                        device=device,
+                        max_offset_k=self._thermal_max_k,
+                        entry=entry,
+                        models=models,
+                        temperatures=temperatures,
+                        settings=settings,
+                        end_value_ct=inputs.end_value_ct,
+                    )
+                ),
+                timeout=THERMAL_STAGE_TIMEOUT_S,
+            )
+        except TimeoutError:
+            log.warning(
+                "Vorheizen und Vorkühlen nach der Zeitgrenze abgebrochen, der Plan gilt ohne "
+                "Verschiebung",
+                timeout_s=THERMAL_STAGE_TIMEOUT_S,
             )
         except Exception:  # die Verschiebung darf den Plan nie verhindern
             log.exception("Vorheizen und Vorkühlen nicht berechnet")
-            enabled = settings is not None and settings.enabled
-            return failed(plan, device=device, entry=entry, enabled=enabled)
+        enabled = settings is not None and settings.enabled
+        return failed(plan, device=device, entry=entry, enabled=enabled)
 
     async def _solve(self, inputs: PlanInputs) -> OptimizerResult:
         try:

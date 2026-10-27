@@ -4816,7 +4816,10 @@ Vorzeichenwechsel über 0. Am Ende des Plans steht das Haus nicht unter dem Soll
   der Slots bleiben die des ersten Schritts.
 - **Prüfung:** Plant die Rechnung einen Versatz außerhalb des Bands, gilt sie nicht (Grund `solver`,
   im Log „Verschiebung der Klimaanlage verworfen, weil sie unplausibel ist“); wirft sie, gilt der Plan
-  ohne sie (im Log „Vorheizen und Vorkühlen nicht berechnet“). Die Verschiebung verhindert nie einen
+  ohne sie (im Log „Vorheizen und Vorkühlen nicht berechnet“). Braucht der Schritt länger als
+  **10 s** (Zeitlimit von HiGHS plus 5 s Reserve), wartet die app nicht weiter: Der Plan des ersten
+  Schritts gilt ohne Verschiebung (Grund `solver`, im Log „Vorheizen und Vorkühlen nach der
+  Zeitgrenze abgebrochen, der Plan gilt ohne Verschiebung“). Die Verschiebung verhindert nie einen
   Plan; auch ein Ersatzplan bekommt sie.
 - **An den core** geht die Verschiebung nur mit Schalter an, einem tauglichen Modell der laufenden
   Betriebsart und der Betriebsart Heizen oder Kühlen (`thermal.active`). Jeder Slot der Absicht trägt
