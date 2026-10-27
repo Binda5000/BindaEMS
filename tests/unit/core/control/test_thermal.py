@@ -99,6 +99,7 @@ CODES = {
     "thermal_stale",
     "thermal_no_echo",
     "thermal_off",
+    "thermal_plan",
 }
 
 
@@ -664,3 +665,273 @@ def test_reasons_are_codes_of_the_plan(
     wish = strategy.step(obs(now=now + 1 + gap, **changes))
     assert wish.reason == reason
     assert reason in CODES
+
+
+# --- Planwert (Plan 5c, Task 8, Entscheidung 9) -----------------------------------------------
+
+
+def planned(steps: int | None, **changes: Any) -> ThermalObs:
+    """``obs`` mit dem Planwert ``steps`` und einem Akku, der nicht entlädt."""
+    return obs(**{"planned_steps": steps, "battery_discharge_w": 0.0, **changes})
+
+
+# Je Lauf die Zyklen (Zeit, Änderungen gegenüber ``obs``) und der Wunsch am Ende nach 6a
+SIXA_RUNS: dict[str, tuple[list[tuple[float, dict[str, Any]]], ThermalWish]] = {
+    "mehr": ([(t, {"export_w": 900}) for t in (0, 600, 1200)], ThermalWish(2, "thermal_more")),
+    "autos": (
+        [(0, {"export_w": 900}), (600, {"export_w": 900}), (601, {"unmet_cars_w": 230})],
+        ThermalWish(0, "thermal_cars"),
+    ),
+    "akku": (
+        [(0, {"export_w": 900}), (600, {"export_w": 900}), (601, {"soc_pct": 50})],
+        ThermalWish(0, "thermal_battery"),
+    ),
+    "netzbezug": (
+        [
+            (0, {"export_w": 900}),
+            (600, {"export_w": 900}),
+            (610, {"import_w": 400}),
+            (910, {"import_w": 400}),
+        ],
+        ThermalWish(0, "thermal_back"),
+    ),
+    "weniger": (
+        [(t, {"hint": "weniger"}) for t in (0, 600, 1200, 1800)],
+        ThermalWish(-2, "thermal_less"),
+    ),
+    "weniger endet": (
+        [(0, {"hint": "weniger"}), (600, {"hint": "weniger"}), (601, {})],
+        ThermalWish(0, "thermal_less"),
+    ),
+    "druck": (
+        [(0, {"export_w": 900}), (600, {"export_w": 900}), (601, {"peak_pressure": True})],
+        ThermalWish(0, "thermal_peak"),
+    ),
+    "betriebsart": (
+        [(0, {"export_w": 900}), (600, {"export_w": 900}), (601, {"mode": "heizen"})],
+        ThermalWish(0, "thermal_mode"),
+    ),
+    "veraltet": (
+        [(0, {"export_w": 900}), (600, {"export_w": 900}), (601, {"fresh": False})],
+        ThermalWish(0, "thermal_stale"),
+    ),
+    "totband": (
+        [(0, {"export_w": 900}), (600, {"export_w": 900}), (700, {"export_w": 500})],
+        ThermalWish(1, "thermal_more"),
+    ),
+}
+
+
+@pytest.mark.parametrize("run", sorted(SIXA_RUNS))
+def test_without_plan_slot_strategy_is_6a(klima: CoeOffsetConfig, run: str) -> None:
+    # Ohne Planwert (``None``) sind Netzbezug des Plans und Entladung des Akkus ohne Wirkung: Die
+    # Strategie wünscht in jedem Zyklus dasselbe wie die aus 6a, die die neuen Felder nicht kennt.
+    cycles, expected = SIXA_RUNS[run]
+    sixa, now = ThermalStrategy(klima), ThermalStrategy(klima)
+    extra = {"planned_steps": None, "planned_grid_w": 1500.0, "battery_discharge_w": 2000.0}
+    for at, changes in cycles:
+        before = sixa.step(obs(now=at, **changes))
+        assert now.step(obs(now=at, **changes, **extra)) == before, (run, at)
+    assert before == expected
+
+
+def test_follows_plan_one_step_per_interval(strategy: ThermalStrategy) -> None:
+    # Planwert +3: +1 sofort, +2 nach 600 s, +3 nach 1200 s, Grund thermal_plan
+    assert strategy.step(planned(3, now=0)) == ThermalWish(1, "thermal_plan")
+    assert strategy.step(planned(3, now=599)).steps == 1
+    assert strategy.step(planned(3, now=600)) == ThermalWish(2, "thermal_plan")
+    assert strategy.step(planned(3, now=1199)).steps == 2
+    assert strategy.step(planned(3, now=1200)) == ThermalWish(3, "thermal_plan")
+    assert strategy.step(planned(3, now=5000)) == ThermalWish(3, "thermal_plan")  # nicht weiter
+
+
+def test_plan_down_is_immediate(strategy: ThermalStrategy) -> None:
+    strategy.step(planned(2, now=0))
+    strategy.step(planned(2, now=600))  # +2, letzte Erhöhung bei 600
+    # +2 → Planwert +1: im selben Zyklus
+    assert strategy.step(planned(1, now=700)) == ThermalWish(1, "thermal_plan")
+    strategy.step(planned(2, now=1300))  # +2, letzte Erhöhung bei 1300
+    # +2 → Planwert −1: im selben Zyklus auf 0 (ein Vorzeichenwechsel geht nur über 0), dann −1,
+    # sobald die Schrittregel eine Erhöhung des Betrags zulässt
+    assert strategy.step(planned(-1, now=1400)) == ThermalWish(0, "thermal_plan")
+    assert strategy.step(planned(-1, now=1899)).steps == 0
+    assert strategy.step(planned(-1, now=1900)) == ThermalWish(-1, "thermal_plan")
+    # von −1 auf Planwert +1: der Betrag sinkt, also sofort 0, dann +1 nach der Wartezeit
+    assert strategy.step(planned(1, now=1901)) == ThermalWish(0, "thermal_plan")
+    assert strategy.step(planned(1, now=2499)).steps == 0
+    assert strategy.step(planned(1, now=2500)) == ThermalWish(1, "thermal_plan")
+
+
+def test_plan_negative_steps_one_per_interval(strategy: ThermalStrategy) -> None:
+    # Weniger als 0 heißt beim Planwert ebenfalls mehr Betrag: eine Stufe je Intervall
+    assert strategy.step(planned(-2, now=0)) == ThermalWish(-1, "thermal_plan")
+    assert strategy.step(planned(-2, now=599)).steps == -1
+    assert strategy.step(planned(-2, now=600)) == ThermalWish(-2, "thermal_plan")
+
+
+def test_plan_negative_replaces_hint_less(strategy: ThermalStrategy) -> None:
+    less = dict(hint="weniger", export_w=0.0)
+    assert strategy.step(planned(-1, now=0, **less)) == ThermalWish(-1, "thermal_plan")
+    # „weniger“ führte nach 600 s auf −2; mit dem Planwert bleibt es bei −1
+    for now in (600, 1200, 5000):
+        assert strategy.step(planned(-1, now=now, **less)) == ThermalWish(-1, "thermal_plan")
+    # Planwert 0 mit dem Hinweis: 0, und „weniger“ bleibt aus
+    assert strategy.step(planned(0, now=5001, **less)) == ThermalWish(0, "thermal_plan")
+    assert strategy.step(planned(0, now=7000, **less)).steps == 0
+    # ohne Planwert gilt wieder 6a: Der Hinweis steht seit 7000 s an, „weniger“ handelt sofort
+    assert strategy.step(planned(None, now=7001, **less)) == ThermalWish(-1, "thermal_less")
+
+
+def test_plan_negative_does_not_end_with_the_hint(strategy: ThermalStrategy) -> None:
+    # „weniger endet“ gilt nur ohne Planwert: ein negativer Planwert bleibt ohne Hinweis stehen
+    strategy.step(planned(-1, now=0))
+    assert strategy.step(planned(-1, now=1, hint="neutral")) == ThermalWish(-1, "thermal_plan")
+
+
+def test_surplus_may_exceed_plan(strategy: ThermalStrategy) -> None:
+    # Einspeisung 800 W seit 10 min → Planwert + 1
+    assert strategy.step(planned(1, now=0, export_w=800)) == ThermalWish(1, "thermal_plan")
+    assert strategy.step(planned(1, now=600, export_w=800)) == ThermalWish(2, "thermal_more")
+    # der Planwert holt die Stufe nicht zurück, auch ohne Einspeisung (Totband wie 6a)
+    assert strategy.step(planned(1, now=601, export_w=0)) == ThermalWish(2, "thermal_more")
+    assert strategy.step(planned(1, now=3000, export_w=0)).steps == 2
+    # der Planwert sinkt um eins: die Stufe aus dem Überschuss bleibt darüber
+    assert strategy.step(planned(0, now=3001)) == ThermalWish(1, "thermal_plan")
+    # der Planwert steigt: die Stufe aus dem Überschuss ist darin aufgegangen
+    strategy.step(planned(2, now=3002))
+    assert strategy.step(planned(1, now=3003)) == ThermalWish(1, "thermal_plan")
+
+
+def test_surplus_before_the_plan_stays_above_it(strategy: ThermalStrategy) -> None:
+    # Stufen aus dem Überschuss, bevor es einen Planwert gab, gelten als Stufen über dem Plan
+    climb(strategy, 2)
+    assert strategy.step(planned(0, now=1300)) == ThermalWish(2, "thermal_more")
+
+
+def test_import_threshold_adds_planned_grid(strategy: ThermalStrategy) -> None:
+    # 300 W + 1500 W geplant: kein Rückschritt bei 1200 W
+    strategy.step(planned(1, now=0, export_w=900, planned_grid_w=1500))
+    strategy.step(planned(1, now=600, export_w=900, planned_grid_w=1500))  # +2 (Überschuss)
+    for now in (610, 1000, 3000):
+        wish = strategy.step(planned(1, now=now, import_w=1200, planned_grid_w=1500))
+        assert wish.steps == 2
+    # ab 1800 W 300 s lang: eine Stufe zurück, aber nicht unter den Planwert
+    strategy.step(planned(1, now=3010, import_w=1800, planned_grid_w=1500))
+    assert strategy.step(planned(1, now=3309, import_w=1800, planned_grid_w=1500)).steps == 2
+    wish = strategy.step(planned(1, now=3310, import_w=1800, planned_grid_w=1500))
+    assert wish == ThermalWish(1, "thermal_back")
+    assert strategy.step(planned(1, now=5000, import_w=1800, planned_grid_w=1500)).steps == 1
+
+
+def test_import_does_not_undo_planned_steps(strategy: ThermalStrategy) -> None:
+    # Der Netzbezug des Hauses (Nacht, Akku hält) holt geplante Stufen nicht zurück
+    strategy.step(planned(2, now=0))
+    strategy.step(planned(2, now=600))
+    for now in (610, 1000, 3000):
+        assert strategy.step(planned(2, now=now, import_w=3000)) == ThermalWish(2, "thermal_plan")
+
+
+def test_battery_guard_steps_back_planned_heat(strategy: ThermalStrategy) -> None:
+    # Entladung 400 W seit 300 s → eine Stufe zurück. Die SOC-Schwelle gilt für geplante Stufen
+    # nicht: SOC 50 % unter der Schwelle 90 % hält den Plan weder auf noch zurück.
+    heat = dict(mode="heizen", soc_pct=50.0)
+    assert strategy.step(planned(2, now=0, **heat)) == ThermalWish(1, "thermal_plan")
+    assert strategy.step(planned(2, now=600, **heat)) == ThermalWish(2, "thermal_plan")
+    strategy.step(planned(2, now=700, battery_discharge_w=400, **heat))
+    assert strategy.step(planned(2, now=999, battery_discharge_w=400, **heat)).steps == 2
+    wish = strategy.step(planned(2, now=1000, battery_discharge_w=400, **heat))
+    assert wish == ThermalWish(1, "thermal_battery")
+    # entlädt er weiter: keine Stufe hoch, nach weiteren 300 s noch eine zurück
+    assert strategy.step(planned(2, now=1299, battery_discharge_w=400, **heat)).steps == 1
+    wish = strategy.step(planned(2, now=1300, battery_discharge_w=400, **heat))
+    assert wish == ThermalWish(0, "thermal_battery")
+    assert strategy.step(planned(2, now=3000, battery_discharge_w=400, **heat)).steps == 0
+    # entlädt er nicht mehr: der Plan steigt wieder, eine Stufe je Intervall
+    assert strategy.step(planned(2, now=3001, **heat)) == ThermalWish(1, "thermal_plan")
+    assert strategy.step(planned(2, now=3601, **heat)) == ThermalWish(2, "thermal_plan")
+
+
+def test_battery_guard_needs_300w_without_interruption(strategy: ThermalStrategy) -> None:
+    strategy.step(planned(1, now=0))
+    strategy.step(planned(1, now=10, battery_discharge_w=299))
+    assert strategy.step(planned(1, now=400, battery_discharge_w=299)).steps == 1
+    strategy.step(planned(1, now=410, battery_discharge_w=300))
+    strategy.step(planned(1, now=500, battery_discharge_w=0))  # unterbrochen
+    strategy.step(planned(1, now=510, battery_discharge_w=300))
+    assert strategy.step(planned(1, now=809, battery_discharge_w=300)).steps == 1
+    wish = strategy.step(planned(1, now=810, battery_discharge_w=300))
+    assert wish == ThermalWish(0, "thermal_battery")
+
+
+def test_unknown_battery_power_holds_the_plan(strategy: ThermalStrategy) -> None:
+    # Unbekannte Akkuleistung: keine geplante Stufe hoch, aber auch kein Rückschritt
+    assert strategy.step(planned(2, now=0, battery_discharge_w=None)).steps == 0
+    strategy.step(planned(2, now=10))  # +1
+    assert strategy.step(planned(2, now=700, battery_discharge_w=None)).steps == 1
+    assert strategy.step(planned(2, now=2000, battery_discharge_w=None)).steps == 1
+
+
+def test_battery_guard_only_for_a_positive_plan(strategy: ThermalStrategy) -> None:
+    # Planwert 0 mit einer Stufe aus dem Überschuss: wie 6a die SOC-Schwelle, keine Entladung
+    climb(strategy, 1)
+    strategy.step(planned(0, now=700, battery_discharge_w=1000))
+    assert strategy.step(planned(0, now=1100, battery_discharge_w=1000)).steps == 1
+    assert strategy.step(planned(0, now=1101, soc_pct=50)) == ThermalWish(0, "thermal_battery")
+
+
+def test_peak_pressure_zeroes_planned_positive(
+    strategy: ThermalStrategy, klima: CoeOffsetConfig
+) -> None:
+    strategy.step(planned(3, now=0))
+    strategy.step(planned(3, now=600))  # +2
+    assert strategy.step(planned(3, now=700, peak_pressure=True)) == ThermalWish(0, "thermal_peak")
+    # solange der Druck anhält, keine geplante Stufe
+    assert strategy.step(planned(3, now=2000, phase_pressure=True)).steps == 0
+    assert strategy.step(planned(3, now=2001)) == ThermalWish(1, "thermal_plan")
+    # ein negativer Planwert bleibt unter Druck stehen
+    other = ThermalStrategy(klima)
+    other.step(planned(-1, now=0))
+    assert other.step(planned(-1, now=1, peak_pressure=True)) == ThermalWish(-1, "thermal_plan")
+
+
+def test_cars_priority_beats_plan(strategy: ThermalStrategy) -> None:
+    strategy.step(planned(2, now=0))
+    strategy.step(planned(2, now=600))  # +2
+    cars = dict(unmet_cars_w=230)
+    assert strategy.step(planned(2, now=601, **cars)) == ThermalWish(1, "thermal_cars")
+    assert strategy.step(planned(2, now=1200, **cars)).steps == 1  # der Plan steigt nicht
+    assert strategy.step(planned(2, now=1201, **cars)) == ThermalWish(0, "thermal_cars")
+    assert strategy.step(planned(2, now=3000, **cars)).steps == 0
+    assert strategy.step(planned(2, now=3001)) == ThermalWish(1, "thermal_plan")
+
+
+def test_plan_steps_ignored_when_mode_changes(strategy: ThermalStrategy) -> None:
+    # Ein Wechsel der Betriebsart geht vor dem Planwert: im selben Zyklus 0. Dass ein Plan für
+    # Heizen beim Kühlen nie wirkt, sichert die Regelung (``test_regulation.py``).
+    strategy.step(planned(2, now=0))
+    strategy.step(planned(2, now=600))
+    assert strategy.step(planned(2, now=601, mode="heizen")) == ThermalWish(0, "thermal_mode")
+    for mode in ("lueften", "aus", "unbekannt"):
+        assert strategy.step(planned(2, now=602, mode=mode)) == ThermalWish(0, "thermal_off")
+
+
+def test_plan_value_beyond_the_band_is_clamped(strategy: ThermalStrategy) -> None:
+    now = 0.0
+    for _ in range(10):
+        wish = strategy.step(planned(6, now=now))
+        now += INTERVAL
+    assert wish.steps == 6  # max_offset_k 3 K = 6 Stufen
+    assert strategy.step(planned(6, now=now, export_w=900)).steps == 6
+    assert strategy.step(planned(6, now=now + INTERVAL, export_w=900)).steps == 6
+
+
+@pytest.mark.parametrize("changes", [{"soc_pct": 50.0}, {"unmet_cars_w": 230}])
+def test_plan_down_goes_before_cars_and_battery(
+    strategy: ThermalStrategy, changes: dict[str, Any]
+) -> None:
+    # Fällt der Planwert, geht der Wunsch sofort ganz zurück, nicht nur um die eine Stufe der
+    # Autos oder des Akkus (SOC 50 % gilt bei einem Planwert von höchstens 0 wieder)
+    strategy.step(planned(3, now=0))
+    strategy.step(planned(3, now=600))
+    strategy.step(planned(3, now=1200))  # +3
+    assert strategy.step(planned(-2, now=1300, **changes)) == ThermalWish(0, "thermal_plan")

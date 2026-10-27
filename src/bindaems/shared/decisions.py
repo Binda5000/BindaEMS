@@ -86,7 +86,11 @@ _REASON_TEXT: Final = {
     "thermal_stale": "Keine Werte der Klimaanlage, Versatz 0",
     "thermal_no_echo": "Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0",
     "thermal_off": "Klimaanlage aus oder lüftet, Versatz 0",
+    # Plan 5c, Task 8: ``{k}`` ist der Versatz der Entscheidung (``_reason_text``)
+    "thermal_plan": "Klimaanlage folgt dem Plan ({k} K)",
 }
+_K: Final = "{k}"
+_WITHOUT_K: Final = " ({k} K)"
 
 
 class DecisionResult(StrEnum):
@@ -328,6 +332,18 @@ def _offset(value: float) -> str:
     return f"{value:+.1f}".replace(".", ",").replace("-", "\N{MINUS SIGN}")
 
 
+def _reason_text(code: str, kind: CommandKind, value: CommandValue) -> str:
+    """Der Text des Grunds ``code``; ``{k}`` darin ist der Versatz der Entscheidung wie in
+    ``_offset`` (ohne endliche Zahl oder bei einer anderen Art entfällt die Klammer mit ihm)."""
+    text = _REASON_TEXT.get(code, code)
+    if _K not in text:
+        return text
+    number = finite_number(value)
+    if kind != CommandKind.SETPOINT_OFFSET or number is None:
+        return text.replace(_WITHOUT_K, "").replace(_K, "")
+    return text.replace(_K, _offset(number))
+
+
 def _result_text(result: DecisionResult, detail: str) -> str:
     """Das Ergebnis als Text; bei Fehler, „nicht gesendet“ und fremder Änderung mit dem Detail."""
     if result in _RESULT_WITH_DETAIL:
@@ -359,7 +375,7 @@ def decision_text(
     """
     head = label
     if reasons:
-        head += f" ({', '.join(_REASON_TEXT.get(code, code) for code in reasons)})"
+        head += f" ({', '.join(_reason_text(code, kind, value) for code in reasons)})"
     sentence = f"{head}: {_command_text(kind, value)} – {_result_text(result, detail)}"
     if not sentence.endswith("."):
         sentence += "."

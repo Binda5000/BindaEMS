@@ -92,7 +92,7 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.domain import Alarm
 from bindaems.shared.numbers import finite_number
-from bindaems.shared.plan import IntentPlan, ThermalHint
+from bindaems.shared.plan import IntentPlan, IntentPlanSlot, ThermalHint
 from bindaems.shared.timeutil import slot_end
 
 _SETPOINT: Final[Key] = (VICTRON, CommandKind.GRID_SETPOINT)  # der Override des Akku-Sollwerts
@@ -251,6 +251,8 @@ class Regulation:
         self.peak_guard = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct, ceiling_w)
         self._peak: PeakLimits = NO_LIMITS  # die Vorgaben des Wächters aus dem letzten Zyklus
         self._active: ActiveSlot | None = None  # der gültige Slot des Plans im letzten Zyklus
+        # derselbe Slot, wie ihn die Absicht nennt: mit dem Planwert der Klimaanlage (Plan 5c)
+        self._slot: IntentPlanSlot | None = None
         self._plan = plan_health(None, None, started)  # der Eintrag ``plan`` für Health
         self._thermal = {
             name: _Thermal(device)
@@ -289,6 +291,7 @@ class Regulation:
         charge = inputs.charge
         plan = None if charge.intent is None else charge.intent.plan
         self._active = active_slot(plan, charge.wall_now)
+        self._slot = None if plan is None or self._active is None else plan.slot_at(charge.wall_now)
         self._plan = plan_health(plan, self._active, charge.wall_now)
         commands = self.charger.step(charge, self._peak, self._active)
         guest = (GuestIntent() if charge.intent is None else charge.intent.guest).mode
@@ -354,12 +357,21 @@ class Regulation:
 
         Den entschiedenen Versatz jeder Klimaanlage dieses Zyklus nennt ``thermal_targets``, auch
         wenn kein Befehl kommt (Ruling R26).
+
+        Den Planwert (Plan 5c, Entscheidung 9) bekommt die Strategie aus dem gültigen Slot
+        (``thermal_steps`` und ``thermal_grid_w``), nur wenn dessen ``thermal_mode`` die
+        Betriebsart der Klimaanlage in diesem Zyklus ist; sonst, ohne gültigen Slot und ohne
+        Planwert ``None`` (6a). Dazu die Entladeleistung des Akkus ``max(0, −battery_w)``
+        (``None``, wenn die Akkuleistung unbekannt ist). Mit Planwert nennt der Befehl ihn in
+        seinen Eingaben (``planned_steps``), Health je Klimaanlage in ``planned``.
         """
-        charge, active = inputs.charge, self._active
+        charge, active, slot = inputs.charge, self._active, self._slot
         hint: ThermalHint = "neutral" if active is None else active.thermal
         grid_w, soc = charge.grid.grid_w, charge.grid.soc_pct
         export_w = None if grid_w is None else max(0.0, -grid_w)
         import_w = None if grid_w is None else max(0.0, grid_w)
+        battery_w = charge.grid.battery_w
+        discharge_w = None if battery_w is None else max(0.0, -battery_w)
         peak = self.peak_guard.pressure()
         phase = self.charger.overload_level() > OverloadLevel.NONE
         thermal_w = 0.0
@@ -383,6 +395,7 @@ class Regulation:
             if active is not None and active.soc_end_pct is not None:
                 gate = active.soc_end_pct
             acting = seen.controllable and not seen.locked
+            planned = _planned_steps(slot, seen.mode)
             wish = device.strategy.step(
                 ThermalObs(
                     now=seen.mono_now,
@@ -398,16 +411,21 @@ class Regulation:
                     peak_pressure=peak,
                     phase_pressure=phase,
                     unmet_cars_w=unmet_w,
+                    planned_steps=planned,
+                    planned_grid_w=0.0 if planned is None or slot is None else slot.thermal_grid_w,
+                    battery_discharge_w=discharge_w,
                 )
             )
             offset = offset_for(wish, seen.mode, device.step_k)
             targets[name] = offset + 0.0  # aus -0.0 wird 0.0
             device.learn(seen, offset)
-            health[name] = _thermal_json(wish, hint, device)
+            health[name] = _thermal_json(wish, hint, device, planned)
             if not acting or blocked or not self._thermal_last.changed(key, offset):
                 continue
             command = self._thermal_last.command(actuator, _OFFSET, offset, (wish.reason,))
             facts = {"thermal_steps": float(wish.steps), "export_w": export_w, "soc_pct": soc}
+            if planned is not None:
+                facts["planned_steps"] = float(planned)
             found.append(ControlCommand(command, facts))
         self._thermal_health = health
         self._thermal_targets = targets
@@ -520,6 +538,7 @@ class Regulation:
         self.peak_guard.idle()
         self._peak = NO_LIMITS
         self._active = None
+        self._slot = None
         self._plan = plan_health(None, None, now)
         self.thermal_idle()
 
@@ -540,6 +559,7 @@ class Regulation:
         aus der Gültigkeit zur Wanduhr ``wall_now``, ohne Plan ``none``.
         """
         self._active = None
+        self._slot = None
         self._plan = plan_health(plan, None, wall_now)
 
     def active(self) -> ActiveSlot | None:
@@ -585,8 +605,9 @@ class Regulation:
         (``PeakGuard.health``, mit ``wall_now``) und ``wallboxes`` je Wallbox
         (``ChargeController.wallbox_health``, Plan 2c-2b), ``plan`` (``plan_health``, Plan 3c) und
         ``thermal`` je Klimaanlage, die der letzte ``step`` regelte: ``wish`` (Stufen), ``reason``
-        (Code) und ``hint`` (Plan 6a, Präzisierung 4). Vor dem ersten ``step`` und solange die
-        Regelung ruht, ist ``thermal`` leer."""
+        (Code) und ``hint`` (Plan 6a, Präzisierung 4) und ``planned`` (der Planwert in Stufen,
+        ``None`` ohne, Plan 5c). Vor dem ersten ``step`` und solange die Regelung ruht, ist
+        ``thermal`` leer."""
         return {**self.core_health(wall_now), "thermal": self.thermal_health()}
 
     def core_health(self, wall_now: datetime) -> dict[str, Any]:
@@ -601,7 +622,8 @@ class Regulation:
         }
 
     def thermal_health(self) -> dict[str, dict[str, Any]]:
-        """``health()["thermal"]``: je Klimaanlage ``wish``, ``reason`` und ``hint``."""
+        """``health()["thermal"]``: je Klimaanlage ``wish``, ``reason``, ``hint`` und mehr
+        (``_thermal_json``)."""
         return {name: dict(entry) for name, entry in self._thermal_health.items()}
 
     def thermal_targets(self) -> dict[str, float]:
@@ -638,9 +660,12 @@ class Regulation:
         return self._peak.budget_w
 
 
-def _thermal_json(wish: ThermalWish, hint: ThermalHint, device: _Thermal) -> dict[str, Any]:
+def _thermal_json(
+    wish: ThermalWish, hint: ThermalHint, device: _Thermal, planned: int | None
+) -> dict[str, Any]:
     """Eine Klimaanlage in ``health()["thermal"]``: Wunsch in Stufen, Grund und Hinweis, dazu die
-    gelernte Grundlast bei Versatz 0 und die zuletzt freigebbare Leistung (ganze W, ``None`` ohne).
+    gelernte Grundlast bei Versatz 0 und die zuletzt freigebbare Leistung (ganze W, ``None`` ohne)
+    und der Planwert in Stufen (``None`` ohne, Plan 5c).
     """
     return {
         "wish": wish.steps,
@@ -648,7 +673,17 @@ def _thermal_json(wish: ThermalWish, hint: ThermalHint, device: _Thermal) -> dic
         "hint": hint,
         "base_w": None if device.base_w is None else round(device.base_w),
         "spare_w": None if device.spare_w is None else round(device.spare_w),
+        "planned": planned,
     }
+
+
+def _planned_steps(slot: IntentPlanSlot | None, mode: ThermalMode) -> int | None:
+    """Der Planwert des Slots in Stufen, wenn er für die Betriebsart ``mode`` gilt; sonst und ohne
+    Slot ``None``. Ein Plan für Heizen wirkt so nie beim Kühlen, und ohne bekannte Betriebsart
+    gilt keiner (Plan 5c, Entscheidung 9)."""
+    if slot is None or slot.thermal_steps is None or slot.thermal_mode != mode:
+        return None
+    return slot.thermal_steps
 
 
 def battery_cars(

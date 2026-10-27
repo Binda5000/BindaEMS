@@ -198,7 +198,8 @@ describe('thermalRows', () => {
 			'thermal_mode',
 			'thermal_stale',
 			'thermal_no_echo',
-			'thermal_off'
+			'thermal_off',
+			'thermal_plan'
 		];
 		expect(reasons.map((reason) => rows({ reason, running: false }).Grund)).toEqual([
 			'PV-Überschuss in die Klimaanlage',
@@ -210,7 +211,8 @@ describe('thermalRows', () => {
 			'Betriebsart gewechselt, Versatz 0',
 			'Keine Werte der Klimaanlage, Versatz 0',
 			'Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0',
-			'Klimaanlage aus oder lüftet, Versatz 0'
+			'Klimaanlage aus oder lüftet, Versatz 0',
+			'Klimaanlage folgt dem Plan'
 		]);
 		expect(rows({ reason: null }).Grund).toBe('–');
 	});

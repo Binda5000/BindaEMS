@@ -100,6 +100,22 @@ von der Tabelle des Plans:
   Viertelstunde.
 - ``klima-teuer-heizen`` sagt „weniger“ mit dem Plan je Viertelstunde (``_every_quarter``), ohne
   PV am Winterabend.
+
+Die Szenarien für Vorheizen und Vorkühlen (Plan 5c, Task 8) bauen darauf auf: Die app schickt je
+Viertelstunde einen Plan mit Planwert der Klimaanlage (``_ShiftPlan``, ``_shift_every_quarter``:
+``thermal_steps``, ``thermal_grid_w`` und die Betriebsart je Slot), die Klimaanlage heizt in einer
+Winternacht ohne PV. Abweichungen vom Plan:
+
+- Der Akku steht auf „Nur Laden“ (``charger_only``), solange der Plan Netzbezug vorsieht: Der Plan
+  nimmt Netz für Mehrverbrauch nur in Slots, in denen der Akku nicht entlädt (Entscheidung 8). Mit
+  Victron im Dry-Run deckte der Akku sonst jede Last, auch die geplante; das spielt
+  ``klima-plan-akku`` ab ``BATTERY_COVERS_S`` durch (``_BatteryCovers``).
+- In ``klima-plan-vorheizen`` folgt der teure Block nach drei Viertelstunden
+  (``EXPENSIVE_S``), in ``klima-plan-ende`` gilt der einzige Plan nur ``PLAN_ENDS_S`` statt der
+  45 min eines Plans der app; danach fällt die app aus. So bleiben die Läufe kurz.
+- Geht ein Wunsch über 0 hinweg (+3 → −2), bekommt die UVR im selben Zyklus 0 und das Negative
+  erst, wenn die Schrittregel eine Erhöhung des Betrags zulässt: Ein Vorzeichenwechsel geht nur
+  über 0.
 """
 
 from __future__ import annotations
@@ -137,6 +153,7 @@ from bindaems.shared.plan import (
     IntentPlan,
     IntentPlanSlot,
     ThermalHint,
+    ThermalMode,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
 from bindaems.tools.sim.cars import TESSIE_DELAY_S, Evcs
@@ -554,13 +571,19 @@ class _Plan:
         )
 
     def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
-        current = rt.intent()
-        if current is None:
-            raise ValueError("Plan ohne gültige Absicht.")
-        update = {"version": current.version + 1, "plan": self.plan()}
-        reply = rt.submit_intent(current.model_copy(update=update))
-        if reply.result == "rejected":
-            raise ValueError(f"Plan abgelehnt: {' '.join(reply.details)}")
+        _submit_plan(rt, self.plan())
+
+
+def _submit_plan(rt: CoreRuntime, plan: IntentPlan) -> None:
+    """Die nächste Version der gültigen Absicht mit ``plan``; ohne gültige Absicht und bei einer
+    Ablehnung bricht der Lauf ab (``ValueError``)."""
+    current = rt.intent()
+    if current is None:
+        raise ValueError("Plan ohne gültige Absicht.")
+    update = {"version": current.version + 1, "plan": plan}
+    reply = rt.submit_intent(current.model_copy(update=update))
+    if reply.result == "rejected":
+        raise ValueError(f"Plan abgelehnt: {' '.join(reply.details)}")
 
 
 def _plan(
@@ -3488,6 +3511,316 @@ def _klima_teuer_heizen() -> Scenario:
     )
 
 
+# --- Szenarien 40 bis 42: Vorheizen und Vorkühlen (Plan 5c, Task 8) ---------------------------
+
+# Je Slot des Plans: Planwert in Stufen, Netzbezug dafür in W und der Hinweis für die Klimaanlage
+ShiftSlot = tuple[int, float, ThermalHint]
+SHIFT_GRID_W: Final = 200.0  # geplanter Netzbezug je Stufe: 0,5 K mal ``AC_GAIN_W_PER_K``
+# „klima-plan-vorheizen“: +3 in der billigen Nacht …
+CHEAP: Final[ShiftSlot] = (3, 3 * SHIFT_GRID_W, "neutral")
+EXPENSIVE: Final[ShiftSlot] = (-2, 0.0, "weniger")  # … und −2 im teuren Block ab …
+EXPENSIVE_S: Final = 3 * QUARTER_S  # … dieser Sekunde (06:45)
+# „klima-plan-akku“ und „klima-plan-ende“: +2
+PLAN_UP: Final[ShiftSlot] = (2, 2 * SHIFT_GRID_W, "neutral")
+BATTERY_COVERS_S: Final = 25 * MINUTE_S  # „klima-plan-akku“: ab hier deckt der Akku die Last
+GUARD_WITHIN_S: Final = 6 * MINUTE_S  # … und binnen so vieler Sekunden geht eine Stufe zurück
+PLAN_ENDS_S: Final = 20 * MINUTE_S  # „klima-plan-ende“: so lange gilt der einzige Plan
+SIXA_WITHIN_S: Final = 10 * MINUTE_S  # … danach ist der Versatz binnen so vieler Sekunden 0
+WINTER_NIGHT: Final = datetime(2026, 12, 16, 6, tzinfo=LOCAL_TZ).astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class _ShiftPlan:
+    """Wie ``_Plan``, mit dem Planwert der Klimaanlage für die Betriebsart ``mode`` (Plan 5c).
+
+    ``slots`` nennt je Slot ab der Viertelstunde, in der das Szenario beginnt (``start``), den
+    Versatz in Viertelstunden und ``ShiftSlot``; die Absicht jedes Slots ist Eigenverbrauch. Der
+    Plan entsteht in der Sekunde ``at_s`` und gilt ``valid_s`` danach.
+    """
+
+    start: datetime
+    at_s: int
+    slots: tuple[tuple[int, ShiftSlot], ...]
+    mode: ThermalMode
+    _: KW_ONLY
+    valid_s: int
+
+    def plan(self) -> IntentPlan:
+        created = self.start + timedelta(seconds=self.at_s)
+        first = slot_start(self.start)
+        return IntentPlan(
+            id=self.at_s,
+            created_at=created,
+            valid_until=created + timedelta(seconds=self.valid_s),
+            grid_charge_allowed=False,
+            slots=[
+                IntentPlanSlot(
+                    start=first + offset * SLOT,
+                    intent=OWN_USE,
+                    thermal=hint,
+                    thermal_steps=steps,
+                    thermal_grid_w=grid_w,
+                    thermal_mode=self.mode,
+                )
+                for offset, (steps, grid_w, hint) in self.slots
+            ],
+        )
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        _submit_plan(rt, self.plan())
+
+
+def _shift_every_quarter(
+    start: datetime,
+    duration_s: int,
+    slot: Callable[[int], ShiftSlot],
+    mode: ThermalMode,
+) -> tuple[tuple[int, Action], ...]:
+    """Pläne wie von der app: einer zu Beginn, dann zu jeder Viertelstunde des Laufs, je mit
+    ``PLAN_SLOTS`` Slots ab seiner Viertelstunde, gültig für ``PLAN_VALID_S``; ``slot`` gibt je
+    Viertelstunde des Laufs (0 ist die erste) Planwert, Netzbezug und Hinweis."""
+    into = int((start - slot_start(start)).total_seconds())
+    seconds = sorted({0, *range((QUARTER_S - into) % QUARTER_S, duration_s, QUARTER_S)})
+    events: list[tuple[int, Action]] = []
+    for t in seconds:
+        first = (into + t) // QUARTER_S
+        slots = tuple((q, slot(q)) for q in range(first, first + PLAN_SLOTS))
+        events.append((t, _ShiftPlan(start, t, slots, mode, valid_s=PLAN_VALID_S)))
+    return tuple(events)
+
+
+@dataclass(frozen=True, slots=True)
+class _BatteryCovers:
+    """Der Akku darf wieder entladen (``charger_only`` aus), als Ereignis: Mit Victron im Dry-Run
+    deckt der ESS dann jede Last, auch die, die der Plan dem Netz zugedacht hat."""
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        model.charger_only = False
+
+
+def _step_rule(result: SimResult) -> list[str]:
+    """Jede Erhöhung des Betrags an der UVR ist eine Stufe von 0,5 K, geht nicht über 0 hinweg
+    und kommt mindestens ``KLIMA_STEP_S`` nach der vorigen Erhöhung; Verringerungen sind frei."""
+    found, raised = [], None
+    for t, old, new in _changes(result):
+        if new != 0 and old * new < 0:
+            found.append(
+                f"Die UVR bekam bei {t} s {_kelvin(new)} nach {_kelvin(old)} über 0 hinweg."
+            )
+            raised = t
+            continue
+        if abs(new) <= abs(old):
+            continue
+        if not math.isclose(abs(new) - abs(old), KLIMA_STEP_K):
+            found.append(
+                f"Die UVR bekam bei {t} s {_kelvin(new)} nach {_kelvin(old)}, verlangt ist eine "
+                f"Stufe von {_kelvin(KLIMA_STEP_K)}."
+            )
+        if raised is not None and t - raised < KLIMA_STEP_S:
+            found.append(
+                f"Die UVR bekam bei {t} s eine Erhöhung nur {t - raised} s nach der vorigen, "
+                f"verlangt sind mindestens {KLIMA_STEP_S} s."
+            )
+        raised = t
+    return found
+
+
+STEP_RULE: Final = Check(
+    f"Jede Erhöhung des Betrags an der UVR ist eine Stufe von {_kelvin(KLIMA_STEP_K)}, geht nicht "
+    f"über 0 hinweg und kommt mindestens {KLIMA_STEP_S} s nach der vorigen.",
+    _step_rule,
+)
+
+
+def _never_rejected(result: SimResult) -> list[str]:
+    """Die Safety-Schicht lehnt keinen Versatz an die Klimaanlage ab."""
+    return [
+        f"Die Safety-Schicht lehnte bei {_second(result, d.ts)} s "
+        f"{_kelvin(finite_number(d.requested) or 0.0)} ab ({', '.join(d.codes)})."
+        for d in _at(result.decisions, KLIMA_ACTUATOR)
+        if d.result == DecisionResult.REJECTED
+    ]
+
+
+NEVER_REJECTED: Final = Check(
+    "Die Safety-Schicht lehnt keinen Versatz an die Klimaanlage ab.", _never_rejected
+)
+
+
+def _backs_off(from_s: int, codes: frozenset[str], within_s: int) -> Check:
+    """Ab der Sekunde ``from_s`` wird der Versatz an der UVR nur kleiner, zuerst binnen
+    ``within_s``, und jede Entscheidung, die ihn kleiner macht, nennt einen der ``codes``."""
+    named = " oder ".join(sorted(codes))
+
+    def find(result: SimResult) -> list[str]:
+        changes = [c for c in _changes(result) if c[0] >= from_s]
+        found = [
+            f"Die UVR bekam bei {t} s {_kelvin(new)} nach {_kelvin(old)}: Der Versatz wurde größer."
+            for t, old, new in changes
+            if abs(new) > abs(old)
+        ]
+        first = next((t for t, old, new in changes if abs(new) < abs(old)), None)
+        if first is None or first - from_s > within_s:
+            shown = "nie" if first is None else f"erst bei {first} s"
+            found.append(
+                f"Der Versatz an der UVR ging nach {from_s} s {shown} zurück, verlangt binnen "
+                f"{within_s} s."
+            )
+        last = 0.0
+        for d in _at(result.decisions, KLIMA_ACTUATOR):
+            k = finite_number(d.requested)
+            if k is None:
+                continue
+            t = _second(result, d.ts)
+            if t >= from_s and abs(k) < abs(last) and not codes & set(d.codes):
+                found.append(
+                    f"Die Entscheidung bei {t} s auf {_kelvin(k)} nennt {', '.join(d.codes)}, "
+                    f"verlangt {named}."
+                )
+            last = k
+        return found
+
+    return Check(
+        f"Ab {de(from_s / MINUTE_S)} min geht der Versatz an der UVR binnen {within_s} s zurück, "
+        f"nur wegen {named}, und wird nie größer.",
+        find,
+    )
+
+
+def _without_plan_from(from_s: int) -> Check:
+    """Nach der Sekunde ``from_s`` nennt die Regelung keinen Planwert, und keine Entscheidung an
+    die Klimaanlage nennt ``thermal_plan``."""
+
+    def find(result: SimResult) -> list[str]:
+        found = [
+            f"Die Regelung nannte bei {t} s den Planwert {unit.planned}."
+            for t, unit in _thermal_samples(result)
+            if t > from_s and unit.planned is not None
+        ][:1]
+        found += [
+            f"Die Entscheidung bei {t} s nennt thermal_plan."
+            for d in _at(result.decisions, KLIMA_ACTUATOR)
+            if (t := _second(result, d.ts)) > from_s and "thermal_plan" in d.codes
+        ]
+        return found
+
+    return Check(
+        f"Nach {de(from_s / MINUTE_S)} min nennt die Regelung keinen Planwert und keine "
+        "Entscheidung thermal_plan.",
+        find,
+    )
+
+
+def _klima_plan_vorheizen() -> Scenario:
+    """Billige Nacht, teurer Morgen: Der Wunsch steigt planmäßig auf +3 (+1,5 K), im teuren Block
+    über 0 auf −2 (−1,0 K), nie über die Schrittregel."""
+    start, duration_s, seed = WINTER_NIGHT, EXPENSIVE_S + 30 * MINUTE_S, 40
+
+    def slot(q: int) -> ShiftSlot:
+        return CHEAP if q < EXPENSIVE_S // QUARTER_S else EXPENSIVE
+
+    return Scenario(
+        name="klima-plan-vorheizen",
+        title="Vorheizen in der billigen Nacht",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _klima_setup, mode="heizen", base_w=KLIMA_HEAT_W, soc_pct=60.0, charger_only=True
+        ),
+        intent=_intent(),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, noise_w=KLIMA_NOISE_W),
+            *_shift_every_quarter(start, duration_s, slot, "heizen"),
+        ),
+        checks=Checks(
+            (
+                _reached_before(3 * KLIMA_STEP_K, EXPENSIVE_S),
+                _zero_in_the_second(
+                    _second_of(EXPENSIVE_S), "Beginn des teuren Blocks", "thermal_plan"
+                ),
+                _reached_before(-2 * KLIMA_STEP_K, duration_s),
+                _offset_within(-2 * KLIMA_STEP_K, 3 * KLIMA_STEP_K),
+                STEP_RULE,
+                NEVER_REJECTED,
+                _thermal_reason("thermal_plan"),
+            )
+        ),
+        thermal=True,
+    )
+
+
+def _klima_plan_akku() -> Scenario:
+    """Planwert +2 aus dem Netz, dann deckt der Akku die Last: binnen 6 min eine Stufe zurück und
+    keine mehr hoch, solange er entlädt."""
+    start, duration_s, seed = WINTER_NIGHT, BATTERY_COVERS_S + 15 * MINUTE_S, 41
+    return Scenario(
+        name="klima-plan-akku",
+        title="Akku deckt das geplante Vorheizen",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _klima_setup, mode="heizen", base_w=KLIMA_HEAT_W, soc_pct=60.0, charger_only=True
+        ),
+        intent=_intent(),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, noise_w=KLIMA_NOISE_W),
+            *_shift_every_quarter(start, duration_s, lambda q: PLAN_UP, "heizen"),
+            (BATTERY_COVERS_S, _BatteryCovers()),
+        ),
+        checks=Checks(
+            (
+                _reached_before(2 * KLIMA_STEP_K, BATTERY_COVERS_S),
+                _backs_off(BATTERY_COVERS_S, frozenset({"thermal_battery"}), GUARD_WITHIN_S),
+                _offset_at_the_end(0.0),
+                TOWARDS_MORE,
+                STEP_RULE,
+            )
+        ),
+        thermal=True,
+    )
+
+
+def _klima_plan_ende() -> Scenario:
+    """Planwert +2, dann läuft der Plan ab und die app schweigt: Die Strategie ist die aus 6a, der
+    SOC unter der Schwelle und der Netzbezug holen den Versatz zurück auf 0."""
+    start, duration_s, seed = WINTER_NIGHT, PLAN_ENDS_S + 15 * MINUTE_S, 42
+    slots = tuple((q, PLAN_UP) for q in range(PLAN_SLOTS))
+    sixa = frozenset({"thermal_battery", "thermal_back"})
+    return Scenario(
+        name="klima-plan-ende",
+        title="Plan der Klimaanlage läuft ab",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _klima_setup, mode="heizen", base_w=KLIMA_HEAT_W, soc_pct=60.0, charger_only=True
+        ),
+        intent=_intent(),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, noise_w=KLIMA_NOISE_W),
+            (0, _ShiftPlan(start, 0, slots, "heizen", valid_s=PLAN_ENDS_S)),
+        ),
+        checks=Checks(
+            (
+                _reached_before(2 * KLIMA_STEP_K, PLAN_ENDS_S),
+                _without_plan_from(PLAN_ENDS_S),
+                _backs_off(PLAN_ENDS_S, sixa, SIXA_WITHIN_S),
+                _only_zero_from(
+                    _second_of(PLAN_ENDS_S + SIXA_WITHIN_S), "10 min nach dem Ende des Plans"
+                ),
+                _offset_at_the_end(0.0),
+                TOWARDS_MORE,
+            )
+        ),
+        thermal=True,
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -3530,5 +3863,8 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _klima_paketverlust(),
         _klima_spitze(),
         _klima_teuer_heizen(),
+        _klima_plan_vorheizen(),
+        _klima_plan_akku(),
+        _klima_plan_ende(),
     )
 }

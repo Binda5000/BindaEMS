@@ -350,9 +350,9 @@ def _thermal_json(
     Die Werte kommen aus dem Snapshot (``thermal.<name>.*``, nur mit Qualität ``OK``), die Zähler
     der Pakete und der Werte mit falscher Einheit (``unit_mismatch``, Entscheidung 10) aus dem
     Adapter (``stats``, ohne Adapter leer). Wunsch (Stufen), Grund (Code) und
-    Hinweis, dazu die gelernte Grundlast ``base_w`` und die zuletzt freigebbare Leistung
-    ``spare_w`` setzt die Regelung (``regulated``, ihr Eintrag in ``health()["thermal"]``); ohne
-    ihn, etwa solange sie ruht, sind sie ``None``.
+    Hinweis, dazu die gelernte Grundlast ``base_w``, die zuletzt freigebbare Leistung
+    ``spare_w`` und den Planwert ``planned`` (Stufen, Plan 5c) setzt die Regelung (``regulated``,
+    ihr Eintrag in ``health()["thermal"]``); ohne ihn, etwa solange sie ruht, sind sie ``None``.
 
     Der Sollwert ohne Versatz ist ``setpoint_c`` minus den Versatz, den die UVR gerade anwendet:
     das Echo ``offset_active_k`` (die UVR rechnet ihn in ``setpoint_c`` ein), ohne Echo der
@@ -385,6 +385,7 @@ def _thermal_json(
         "hint": regulated.get("hint"),
         "base_w": regulated.get("base_w"),
         "spare_w": regulated.get("spare_w"),
+        "planned": regulated.get("planned"),
     }
 
 

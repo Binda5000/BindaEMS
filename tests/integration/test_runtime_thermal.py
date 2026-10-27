@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -23,7 +24,15 @@ from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import ActuatorMode, Command, CommandKind, Intent
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.domain import SignalKind, Snapshot
-from bindaems.shared.timeutil import ManualClock
+from bindaems.shared.plan import (
+    PLAN_VALID,
+    BatteryIntent,
+    BatteryIntentKind,
+    IntentPlan,
+    IntentPlanSlot,
+    ThermalMode,
+)
+from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
 THERMAL = "thermal.klima"
 OFFSET = CommandKind.SETPOINT_OFFSET
@@ -66,6 +75,28 @@ def allow_thermal_live(cfg: Config) -> Config:
 
 def intent(version: int, mode: ActuatorMode) -> Intent:
     return Intent(version=version, control=True, actuators={THERMAL: mode})
+
+
+def planned_intent(version: int, now: datetime, steps: int, mode: ThermalMode) -> Intent:
+    """``intent`` (live) mit einem Plan ab ``now``, gültig ``PLAN_VALID``, Planwert ``steps`` für
+    ``mode`` in jedem Slot (Plan 5c)."""
+    first = slot_start(now)
+    plan = IntentPlan(
+        id=version,
+        created_at=now,
+        valid_until=now + PLAN_VALID,
+        grid_charge_allowed=False,
+        slots=[
+            IntentPlanSlot(
+                start=first + n * SLOT,
+                intent=BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH),
+                thermal_steps=steps,
+                thermal_mode=mode,
+            )
+            for n in range(5)
+        ],
+    )
+    return intent(version, ActuatorMode.LIVE).model_copy(update={"plan": plan})
 
 
 class CoeRuntime:
@@ -291,6 +322,7 @@ async def test_health_has_thermal_block(runtime_with_coe) -> None:
         "hint": None,
         "base_w": None,
         "spare_w": None,
+        "planned": None,
     }
 
 
@@ -424,7 +456,18 @@ async def test_health_takes_wish_reason_and_hint_from_the_regulation(runtime_env
         # SOC 50 % unter der Schwelle von 90 %: kein Schritt, der Wunsch bleibt 0
         assert (block["wish"], block["hint"]) == (0, "neutral")
         assert block["reason"] == "thermal_off"
+        assert block["planned"] is None  # ohne Plan kein Planwert
         assert set(env.sent()) == {0}
+        # Plan 5c: Ein Plan mit Planwert +2 fürs Kühlen steht in Health, und der Wunsch folgt ihm
+        # trotz SOC 50 % sofort um eine Stufe (die Schwelle gilt für geplante Stufen nicht).
+        assert rt.submit_intent(planned_intent(2, clock.now(), 2, "kuehlen")).result == "accepted"
+        run(rt, clock, 1)
+        block = rt.health().thermal["klima"]
+        assert (block["planned"], block["wish"], block["reason"]) == (2, 1, "thermal_plan")
+        # ein Plan für Heizen wirkt beim Kühlen nicht
+        rt.submit_intent(planned_intent(3, clock.now(), 2, "heizen"))
+        run(rt, clock, 1)
+        assert rt.health().thermal["klima"]["planned"] is None
     finally:
         assert env.task is not None
         env.task.cancel()

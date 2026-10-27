@@ -1375,13 +1375,19 @@ def test_regulation_peak_and_overload_press_the_wish(reg_with_klima, cfg, monkey
     assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_peak",))]
 
 
-def klima_plan(thermal: str = "neutral", soc_end_pct: float | None = None) -> Intent:
-    """Die Absicht mit einem Plan von ``T0`` an für zwei Stunden, jeder Slot Eigenverbrauch mit
-    ``thermal`` und ``soc_end_pct``."""
+def klima_plan(
+    thermal: str = "neutral",
+    soc_end_pct: float | None = None,
+    *,
+    valid: timedelta = timedelta(hours=2),
+    **slot: Any,
+) -> Intent:
+    """Die Absicht mit einem Plan von ``T0`` an für zwei Stunden (``valid``), jeder Slot
+    Eigenverbrauch mit ``thermal``, ``soc_end_pct`` und den Feldern ``slot``."""
     plan = IntentPlan(
         id=7,
         created_at=T0,
-        valid_until=T0 + timedelta(hours=2),
+        valid_until=T0 + valid,
         grid_charge_allowed=False,
         slots=[
             IntentPlanSlot(
@@ -1389,6 +1395,7 @@ def klima_plan(thermal: str = "neutral", soc_end_pct: float | None = None) -> In
                 intent=BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH),
                 thermal=thermal,
                 soc_end_pct=soc_end_pct,
+                **slot,
             )
             for n in range(8)
         ],
@@ -1591,3 +1598,89 @@ def test_regulation_without_thermal_devices(cfg) -> None:  # Ruling R20
     command = Command(KLIMA, OFFSET, -0.5)
     regulation.note_verdict(command, accepted(command))  # geht an die Laderegelung, ohne Wirkung
     regulation.forget({KLIMA})
+
+
+# --- Planwert der Klimaanlage (Plan 5c, Task 8) ---------------------------------------------------
+
+
+def heat_plan(steps: int = 2, mode: str = "heizen", **kw: Any) -> Intent:
+    """Ein Plan mit dem Planwert ``steps`` für die Betriebsart ``mode`` in jedem Slot."""
+    return klima_plan(thermal_steps=steps, thermal_mode=mode, **kw)
+
+
+def test_regulation_follows_the_plan_value(reg_with_klima, cfg) -> None:
+    # Planwert +2 beim Heizen, ohne Einspeisung und mit SOC 50 % (die Schwelle gilt für geplante
+    # Stufen nicht): +0,5 K sofort, +1,0 K nach 600 s, Grund thermal_plan
+    run = dict(mode="heizen", grid_w=1500.0, soc=50.0, intent=heat_plan())
+    found = klima_run(reg_with_klima, cfg, 0, 700, **run)
+    assert offsets(found) == [(0, 0.5, ("thermal_plan",)), (600, 1.0, ("thermal_plan",))]
+    assert found[-1][1].inputs == {
+        "thermal_steps": 2.0,
+        "export_w": 0.0,
+        "soc_pct": 50.0,
+        "planned_steps": 2.0,
+    }
+    # der Netzbezug des Hauses holt die geplanten Stufen nicht zurück
+    assert klima_run(reg_with_klima, cfg, 710, 2000, **run) == []
+
+
+def test_plan_steps_ignored_when_mode_changes(reg_with_klima, cfg) -> None:
+    # Ein Plan für Heizen wirkt beim Kühlen nie: 6a (900 W Einspeisung → nach 600 s mehr)
+    found = klima_run(reg_with_klima, cfg, 0, 600, intent=heat_plan(3))
+    assert offsets(found) == [(0, 0.0, ("thermal_off",)), (600, -0.5, ("thermal_more",))]
+    assert klima_health(reg_with_klima)["planned"] is None
+    # Plan und Gerät beim Kühlen: der Plan gilt (Einspeisung: der Plan steigt sofort, 600 s nach
+    # der letzten Erhöhung)
+    cool = heat_plan(3, "kuehlen")
+    assert offsets(klima_run(reg_with_klima, cfg, 1200, 1200, intent=cool)) == [
+        (1200, -1.0, ("thermal_plan",))
+    ]
+    # die Anlage wechselt mitten im Plan auf Heizen: im selben Zyklus 0, danach kein Planwert
+    found = klima_run(reg_with_klima, cfg, 1210, 2500, intent=cool, mode="heizen")
+    assert offsets(found)[0] == (1210, 0.0, ("thermal_mode",))
+    assert all(x.command.reasons != ("thermal_plan",) for _, x in found)
+    assert klima_health(reg_with_klima)["planned"] is None
+
+
+def test_health_names_planned_steps(reg_with_klima, cfg) -> None:
+    klima(reg_with_klima, cfg, 0, mode="heizen", intent=heat_plan(-2))
+    assert klima_health(reg_with_klima)["planned"] == -2
+    # ohne Planwert im Slot, ohne Plan und nach seinem Ende: keiner
+    klima(reg_with_klima, cfg, 10, mode="heizen", intent=klima_plan())
+    assert klima_health(reg_with_klima)["planned"] is None
+    klima(reg_with_klima, cfg, 20, mode="heizen")
+    assert klima_health(reg_with_klima)["planned"] is None
+    ended = heat_plan(2, valid=timedelta(minutes=1))
+    klima(reg_with_klima, cfg, 30, mode="heizen", intent=ended)
+    assert klima_health(reg_with_klima)["planned"] == 2
+    klima(reg_with_klima, cfg, 60, mode="heizen", intent=ended)
+    assert klima_health(reg_with_klima)["planned"] is None
+    # in Ruhe nennt Health keine Klimaanlage
+    reg_with_klima.idle(T0)
+    assert reg_with_klima.health(T0)["thermal"] == {}
+
+
+def test_regulation_battery_guard_reads_the_battery_power(reg_with_klima, cfg) -> None:
+    # Akkuleistung positiv beim Laden: −400 W heißt 400 W Entladung. 300 s lang: eine Stufe zurück.
+    run = dict(mode="heizen", grid_w=0.0, intent=heat_plan())
+    klima_run(reg_with_klima, cfg, 0, 600, **run)
+    over = grid(grid_w=0.0, battery_w=-400.0, soc=95.0)
+    found = klima_run(reg_with_klima, cfg, 610, 910, grid_obs=over, **run)
+    assert offsets(found) == [(910, 0.5, ("thermal_battery",))]
+    # ohne bekannte Akkuleistung steigt der Plan nicht
+    unknown = grid(grid_w=0.0, battery_w=None, soc=95.0)
+    assert klima_run(reg_with_klima, cfg, 920, 2000, grid_obs=unknown, **run) == []
+    assert offsets(klima_run(reg_with_klima, cfg, 2010, 2010, **run)) == [
+        (2010, 1.0, ("thermal_plan",))
+    ]
+
+
+def test_regulation_import_threshold_takes_the_planned_grid(reg_with_klima, cfg) -> None:
+    # Planwert 0 mit 1500 W geplantem Netzbezug, eine Stufe aus dem Überschuss: 1200 W Bezug
+    # holen sie nicht zurück, 1800 W nach 300 s schon.
+    plan = klima_plan(thermal_steps=0, thermal_mode="kuehlen", thermal_grid_w=1500.0)
+    klima_run(reg_with_klima, cfg, 0, 600, intent=plan)
+    assert wish(reg_with_klima)["wish"] == 1
+    assert klima_run(reg_with_klima, cfg, 610, 1500, grid_w=1200.0, intent=plan) == []
+    found = klima_run(reg_with_klima, cfg, 1510, 1810, grid_w=1800.0, intent=plan)
+    assert offsets(found) == [(1810, 0.0, ("thermal_back",))]

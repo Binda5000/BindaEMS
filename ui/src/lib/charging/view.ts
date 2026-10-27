@@ -108,7 +108,9 @@ const REASONS: Record<string, string> = {
 	thermal_mode: 'Betriebsart gewechselt, Versatz 0',
 	thermal_stale: 'Keine Werte der Klimaanlage, Versatz 0',
 	thermal_no_echo: 'Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0',
-	thermal_off: 'Klimaanlage aus oder lüftet, Versatz 0'
+	thermal_off: 'Klimaanlage aus oder lüftet, Versatz 0',
+	// im Log mit dem Versatz („… (+0,5 K)“); die Karte zeigt den Versatz in einer eigenen Zeile
+	thermal_plan: 'Klimaanlage folgt dem Plan'
 };
 
 const SURPLUS: Record<'cars_first' | 'battery_first', string> = {

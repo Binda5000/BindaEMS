@@ -517,6 +517,7 @@ def _thermal_sample(
         wish=entry.get("wish"),
         reason=entry.get("reason"),
         peak_pressure=pressure,
+        planned=entry.get("planned"),
     )
 
 

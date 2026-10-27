@@ -619,3 +619,29 @@ def test_offset_text_has_sign_comma_and_one_decimal(value: float, expected: str)
 def test_thermal_reasons_have_texts(code: str, expected: str) -> None:  # Präzisierung 5
     text = decision_text("K", CommandKind.SETPOINT_OFFSET, 0.0, DecisionResult.OK, reasons=(code,))
     assert text == f"K ({expected}): Sollwertversatz 0,0 K – gesendet und bestätigt."
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(1.0, "+1,0"), (-0.5, "\N{MINUS SIGN}0,5"), (0.0, "0,0")]
+)
+def test_thermal_plan_names_the_offset(value: float, expected: str) -> None:  # Plan 5c, Task 8
+    text = decision_text(
+        "K", CommandKind.SETPOINT_OFFSET, value, DecisionResult.OK, reasons=("thermal_plan",)
+    )
+    assert text == (
+        f"K (Klimaanlage folgt dem Plan ({expected} K)): Sollwertversatz {expected} K"
+        " – gesendet und bestätigt."
+    )
+
+
+def test_thermal_plan_without_a_number_drops_the_offset() -> None:
+    text = decision_text(
+        "K",
+        CommandKind.SETPOINT_OFFSET,
+        float("nan"),
+        DecisionResult.REJECTED,
+        reasons=("thermal_plan", "thermal_more"),
+    )
+    assert text.startswith("K (Klimaanlage folgt dem Plan, PV-Überschuss in die Klimaanlage): ")
+    other = decision_text("K", CommandKind.CURRENT, 6, DecisionResult.OK, reasons=("thermal_plan",))
+    assert other.startswith("K (Klimaanlage folgt dem Plan): Strom 6 A")

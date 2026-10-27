@@ -6,6 +6,7 @@ Die ganzen Läufe prüft ``tests/integration/test_sim_scenarios.py``.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
 from typing import Final
 
@@ -236,8 +237,11 @@ def thermal(
     wish: int | None = None,
     reason: str | None = None,
     pressure: bool = False,
+    planned: int | None = None,
 ) -> ThermalSample:
-    return ThermalSample(mode, 600.0, active_k, received, False, wish, reason, pressure)
+    return ThermalSample(
+        mode, 600.0, active_k, received, False, wish, reason, pressure, planned=planned
+    )
 
 
 def sample(t: int, unit: ThermalSample | None, *, grid_w: float = 0.0) -> Sample:
@@ -259,7 +263,16 @@ def run(
     for t in range(duration_s):
         unit = found.get(t)
         if unit is None:
-            unit = ThermalSample(last.mode, 600.0, last.active_k, (), False, last.wish, last.reason)
+            unit = ThermalSample(
+                last.mode,
+                600.0,
+                last.active_k,
+                (),
+                False,
+                last.wish,
+                last.reason,
+                planned=last.planned,
+            )
         last = unit
         samples.append(sample(t, unit, grid_w=grid_w))
     decisions = decisions or []
@@ -469,4 +482,73 @@ def test_checks_without_the_air_conditioner_find_it_missing(cfg: Config) -> None
     )
     assert check(name, "am Ende 0 K").find(result) == [
         "Die UVR wendet am Ende keinen Versatz an, verlangt 0 K."
+    ]
+
+
+# --- Vorheizen und Vorkühlen (Plan 5c, Task 8) ------------------------------------------------
+
+
+def test_plan_step_rule_allows_drops_and_forbids_jumps(cfg: Config) -> None:
+    name = "klima-plan-vorheizen"
+    rule = check(name, "über 0 hinweg")
+    good = [(60, 0.5), (660, 1.0), (1260, 1.5), (2700, 0.0), (2701, -0.5), (3301, -1.0)]
+    assert rule.find(run(cfg, name, steps(*good, mode="heizen"), 3400)) == []
+    across = steps((60, 0.5), (660, 1.0), (1260, -0.5), mode="heizen")
+    assert rule.find(run(cfg, name, across, 1300)) == [
+        "Die UVR bekam bei 1260 s −0,5 K nach +1 K über 0 hinweg."
+    ]
+    close = steps((60, 0.5), (600, 1.0), (700, 0.0), (900, -0.5), mode="heizen")
+    assert rule.find(run(cfg, name, close, 1000)) == [
+        "Die UVR bekam bei 600 s eine Erhöhung nur 540 s nach der vorigen, verlangt sind "
+        "mindestens 600 s.",
+        "Die UVR bekam bei 900 s eine Erhöhung nur 300 s nach der vorigen, verlangt sind "
+        "mindestens 600 s.",
+    ]
+    jump = steps((60, 1.0), mode="heizen")
+    assert rule.find(run(cfg, name, jump, 100)) == [
+        "Die UVR bekam bei 60 s +1 K nach 0 K, verlangt ist eine Stufe von +0,5 K."
+    ]
+
+
+def test_plan_never_rejected(cfg: Config) -> None:
+    name = "klima-plan-vorheizen"
+    rule = check(name, "lehnt keinen")
+    refused = replace(
+        decision(name, 5, -0.5, "thermal_plan", "offset.step"), result=DecisionResult.REJECTED
+    )
+    assert rule.find(run(cfg, name, {}, 10, decisions=[decision(name, 4, 0.5, "x")])) == []
+    assert rule.find(run(cfg, name, {}, 10, decisions=[refused])) == [
+        "Die Safety-Schicht lehnte bei 5 s −0,5 K ab (thermal_plan, offset.step)."
+    ]
+
+
+def test_plan_akku_backs_off_in_time_and_only_for_the_battery(cfg: Config) -> None:
+    name = "klima-plan-akku"
+    rule = check(name, "binnen 360 s zurück")
+    good = steps((60, 0.5), (660, 1.0), (1800, 0.5), (2100, 0.0), mode="heizen")
+    decisions = [decision(name, 1800, 0.5, "thermal_battery")]
+    assert rule.find(run(cfg, name, good, 2400, decisions=decisions)) == []
+    late = steps((60, 0.5), (660, 1.0), (1900, 0.5), (1950, 1.0), mode="heizen")
+    wrong = [decision(name, 660, 1.0, "thermal_plan"), decision(name, 1900, 0.5, "thermal_back")]
+    assert rule.find(run(cfg, name, late, 2400, decisions=wrong)) == [
+        "Die UVR bekam bei 1950 s +1 K nach +0,5 K: Der Versatz wurde größer.",
+        "Der Versatz an der UVR ging nach 1500 s erst bei 1900 s zurück, verlangt binnen 360 s.",
+        "Die Entscheidung bei 1900 s auf +0,5 K nennt thermal_back, verlangt thermal_battery.",
+    ]
+    assert rule.find(run(cfg, name, steps((60, 0.5), mode="heizen"), 2400)) == [
+        "Der Versatz an der UVR ging nach 1500 s nie zurück, verlangt binnen 360 s."
+    ]
+
+
+def test_plan_ende_names_no_plan_after_its_end(cfg: Config) -> None:
+    name = "klima-plan-ende"
+    rule = check(name, "keinen Planwert")
+    during = {1100: thermal("heizen", planned=2), 1200: thermal("heizen")}
+    decisions = [decision(name, 1100, 1.0, "thermal_plan"), decision(name, 1201, 0.5, "x")]
+    assert rule.find(run(cfg, name, during, 1300, decisions=decisions)) == []
+    after = {1100: thermal("heizen", planned=2), 1201: thermal("heizen", planned=2)}
+    late = [decision(name, 1300, 0.5, "thermal_plan")]
+    assert rule.find(run(cfg, name, after, 1400, decisions=late)) == [
+        "Die Regelung nannte bei 1201 s den Planwert 2.",
+        "Die Entscheidung bei 1300 s nennt thermal_plan.",
     ]

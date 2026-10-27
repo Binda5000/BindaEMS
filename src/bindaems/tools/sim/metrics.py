@@ -161,8 +161,9 @@ class ThermalSample:
     bekam (``received_k``), und ob das C.M.I. schweigt (``silent``).
 
     Aus der Regelung dieser Sekunde: Wunsch in Stufen und Grund (``wish``, ``reason``; ohne Stand
-    ``None``) und ob der 15-min-Wächter Druck macht (``peak_pressure``: Zustand ``exceeded`` oder
-    eine verlangte Senkung über 0, wie ``PeakGuard.pressure``).
+    ``None``), ob der 15-min-Wächter Druck macht (``peak_pressure``: Zustand ``exceeded`` oder
+    eine verlangte Senkung über 0, wie ``PeakGuard.pressure``) und der Planwert in Stufen
+    (``planned``, Plan 5c; ohne ``None``).
     """
 
     mode: str
@@ -173,6 +174,7 @@ class ThermalSample:
     wish: int | None = None
     reason: str | None = None
     peak_pressure: bool = False
+    planned: int | None = None
 
 
 @dataclass(frozen=True)

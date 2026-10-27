@@ -854,8 +854,8 @@ def test_simulator_section_matches_the_tool(capsys: pytest.CaptureFixture[str]) 
     assert documented == known - {"--help"}
     scenarios = re.findall(r"^\| `([a-z0-9-]+)` \|", section, re.MULTILINE)
     assert scenarios == list(SCENARIOS)
-    assert len(SCENARIOS) == 39 and "dreiunddreißig" not in section  # die Zahl im Text zieht mit
-    assert section.count("neununddreißig") == 3
+    assert len(SCENARIOS) == 42 and "neununddreißig" not in section  # die Zahl im Text zieht mit
+    assert section.count("zweiundvierzig") == 3
 
 
 def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:
@@ -1337,7 +1337,7 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
 
     section = " ".join(_guide_section("Klimaanlage (Phase 6a)").split())
     codes = {code: text for code, text in _REASON_TEXT.items() if code.startswith("thermal_")}
-    assert len(codes) == 10
+    assert len(codes) == 11
     for code, text in codes.items():
         assert f"| `{code}` | {text} |" in section, code
     assert f"`{THERMAL_EXCEPTION}`" in section

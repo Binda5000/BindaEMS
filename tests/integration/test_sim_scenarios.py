@@ -90,7 +90,9 @@ KLIMA = [
     "klima-spitze",
     "klima-teuer-heizen",
 ]
-ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *KLIMA]
+# die Szenarien für Vorheizen und Vorkühlen (Plan 5c, Task 8), am CoE-Adapter und live
+KLIMA_PLAN = ["klima-plan-vorheizen", "klima-plan-akku", "klima-plan-ende"]
+ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *KLIMA, *KLIMA_PLAN]
 # Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen. Der
 # Befund aus „klima-auto-vorrang“ (Schritt der Klimaanlage beim Start des e-Golf) ist mit dem
 # Anlauf behoben (Ruling R23 a).
@@ -109,7 +111,7 @@ def test_battery_and_peak_scenarios_are_registered() -> None:
 
 def test_assignment_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[18:21] == ["tesla-evcs", "egolf-twc", "gast-evcs"]
-    assert len(SCENARIOS) == 39
+    assert len(SCENARIOS) == 42
 
 
 def test_tesla_off_scenarios_are_registered() -> None:
@@ -128,9 +130,10 @@ def test_planned_scenarios_are_registered() -> None:
 
 
 def test_klima_scenarios_are_registered() -> None:
-    assert list(SCENARIOS)[-6:] == KLIMA
-    assert all(SCENARIOS[name].thermal and SCENARIOS[name].live for name in KLIMA)
-    assert not any(SCENARIOS[name].thermal for name in list(SCENARIOS)[:-6])
+    assert list(SCENARIOS)[-9:] == [*KLIMA, *KLIMA_PLAN]
+    assert all(SCENARIOS[name].thermal and SCENARIOS[name].live for name in [*KLIMA, *KLIMA_PLAN])
+    assert not any(SCENARIOS[name].thermal for name in list(SCENARIOS)[:-9])
+    assert not any(SCENARIOS[name].victron_live for name in KLIMA_PLAN)
 
 
 @pytest.mark.parametrize("name", ALL)
