@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 import uvicorn
-from tests.ui_world import DEMO_PASSWORD, World, build_world
+from tests.ui_world import DEMO_PASSWORD, World, build_world, demo_thermal_stage
 
 from bindaems.shared.config import load_config
 
@@ -51,19 +51,21 @@ async def serve(args: argparse.Namespace) -> None:
         flush=True,
     )
     ticker = asyncio.create_task(_tick(world))
-    # Der Planungsdienst läuft wie in der app (lifespan ist aus): „Neu planen“ geht durch ihn
-    planner = asyncio.create_task(world.app.planning.run())
-    try:
-        config = uvicorn.Config(
-            world.app.app, host=args.host, port=args.port, log_level="warning", lifespan="off"
-        )
-        await uvicorn.Server(config).serve()
-    finally:
-        for task in (planner, ticker):
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        world.close()
+    # Der Planungsdienst läuft wie in der app (lifespan ist aus): „Neu planen“ geht durch ihn.
+    # Seine Pläne zeigen wie der erste die Vorschau von Vorheizen und Vorkühlen.
+    with demo_thermal_stage():
+        planner = asyncio.create_task(world.app.planning.run())
+        try:
+            config = uvicorn.Config(
+                world.app.app, host=args.host, port=args.port, log_level="warning", lifespan="off"
+            )
+            await uvicorn.Server(config).serve()
+        finally:
+            for task in (planner, ticker):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            world.close()
 
 
 def main() -> None:

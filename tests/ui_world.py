@@ -1094,6 +1094,29 @@ def _heating(app: AppRuntime) -> Iterator[None]:
         app.live.health = health
 
 
+def _demo_apply_thermal(plan: Plan, *, entry: Any, **kwargs: Any) -> Plan:
+    """Der zweite Planungsschritt der laufenden Demo: wie beim ersten Plan heizt die Klimaanlage
+    (nur für die Verschiebung, Health der API bleibt „unbekannt“), die Verschiebung ist die feste
+    der Demo."""
+    heating = {
+        **(entry or {}),
+        "mode": "heizen",
+        "running": True,
+        "actual_c": 20.6,
+        "base_setpoint_c": THERMAL_SETPOINT_C,
+    }
+    return apply_thermal(plan, entry=heating, shift_fn=_demo_shift, **kwargs)
+
+
+@contextmanager
+def demo_thermal_stage() -> Iterator[None]:
+    """Für das Demo-Backend: Auch die Pläne des laufenden Planungsdienstes (Start, Viertelstunde,
+    „Neu planen“) zeigen die Vorschau. Ohne das ersetzt der erste Lauf von ``planning.run`` den
+    Plan der Demo-Welt sofort durch einen ohne Vorschau (Betriebsart „unbekannt“, Grund „aus“)."""
+    with patch("bindaems.app.planning.service.apply_thermal", _demo_apply_thermal):
+        yield
+
+
 async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
     """Ein Plan um 09:01 neben dem von 10:00, damit „Plan gegen Ist“ für 09:00 bis 10:00 Plan
     und Ist zeigt.
