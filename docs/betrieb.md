@@ -448,10 +448,13 @@ Die app meldet ihre Sensoren per MQTT Discovery am Mosquitto von Home Assistant 
 Befehle der Bedienelemente unter `bindaems/cmd/`. Lege dafür einen eigenen Benutzer `bindaems` an;
 sein Passwort steht in `BINDAEMS_HA_MQTT_PASSWORD`. Die ACL beschränkt ihn auf das Nötige (beim
 Mosquitto-Add-on über `customize` und eine ACL-Datei unter `/share/mosquitto`). Die Bedienelemente
-brauchen dafür sechs Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
-Plan 3c, die Unterstützungsschwelle), `text` (seit Plan 4b, die Abfahrtszeit) und `button` und das
-Leserecht auf `bindaems/cmd/#`. Nach dem Ausrollen von Plan 4b ergänzt du die Zeile für `text`; ohne
-sie fehlt die Entität „Abfahrtszeit“ in Home Assistant.
+brauchen dafür sieben Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
+Plan 3c, die Unterstützungsschwelle), `time` (seit Plan „Abfahrt als Uhrzeit“, die Abfahrtszeit; dafür
+brauchst du Home Assistant ab 2026.5), `text`, `button` und das Leserecht auf `bindaems/cmd/#`. Die
+Zeile für `text` bleibt, obwohl die Abfahrtszeit kein Textfeld mehr ist: Die app veröffentlicht bei
+jedem MQTT-Verbinden und beim Neustart von Home Assistant eine leere Konfiguration für das alte
+Textfeld, damit Home Assistant es entfernt, und dafür braucht sie das Schreibrecht. Ohne die Zeile für
+`time` fehlt die Entität „Abfahrtszeit“ in Home Assistant.
 
 ```text
 user bindaems
@@ -460,6 +463,7 @@ topic write homeassistant/binary_sensor/bindaems/#
 topic write homeassistant/select/bindaems/#
 topic write homeassistant/switch/bindaems/#
 topic write homeassistant/number/bindaems/#
+topic write homeassistant/time/bindaems/#
 topic write homeassistant/text/bindaems/#
 topic write homeassistant/button/bindaems/#
 topic write bindaems/#
@@ -528,7 +532,7 @@ steht die Quelle „ha“.
 |---|---|---|
 | Lademodus (je Fahrzeug) | Auswahl | PV-Überschuss, Min+PV, Sofort, Aus oder Geplant; „Boost“ gibt es hier nicht |
 | Ziel-SOC (je Fahrzeug) | Zahl | das Ziel für „Geplant“ in %, eine ganze Zahl von 20 bis 100; die Abfahrt bleibt |
-| Abfahrtszeit (je Fahrzeug) | Text | die tägliche Abfahrt für „Geplant“ als `HH:MM` (00:00 bis 23:59); das Ziel bleibt |
+| Abfahrtszeit (je Fahrzeug) | Uhrzeit | die tägliche Abfahrt für „Geplant“, Uhrzeit von 00:00 bis 23:59 (Sekunden fallen weg); das Ziel bleibt |
 | Boost (je Fahrzeug) | Taste | Boost bis zum Abstecken, höchstens 12 h |
 | Boost beenden (je Fahrzeug) | Taste | beendet den Boost |
 | Automatik Ziel und Abfahrt (je Fahrzeug) | Schalter | schaltet die Automatik, die Ziel und Abfahrt von „Geplant“ nach dem Vorschlag setzt (Abschnitt „Fahrverhalten (Phase 5b)“); ab Werk aus. Eine Änderung ist eine neue Version der Einstellungen und steht im Änderungsprotokoll als `control.automation` mit der Quelle „ha“ |
@@ -2490,8 +2494,8 @@ laden: Für ihn gibt es weder Ladestand noch Abfahrt.
   Abfahrtszeit setzt, ersetzt den Tag: ohne `departure_on` im Aufruf wird er gelöscht. Ein Aufruf ohne
   Abfahrtszeit lässt ihn stehen, und `departure_on` ohne Abfahrtszeit lehnt die app ab („Ein
   Abfahrtstag verlangt eine Abfahrtszeit.“). Im Änderungsprotokoll steht er mit Wochentag: „Ziel 80 %,
-  Abfahrt Mo 23.11. 07:15“. Die Home-Assistant-Entität „Abfahrtszeit“ sendet nur die Uhrzeit und
-  löscht den Tag also.
+  Abfahrt Mo 23.11. 07:15“. Die Home-Assistant-Entität „Abfahrtszeit“ (`time`) sendet nur die Uhrzeit
+  und löscht den Tag also.
 - **Ladestand** (Health `soc_pct` mit `soc_source`):
   - `measured` (gemessen): beim Tesla aus Tessie, höchstens 900 s alt; beim e-Golf aus Home Assistant
     (`soc_entity`; die Einstellung steht unten in „Zuordnung Auto und Wallbox“).
@@ -3392,7 +3396,9 @@ nicht nötig.
 
 1. **ACL ergänzen:** In der ACL des Mosquitto-Benutzers `bindaems` die Zeile
    `topic write homeassistant/text/bindaems/#` eintragen (Abschnitt 7) und das Add-on neu starten. Ohne
-   sie fehlt in Home Assistant die Entität „Abfahrtszeit“; alles andere geht.
+   sie fehlt in Home Assistant die Entität „Abfahrtszeit“; alles andere geht. Seit Plan „Abfahrt als
+   Uhrzeit“ ist die Abfahrtszeit eine `time`-Entität und braucht zusätzlich die Zeile
+   `topic write homeassistant/time/bindaems/#` (Home Assistant ab 2026.5); die Zeile für `text` bleibt.
 2. **Regelbetrieb aus:** im UI unter **System** → „Bedienung“ oder in Home Assistant. Der core übergibt
    die Aktoren und geht nach OBSERVE (Abschnitt 13); warte, bis die Übergabe fertig ist. Notiere dir die
    Einstellungen der Seite „Laden“ (für einen Rollback, Abschnitt 4).

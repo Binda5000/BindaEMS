@@ -608,8 +608,8 @@ Zeile „Übersicht“.
     Autos, Auslöser „Fahrzeug geändert“, drei neue Grundcodes, Plausibilität mit Autos.
   - **app:** `PUT /api/control/vehicles/{key}/target`, Zählung der geplanten Ladungen (Migration
     `0012`, Tabelle `planned_charge`) und `planned` in `GET /api/stats`; HA vollständig (Ziel-SOC,
-    Abfahrtszeit als `text`, „Fertig um“, „Ziel erreichbar“, „Ziel-SOC unerreichbar“) und
-    Benachrichtigungen für alle Warnungen.
+    Abfahrtszeit mit 4b als `text`, seit Plan „Abfahrt als Uhrzeit“ als `time`, „Fertig um“,
+    „Ziel erreichbar“, „Ziel-SOC unerreichbar“) und Benachrichtigungen für alle Warnungen.
   - **UI:** Ziel-SOC, Abfahrt und „Fertig um“ auf „Laden“, Diagramm „Autos“ im Zeitplan, Karte
     „Geplantes Laden“ in der Statistik.
   - **Simulator und Szenarien:** fünf Szenarien dazu (jetzt 33), Planungsszenarien mit einem Auto.
@@ -631,8 +631,9 @@ Zeile „Übersicht“.
       überschreiten (Spec 18, „Stand Plan 4b“, „Offen“).
     - Die Lösezeit mit einem Auto in den Wintermonaten mit Leistungspreis hat im Dev-Container die
       Grenze von 20 s erreicht; an der Anlagenmaschine messen.
-    - Einmal in HA prüfen, dass die Text-Entität „Abfahrtszeit“ „unbekannt“ zeigt (nicht den Text
-      „None“), solange keine Absicht bekannt ist.
+    - Einmal in HA prüfen, dass die Entität „Abfahrtszeit“ (seit Plan „Abfahrt als Uhrzeit“ eine
+      `time`-Entität statt des Textfelds) „unbekannt“ zeigt (nicht „None“), solange keine Absicht
+      bekannt ist.
     - ~~`horizon_need` hat keinen Puffer: Liegt die Abfahrt knapp hinter dem Ende des Horizonts, gibt es
       keinen Spielraum.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K18)
     - Die gesammelten Kleinigkeiten stehen in der Abschlusszusammenfassung
@@ -1640,7 +1641,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      im Betriebshandbuch, „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“:
      1. **ACL:** Der Benutzer `bindaems` braucht für die Abfahrtszeit die Zeile
         `topic write homeassistant/text/bindaems/#` in der ACL von Mosquitto (Betriebshandbuch 7),
-        danach das Add-on neu starten. Ohne sie fehlt in Home Assistant nur die Abfahrtszeit.
+        danach das Add-on neu starten. Ohne sie fehlt in Home Assistant nur die Abfahrtszeit. Seit Plan
+        „Abfahrt als Uhrzeit“ braucht der Benutzer zusätzlich `topic write homeassistant/time/bindaems/#`;
+        die Zeile für `text` bleibt.
      2. **Regelbetrieb aus** (Seite „System“ oder HA), dann die **Datenbank kopieren**
         (`/backup/vor-plan-4b.sqlite3`; eine ältere app startet mit der Migration `0012` nicht).
      3. **Ausrollen:** `cd /opt/bindaems && docker compose pull && docker compose up -d`; core und app
@@ -1984,6 +1987,19 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    - an der Anlage das Ausrollen von `ems-app` mit oder nach 4b und 6a (Punkt 10 unter „Offen an der
      Anlage“) und die Abnahme über 28 Tage;
    - als nächster Plan **5b (Fahrverhalten)**, Spec 10.4 und 18; danach 5c (Vorheizen und Vorkühlen).
+9. **Plan „Abfahrt als Uhrzeit“** (`docs/superpowers/plans/2026-10-27-ha-abfahrt-als-uhrzeit.md`): Die
+   Home-Assistant-Entität „Abfahrtszeit“ je Fahrzeug ist jetzt eine MQTT-`time`-Entität
+   (`time.bindaems_<auto>_abfahrtszeit` statt `text.bindaems_<auto>_abfahrtszeit`). An der Anlage in
+   dieser Reihenfolge:
+   1. Die Home-Assistant-Version prüfen (Einstellungen → Info, mindestens 2026.5).
+   2. In der ACL des Benutzers `bindaems` die Zeile `topic write homeassistant/time/bindaems/#`
+      ergänzen (die Zeile für `text` bleibt) und das Mosquitto-Add-on neu starten.
+   3. `ems-app` ziehen.
+   4. In Home Assistant prüfen, dass `time.bindaems_<auto>_abfahrtszeit` die Abfahrt zeigt und das alte
+      Textfeld weg ist.
+   5. Dann die neuen Dashboard-Dateien (`/mnt/project-files/dashboard/`) einspielen.
+   6. Eigene Automationen, die die alte ID `text.bindaems_…_abfahrtszeit` nennen, auf die neue ID
+      umstellen.
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
