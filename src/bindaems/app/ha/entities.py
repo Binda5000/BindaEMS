@@ -15,7 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
-from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
+from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE, guest_range
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.learning.driving_profile import (
@@ -35,6 +35,7 @@ from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import (
     ASSIGNMENT_AUTOMATIC,
+    HA_GUEST_LIMIT_ID,
     HA_THERMAL_PREFIX,
     THERMAL_DEFAULT_LABEL,
     Config,
@@ -285,6 +286,30 @@ def _target_soc_state(key: str) -> Callable[[HaInputs], str]:
         if inputs.intent is None:
             return UNKNOWN
         return str(inputs.intent.vehicles.get(key, VehicleIntent()).target_soc_pct)
+
+    return value
+
+
+def _now_max_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    """Höchststrom in „Sofort“ in A; ohne Limit (``None``) zeigt HA den Höchststrom des Autos."""
+
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        limit = inputs.intent.vehicles.get(key, VehicleIntent()).now_max_a
+        return str(cfg.vehicles[key].max_a if limit is None else limit)
+
+    return value
+
+
+def _guest_now_max_state(high: int) -> Callable[[HaInputs], str]:
+    """Wie ``_now_max_state`` für Gäste; ohne Limit gilt das obere Ende des EVCS-Bereichs."""
+
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        limit = inputs.intent.guest.now_max_a
+        return str(high if limit is None else limit)
 
     return value
 
@@ -871,6 +896,26 @@ def _price(
 
 def build_entities(cfg: Config) -> list[EntitySpec]:
     main = MAIN_DEVICE
+    # Gäste können nur an der EVCS begrenzt werden; ohne EVCS gibt es die Zahl nicht
+    span = guest_range(cfg)
+    guest_limit = (
+        [
+            EntitySpec(
+                HA_GUEST_LIMIT_ID,
+                "number",
+                "Gast-Sofort-Höchststrom",
+                main,
+                _guest_now_max_state(span[1]),
+                unit="A",
+                command=True,
+                min=float(span[0]),
+                max=float(span[1]),
+                step=1.0,
+            )
+        ]
+        if span is not None
+        else []
+    )
     entities = [
         _price("price_now", "Bezugspreis", lambda i: fmt(i.price_now_ct, 2), _price_attributes),
         _price("feed_in_price", "Einspeisepreis", lambda i: fmt(i.feed_in_ct, 2)),
@@ -1043,6 +1088,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             _guest_mode_state,
             tuple(GUEST_MODE_LABELS.values()),
         ),
+        *guest_limit,
         _control(
             "grid_charge",
             "switch",
@@ -1135,6 +1181,18 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 command=True,
                 min=float(TARGET_SOC_MIN),
                 max=float(TARGET_SOC_MAX),
+                step=1.0,
+            ),
+            EntitySpec(
+                f"{oid}_now_max_a",
+                "number",
+                "Sofort-Höchststrom",
+                device,
+                _now_max_state(cfg, key),
+                unit="A",
+                command=True,
+                min=float(vehicle.min_a),
+                max=float(vehicle.max_a),
                 step=1.0,
             ),
             EntitySpec(

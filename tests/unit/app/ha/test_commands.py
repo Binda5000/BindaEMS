@@ -13,7 +13,9 @@ from bindaems.app.control.intent import (
     SetBoost,
     SetControl,
     SetGuestMode,
+    SetGuestNowLimit,
     SetMode,
+    SetNowLimit,
     SetSupport,
     SetTarget,
     UnknownTarget,
@@ -591,6 +593,76 @@ async def test_target_number_out_of_range_or_no_whole_number_is_rejected(
             for shown in ("80.5", "4_5", "viel", "nan", "")
         ),
     ]
+
+
+async def test_now_max_a_number_sets_only_the_limit(handler, intents, clock) -> None:
+    for key, payload in (("egolf", "10"), ("egolf", "10.0"), ("tesla", "5"), ("tesla", "16")):
+        await handler(f"{key}_now_max_a", payload)
+        clock.advance(1.0)
+    # die Normalisierung des Höchststroms auf „volle Leistung“ macht der IntentService
+    assert [change for change, _, _ in intents.applied] == [
+        SetNowLimit("egolf", 10),
+        SetNowLimit("egolf", 10),
+        SetNowLimit("tesla", 5),
+        SetNowLimit("tesla", 16),
+    ]
+
+
+async def test_now_max_a_number_out_of_range_or_no_whole_number_is_rejected(
+    handler, intents, rejections, clock
+) -> None:
+    for payload in ("4", "17", "10.5", "4_5", "abc", "nan", ""):
+        await handler("tesla_now_max_a", payload)
+        clock.advance(1.0)
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + "Sofort-Höchststrom „4“ liegt außerhalb von 5–16 A.",
+        PREFIX + "Sofort-Höchststrom „17“ liegt außerhalb von 5–16 A.",
+        *(
+            PREFIX + f"Unbekannter Befehl „{shown}“ für „Sofort-Höchststrom“."
+            for shown in ("10.5", "4_5", "abc", "nan", "")
+        ),
+    ]
+
+
+async def test_now_max_a_range_follows_the_vehicle(handler, intents, rejections) -> None:
+    await handler("egolf_now_max_a", "5")  # der e-Golf lädt erst ab 6 A
+    assert intents.applied == []
+    assert rejections.texts == [PREFIX + "Sofort-Höchststrom „5“ liegt außerhalb von 6–16 A."]
+
+
+async def test_guest_now_max_a_number(handler, intents, rejections, clock) -> None:
+    for payload in ("8", "8.0", "6", "16", "5", "17", "abc"):
+        await handler("guest_now_max_a", payload)
+        clock.advance(1.0)
+    assert [change for change, _, _ in intents.applied] == [
+        SetGuestNowLimit(8),
+        SetGuestNowLimit(8),
+        SetGuestNowLimit(6),
+        SetGuestNowLimit(16),
+    ]
+    assert rejections.texts == [
+        PREFIX + "Sofort-Höchststrom „5“ liegt außerhalb von 6–16 A.",
+        PREFIX + "Sofort-Höchststrom „17“ liegt außerhalb von 6–16 A.",
+        PREFIX + "Unbekannter Befehl „abc“ für „Gast-Sofort-Höchststrom“.",
+    ]
+
+
+async def test_now_max_a_through_the_real_service_stores_full_power_as_none(
+    cfg, audit: AuditLog, clock: ManualClock, rejections
+) -> None:
+    client = FakeCoreClient()
+    service = IntentService(client, LiveState(), FakeFeed(), audit, clock, cfg)  # type: ignore[arg-type]
+    handler = HaCommandHandler(cfg, service, rejections, clock)
+    await handler("tesla_now_max_a", "10")
+    await handler("guest_now_max_a", "8")
+    assert client.valid is not None
+    assert (client.valid.vehicles["tesla"].now_max_a, client.valid.guest.now_max_a) == (10, 8)
+    clock.advance(1.0)
+    await handler("tesla_now_max_a", "16")
+    await handler("guest_now_max_a", "16")
+    assert (client.valid.vehicles["tesla"].now_max_a, client.valid.guest.now_max_a) == (None, None)
+    assert rejections.texts == []
 
 
 async def test_departure_time_sets_only_the_departure(handler, intents, clock) -> None:

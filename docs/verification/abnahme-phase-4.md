@@ -264,6 +264,7 @@ Prüfschritte, je Zeile der Tabelle:
 |---|---|---|---|---|
 | Lademodus (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, Fahrzeugkarte | ☐ | ☐ |
 | Ziel-SOC (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, Fahrzeugkarte in „Geplant“ | ☐ | ☐ |
+| Sofort-Höchststrom (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, Fahrzeugkarte in „Sofort“ („Höchststrom“) | ☐ | ☐ |
 | Abfahrtszeit (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, Fahrzeugkarte in „Geplant“ („Abfahrt“) | ☐ | ☐ |
 | Boost (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, „Boost beenden“ und „bis HH:MM“ | ☐ | – (Taste ohne Zustand) |
 | Boost beenden (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, wieder „Boost“ | ☐ | – (Taste ohne Zustand) |
@@ -271,6 +272,7 @@ Prüfschritte, je Zeile der Tabelle:
 | Zuordnung (je Wallbox) | „BindaEMS EVCS“ / „BindaEMS Wall Connector“ | Laden, Wallbox-Karte | ☐ | ☐ |
 | Regelbetrieb | „BindaEMS“ | System, „Bedienung“ | ☐ | ☐ |
 | Gast-Lademodus | „BindaEMS“ | Laden, „Gast“ | ☐ | ☐ |
+| Gast-Sofort-Höchststrom | „BindaEMS“ | Laden, „Gast“ in „Sofort“ („Höchststrom“) | ☐ | ☐ |
 | Netzladen erlaubt | „BindaEMS“ | Zeitplan | ☐ | ☐ |
 | Akku-Unterstützung erlaubt | „BindaEMS“ | Laden, „Akku-Unterstützung“ | ☐ | ☐ |
 | Unterstützungsschwelle | „BindaEMS“ | Laden, „Akku-Unterstützung“ | ☐ | ☐ |

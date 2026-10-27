@@ -1,7 +1,8 @@
 """Befehle aus Home Assistant (Plan 2d, Präzisierung 15).
 
 Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Ziel-SOC und Abfahrt,
-Boost, Zuordnung, Gast-Modus, Akku-Unterstützung und die Automatik für Ziel und Abfahrt.
+Sofort-Höchststrom (je Fahrzeug und für Gäste), Boost, Zuordnung, Gast-Modus, Akku-Unterstützung
+und die Automatik für Ziel und Abfahrt.
 Live-Schaltung (``SetActuators``) und Vorrang (``SetPriority``) gibt es hier nicht.
 Jeder Befehl wird eine ``Change`` an den ``IntentService``; was Home Assistant sendet, kann nichts
 außer diesen Änderungen auslösen. Ein ungültiger oder abgelehnter Befehl ändert nichts und wird
@@ -17,6 +18,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Final, Protocol
 
 import structlog
@@ -33,10 +35,13 @@ from bindaems.app.control.intent import (
     SetBoost,
     SetControl,
     SetGuestMode,
+    SetGuestNowLimit,
     SetMode,
+    SetNowLimit,
     SetSupport,
     SetTarget,
     UnknownTarget,
+    guest_range,
 )
 from bindaems.app.control.routes import CONFLICT, CORE_DOWN
 from bindaems.app.core_link import CoreUnavailableError
@@ -184,6 +189,24 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
 
         return parse
 
+    def now_limit(
+        low: int, high: int, change: Callable[[int], Change]
+    ) -> Callable[[str], Change | None]:
+        """Höchststrom in „Sofort“: eine ganze Zahl von ``low`` bis ``high`` A. Dass der Höchststrom
+        selbst „volle Leistung“ (``None``) ist, entscheidet der ``IntentService``."""
+
+        def parse(payload: str) -> Change | None:
+            amps = _whole_number(payload)
+            if amps is None:
+                return None
+            if not low <= amps <= high:
+                raise Refused(
+                    f"Sofort-Höchststrom „{_shown(payload)}“ liegt außerhalb von {low}–{high} A."
+                )
+            return change(int(amps))
+
+        return parse
+
     def departure(key: str) -> Callable[[str], Change | None]:
         """Nur die Abfahrt (``HH:MM``, von Home Assistant ``HH:MM:SS``; die Sekunden fallen weg).
 
@@ -244,6 +267,11 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         "battery_support": _Command("Akku-Unterstützung erlaubt", support_switch, option=False),
         "support_soc": _Command("Unterstützungsschwelle", support_threshold, option=False),
     }
+    span = guest_range(cfg)
+    if span is not None:
+        table["guest_now_max_a"] = _Command(
+            "Gast-Sofort-Höchststrom", now_limit(*span, SetGuestNowLimit), option=False
+        )
     if planning:
         table["grid_charge"] = _Command("Netzladen erlaubt", grid_charge, option=False)
         table["replan"] = _Command(
@@ -253,6 +281,12 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         oid = object_id(key)
         table[f"{oid}_mode"] = _Command("Lademodus", mode(key), option=True)
         table[f"{oid}_target_soc"] = _Command("Ziel-SOC", target_soc(key), option=False)
+        vehicle = cfg.vehicles[key]
+        table[f"{oid}_now_max_a"] = _Command(
+            "Sofort-Höchststrom",
+            now_limit(vehicle.min_a, vehicle.max_a, partial(SetNowLimit, key)),
+            option=False,
+        )
         table[f"{oid}_departure"] = _Command("Abfahrtszeit", departure(key), option=False)
         table[f"{oid}_boost"] = _Command("Boost", press(SetBoost(key, True)), option=False)
         table[f"{oid}_boost_stop"] = _Command(

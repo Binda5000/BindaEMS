@@ -33,7 +33,7 @@ from bindaems.app.planning.builder import build_plan
 from bindaems.app.prices.service import PriceService
 from bindaems.app.stats.service import TodayStats
 from bindaems.shared.config import Config, ha_object_id
-from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
+from bindaems.shared.control import ChargeMode, GuestIntent, Intent, SupportIntent, VehicleIntent
 from bindaems.shared.plan import BatteryIntent, PlanVehicle
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 
@@ -78,6 +78,7 @@ def test_entities_from_config(cfg) -> None:
         "watchdog_tripped",
         "regulation",
         "guest_mode",
+        "guest_now_max_a",
         "grid_charge",
         "battery_support",
         "support_soc",
@@ -91,6 +92,7 @@ def test_entities_from_config(cfg) -> None:
         "tesla_wallbox",
         "tesla_charge_energy",
         "tesla_target_soc",
+        "tesla_now_max_a",
         "tesla_departure",
         "tesla_done_by",
         "tesla_target_reachable",
@@ -105,6 +107,7 @@ def test_entities_from_config(cfg) -> None:
         "egolf_wallbox",
         "egolf_charge_energy",
         "egolf_target_soc",
+        "egolf_now_max_a",
         "egolf_departure",
         "egolf_done_by",
         "egolf_target_reachable",
@@ -936,6 +939,60 @@ def test_target_soc_number_and_departure_time(cfg) -> None:
     )
     unknown = sample_inputs(intent=None)
     assert {state(cfg, f"tesla_{s}", unknown) for s in ("target_soc", "departure")} == {"None"}
+
+
+def test_now_max_a_number_per_vehicle(cfg) -> None:
+    tesla, egolf = config_of(cfg, "tesla_now_max_a"), config_of(cfg, "egolf_now_max_a")
+    assert (tesla["name"], tesla["min"], tesla["max"], tesla["step"]) == (
+        "Sofort-Höchststrom",
+        5.0,
+        16.0,
+        1.0,
+    )
+    assert (egolf["min"], egolf["max"]) == (6.0, 16.0)
+    assert (tesla["unit_of_measurement"], tesla["command_topic"]) == (
+        "A",
+        "bindaems/cmd/tesla_now_max_a",
+    )
+    topic, _ = discovery(entity(cfg, "egolf_now_max_a"), cfg.homeassistant.mqtt)
+    assert topic == "homeassistant/number/bindaems/egolf_now_max_a/config"
+    intent = Intent(version=2, vehicles={"tesla": VehicleIntent(now_max_a=10)})
+    inputs = sample_inputs(intent=intent)
+    # ohne Limit gilt der Höchststrom des Fahrzeugs, ohne Absicht ist der Zustand unbekannt
+    assert (state(cfg, "tesla_now_max_a", inputs), state(cfg, "egolf_now_max_a", inputs)) == (
+        "10",
+        "16",
+    )
+    unknown = sample_inputs(intent=None)
+    assert state(cfg, "tesla_now_max_a", unknown) == "None"
+
+
+def test_guest_now_max_a_number_uses_the_evcs_range(cfg) -> None:
+    number = config_of(cfg, "guest_now_max_a")
+    assert (number["name"], number["min"], number["max"], number["step"]) == (
+        "Gast-Sofort-Höchststrom",
+        6.0,
+        16.0,
+        1.0,
+    )
+    assert (number["unit_of_measurement"], number["command_topic"]) == (
+        "A",
+        "bindaems/cmd/guest_now_max_a",
+    )
+    # auf dem Gerät des Gast-Lademodus
+    assert entity(cfg, "guest_now_max_a").device == entity(cfg, "guest_mode").device
+    inputs = sample_inputs(intent=Intent(version=2, guest=GuestIntent(now_max_a=8)))
+    assert state(cfg, "guest_now_max_a", inputs) == "8"
+    assert state(cfg, "guest_now_max_a", sample_inputs(intent=Intent(version=2))) == "16"
+    assert state(cfg, "guest_now_max_a", sample_inputs(intent=None)) == "None"
+
+
+def test_guest_now_max_a_is_missing_without_an_evcs(cfg) -> None:
+    data = cfg.model_dump(mode="json")
+    del data["wallboxes"]["evcs"]
+    data["vehicles"]["egolf"]["default_wallbox"] = "twc"
+    ids = {e.object_id for e in build_entities(Config.model_validate(data))}
+    assert "guest_now_max_a" not in ids and "tesla_now_max_a" in ids
 
 
 def test_retired_discovery_names_the_old_departure_text(cfg) -> None:

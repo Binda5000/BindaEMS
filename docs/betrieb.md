@@ -534,6 +534,7 @@ steht die Quelle „ha“.
 |---|---|---|
 | Lademodus (je Fahrzeug) | Auswahl | PV-Überschuss, Min+PV, Sofort, Aus oder Geplant; „Boost“ gibt es hier nicht |
 | Ziel-SOC (je Fahrzeug) | Zahl | das Ziel für „Geplant“ in %, eine ganze Zahl von 20 bis 100; die Abfahrt bleibt |
+| Sofort-Höchststrom (je Fahrzeug) | Zahl | der höchste Ladestrom in „Sofort“ in A je Phase, eine ganze Zahl von `min_a` bis `max_a` des Fahrzeugs; der Höchststrom des Fahrzeugs heißt „volle Leistung“. Das Limit bleibt über Abstecken und Neustart stehen |
 | Abfahrtszeit (je Fahrzeug) | Uhrzeit | die tägliche Abfahrt für „Geplant“, Uhrzeit von 00:00 bis 23:59 (Sekunden fallen weg); das Ziel bleibt |
 | Boost (je Fahrzeug) | Taste | Boost bis zum Abstecken, höchstens 12 h |
 | Boost beenden (je Fahrzeug) | Taste | beendet den Boost |
@@ -541,13 +542,14 @@ steht die Quelle „ha“.
 | Zuordnung (je Wallbox) | Auswahl | „Automatisch“ oder der Name eines Fahrzeugs; „Automatisch“ hebt jede Übersteuerung dieser Wallbox auf (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | Regelbetrieb | Schalter | schaltet den Regelbetrieb ein oder aus |
 | Gast-Lademodus | Auswahl | der Modus für einen Gast an jeder Wallbox; ohne „Geplant“, denn für einen Gast gibt es weder Ladestand noch Abfahrt |
+| Gast-Sofort-Höchststrom | Zahl | wie der Sofort-Höchststrom, für jeden Gast an der EVCS: eine ganze Zahl vom kleinsten `min_a` bis zum größten `max_a` aller EVCS; die Zahl gibt es nur mit einer EVCS in `config.yaml` |
 | Netzladen erlaubt | Schalter | die Einstellung „Netzladen erlaubt“ (Abschnitt „Planung“); jede Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
 | Akku-Unterstützung erlaubt | Schalter | erlaubt oder sperrt die Unterstützung der Autos aus dem Akku (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Unterstützungsschwelle | Zahl | die Schwelle in %, von der USV-Reserve bis 100 (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Neu planen | Taste | löst eine Neuplanung aus |
 
 Die Bedienelemente stehen am Gerät des Fahrzeugs bzw. der Wallbox, Regelbetrieb, Gast-Lademodus,
-Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
+Gast-Sofort-Höchststrom, Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
 
 - **Befehle** kommen über `bindaems/cmd/<Objekt>`. Eine gehaltene (retained) Nachricht auf diesen
   Topics ignoriert die app: Sie käme sonst bei jeder Verbindung wieder.
@@ -556,7 +558,7 @@ Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu 
 - **Nach jedem Befehl veröffentlicht die app den Zustand der Entität neu**, auch nach einem
   verworfenen oder abgelehnten Befehl. Home Assistant zeigt so immer, was gilt.
 - **Ablehnungen:** Ein ungültiger Wert (eine Option, die es nicht gibt, ein Ziel-SOC außerhalb von
-  20–100 % oder eine Abfahrt, die keine Uhrzeit `HH:MM` ist) oder ein Befehl, den der core ablehnt oder
+  20–100 %, ein Sofort-Höchststrom außerhalb des Strombereichs oder eine Abfahrt, die keine Uhrzeit `HH:MM` ist) oder ein Befehl, den der core ablehnt oder
   der nicht ankommt, ändert nichts. Home Assistant zeigt dann die persistente Meldung
   `bindaems_ha_command` mit „Befehl aus Home Assistant abgelehnt: …“; eine neue Ablehnung ersetzt die
   alte. Ist der core nicht erreichbar, lautet der Grund „core nicht erreichbar.“.
