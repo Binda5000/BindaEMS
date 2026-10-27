@@ -454,7 +454,9 @@ brauchst du Home Assistant ab 2026.5), `text`, `button` und das Leserecht auf `b
 Zeile für `text` bleibt, obwohl die Abfahrtszeit kein Textfeld mehr ist: Die app veröffentlicht bei
 jedem MQTT-Verbinden und beim Neustart von Home Assistant eine leere Konfiguration für das alte
 Textfeld, damit Home Assistant es entfernt, und dafür braucht sie das Schreibrecht. Ohne die Zeile für
-`time` fehlt die Entität „Abfahrtszeit“ in Home Assistant.
+`time` fehlt die Entität „Abfahrtszeit“ in Home Assistant. Gehst du mit `ems-app` auf einen Stand vor
+diesem Plan zurück, bleibt die gehaltene Discovery der Uhrzeit stehen; lösche sie dann mit
+`mosquitto_pub -r -n -t homeassistant/time/bindaems/<objekt-id>_departure/config` je Fahrzeug.
 
 ```text
 user bindaems

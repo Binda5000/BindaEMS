@@ -276,9 +276,10 @@ Prüfschritte, je Zeile der Tabelle:
 | Unterstützungsschwelle | „BindaEMS“ | Laden, „Akku-Unterstützung“ | ☐ | ☐ |
 | Neu planen | „BindaEMS“ | Zeitplan, Anlass „Neu planen“ | ☐ | – (Taste ohne Zustand) |
 
-Ein ungültiger Wert aus Home Assistant (etwa Ziel-SOC 10 oder Abfahrtszeit „7 Uhr“) ändert nichts und
-erscheint als persistente Meldung „Befehl aus Home Assistant abgelehnt: …“ (Betriebshandbuch,
-Abschnitt 7): ☐ geprüft
+Ein ungültiger Wert aus Home Assistant (etwa Ziel-SOC 10) ändert nichts und erscheint als
+persistente Meldung „Befehl aus Home Assistant abgelehnt: …“ (Betriebshandbuch, Abschnitt 7). Eine
+ungültige Abfahrtszeit lässt sich nicht eingeben, die Uhrzeitauswahl prüft selbst; sie kommt nur,
+wenn du von Hand an `bindaems/cmd/<auto>_departure` veröffentlichst (etwa `7 Uhr`): ☐ geprüft
 
 Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ________
 

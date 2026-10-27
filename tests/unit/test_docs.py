@@ -1124,6 +1124,7 @@ def test_planned_charging_entities_in_the_guide_exist() -> None:
     assert "| Ziel-SOC (je Fahrzeug) | Zahl |" in section
     assert "| Abfahrtszeit (je Fahrzeug) | Uhrzeit |" in section
     assert "topic write homeassistant/text/bindaems/#" in section
+    assert "topic write homeassistant/time/bindaems/#" in section
     assert "Sofort, Aus oder Geplant" in section
 
 
