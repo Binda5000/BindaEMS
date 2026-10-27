@@ -1503,6 +1503,7 @@ def test_guide_describes_the_thermal_model_endpoints_and_component() -> None:
     from bindaems.app.learning.thermal_model import ModeModel, Reason
     from bindaems.app.learning.thermal_service import (
         COMPONENT,
+        EMPTY_WINDOW,
         KEEP_DAYS,
         NO_DATA,
         RUN_AT,
@@ -1523,6 +1524,9 @@ def test_guide_describes_the_thermal_model_endpoints_and_component() -> None:
         "löst neu planen aus",
         "Komponente `thermal_model`",
         f"„{NO_DATA}“",
+        f"„{EMPTY_WINDOW}“",
+        "behält ein Lauf ohne eine einzige Viertelstunde im Fenster den letzten Stand",
+        "ebenso das Laden des abgelegten Modells beim Start der app",
         "Wärmemodell aktuell",
         "Wärmemodell fehlgeschlagen: {Fehler}",
         "`GET /api/learning/thermal` (ab „Lesen“)",

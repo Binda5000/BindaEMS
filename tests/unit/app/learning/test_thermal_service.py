@@ -291,6 +291,71 @@ async def test_new_model_calls_on_change(service, read) -> None:
     assert calls == ["a", "b"]  # ohne neues Modell kein Rückruf
 
 
+async def test_run_without_data_keeps_the_last_model(service, engine, read, clock) -> None:
+    # Plan-Review, Schwerpunkt 2: ein Lauf ohne Daten behält den letzten Stand
+    await service.recompute()
+    before = (service.current("heizen"), service.current("kuehlen"))
+    assert before[0] is not None and before[0][0].usable
+    stamp = f"{NOW.astimezone(LOCAL_TZ):%d.%m. %H:%M}"
+    calls: list[str] = []
+    service.on_change(lambda: calls.append("neu"))
+    clock.advance(timedelta(days=40))  # das ganze Fenster ohne eine Viertelstunde
+    with capture_logs() as logs:
+        assert await service.recompute() is True
+    assert (service.current("heizen"), service.current("kuehlen")) == before
+    assert len(rows(engine)) == 2  # keine Zeile „keine Daten“
+    assert calls == []  # kein neuer Stand, kein neuer Plan
+    assert "Keine Daten der Klimaanlage im Fenster, das letzte Wärmemodell gilt" in [
+        e["event"] for e in logs
+    ]
+    status = service.component_status()
+    assert (status.ok, status.message) == (
+        True,
+        "Keine Daten der Klimaanlage im Fenster, das letzte Wärmemodell gilt",
+    )
+    assert service.status()["status"] == {
+        "ok": True,
+        "text": (
+            "Keine Daten der Klimaanlage im Fenster, das letzte Wärmemodell gilt: "
+            f"Stand vom {stamp}."
+        ),
+    }
+    # der nächste Lauf mit Daten legt wieder ab und meldet „aktuell“
+    clock.advance(timedelta(days=-40))
+    await service.recompute()
+    assert calls == ["neu"]
+    assert service.component_status().message == "Wärmemodell aktuell"
+
+
+async def test_run_without_data_and_without_state_stores_nothing(service, engine, read) -> None:
+    read.slots = []
+    calls: list[str] = []
+    service.on_change(lambda: calls.append("neu"))
+    await service.recompute()
+    assert rows(engine) == []
+    assert calls == []
+    assert service.current("heizen") is None
+    assert service.component_status().message == "Noch keine Daten der Klimaanlage"
+    assert service.status()["status"] == {"ok": True, "text": "Noch keine Daten der Klimaanlage."}
+
+
+async def test_loading_a_stored_model_calls_on_change(make_service, engine) -> None:
+    # nach einem Neustart plant die Planung gleich mit dem abgelegten Modell neu
+    await make_service().recompute()
+    later = make_service()
+    calls: list[str] = []
+    later.on_change(lambda: calls.append("neu"))
+    await later.load_stored()
+    assert calls == ["neu"]
+
+
+async def test_loading_nothing_calls_no_on_change(service) -> None:
+    calls: list[str] = []
+    service.on_change(lambda: calls.append("neu"))
+    await service.load_stored()
+    assert calls == []
+
+
 async def test_start_run_refuses_while_running(service, read) -> None:
     read.gate = asyncio.Event()
     assert service.running is False
@@ -388,16 +453,19 @@ async def test_close_without_a_run_is_done_at_once(service) -> None:
 
 
 async def test_close_cancels_the_run_and_waits_for_the_thread(service, monkeypatch) -> None:
-    release = threading.Event()
+    release, entered = threading.Event(), threading.Event()
     real_store = service._store
 
     def slow_store(*args) -> None:
+        entered.set()
         release.wait(5)
         real_store(*args)
 
     monkeypatch.setattr(service, "_store", slow_store)
     assert service.start_run() is True
-    await until(lambda: len(service._threads) == 1)
+    # erst warten, bis der Schreibzugriff läuft: Sah ``until`` noch die Rechnung, die gleich
+    # endet, meldete ``close`` schon fertig
+    await until(entered.is_set)
     assert await service.close(0.01) is False  # der Thread schreibt noch
     release.set()
     assert await service.close(5) is True
@@ -424,7 +492,7 @@ async def test_component_texts(service, read) -> None:
         "Noch keine Daten der Klimaanlage",
     )
     read.slots = []
-    await service.recompute()  # ein Lauf ohne Slots legt „keine Daten“ ab
+    await service.recompute()  # ein Lauf ohne Slots und ohne Stand bleibt bei „keine Daten“
     assert service.component_status().message == "Noch keine Daten der Klimaanlage"
     read.slots = list(HOUSE)
     await service.recompute()

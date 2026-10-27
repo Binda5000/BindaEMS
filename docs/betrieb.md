@@ -4746,8 +4746,10 @@ das Komfortband liegt immer innerhalb von `max_offset_k`.
   InfluxDB (Messwerte und Betriebsbits) und legt je Betriebsart eine Zeile in der Tabelle
   `thermal_model` ab (Modell ohne Profile in `params`, das Profil in `profile`); behalten werden 70
   Tage. Während eines Laufs steht auf der Taste „Berechnung läuft …“; ein zweiter Start ist nicht
-  möglich. Scheitert das Lesen oder Rechnen, gilt der letzte Stand weiter. **Ein neues Modell löst
-  neu planen aus** (Anlass „Klimaanlage geändert“, höchstens alle 5 min, Abschnitt „Planung“).
+  möglich. Scheitert das Lesen oder Rechnen, gilt der letzte Stand weiter. Ebenso **behält ein Lauf
+  ohne eine einzige Viertelstunde im Fenster den letzten Stand**: Er legt keine Zeile ab und plant
+  nicht neu. **Ein neues Modell löst neu planen aus** (Anlass „Klimaanlage geändert“, höchstens alle
+  5 min, Abschnitt „Planung“), ebenso das Laden des abgelegten Modells beim Start der app.
 - **Das Modell einer Betriebsart** besteht aus der **Grundleistung** (Watt je Kelvin Temperaturdifferenz
   zwischen Sollwert und außen, dazu ein Anteil je kW PV und ein fester Anteil), der **Zeitkonstante** τ
   (aus den Auskühl-Phasen, in denen die Klimaanlage nicht lief) und dem **Speicher** `C` (kWh Strom je
@@ -4771,8 +4773,11 @@ das Komfortband liegt immer innerhalb von `max_offset_k`.
 | `no_data` | „Noch keine Daten der Klimaanlage.“ |
 
 - **Komponente `thermal_model`** unter **System** → „Komponenten“: „Wärmemodell aktuell“, „Noch
-  keine Daten der Klimaanlage“ (normal, bis die ersten Tage vorliegen; Status in Ordnung) oder
-  „Wärmemodell fehlgeschlagen: {Fehler}“ (Status nicht in Ordnung; das letzte Modell gilt weiter).
+  keine Daten der Klimaanlage“ (normal, bis die ersten Tage vorliegen; Status in Ordnung), „Keine
+  Daten der Klimaanlage im Fenster, das letzte Wärmemodell gilt“ (der letzte Lauf fand in den 28
+  Tagen keine Viertelstunde, etwa weil InfluxDB leer war; Status in Ordnung, prüfe die Messwerte der
+  Klimaanlage in InfluxDB) oder „Wärmemodell fehlgeschlagen: {Fehler}“ (Status nicht in Ordnung; das
+  letzte Modell gilt weiter).
 - **Datenbank:** Die Migration `0015` legt die Tabelle `thermal_model` an (`computed_at` in UTC,
   `device`, `mode`, `params`, `profile`, `usable`, `reason`, ein Index auf `device`, `mode`,
   `computed_at`) und ändert keine vorhandene Tabelle. **Sichere die Datenbank vor dem Ausrollen**

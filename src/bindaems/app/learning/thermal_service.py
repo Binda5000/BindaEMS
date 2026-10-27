@@ -8,9 +8,11 @@ behalten werden 70 Tage. Der Dienst gilt dem ersten Gerät der Art ``coe_offset`
 ``thermal.devices`` (``thermal_device``); ohne ein solches entsteht er nicht.
 
 Scheitert das Lesen oder Rechnen, gilt der letzte Stand weiter, und die Komponente
-``thermal_model`` nennt den Fehler. Auch ein untaugliches Modell ist ein Stand: Der Status zeigt
-seine Zahlen und den Grund, die Planung verschiebt mit ihm nichts. Nach jedem abgelegten Stand
-rufen die mit ``on_change`` angemeldeten Rückrufe (neu planen).
+``thermal_model`` nennt den Fehler. Ein Lauf ohne eine einzige Viertelstunde im Fenster legt
+nichts ab und behält den letzten Stand (Plan-Review, Schwerpunkt 2). Auch ein untaugliches Modell
+ist ein Stand: Der Status zeigt seine Zahlen und den Grund, die Planung verschiebt mit ihm nichts.
+Nach jedem abgelegten Stand und nach dem Laden eines abgelegten beim Start rufen die mit
+``on_change`` angemeldeten Rückrufe (neu planen).
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ _FIELDS: Final = frozenset(field.name for field in fields(ModeModel))
 _COUNTS: Final = frozenset({"days", "episodes", "events"})  # ganze Zahlen in ``ModeModel``
 _MODE_NAMES: Final[dict[Mode, str]] = {"heizen": "Heizen", "kuehlen": "Kühlen"}
 NO_DATA: Final = "Noch keine Daten der Klimaanlage"
+EMPTY_WINDOW: Final = "Keine Daten der Klimaanlage im Fenster, das letzte Wärmemodell gilt"
 
 ReadSlots = Callable[
     [InfluxReader, WeatherArchive, str, datetime, datetime], Awaitable[list[ThermalSlot]]
@@ -217,6 +220,7 @@ class ThermalModelService:
         self._running = False
         self._states: dict[Mode, _State] = {}
         self._error: str | None = None  # Fehler des letzten Laufs
+        self._empty = False  # der letzte Lauf fand keine Viertelstunde im Fenster
         self._tasks: set[asyncio.Task[Any]] = set()  # Aufgaben in ``run`` und ``start_run``
         # Rechnungen und Schreibzugriffe im Thread; nach einem Abbruch laufen sie weiter, bis sie
         # wirklich enden (``close`` wartet darauf, bevor die Datenbank schließt)
@@ -267,10 +271,11 @@ class ThermalModelService:
         return self._running
 
     def on_change(self, callback: Callable[[], None]) -> None:
-        """Meldet einen Rückruf an, den jeder Lauf mit neu abgelegtem Stand ruft (neu planen).
+        """Meldet einen Rückruf an, den jeder Lauf mit neu abgelegtem Stand und das Laden eines
+        abgelegten Stands beim Start rufen (neu planen).
 
-        Ein gescheiterter Lauf ruft nicht. Ein Fehler in einem Rückruf wird protokolliert, die
-        übrigen laufen weiter."""
+        Ein gescheiterter Lauf und ein Lauf ohne Daten im Fenster rufen nicht. Ein Fehler in
+        einem Rückruf wird protokolliert, die übrigen laufen weiter."""
         self._changed.append(callback)
 
     async def recompute(self) -> bool:
@@ -342,6 +347,9 @@ class ThermalModelService:
             slots = await self._read(
                 self._reader, self._weather, self._device, now - timedelta(days=FIT_DAYS), now
             )
+            if not slots:
+                self._keep_without_data()
+                return
             built = await self._offload(_build, slots, today)
             await self._offload(self._store, built, now)
         except ThermalDataError as exc:
@@ -359,12 +367,26 @@ class ThermalModelService:
         for mode, (model, profile) in built.items():
             self._states[mode] = _State(model, profile, now)
         self._error = None
+        self._empty = False
         log.info(
             "Wärmemodell berechnet",
             device=self._device,
             slots=len(slots),
             usable=[mode for mode, (model, _) in built.items() if model.usable],
         )
+        self._notify()
+
+    def _keep_without_data(self) -> None:
+        """Ein gelungenes Lesen ohne Viertelstunde: kein neuer Stand, keine Ablage, kein Rückruf
+        (ein Lauf ohne Daten überschriebe sonst ein taugliches Modell mit „keine Daten“)."""
+        self._error = None
+        self._empty = True
+        log.warning(
+            "Keine Daten der Klimaanlage im Fenster, das letzte Wärmemodell gilt",
+            device=self._device,
+        )
+
+    def _notify(self) -> None:
         for callback in self._changed:
             try:
                 callback()
@@ -437,6 +459,8 @@ class ThermalModelService:
             return
         self._states.update(latest)
         log.info("Wärmemodelle geladen", device=self._device, modes=len(latest))
+        if latest:  # nach einem Neustart gleich mit dem abgelegten Modell planen
+            self._notify()
 
     # --- Zugriff --------------------------------------------------------------------------
 
@@ -458,6 +482,8 @@ class ThermalModelService:
             return ComponentStatus(COMPONENT, False, f"Wärmemodell fehlgeschlagen: {self._error}")
         if not self._has_data():
             return ComponentStatus(COMPONENT, True, NO_DATA)
+        if self._empty:
+            return ComponentStatus(COMPONENT, True, EMPTY_WINDOW)
         return ComponentStatus(COMPONENT, True, "Wärmemodell aktuell")
 
     def _status_text(self) -> str:
@@ -469,6 +495,8 @@ class ThermalModelService:
             return f"{text.rstrip('.')}. Es gilt der Stand vom {_stamp(computed)}."
         if computed is None or not self._has_data():
             return f"{NO_DATA}."
+        if self._empty:
+            return f"{EMPTY_WINDOW}: Stand vom {_stamp(computed)}."
         return f"Wärmemodell berechnet am {_stamp(computed)}."
 
     def status(self) -> dict[str, Any]:
