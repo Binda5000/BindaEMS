@@ -1362,7 +1362,7 @@ gilt für diesen Browser.
 
 | Seite | Inhalt |
 |---|---|
-| Übersicht | Energiefluss live mit den Verbrauchern unter dem Haus, Strompreis jetzt und die nächsten 3 h (Balken überfahren, antippen oder mit den Pfeiltasten wählen zeigt den Preis der Viertelstunde), Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher mit Leistung und Energie seit Mitternacht, „Warum?“ (unten) |
+| Übersicht | von oben nach unten: die Hinweis-Leiste (ohne Hinweise unsichtbar; „Anzeigen“ klappt die Liste auf), die Kachelreihe mit dem Hausakku (doppelt breit: SOC, kWh, Reserve, Netzladen, Planausblick), PV, Haus und Netz (je mit 2-h-Linie und Tageswert) und dem Strompreis (jetzt, nächste 3 h, günstigste Viertelstunde), die Karte „Woher kommt der Strom – wohin geht er?“ (zwei Balken, darunter die Verbraucher im Haus) neben „Autos“, das Diagramm „Preise, PV und Akku heute/morgen“ (Preis je Viertelstunde im Tooltip, Akku-SOC und Akku-Plan) und „Warum?“ (unten). Das Alter steht als „vor 45 s“, „vor 12 min“, „vor 3 h“ oder „vor 2 Tagen“. Scheitert die Abfrage des Plans, des Verlaufs oder der Tageswerte, fehlt nur ihr Teil (Planzeile, Linie, Tageswert) |
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; in „Geplant“ mit Ziel-SOC, Abfahrt und „Fertig um“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (Profil und Modell) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Merkmale“ (Abschnitt „Lastmodell (Phase 5a)“) |
@@ -1553,7 +1553,7 @@ Plan-Slots zeigt „Warum?“ noch nicht; sie steht auf der Seite „Zeitplan“
 ### Namen der Ladestationen
 
 Unter **Einstellungen** → „Bearbeiten“ → „Ladestationen“ gibt ein Admin jeder Wallbox einen
-eigenen Namen (höchstens 40 Zeichen). Er erscheint im Energiefluss, im Verlauf und bei den
+eigenen Namen (höchstens 40 Zeichen). Er erscheint in „Woher – Wohin“, im Verlauf und bei den
 harten Grenzen. Ein leeres Feld heißt: der Typname („EVCS“, „Wall Connector“). Der Schlüssel aus
 `config.yaml` (z. B. `evcs`) bleibt unverändert.
 
@@ -1633,7 +1633,7 @@ nicht. Dann nimm den Weg über das core-Signal.
 Das Kennzeichen oben rechts zeigt den Zustand der Live-Verbindung:
 
 - **live:** Die Werte kommen laufend, etwa jede Sekunde.
-- **veraltet:** Seit über 5 s kamen keine neuen Werte. Energiefluss und Ladestände zeigen die
+- **veraltet:** Seit über 5 s kamen keine neuen Werte. Kacheln, „Woher – Wohin“ und „Autos“ zeigen die
   letzten Werte gedämpft.
 - **core getrennt:** Die app erreicht den core nicht. Prüfe `docker compose ps` und
   `docker compose logs --tail 100 ems-core` sowie unter „System“ die Komponente core.
@@ -4242,7 +4242,7 @@ sind als „geschätzt“ gekennzeichnet (Herkunft `estimated`) und stehen nur f
 
 ### Was du im UI siehst
 
-- **Übersicht**, Diagramm „Preise und PV heute/morgen“: die Reihe „PV-Prognose“ (P50) mit dem
+- **Übersicht**, Diagramm „Preise, PV und Akku heute/morgen“ (bis Plan Übersicht B „Preise und PV heute/morgen“): die Reihe „PV-Prognose“ (P50) mit dem
   Band „PV P25–P75“ und die „Lastprognose“ als Linie. Scheitert die Abfrage einer Prognose,
   steht der Fehler über dem Diagramm, und die übrigen Reihen bleiben.
 - **System**: die Karten „Lastprognose“ und „Prognosegüte“ (oben, mit dem Verweis „Mehr unter

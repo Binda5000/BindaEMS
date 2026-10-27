@@ -139,6 +139,22 @@ wann, entscheidet der Betreiber (Entscheidung 7);** Vorschlag: mit dem nächsten
 Fenster (nach dem 25.10.2026), nicht in dieses Fenster gedrängt. Der Gesamtreview ist gemacht, und die Fix-Welle danach ist umgesetzt. Betrieb: `docs/betrieb.md`,
 Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
 
+**Plan Übersicht B (Kennzahlen-Leiste) ist umgesetzt und je Task geprüft; der Gesamtreview des Branches steht noch aus**
+(`docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md`, 6 Tasks, freigegeben vom Betreiber am 27.10.2026 mit allen 10 Entscheidungen: „Passt bitte machen“, nach Variante B
+der drei Entwürfe): Branch `claude/project-thread-81quvk` (Commits `5ad778d` bis `5df4b20` und die Doku), **nicht auf `main`,
+nicht ausgerollt**. Die Übersicht (`ui/src/routes/+page.svelte`) hat jetzt oben die Hinweis-Leiste (aufklappbar), dann
+die Kachelreihe mit dem Hausakku doppelt breit (SOC, kWh, Reserve, Netzladen, Ausblick aus dem Plan), PV, Haus und Netz mit
+2-h-Linie und Tageswert und dem Strompreis, darunter „Woher kommt der Strom – wohin geht er?“ (zwei Balken) neben „Autos“,
+das Diagramm „Preise, PV und Akku heute/morgen“ mit Akku-SOC und Akku-Plan und „Warum?“ in einer Zeile je Aktor. Das Alter
+heißt überall „vor 45 s“, „vor 12 min“, „vor 3 h“, „vor 2 Tagen“ (auch auf „System“). Entfallen sind `EnergyFlow`, `SocList`,
+`ConsumerSummary`, `PriceNow` und `Notices` (und `flowBranches`). Plan Übersicht B ändert nur `ui/` und die Doku; core, app,
+`shared`, Migrationen, HA und API-Antworten bleiben gleich (neue Abfragen des UI: Plan alle 60 s, Verlauf ab 0 Uhr alle 120 s,
+Tageswerte alle 300 s, über vorhandene Endpunkte). Geprüft zuletzt (Task 5): `pnpm check` und `pnpm lint` sauber, 1025
+Vitest-Tests in 104 Dateien, E2E 44 grün. **Ausgerollt wird nur `ems-app`, ohne Migration, und wann, entscheidet der
+Betreiber beim Abschluss** (so steht es in der Einordnung des Plans); Vorschlag: mit dem nächsten
+Pull von `ems-app`, auch zusammen mit Plan 4c, falls der noch aussteht. Betrieb: `docs/betrieb.md`, Abschnitt 12, „Seiten“,
+Zeile „Übersicht“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -969,6 +985,7 @@ Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md` | Plan 4c, 5 Tasks, umgesetzt, seit dem 25.10.2026 auf `main` (nicht ausgerollt): Verlauf je Auto in `GET /api/stats` (`vehicle_buckets`), Auswahl des Autos und Karte „Laden je Auto“ auf „Statistik“, Ladesessions bis 2000 mit Nachladen und CSV; die sieben Entscheidungen des Betreibers vom 23.10.2026 |
+| `docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md` | Plan Übersicht B, 6 Tasks, umgesetzt auf dem Branch `claude/project-thread-81quvk` (nicht auf `main`, nicht ausgerollt): die Übersicht als Kennzahlen-Leiste mit Hausakku, Hinweis-Leiste, „Woher – Wohin“, Autos, Diagramm mit Akku-SOC und -Plan; nur UI und Doku; die zehn Entscheidungen des Betreibers vom 27.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
@@ -1084,6 +1101,11 @@ Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
 - **`ui/`**
   - SvelteKit 2 als SPA (Svelte 5 Runes), valibot-Schemas für jede Antwort, ECharts
   - Tests mit Vitest und Playwright
+  - Die Übersicht (`src/routes/+page.svelte`) setzt Komponenten aus `src/lib/dashboard/` zusammen (`NoticeBar`, `BatteryTile`,
+    `KpiTile` mit `Sparkline`, `PriceTile`, `BalanceCard`, `VehicleTiles`, `WhyCard`); die Logik mit Verzweigungen steht in den
+    Modulen daneben (`battery.ts`, `tiles.ts`, `balance.ts`, `vehicles.ts`, `prices.ts`, `notices.ts`, `socs.ts`) mit Tests.
+    Das Diagramm kommt aus `src/lib/charts/options.ts` (`priceForecastOption`, optional mit `battery`). Die Komponenten
+    `EnergyFlow`, `SocList`, `ConsumerSummary`, `PriceNow` und `Notices` gibt es seit Plan Übersicht B nicht mehr.
   - Die Vertragsdateien `ui/src/lib/api/contract/*.json` kommen aus der Demo-Welt
     (`tests/ui_world.py`).
 - **`deploy/` und CI:**
@@ -1142,6 +1164,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 - **Demo-Uhr:** steht fest auf dem 09.10.2026, 10:00 in Wien, der Browser läuft auf dem echten
   Datum. Deshalb zeigt das Übersicht-Diagramm in der Demo Preise vom 09.10. neben der PV der
   echten Tage. Das betrifft nur die Demo.
+  Seit Plan Übersicht B kommt der Akku-SOC im selben Diagramm aus dem Verlauf des echten Tages (die x-Achse reicht
+  dann bis heute), der „Akku-Plan“ und die Planzeile der Akku-Kachel fehlen, weil alle Plan-Slots der Demo vor der
+  Demo-Uhr liegen, und „Warum?“ zeigt „vor 18 Tagen“. In Betrieb stimmen die Uhren überein.
 - **Demo-Backend beenden:** nicht mit `pkill -f`, das trifft die eigene Shell. Die PID merken
   und gezielt beenden.
 - **ECharts in Node (SSR):** endet nicht von selbst; danach `chart.dispose(); process.exit(0)`.
@@ -1710,6 +1735,14 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       7. **Abnahme 5b:** 28 Tage ab dem Ausrollen (Checkliste oben): Vorschläge mit Konfidenz,
          Trefferquoten je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch
          die Automatik, ein erwartetes Auto im Zeitplan, beim Anstecken ersetzt (einmal beobachtet).
+  12. **Übersicht neu (Plan Übersicht B) ausrollen:** nur `ems-app` (das UI liegt im Image der app), **keine Migration, keine
+      Änderung an core, `config.yaml` oder Home Assistant**. Wann, entscheidet der Betreiber beim Abschluss des Plans; erst nach dem Gesamtreview und der
+      Zustimmung zur Integration auf `main`. Vorschlag: mit dem nächsten Pull von `ems-app`
+      (`cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`; der Regelbetrieb
+      braucht dafür nicht aus). Danach auf der Übersicht ansehen: die Hinweis-Leiste (ohne Hinweise unsichtbar), den Akku
+      mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
+      Diagramm mit Akku-SOC und Akku-Plan; am Handy (360 bis 390 px) ohne waagrechtes Scrollen und mit einem Blick auf
+      „Warum?“ (siehe die aufgeschobenen Kleinigkeiten am Ende der Datei).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1891,6 +1924,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    - **5c Vorheizen und Vorkühlen (später):** ein Wärmemodell des Hauses aus den Daten der Klimaanlage und
      die Klimaanlage als flexible Last im Planer. Es braucht Wochen mit Daten aus 6a, also erst nach dem
      Ausrollen von 6a; ob 5c allein oder mit 6b kommt, entscheidet der Betreiber dann.
+8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt und je Task geprüft, auf dem Branch
+   `claude/project-thread-81quvk`, nicht auf `main` (Kurzfassung oben, „Plan Übersicht B“). Es folgen der Gesamtreview des
+   Branches, die Integration auf `main` (nur mit Zustimmung des Betreibers) und das Ausrollen von `ems-app` (Punkt 12 unter
+   „Offen an der Anlage“); wann, entscheidet der Betreiber. Die aufgeschobenen Kleinigkeiten stehen am Ende dieser Datei.
 
 ### Nächster Schritt: die Anlage
 
@@ -3577,3 +3614,34 @@ Punkte behoben (23.10.2026); der Rest bleibt offen.
   braucht etwa 0,5 s; erwartet werden an der Anlage für die Jahresansicht insgesamt 4 bis 5 s. Gemessen an der Anlage ist das
   noch nicht; das Ergebnis (Laufzeit von „Jahr“ in der Statistik und der Sessions mit vielen Einträgen) kommt hierher, sobald
   `ems-app` ausgerollt ist.
+
+Aufgeschobene Kleinigkeiten aus Plan Übersicht B (aus den Reviews der Tasks 1 bis 5; keine davon gefährdet die Anlage, denn
+der Plan ändert nur die Anzeige der Übersicht). Der Gesamtreview des Branches kann einzelne noch beheben; was dann
+erledigt ist, wird hier durchgestrichen.
+
+- **Task 1 (`battery.ts`):** `planOutlook` nimmt chronologisch sortierte Slots an (die API liefert sie sortiert); es gibt keine
+  Tests für einen fallenden Lauf mit Wackler und für „steigt, dann zurück“.
+- **Task 2 (Modelle):**
+  - `vehicleCards` zeigt bei `health` gleich `null` „nicht angesteckt“ statt „unbekannt“.
+  - `balance` gibt bei teilweise unbekannten Quellen (etwa PV `null`) eine Teilsumme als Summe aus.
+  - `sparkPoints` hat keine Obergrenze bei „jetzt“.
+  - Ein eigenes Auto zeigt „lädt 5 W“, wenn `charging` wahr ist, die Leistung aber im Leerlauf liegt; der Pfad des Gastes
+    nutzt `IDLE_W`, der des eigenen Autos nicht.
+  - Die Kachel des Gastes heißt „Gast“ statt „Gast · {Wallbox}“ (Entscheidung 7 des Plans).
+- **Task 3 (Komponenten):**
+  - `NoticeBar`: `aria-controls` zeigt auf eine feste `id`; die Liste der Hinweise hat nur den Text als
+    Schlüssel.
+  - Restliche Verzweigungen in `PriceTile`, `VehicleTiles` und `BatteryTile` (Balkenhöhe, Beschriftung des Rings, Klemmen)
+    liegen noch in den Komponenten statt in den Modulen; der Ringradius ist dreimal definiert; der Test zu
+    `LABEL_MIN_SHARE` ist überflüssig, und `houseText` hat einen `DASH`-Zweig, den es nicht braucht.
+  - Testlücken: das Dimmen veralteter Werte in `VehicleTiles` und `BalanceCard` und die Warnklasse der `NoticeBar`.
+- **Task 4 (Diagramm):** Der Test für leere Messwerte mit gültigem Plan prüft nicht, dass `yAxis` drei Einträge hat.
+- **Task 5 (Seite):**
+  - Eine Abfrage (`Resource`) behält nach einem gescheiterten Neuabruf die alten Daten, sodass Planzeile und Mini-Linien
+    stehen bleiben; das gilt für alle Ressourcen der Seite.
+  - Es gibt keine Tests für die Abfrageintervalle (60, 120 und 300 s) und für den Zeitraum des Verlaufs über Mitternacht
+    (er wird bei jeder Abfrage neu gerechnet).
+  - `icons.ts` enthält noch die Symbole des Energieflusses (`pv`, `grid`, `battery`, `house`, `wallbox`) und den Kommentar
+    dazu.
+  - „Warum?“ bei 390 px: Die 44-px-Verweise reißen die erste Zeile jeder Entscheidung auseinander, der Text darunter wirkt
+    gesperrt (lesbar, nicht geändert).
