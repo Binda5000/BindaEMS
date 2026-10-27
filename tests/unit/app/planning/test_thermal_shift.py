@@ -336,6 +336,44 @@ def test_start_off_setpoint_at_flat_price_is_not_worth(start_k: float, down_k: f
     assert r.reason == "not_worth" and 0 <= r.saving_ct < MIN_SAVING_CT and all_zero(r)
 
 
+@pytest.mark.parametrize(("start_k", "down_k"), [(-0.5, 1.0), (-1.0, 2.0)])
+def test_margin_is_no_saving_at_flat_price(start_k: float, down_k: float) -> None:
+    # die Marge ist nur eine Hürde im LP: weniger Brutto-Netzstrom bei gleicher Energie spart
+    # zu echten Preisen nichts
+    inp = shift_input([slot(i) for i in range(96)], start_k=start_k, down_k=down_k, margin_ct=20.0)
+    r = shift(inp)
+    assert r.reason == "not_worth" and 0 <= r.saving_ct < MIN_SAVING_CT and all_zero(r)
+
+
+def pv_then_evening(margin_ct: float) -> ShiftInput:
+    """PV-Mittag (Einspeisung 600 W zu 5 ct, Bezug 15 ct), dann Abend zu 30 ct."""
+    sunny = [
+        slot(i, import_ct=15.0, export_w=600.0, import_w=0.0, feed_in_ct=5.0) for i in range(8)
+    ]
+    evening = [slot(i, import_ct=30.0) for i in range(8, 16)]
+    return shift_input(sunny + evening, margin_ct=margin_ct)
+
+
+def test_margin_blocks_grid_preheat_but_not_export() -> None:
+    # Spanne 15 ct: mit Marge 2 auch aus dem Netz vorgeheizt, mit Marge 20 nur aus der Einspeisung
+    low = shift(pv_then_evening(2.0))
+    assert low.reason == "ok" and max(s.grid_w for s in low.slots) > 0
+    # Ersparnis zu echten Preisen, die Marge zählt nicht: Netz 15 ct, Einspeisung 5 ct, Abend 30 ct
+    grid_kwh = sum(s.grid_w for s in low.slots) * DT_H / 1000
+    export_kwh = sum(max(s.thermal_w, 0.0) - s.grid_w for s in low.slots) * DT_H / 1000
+    saved_kwh = -sum(min(s.thermal_w, 0.0) for s in low.slots) * DT_H / 1000
+    real_ct = 30.0 * saved_kwh - 15.0 * grid_kwh - 5.0 * export_kwh
+    assert low.saving_ct == pytest.approx(real_ct, abs=1e-6)
+    high = shift(pv_then_evening(20.0))
+    assert high.reason == "ok" and high.saving_ct > MIN_SAVING_CT
+    assert all(s.grid_w == 0 for s in high.slots)
+    assert max(s.thermal_w for s in high.slots[:8]) == pytest.approx(600.0, abs=TOL_W)
+    # Ersparnis zu echten Preisen: Einspeisung 5 ct statt Bezug 30 ct je kWh, ohne Marge
+    up_kwh = sum(max(s.thermal_w, 0.0) for s in high.slots) * DT_H / 1000
+    dn_kwh = -sum(min(s.thermal_w, 0.0) for s in high.slots) * DT_H / 1000
+    assert high.saving_ct == pytest.approx(30.0 * dn_kwh - 5.0 * up_kwh, abs=1e-6)
+
+
 def test_export_slots_save_only_the_feed_in_price() -> None:
     # nur Slots mit Einspeisung und zugleich Bezug (oder Entladung): Mehrverbrauch aus der
     # Einspeisung und Minderverbrauch am Bezug im selben Slot heben sich in S auf und sparen nichts
@@ -355,7 +393,7 @@ def test_step_bounds_round_down() -> None:
 def test_negative_saving_is_reported_as_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     inp = night_cheap_morning_expensive()
     zeros = [thermal_shift.ShiftedSlot(s.start, 0.0, 0.0, 0) for s in inp.slots]
-    monkeypatch.setattr(thermal_shift, "_solve", lambda *_args, **_kwargs: (zeros, 0.5))
+    monkeypatch.setattr(thermal_shift, "_solve", lambda *_args, **_kwargs: (zeros, 0.5, 0.5))
     assert shift(inp) == ShiftResult(slots=zeros, saving_ct=0.0, reason="not_worth")
 
 
@@ -389,7 +427,9 @@ def test_runs_with_a_start_off_setpoint(monkeypatch: pytest.MonkeyPatch) -> None
     shift(night_cheap_morning_expensive(start_k=-0.25))
     assert [c[:3] for c in calls] == [(-0.5, 0.0, True), (-0.5, 0.0, False), (-1.0, 2.0, False)]
     floor = calls[0][3]
-    assert floor is None and calls[1][3] == calls[2][3] is not None
+    assert floor is None and calls[1][3] is not None and calls[2][3] is not None
+    # der Hauptlauf braucht mindestens die Energie, die die Grundlinie wirklich braucht
+    assert calls[2][3] >= calls[1][3]
     calls.clear()
     shift(night_cheap_morning_expensive())
     assert calls == [(-1.0, 2.0, False, 0.0)]  # ohne Abweichung jetzt: E ≥ 0, ein Lauf
