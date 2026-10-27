@@ -5,6 +5,11 @@ Der core bekommt in der Absicht den bindenden Teil des neuesten gültigen Plans
 Plan der Absicht in seinem Health dieselbe ``id`` und dasselbe ``grid_charge_allowed`` trägt. So
 geht nach dem Ausschalten des Schalters sofort derselbe Plan ohne ``NETZLADEN`` hinaus.
 
+Ebenso der Schalter „Vorheizen und Vorkühlen“ (Plan 5c): Der Planwert der Klimaanlage geht nur
+mit, wenn der Plan ihn aktiv rechnete und der Schalter jetzt an ist; ob der core Planwerte hält,
+gehört zum Vergleich. Nach dem Ausschalten geht derselbe Plan sofort ohne Planwert hinaus, auch
+wenn der Lauf danach keinen Plan ergibt.
+
 Abgeglichen wird beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder
 Änderung der Einstellungen und sonst alle ``interval_s`` s. Ein Fehler wird geloggt, der nächste
 Anstoß versucht es neu. Der Plan kommt nicht ins Änderungsprotokoll (Entscheidung 1).
@@ -103,8 +108,12 @@ class PlanSender:
         plan = self._planning.current()
         if plan is None or not plan.valid_at(self._clock.now()):
             return None
-        allowed = self._settings.current().settings.planning.grid_charge_allowed
-        return intent_plan(plan, grid_charge_allowed=allowed)
+        settings = self._settings.current().settings
+        return intent_plan(
+            plan,
+            grid_charge_allowed=settings.planning.grid_charge_allowed,
+            thermal_allowed=settings.learning.thermal.enabled,
+        )
 
     async def sync(self) -> SyncResult:
         """Ein Abgleich: ``none`` ohne gültigen Plan, ``current``, wenn der core ihn hat,
@@ -120,7 +129,10 @@ class PlanSender:
         if health is None:
             return self._wait("Plan wartet auf Health des core", wanted.id)
         # Hat der core den Plan schon, ist nichts zu übergeben; erst sonst zählt, ob er regelt
-        if core_has_plan(health, wanted, grid_charge_allowed=wanted.grid_charge_allowed):
+        thermal = any(slot.thermal_steps is not None for slot in wanted.slots)
+        if core_has_plan(
+            health, wanted, grid_charge_allowed=wanted.grid_charge_allowed, thermal=thermal
+        ):
             self._waiting = None
             return "current"
         if not health_trusted(health):

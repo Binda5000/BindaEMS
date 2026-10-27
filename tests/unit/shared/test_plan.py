@@ -508,13 +508,27 @@ def test_plan_thermal_roundtrips_and_validates() -> None:
 
 def test_shadow_shift_is_not_sent() -> None:
     sent = intent_plan(_shifted(active=False), grid_charge_allowed=True)
-    assert [(s.thermal_steps, s.thermal_grid_w) for s in sent.slots] == [(None, 0.0)] * 2
+    assert [(s.thermal_steps, s.thermal_grid_w, s.thermal_mode) for s in sent.slots] == [
+        (None, 0.0, None)
+    ] * 2
 
 
 def test_active_shift_goes_into_intent() -> None:
     sent = intent_plan(_shifted(active=True), grid_charge_allowed=True)
-    # der Netzbezug auf ganze W gerundet, wie die Leistung der Autos
-    assert [(s.thermal_steps, s.thermal_grid_w) for s in sent.slots] == [(1, 900.0), (-1, 0.0)]
+    # der Netzbezug auf ganze W gerundet, wie die Leistung der Autos; die Betriebsart des Plans
+    # geht mit, der core folgt nur in derselben
+    assert [(s.thermal_steps, s.thermal_grid_w, s.thermal_mode) for s in sent.slots] == [
+        (1, 900.0, "heizen"),
+        (-1, 0.0, "heizen"),
+    ]
+
+
+def test_switched_off_thermal_is_not_sent_from_an_active_plan() -> None:
+    # Fix-Runde 1: der Schalter wirkt beim Senden wie „Netzladen erlaubt“
+    sent = intent_plan(_shifted(active=True), grid_charge_allowed=True, thermal_allowed=False)
+    assert [(s.thermal_steps, s.thermal_grid_w, s.thermal_mode) for s in sent.slots] == [
+        (None, 0.0, None)
+    ] * 2
 
 
 def test_old_intent_without_thermal_steps_loads() -> None:
@@ -524,7 +538,7 @@ def test_old_intent_without_thermal_steps_loads() -> None:
         ' "thermal": "mehr", "soc_end_pct": 55.0}'
     )
     slot = IntentPlanSlot.model_validate_json(old)
-    assert (slot.thermal_steps, slot.thermal_grid_w) == (None, 0.0)
+    assert (slot.thermal_steps, slot.thermal_grid_w, slot.thermal_mode) == (None, 0.0, None)
     assert IntentPlanSlot.model_validate_json(slot.model_dump_json()) == slot
 
 
@@ -532,7 +546,13 @@ def test_intent_thermal_steps_range() -> None:
     start = at(DAY + "10:00:00+00:00")
     for steps in (-6, 0, 6):
         assert IntentPlanSlot(start=start, intent=BatteryIntent(), thermal_steps=steps)
-    for bad in ({"thermal_steps": 7}, {"thermal_steps": -7}, {"thermal_grid_w": -1.0}):
+    assert IntentPlanSlot(start=start, intent=BatteryIntent(), thermal_mode="kuehlen")
+    for bad in (
+        {"thermal_steps": 7},
+        {"thermal_steps": -7},
+        {"thermal_grid_w": -1.0},
+        {"thermal_mode": "warm"},
+    ):
         with pytest.raises(ValidationError):
             IntentPlanSlot(start=start, intent=BatteryIntent(), **bad)  # type: ignore[arg-type]
 

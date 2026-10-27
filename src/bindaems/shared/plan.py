@@ -268,6 +268,9 @@ class IntentPlanSlot(_Model):
     # 0. Alte Absichten laden so.
     thermal_steps: Annotated[int, Field(ge=-MAX_THERMAL_STEPS, le=MAX_THERMAL_STEPS)] | None = None
     thermal_grid_w: NonNegativeW = 0.0
+    # Betriebsart, für die der Planwert gilt (``Plan.thermal.mode``, mit ``thermal_steps``
+    # gesetzt); der core folgt ihm nur in derselben Betriebsart. Alte Absichten: ``None``.
+    thermal_mode: ThermalMode | None = None
 
 
 class IntentPlan(_Model):
@@ -330,7 +333,9 @@ def thermal_hint(slot: PlanSlot, expensive_ct: float | None) -> ThermalHint:
     return "neutral"
 
 
-def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
+def intent_plan(
+    plan: Plan, *, grid_charge_allowed: bool, thermal_allowed: bool = True
+) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
     ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Jedes Auto aus
@@ -339,9 +344,11 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     spätesten Startzeit. Erwartete Autos (``expected``, Plan 5b) fehlen ganz, ohne Leistung und
     ohne Eintrag: Der core bekommt für sie nichts. Je Slot gehen der Hinweis für die Klimaanlage
     (Perzentil über alle Slots des Plans, nicht nur über die gesendeten) und der geplante SOC am
-    Ende (auf 0,1 % gerundet, in 0 bis 100 geklemmt) mit. Nur wenn ``plan.thermal.active`` ist,
-    gehen der Planwert der Klimaanlage (``thermal_steps``) und sein Netzbezug (auf ganze W
-    gerundet) mit; sonst bleiben sie ``None`` und 0, und der core regelt wie in Plan 6a.
+    Ende (auf 0,1 % gerundet, in 0 bis 100 geklemmt) mit. Nur wenn ``plan.thermal.active`` ist
+    und ``thermal_allowed`` (der Schalter „Vorheizen und Vorkühlen“, wie er jetzt steht), gehen
+    der Planwert der Klimaanlage (``thermal_steps``), sein Netzbezug (auf ganze W gerundet) und
+    die Betriebsart des Plans (``thermal_mode``) mit; sonst bleiben sie ``None``, 0 und ``None``,
+    und der core regelt wie in Plan 6a.
     ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
     if plan.id is None:
         raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
@@ -349,7 +356,9 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     expensive_ct = expensive_import_ct(plan.slots)
     expected = {car.key for car in plan.vehicles if car.expected}
     cars = [car for car in plan.vehicles if not car.expected]
-    thermal_active = plan.thermal is not None and plan.thermal.active
+    thermal = plan.thermal if plan.thermal is not None and plan.thermal.active else None
+    if not thermal_allowed:
+        thermal = None
 
     def binding(slot: PlanSlot) -> IntentPlanSlot:
         intent = slot.intent
@@ -366,8 +375,9 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
             vehicles=planned | powers,
             thermal=thermal_hint(slot, expensive_ct),
             soc_end_pct=min(100.0, max(0.0, round(slot.soc_end_pct, 1))),
-            thermal_steps=slot.thermal_steps if thermal_active else None,
-            thermal_grid_w=float(round(slot.thermal_grid_w)) if thermal_active else 0.0,
+            thermal_steps=slot.thermal_steps if thermal is not None else None,
+            thermal_grid_w=float(round(slot.thermal_grid_w)) if thermal is not None else 0.0,
+            thermal_mode=thermal.mode if thermal is not None else None,
         )
 
     kept = [slot for slot in plan.slots if slot.start < plan.valid_until]

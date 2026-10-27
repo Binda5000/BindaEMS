@@ -240,3 +240,22 @@ def test_every_state_has_a_text_except_none() -> None:
         "dry_run",
         "live",
     }
+
+
+def test_core_has_plan_compares_whether_thermal_steps_are_held() -> None:
+    # Plan 5c, Fix-Runde 1: hält der core Planwerte der Klimaanlage, die nicht mehr gewollt
+    # sind (Schalter aus), hat er den Plan nicht, und der Sender schickt ihn neu
+    plain = health()
+    with_steps = health()
+    held = with_steps["intent"]["plan"]
+    held["slots"] = [{"start": "…", "thermal_steps": None}, {"start": "…", "thermal_steps": 1}]
+    plan = stored_plan()
+    assert core_has_plan(plain, plan, grid_charge_allowed=False, thermal=False)
+    assert not core_has_plan(plain, plan, grid_charge_allowed=False, thermal=True)
+    assert core_has_plan(with_steps, plan, grid_charge_allowed=False, thermal=True)
+    assert not core_has_plan(with_steps, plan, grid_charge_allowed=False, thermal=False)
+    # ohne Angabe (Stand der Ausführung) zählt es nicht
+    assert core_has_plan(with_steps, plan, grid_charge_allowed=False)
+    broken = health()
+    broken["intent"]["plan"]["slots"] = "kaputt"
+    assert core_has_plan(broken, plan, grid_charge_allowed=False, thermal=False)

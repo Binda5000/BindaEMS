@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Final
 
 from bindaems.app.planning.battery_model import SimStep, params_of
 from bindaems.app.planning.inputs import PlanInputs
@@ -25,6 +24,7 @@ from bindaems.app.planning.plausibility import (
     export_while_charged_kwh,
     pays_off,
 )
+from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import EV_ON_W, KWH_EPS, charge_window
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, PlanVehicle, Reason
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
@@ -51,9 +51,6 @@ def _num(params: Params, key: str) -> float:
 
 def _txt(params: Params, key: str) -> str:
     return str(params[key])
-
-
-THERMAL_STEP_K: Final = 0.5  # eine Stufe des Sollwertversatzes in K
 
 
 def _klima_mehr(params: Params) -> str:
@@ -140,7 +137,7 @@ def thermal_reason(mode: str, steps: int | None) -> Reason | None:
     if steps is None or steps == 0:
         return None
     code = "KLIMA_MEHR" if steps > 0 else "KLIMA_WENIGER"
-    return Reason(code=code, params={"mode": mode, "k": steps * THERMAL_STEP_K})
+    return Reason(code=code, params={"mode": mode, "k": steps * STEP_K})
 
 
 def with_thermal(reasons: Sequence[Reason], reason: Reason | None) -> list[Reason]:

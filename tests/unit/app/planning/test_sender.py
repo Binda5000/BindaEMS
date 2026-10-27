@@ -498,3 +498,71 @@ async def test_sender_sends_vehicle_power(
     sent = fake_client.sent[-1].plan
     assert sent is not None
     assert [slot.vehicles for slot in sent.slots] == [{"tesla": 6900}, {}, {}, {}]
+
+
+# --- Vorheizen und Vorkühlen (Plan 5c, Fix-Runde 1) -----------------------------------------
+
+
+def thermal_switch(settings: SettingsService, on: bool) -> None:
+    from bindaems.shared.settings import ThermalPlanSettings
+
+    current = settings.current()
+    learning = current.settings.learning.model_copy(
+        update={"thermal": ThermalPlanSettings(enabled=on)}
+    )
+    settings.update(
+        current.settings.model_copy(update={"learning": learning}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+
+
+def active_thermal_plan() -> Plan:
+    from bindaems.shared.plan import PlanThermal
+
+    plan = stored_plan(intents=[{"thermal_steps": 1, "thermal_grid_w": 800.0}] * 4)
+    thermal = PlanThermal(
+        device="klima",
+        mode="heizen",
+        active=True,
+        saving_ct=10.0,
+        model_computed_at=None,
+        reason="ok",
+    )
+    return plan.model_copy(update={"thermal": thermal})
+
+
+async def test_switching_thermal_off_resends_without_steps_at_once(
+    sender: PlanSender,
+    fake_client: FakeCoreClient,
+    planning: FakePlanning,
+    live: LiveState,
+    settings_service: SettingsService,
+) -> None:
+    """Der Plan wurde mit Schalter an aktiv gerechnet; nach dem Ausschalten bleibt er (der Lauf
+    danach ergibt keinen Plan), aber der nächste Abgleich sendet ihn ohne Planwert."""
+    thermal_switch(settings_service, True)
+    planning.plan = active_thermal_plan()
+    assert await sender.sync() == "sent"
+    first = fake_client.sent[-1].plan
+    assert first is not None
+    assert [(s.thermal_steps, s.thermal_mode) for s in first.slots] == [(1, "heizen")] * 4
+    live_reports(live, fake_client.sent[-1])
+    assert await sender.sync() == "current"
+
+    thermal_switch(settings_service, False)
+    assert await sender.sync() == "sent"
+    second = fake_client.sent[-1].plan
+    assert second is not None and second.id == first.id
+    assert all(
+        (s.thermal_steps, s.thermal_grid_w, s.thermal_mode) == (None, 0.0, None)
+        for s in second.slots
+    )
+    live_reports(live, fake_client.sent[-1])
+    assert await sender.sync() == "current"
+
+    thermal_switch(settings_service, True)  # wieder an: derselbe Plan mit Planwert
+    assert await sender.sync() == "sent"
+    third = fake_client.sent[-1].plan
+    assert third is not None and third.slots[0].thermal_steps == 1

@@ -44,11 +44,19 @@ def _intent(health: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
 
 
 def core_has_plan(
-    health: Mapping[str, Any] | None, plan: Plan | IntentPlan, *, grid_charge_allowed: bool
+    health: Mapping[str, Any] | None,
+    plan: Plan | IntentPlan,
+    *,
+    grid_charge_allowed: bool,
+    thermal: bool | None = None,
 ) -> bool:
     """Ob der Plan der Absicht im Health des core dieselbe ``id``, dasselbe ``grid_charge_allowed``
     und dasselbe ``created_at`` trägt wie der gewollte (Präzisierung 11). Ohne Health ist es
     unbekannt und gilt als nein.
+
+    Mit ``thermal`` (Plan 5c, der Sender) zählt auch, ob der core Planwerte der Klimaanlage hält
+    (ein Slot mit ``thermal_steps``) wie der gewollte; so geht nach dem Ausschalten von
+    „Vorheizen und Vorkühlen“ derselbe Plan ohne sie hinaus. ``None`` vergleicht das nicht.
 
     ``created_at`` fängt eine ``id`` ab, die nach einer Wiederherstellung der Datenbank
     wiederkehrt; es wird als Zeitpunkt verglichen. Meldet ein älterer core es nicht, vergleichen
@@ -60,8 +68,18 @@ def core_has_plan(
         return False
     if (held.get("id"), held.get("grid_charge_allowed")) != (plan.id, grid_charge_allowed):
         return False
+    if thermal is not None and _holds_thermal(held) != thermal:
+        return False
     created_at = held.get("created_at")
     return created_at is None or _same_moment(created_at, plan.created_at)
+
+
+def _holds_thermal(held: Mapping[str, Any]) -> bool:
+    """Ob ein Slot des Plans, den der core hält, einen Planwert der Klimaanlage trägt."""
+    slots = held.get("slots")
+    if not isinstance(slots, list):
+        return False
+    return any(isinstance(s, dict) and s.get("thermal_steps") is not None for s in slots)
 
 
 def _same_moment(written: Any, moment: datetime) -> bool:

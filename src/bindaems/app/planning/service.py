@@ -83,9 +83,10 @@ from bindaems.app.settings.service import (
     VersionConflictError,
 )
 from bindaems.app.status import ComponentStatus
-from bindaems.shared.config import Config
+from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
+from bindaems.shared.settings import ThermalPlanSettings
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, slot_start
 
 log = structlog.get_logger(__name__)
@@ -248,6 +249,11 @@ class PlanningService:
         self._thermal_seen: ThermalClass | None = None
         self._thermal_model_changed = False
         self._thermal_at: datetime | None = None
+        # Einstellungen der Verschiebung aus dem Schnappschuss des Laufs (``collect``), damit sie
+        # zu ``settings_version`` des Plans passen; harte Grenze des Versatzes der Klimaanlage
+        self._thermal_settings: ThermalPlanSettings | None = None
+        unit = cfg.thermal.devices.get(device) if device is not None else None
+        self._thermal_max_k = unit.max_offset_k if isinstance(unit, CoeOffsetConfig) else 0.0
 
     def current(self) -> Plan | None:
         """Der zuletzt erzeugte Plan, auch wenn er abgelaufen ist."""
@@ -576,6 +582,7 @@ class PlanningService:
         pv = self._forecast.latest()
         load = self._load_forecast.latest()
         current = self._settings.current()
+        self._thermal_settings = current.settings.learning.thermal
         health = self._live.health
         intent = self._intent_for(health)
         self._cars_unseen = (
@@ -678,14 +685,19 @@ class PlanningService:
         # Dieser Plan kennt Betriebsart und Wärmemodell von jetzt
         self._thermal_seen = thermal_class(health, device) or "rest"
         self._thermal_model_changed = False
-        settings = self._settings.current().settings.learning.thermal
-        temperatures = {ensure_utc(slot): t for slot, t in self._forecast.temperatures().items()}
+        settings = self._thermal_settings  # die des Laufs (``collect``)
         try:
+            if settings is None:
+                settings = self._settings.current().settings.learning.thermal
+            temperatures = {
+                ensure_utc(slot): t for slot, t in self._forecast.temperatures().items()
+            }
             return await asyncio.to_thread(
                 partial(
                     apply_thermal,
                     plan,
                     device=device,
+                    max_offset_k=self._thermal_max_k,
                     entry=entry,
                     models=models,
                     temperatures=temperatures,
@@ -695,7 +707,8 @@ class PlanningService:
             )
         except Exception:  # die Verschiebung darf den Plan nie verhindern
             log.exception("Vorheizen und Vorkühlen nicht berechnet")
-            return failed(plan, device=device, entry=entry, enabled=settings.enabled)
+            enabled = settings is not None and settings.enabled
+            return failed(plan, device=device, entry=entry, enabled=enabled)
 
     async def _solve(self, inputs: PlanInputs) -> OptimizerResult:
         try:

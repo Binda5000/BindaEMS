@@ -22,7 +22,8 @@ umgekehrtem Vorzeichen (vorgekühlt ist positiv); ohne beide Werte 0. Komfortban
 
 Grund (``reason``): Betriebsart aus Health nicht ``heizen`` oder ``kuehlen`` → ``mode``; kein
 taugliches Modell der Betriebsart → ``no_model``; sonst das Ergebnis der Verschiebung (``ok``,
-``not_worth``, ``solver``). Plant sie einen Versatz außerhalb des Bands (``check_thermal``),
+``not_worth``, ``solver``). Das Band ist je Richtung der kleinere Wert aus Einstellung und
+``max_offset_k`` der Klimaanlage (``band``). Plant sie einen Versatz außerhalb (``check_thermal``),
 gilt sie nicht (``solver``). An den core geht sie nur mit Schalter an und ``ok``
 (``active``). Mit Schalter aus bleibt ``ok`` als Vorschau, jeder andere Grund wird ``off``. Die
 Slots tragen die Verschiebung, wann immer der Grund ``ok`` ist, auch in der Vorschau; die
@@ -37,7 +38,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Any, Protocol, get_args
+from typing import Any, Protocol, cast, get_args
 
 import structlog
 
@@ -50,7 +51,13 @@ from bindaems.app.learning.thermal_model import (
 )
 from bindaems.app.planning.explain import thermal_reason, with_thermal
 from bindaems.app.planning.plausibility import check_thermal
-from bindaems.app.planning.thermal_shift import ShiftInput, ShiftResult, ShiftSlot, shift
+from bindaems.app.planning.thermal_shift import (
+    STEP_K,
+    ShiftInput,
+    ShiftResult,
+    ShiftSlot,
+    shift,
+)
 from bindaems.shared.plan import Plan, PlanSlot, PlanThermal, ThermalMode, ThermalReason
 from bindaems.shared.settings import ThermalPlanSettings
 from bindaems.shared.timeutil import ensure_utc
@@ -72,7 +79,7 @@ def health_mode(entry: Mapping[str, Any] | None) -> ThermalMode:
     """Betriebsart aus dem Eintrag der Klimaanlage in Health; ohne Eintrag oder mit einem
     unbekannten Wert ``unbekannt``."""
     mode = entry.get("mode") if entry is not None else None
-    return mode if isinstance(mode, str) and mode in _MODES else "unbekannt"  # type: ignore[return-value]
+    return cast(ThermalMode, mode) if isinstance(mode, str) and mode in _MODES else "unbekannt"
 
 
 def _finite(value: object) -> float | None:
@@ -133,11 +140,18 @@ def shift_slots(
     return result
 
 
-def band(mode: Mode, settings: ThermalPlanSettings) -> tuple[float, float]:
-    """Komfortband ``(up_k, down_k)`` der Betriebsart."""
+def band(mode: Mode, settings: ThermalPlanSettings, *, max_offset_k: float) -> tuple[float, float]:
+    """Komfortband ``(up_k, down_k)`` der Betriebsart: je Richtung der kleinere Wert aus der
+    Einstellung und ``max_offset_k`` der Klimaanlage, auf ein Vielfaches von 0,5 K abgerundet."""
     if mode == "heizen":
-        return settings.heat_up_k, settings.heat_down_k
-    return settings.cool_up_k, settings.cool_down_k
+        up_k, down_k = settings.heat_up_k, settings.heat_down_k
+    else:
+        up_k, down_k = settings.cool_up_k, settings.cool_down_k
+
+    def capped(value: float) -> float:
+        return math.floor(min(value, max_offset_k) / STEP_K + 1e-9) * STEP_K
+
+    return capped(up_k), capped(down_k)
 
 
 def _shifted_slots(plan: Plan, mode: Mode, result: ShiftResult, *, explain: bool) -> list[PlanSlot]:
@@ -163,6 +177,7 @@ def apply_thermal(
     plan: Plan,
     *,
     device: str,
+    max_offset_k: float,
     entry: Mapping[str, Any] | None,
     models: ThermalModels,
     temperatures: Mapping[datetime, float],
@@ -172,8 +187,9 @@ def apply_thermal(
 ) -> Plan:
     """``plan`` mit der Verschiebung der Klimaanlage ``device`` (siehe Moduldokumentation).
 
-    ``entry`` ist der Eintrag der Klimaanlage in Health (``None`` ohne Health), ``temperatures``
-    die Außentemperatur je Slotbeginn (UTC) aus der Prognose."""
+    ``max_offset_k`` ist die harte Grenze des Versatzes der Klimaanlage (``CoeOffsetConfig``),
+    ``entry`` ihr Eintrag in Health (``None`` ohne Health), ``temperatures`` die Außentemperatur
+    je Slotbeginn (UTC) aus der Prognose."""
     mode = health_mode(entry)
     current: Mode | None = mode if mode == "heizen" or mode == "kuehlen" else None
     computed_at: datetime | None = None
@@ -190,7 +206,7 @@ def apply_thermal(
             reason = "no_model"
         else:
             model, profile, _ = state
-            up_k, down_k = band(current, settings)
+            up_k, down_k = band(current, settings, max_offset_k=max_offset_k)
             result = shift_fn(
                 ShiftInput(
                     mode=current,

@@ -1274,7 +1274,11 @@ async def test_switch_off_reports_off_unless_preview(service_with, live, cold):
     assert plan.thermal is not None and plan.thermal.reason == "off"
 
 
-async def test_unexpected_error_keeps_the_plan(service_with, live, cold, monkeypatch):
+@pytest.mark.parametrize(("enabled", "reason"), [(False, "off"), (True, "solver")])
+async def test_unexpected_error_keeps_the_plan(
+    service_with, live, cold, monkeypatch, settings_service, enabled, reason
+):
+    set_thermal(settings_service, enabled=enabled)
     live.health = thermal_health()
 
     def broken(*args, **kwargs):
@@ -1284,8 +1288,91 @@ async def test_unexpected_error_keeps_the_plan(service_with, live, cold, monkeyp
     with capture_logs() as logs:
         plan = await service_with(thermal_model=heating_models()).replan("manual")
     assert plan.thermal is not None
-    assert (plan.thermal.reason, plan.thermal.active) == ("off", False)
+    assert (plan.thermal.reason, plan.thermal.active, plan.thermal.mode) == (
+        reason,
+        False,
+        "heizen",
+    )
+    assert all(s.thermal_steps is None for s in plan.slots)
     assert "Vorheizen und Vorkühlen nicht berechnet" in [e["event"] for e in logs]
+
+
+async def test_error_reading_the_temperatures_degrades_like_the_rest(
+    service_with, live, cold, settings_service, monkeypatch
+):
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+
+    def broken():
+        raise RuntimeError("Prognose kaputt")
+
+    monkeypatch.setattr(cold, "temperatures", broken)
+    plan = await service_with(thermal_model=heating_models()).replan("manual")
+    assert plan.thermal is not None and plan.thermal.reason == "solver"
+
+
+async def test_fallback_plan_gets_the_shift(
+    service_with, live, cold, settings_service, small_house
+):
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+    service = service_with(
+        cfg=small_house,
+        solver=returns(OptimizerResult("timeout", (), {}, None, 30000)),
+        thermal_model=heating_models(),
+    )
+    plan = await service.replan("slot")
+    assert plan.source == "fallback"
+    assert plan.thermal is not None and (plan.thermal.reason, plan.thermal.active) == ("ok", True)
+    assert any(s.thermal_steps for s in plan.slots)
+
+
+async def test_thermal_settings_come_from_the_run(
+    service_with, live, cold, settings_service, small_house, monkeypatch
+):
+    """Die Einstellungen der Verschiebung sind die, mit denen der Lauf begann (``collect``):
+    Der Plan trägt deren Version. Ein Schalter, der während des Lösens umgelegt wird, plant
+    danach ohnehin neu (``settings``)."""
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+    service = service_with(cfg=small_house, thermal_model=heating_models())
+    solve_inline_ = service._solver
+
+    async def switching(inputs):
+        set_thermal(settings_service, enabled=False)
+        return await solve_inline_(inputs)
+
+    monkeypatch.setattr(service, "_solver", switching)
+    plan = await service.replan("manual")
+    assert plan.thermal is not None and plan.thermal.active is True
+    assert plan.settings_version == settings_service.current().version - 1
+
+
+async def test_band_is_capped_by_the_max_offset_of_the_device(
+    service_with, live, cold, settings_service, small_house
+):
+    """Mit ``max_offset_k`` 1,0 und dem Band ab Werk (+1,5 / −1,0 K) plant die Verschiebung
+    höchstens +2 Stufen."""
+    set_thermal(settings_service, enabled=True)
+    live.health = thermal_health()
+    device = small_house.thermal.devices["klima"].model_copy(update={"max_offset_k": 1.0})
+    thermal = small_house.thermal.model_copy(update={"devices": {"klima": device}})
+    capped = small_house.model_copy(update={"thermal": thermal})
+    plan = await service_with(cfg=capped, thermal_model=heating_models()).replan("manual")
+    assert plan.thermal is not None and plan.thermal.reason == "ok"
+    steps = [s.thermal_steps or 0 for s in plan.slots]
+    assert max(steps) == 2 and min(steps) >= -2
+    wide = await service_with(cfg=small_house, thermal_model=heating_models()).replan("manual")
+    assert max(s.thermal_steps or 0 for s in wide.slots) == 3  # ohne Deckel bis +1,5 K
+
+
+def test_band_uses_the_smaller_of_setting_and_max_offset() -> None:
+    settings = ThermalPlanSettings(heat_up_k=1.5, heat_down_k=1.0, cool_up_k=2.5, cool_down_k=0.5)
+    assert thermal_stage.band("heizen", settings, max_offset_k=3.0) == (1.5, 1.0)
+    assert thermal_stage.band("heizen", settings, max_offset_k=1.0) == (1.0, 1.0)
+    assert thermal_stage.band("kuehlen", settings, max_offset_k=2.0) == (2.0, 0.5)
+    # auf ein Vielfaches von 0,5 abgerundet
+    assert thermal_stage.band("kuehlen", settings, max_offset_k=1.7) == (1.5, 0.5)
 
 
 # --- Eingabe der Verschiebung --------------------------------------------------------------
@@ -1300,10 +1387,11 @@ def _recording_shift(seen: list[ShiftInput], reason: str = "ok", steps: int = 1)
     return fake
 
 
-def _apply(plan, entry, *, models=None, temps=None, settings=None, shift_fn=None):
+def _apply(plan, entry, *, models=None, temps=None, settings=None, shift_fn=None, max_k=3.0):
     return thermal_stage.apply_thermal(
         plan,
         device="klima",
+        max_offset_k=max_k,
         entry=entry,
         models=models or heating_models(),
         temperatures=temps if temps is not None else {},
@@ -1414,15 +1502,19 @@ def test_cooling_inverts_start_and_keeps_power_steps() -> None:
     assert seen[-1].start_k == pytest.approx(-0.5) and heating.thermal is not None
 
 
-def test_shift_outside_the_band_is_dropped() -> None:
+@pytest.mark.parametrize(("up_k", "max_k"), [(0.5, 3.0), (1.5, 1.0)])
+def test_shift_outside_the_band_is_dropped(up_k: float, max_k: float) -> None:
     plan = _sample_plan(["10:00", "10:15"])
+    seen: list[ShiftInput] = []
     with capture_logs() as logs:
         result = _apply(
             plan,
             {"mode": "heizen"},
-            settings=ThermalPlanSettings(enabled=True, heat_up_k=0.5),
-            shift_fn=_recording_shift([], steps=3),
+            settings=ThermalPlanSettings(enabled=True, heat_up_k=up_k),
+            shift_fn=_recording_shift(seen, steps=3),
+            max_k=max_k,
         )
+    assert seen[0].up_k == min(up_k, max_k)
     assert result.thermal is not None
     assert (result.thermal.reason, result.thermal.active, result.thermal.saving_ct) == (
         "solver",
@@ -1479,11 +1571,10 @@ async def test_mode_change_triggers_replan(service_with, live, clock, cold):
         solver=recording(calls), sleep=fast_sleep(), thermal_model=heating_models()
     )
     async with running(service):
-        await until(lambda: len(calls) == 1)
-        await asyncio.sleep(0.05)
+        # auf den gespeicherten Plan warten: Die Verschiebung liest Health erst nach dem Solver
+        await until(lambda: _stored_runs(service) == 1)
         live.health = thermal_health("lueften")
-        await until(lambda: len(calls) == 2)
-        await asyncio.sleep(0.1)
+        await until(lambda: _stored_runs(service) == 2)
         live.health = thermal_health("aus")
         await asyncio.sleep(0.1)
         assert len(calls) == 2  # Lüften und aus sind beide „Rest“
@@ -1492,7 +1583,6 @@ async def test_mode_change_triggers_replan(service_with, live, clock, cold):
         await asyncio.sleep(0.1)
         assert len(calls) == 2  # gedrosselt
         clock.advance(timedelta(seconds=241))
-        await until(lambda: len(calls) == 3)
         await until(lambda: _stored_runs(service) == 3)
         await asyncio.sleep(0.1)  # danach geplant: keine weitere Anfrage
     assert triggers(calls) == ["start", "thermal", "thermal"]
@@ -1507,8 +1597,7 @@ async def test_missing_health_is_no_mode_change(service_with, live, cold):
         solver=recording(calls), sleep=fast_sleep(), thermal_model=heating_models()
     )
     async with running(service):
-        await until(lambda: len(calls) == 1)
-        await asyncio.sleep(0.05)
+        await until(lambda: _stored_runs(service) == 1)
         live.health = None
         await asyncio.sleep(0.2)
     assert triggers(calls) == ["start"]
