@@ -12,6 +12,7 @@ import {
 	type ControlReply,
 	type CoreHealth,
 	type Intent,
+	type Limits,
 	type PlanResponse,
 	type Role,
 	type VehicleHealth,
@@ -35,6 +36,8 @@ const { api, user } = vi.hoisted(() => ({
 		setBoost: vi.fn(),
 		setWallboxVehicle: vi.fn(),
 		setGuestMode: vi.fn(),
+		setNowLimit: vi.fn(),
+		setGuestNowLimit: vi.fn(),
 		setSupport: vi.fn(),
 		setPriority: vi.fn(),
 		drivingStatus: vi.fn(),
@@ -97,13 +100,14 @@ async function show(
 	intent: Intent | null = baseIntent(),
 	boostCost: BoostCost = boostCostJson,
 	sessions: ChargingSession[] = [],
-	plan: PlanResponse = PLAN_RESPONSE
+	plan: PlanResponse = PLAN_RESPONSE,
+	limitsResponse: Limits = limits()
 ) {
 	api.system.mockResolvedValue(response);
 	api.plan.mockResolvedValue(plan);
 	api.boostCost.mockResolvedValue(boostCost);
 	api.control.mockResolvedValue({ core_connected: true, intent });
-	api.limits.mockResolvedValue(limits());
+	api.limits.mockResolvedValue(limitsResponse);
 	api.chargingSessions.mockResolvedValue(sessions);
 	render(Page);
 	await screen.findByRole('heading', { level: 2, name: 'Tesla Model 3' });
@@ -545,6 +549,135 @@ it('wählt den Gast-Modus', async () => {
 	).toEqual(['PV-Überschuss', 'Min+PV', 'Sofort', 'Aus']);
 	await fireEvent.change(select, { target: { value: 'now' } });
 	await waitFor(() => expect(api.setGuestMode).toHaveBeenCalledWith('now'));
+});
+
+describe('Höchststrom in „Sofort“', () => {
+	/** Absicht mit dem Tesla und dem Gast in „Sofort“; `tesla`/`guest` ersetzen `now_max_a` */
+	function nowIntent(tesla: number | null | undefined, guest: number | null | undefined) {
+		const base = baseIntent();
+		// `undefined` ist ein fehlendes Feld, wie in einer Antwort vor dem Sofort-Limit
+		return baseIntent({
+			vehicles: {
+				...base.vehicles,
+				tesla: { ...base.vehicles.tesla!, now_max_a: tesla, mode: 'now' }
+			},
+			guest: { ...base.guest, now_max_a: guest, mode: 'now' }
+		});
+	}
+
+	it('Bedienen wählt den Höchststrom des Tesla und „Volle Leistung“', async () => {
+		await show(system(), nowIntent(null, null));
+		api.setNowLimit.mockResolvedValue(reply());
+		const select = within(card('Tesla Model 3')).getByRole('combobox', { name: 'Höchststrom' });
+		expect(select).toHaveValue('full');
+		expect(
+			within(select)
+				.getAllByRole('option')
+				.map((o) => o.textContent)
+		).toHaveLength(12);
+		expect(within(select).getAllByRole('option')[0]).toHaveTextContent(
+			'Volle Leistung (16 A · 11,0 kW)'
+		);
+		const loaded = api.control.mock.calls.length;
+		await fireEvent.change(select, { target: { value: '10' } });
+		await waitFor(() => expect(api.setNowLimit).toHaveBeenCalledWith('tesla', 10));
+		await waitFor(() => expect(api.control.mock.calls.length).toBeGreaterThan(loaded));
+		await fireEvent.change(select, { target: { value: 'full' } });
+		await waitFor(() => expect(api.setNowLimit).toHaveBeenLastCalledWith('tesla', null));
+	});
+
+	it('rechnet die kW des e-Golf mit seinen zwei Phasen', async () => {
+		const base = baseIntent();
+		await show(
+			system(),
+			baseIntent({
+				vehicles: {
+					...base.vehicles,
+					egolf: {
+						...base.vehicles.tesla!,
+						mode: 'now',
+						now_max_a: 8
+					}
+				}
+			})
+		);
+		const egolf = within(card('e-Golf'));
+		const options = egolf.getAllByRole('option', { name: /A · / });
+		expect(options.at(-1)).toHaveTextContent('6 A · 2,8 kW');
+		expect(egolf.getByRole('combobox', { name: 'Höchststrom' })).toHaveValue('8');
+	});
+
+	it('eine Antwort ohne now_max_a gilt als volle Leistung', async () => {
+		await show(system(), nowIntent(undefined, undefined));
+		const tesla = within(card('Tesla Model 3'));
+		expect(tesla.getByRole('combobox', { name: 'Höchststrom' })).toHaveValue('full');
+		expect(tesla.queryByText(/Sofort mit höchstens/)).toBeNull();
+		expect(within(card('Gast')).getByRole('combobox', { name: 'Höchststrom' })).toHaveValue('full');
+	});
+
+	it('zeigt die Auswahl nicht außerhalb von „Sofort“', async () => {
+		await show();
+		expect(screen.queryByRole('combobox', { name: 'Höchststrom' })).toBeNull();
+	});
+
+	it('Lesende sehen das Limit als Satz ohne Auswahl', async () => {
+		user.role = 'viewer';
+		await show(system(), nowIntent(10, 8));
+		expect(screen.queryByRole('combobox', { name: 'Höchststrom' })).toBeNull();
+		expect(
+			within(card('Tesla Model 3')).getByText('Sofort mit höchstens 10 A (6,9 kW)')
+		).toBeVisible();
+		expect(within(card('Gast')).getByText('Sofort mit höchstens 8 A (5,5 kW)')).toBeVisible();
+	});
+
+	it('Bedienen wählt den Höchststrom für Gäste mit den Phasen der EVCS', async () => {
+		await show(system(), nowIntent(null, null));
+		api.setGuestNowLimit.mockResolvedValue(reply());
+		const select = within(card('Gast')).getByRole('combobox', { name: 'Höchststrom' });
+		const options = within(select).getAllByRole('option');
+		expect(options).toHaveLength(11);
+		expect(options[0]).toHaveTextContent('Volle Leistung (16 A · 11,0 kW)');
+		expect(options.at(-1)).toHaveTextContent('6 A · 4,1 kW');
+		await fireEvent.change(select, { target: { value: '12' } });
+		await waitFor(() => expect(api.setGuestNowLimit).toHaveBeenCalledWith(12));
+		await fireEvent.change(select, { target: { value: 'full' } });
+		await waitFor(() => expect(api.setGuestNowLimit).toHaveBeenLastCalledWith(null));
+	});
+
+	it('bietet Gästen ohne EVCS keine Auswahl', async () => {
+		const noEvcs = limits();
+		delete noEvcs.wallboxes.evcs;
+		await show(system(), nowIntent(null, null), boostCostJson, [], PLAN_RESPONSE, noEvcs);
+		expect(within(card('Gast')).queryByRole('combobox', { name: 'Höchststrom' })).toBeNull();
+		expect(
+			within(card('Tesla Model 3')).getByRole('combobox', { name: 'Höchststrom' })
+		).toBeVisible();
+	});
+
+	it('zeigt eine Ablehnung des core an der Fahrzeugkarte und an der Gastkarte', async () => {
+		await show(system(), nowIntent(null, null));
+		api.setNowLimit.mockRejectedValue(
+			new ApiError(422, 'Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.')
+		);
+		api.setGuestNowLimit.mockRejectedValue(
+			new ApiError(422, 'Sofort-Höchststrom „3“ liegt außerhalb von 6–16 A.')
+		);
+		await fireEvent.change(
+			within(card('Tesla Model 3')).getByRole('combobox', { name: 'Höchststrom' }),
+			{ target: { value: '8' } }
+		);
+		expect(
+			await within(card('Tesla Model 3')).findByText(
+				'Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.'
+			)
+		).toBeVisible();
+		await fireEvent.change(within(card('Gast')).getByRole('combobox', { name: 'Höchststrom' }), {
+			target: { value: '8' }
+		});
+		expect(
+			await within(card('Gast')).findByText('Sofort-Höchststrom „3“ liegt außerhalb von 6–16 A.')
+		).toBeVisible();
+	});
 });
 
 it('zeigt die Akku-Unterstützung mit der wirksamen Schwelle', async () => {

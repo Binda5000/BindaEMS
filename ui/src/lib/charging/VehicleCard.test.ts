@@ -31,6 +31,7 @@ function show(changes: Partial<Props> = {}) {
 		onTarget: vi.fn().mockResolvedValue(undefined),
 		onAdopt: vi.fn().mockResolvedValue(undefined),
 		onAutomation: vi.fn().mockResolvedValue(undefined),
+		onNowLimit: vi.fn().mockResolvedValue(undefined),
 		...changes
 	};
 	render(VehicleCard, props);
@@ -299,5 +300,80 @@ describe('Abfahrt an einem Tag (Ruling F-3)', () => {
 		show({ mode: 'planned', planned: PLANNED, goal });
 		await fireEvent.input(screen.getByLabelText('Abfahrt'), { target: { value: '08:00' } });
 		expect(screen.queryByText('am Mo 12.10.')).toBeNull();
+	});
+});
+
+describe('Höchststrom in „Sofort“', () => {
+	const SETUP = { max_a: null, range: { min_a: 5, max_a: 16, phases: 3 }, voltage: 230 };
+
+	function limitSelect(): HTMLElement {
+		return screen.getByRole('combobox', { name: 'Höchststrom' });
+	}
+
+	it('zeigt die Auswahl in „Sofort“ mit „Volle Leistung“ vorne', () => {
+		show({ mode: 'now', nowLimit: SETUP });
+		expect(limitSelect()).toHaveValue('full');
+		const options = within(limitSelect()).getAllByRole('option');
+		expect(options).toHaveLength(12);
+		expect(options[0]).toHaveTextContent('Volle Leistung (16 A · 11,0 kW)');
+		expect(options.at(-1)).toHaveTextContent('5 A · 3,5 kW');
+	});
+
+	it('zeigt die Auswahl nur in „Sofort“', () => {
+		show({ mode: 'pv', nowLimit: SETUP });
+		expect(screen.queryByRole('combobox', { name: 'Höchststrom' })).toBeNull();
+	});
+
+	it('zeigt die Auswahl nur ab „Bedienen“', () => {
+		show({ mode: 'now', nowLimit: SETUP, operate: false });
+		expect(screen.queryByRole('combobox', { name: 'Höchststrom' })).toBeNull();
+	});
+
+	it('zeigt die Auswahl nicht ohne Grenzen des Fahrzeugs', () => {
+		show({ mode: 'now', nowLimit: null });
+		expect(screen.queryByRole('combobox', { name: 'Höchststrom' })).toBeNull();
+	});
+
+	it('wählt den Stand der Absicht vor', () => {
+		show({ mode: 'now', nowLimit: { ...SETUP, max_a: 10 } });
+		expect(limitSelect()).toHaveValue('10');
+		expect(within(limitSelect()).getByRole('option', { selected: true })).toHaveTextContent(
+			'10 A · 6,9 kW'
+		);
+	});
+
+	it('ruft onNowLimit mit der Wahl und mit null für „Volle Leistung“', async () => {
+		const props = show({ mode: 'now', nowLimit: SETUP });
+		await fireEvent.change(limitSelect(), { target: { value: '10' } });
+		expect(props.onNowLimit).toHaveBeenLastCalledWith(10);
+		await fireEvent.change(limitSelect(), { target: { value: 'full' } });
+		expect(props.onNowLimit).toHaveBeenLastCalledWith(null);
+	});
+
+	it('sperrt die Auswahl, solange die Karte beschäftigt ist', () => {
+		show({ mode: 'now', nowLimit: SETUP, busy: true });
+		expect(limitSelect()).toBeDisabled();
+	});
+
+	it('nennt das Limit in einem Satz, auch Lesenden', () => {
+		show({ mode: 'now', nowLimit: { ...SETUP, max_a: 10 }, operate: false });
+		expect(screen.getByText('Sofort mit höchstens 10 A (6,9 kW)')).toBeVisible();
+	});
+
+	it('nennt ohne Limit oder außerhalb von „Sofort“ keinen Satz', () => {
+		show({ mode: 'now', nowLimit: SETUP });
+		expect(screen.queryByText(/Sofort mit höchstens/)).toBeNull();
+		cleanup();
+		show({ mode: 'pv', nowLimit: { ...SETUP, max_a: 10 } });
+		expect(screen.queryByText(/Sofort mit höchstens/)).toBeNull();
+	});
+
+	it('zeigt einen Fehler der Karte neben dem Limit', () => {
+		show({
+			mode: 'now',
+			nowLimit: SETUP,
+			notice: { level: 'error', text: 'Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.' }
+		});
+		expect(screen.getByText('Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.')).toBeVisible();
 	});
 });

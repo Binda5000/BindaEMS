@@ -14,15 +14,18 @@
 	import { todayVienna } from '$lib/time';
 	import type { SocEntry } from '$lib/dashboard/socs';
 	import { boostCostText } from './boostCost';
+	import NowLimitSelect from './NowLimitSelect.svelte';
 	import {
 		assignmentLabel,
 		CHARGE_MODES,
 		modeLabel,
+		nowLimitText,
 		parseTarget,
 		reasonLabel,
 		SOC_ESTIMATED_NOTE,
 		type BoostInfo,
 		type CardNotice,
+		type NowLimitSetup,
 		type PlannedLine
 	} from './view';
 
@@ -60,6 +63,10 @@
 		) => Promise<void>;
 		/** schaltet die Automatik für Ziel und Abfahrt */
 		onAutomation?: (on: boolean) => Promise<void>;
+		/** Höchststrom in „Sofort“ mit Bereich des Fahrzeugs; `null` ohne dessen Grenzen */
+		nowLimit?: NowLimitSetup | null;
+		/** schickt den Höchststrom in A; `null` ist volle Leistung */
+		onNowLimit?: (maxA: number | null) => Promise<void>;
 	}
 
 	let {
@@ -80,7 +87,9 @@
 		onTarget,
 		driving = null,
 		onAdopt,
-		onAutomation
+		onAutomation,
+		nowLimit = null,
+		onNowLimit
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -109,6 +118,12 @@
 	);
 
 	const costText = $derived(boostCostText(boostCost, vehicle.id));
+	// Lesende sehen das Limit als Satz; Bedienende sehen es in der Auswahl
+	const nowLimitLine = $derived(
+		mode === 'now' && !operate && nowLimit !== null
+			? nowLimitText(nowLimit.max_a, nowLimit.range, nowLimit.voltage)
+			: null
+	);
 
 	function yesNo(value: boolean | null): string {
 		return value === null ? DASH : value ? 'ja' : 'nein';
@@ -207,6 +222,9 @@
 			{#each notes as note (note)}<p class="muted">{note}</p>{/each}
 		</div>
 	{/if}
+	{#if nowLimitLine !== null}
+		<p class="session">{nowLimitLine}</p>
+	{/if}
 	{#if sessionLine !== null}
 		<p class="session">{sessionLine}</p>
 	{/if}
@@ -248,6 +266,9 @@
 					{/each}
 				</select>
 			</label>
+			{#if mode === 'now' && nowLimit !== null && onNowLimit}
+				<NowLimitSelect setup={nowLimit} {busy} onChange={onNowLimit} />
+			{/if}
 			<button type="button" disabled={busy} onclick={() => onBoost(!boost.active)}>
 				{boost.active ? 'Boost beenden' : 'Boost'}
 			</button>

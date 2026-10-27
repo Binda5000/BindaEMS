@@ -63,6 +63,96 @@ test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
 	}
 });
 
+test('Bedienen begrenzt „Sofort“ des Tesla und der Gäste auf einen Höchststrom', async ({
+	page,
+	browser
+}) => {
+	await login(page, 'bedienen');
+	await page.goto('/laden');
+	await expect(modeSelect(page)).toBeEnabled();
+	const guestCard = page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Gast', exact: true }) });
+	const teslaLimit = teslaCard(page).getByRole('combobox', { name: 'Höchststrom' });
+	const guestLimit = guestCard.getByRole('combobox', { name: 'Höchststrom' });
+	// Ohne „Sofort“ gibt es keine Auswahl
+	await expect(teslaLimit).toHaveCount(0);
+	try {
+		await setMode(page, 'Sofort');
+		await expect(teslaLimit).toHaveValue('full');
+		const reply = page.waitForResponse((response) =>
+			response.url().endsWith('/api/control/vehicles/tesla/now-limit')
+		);
+		await teslaLimit.selectOption({ label: '10 A · 6,9 kW' });
+		expect((await reply).status()).toBe(200);
+
+		// Gäste: Modus „Sofort“, dann der Höchststrom der EVCS (3 Phasen)
+		const guestMode = guestCard.getByRole('combobox', { name: 'Lademodus' });
+		const guestModeReply = page.waitForResponse((response) =>
+			response.url().endsWith('/api/control/guest')
+		);
+		await guestMode.selectOption({ label: 'Sofort' });
+		expect((await guestModeReply).status()).toBe(200);
+		await expect(guestLimit).toHaveValue('full');
+		const guestReply = page.waitForResponse((response) =>
+			response.url().endsWith('/api/control/guest/now-limit')
+		);
+		await guestLimit.selectOption({ label: '8 A · 5,5 kW' });
+		expect((await guestReply).status()).toBe(200);
+
+		// nach dem Neuladen stehen beide Limits
+		await page.reload();
+		await expect(teslaLimit).toHaveValue('10');
+		await expect(guestLimit).toHaveValue('8');
+
+		// das Änderungsprotokoll nennt beide Änderungen (als admin)
+		const context = await browser.newContext();
+		try {
+			const adminPage = await context.newPage();
+			await login(adminPage, 'admin');
+			await adminPage.goto('/protokoll');
+			const row = adminPage
+				.getByRole('row')
+				.filter({
+					has: adminPage.getByRole('cell', { name: 'Sofort-Höchststrom geändert', exact: true })
+				})
+				.filter({ hasText: 'bedienen (UI)' });
+			await expect(row.first()).toBeVisible();
+			await expect(row.first()).toContainText('tesla');
+			await expect(
+				adminPage.getByRole('row').filter({ hasText: 'Gast-Sofort-Höchststrom geändert' }).first()
+			).toBeVisible();
+		} finally {
+			await context.close();
+		}
+	} finally {
+		// Das Limit bleibt über den Moduswechsel stehen: erst zurück auf volle Leistung, dann die Modi
+		await restoreNowLimits(page);
+		await setMode(page, 'Geplant');
+		await guestCard
+			.getByRole('combobox', { name: 'Lademodus' })
+			.selectOption({ label: 'PV-Überschuss' });
+		await expect(guestCard.getByRole('combobox', { name: 'Lademodus' })).toHaveValue('pv');
+	}
+});
+
+/** Stellt „Volle Leistung“ für den Tesla und die Gäste über die API zurück, mit Zeitlimit */
+async function restoreNowLimits(page: Page): Promise<void> {
+	try {
+		const csrf = (await page.context().cookies()).find((cookie) => cookie.name === 'bindaems_csrf');
+		for (const url of ['/api/control/vehicles/tesla/now-limit', '/api/control/guest/now-limit']) {
+			const response = await page.request.put(url, {
+				data: { max_a: null },
+				headers: { 'X-CSRF-Token': csrf?.value ?? '' },
+				timeout: 10_000
+			});
+			expect(response.status()).toBe(200);
+		}
+	} catch (error) {
+		console.warn('Sofort-Höchststrom nicht zurückgestellt:', String(error));
+	}
+}
+
 /** Setzt Ziel-SOC und Abfahrt des Tesla über „Übernehmen“ und wartet auf die Antwort */
 async function setTarget(page: Page, soc: string, departure: string): Promise<void> {
 	const card = teslaCard(page);

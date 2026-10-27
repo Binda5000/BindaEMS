@@ -215,6 +215,18 @@ export const api = {
 			body: { on },
 			schema: s.ControlReplySchema
 		}),
+	/** Höchststrom je Phase (ganze A) in „Sofort“; `null`: volle Leistung */
+	setNowLimit: (vehicle: string, maxA: number | null): Promise<s.ControlReply> =>
+		request('PUT', `/api/control/vehicles/${encode(vehicle)}/now-limit`, {
+			body: { max_a: maxA },
+			schema: s.ControlReplySchema
+		}),
+	/** `null`: Gäste laden in „Sofort“ mit voller Leistung */
+	setGuestNowLimit: (maxA: number | null): Promise<s.ControlReply> =>
+		request('PUT', '/api/control/guest/now-limit', {
+			body: { max_a: maxA },
+			schema: s.ControlReplySchema
+		}),
 	/** `null`: „Automatisch“, die Übersteuerung dieser Wallbox entfällt */
 	setWallboxVehicle: (wallbox: string, vehicle: string | null): Promise<s.ControlReply> =>
 		request('PUT', `/api/control/wallboxes/${encode(wallbox)}/vehicle`, {

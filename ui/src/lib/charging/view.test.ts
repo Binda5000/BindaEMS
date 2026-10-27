@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChargingSession, Intent, PlanVehicle, VehicleHealth } from '$lib/api/schemas';
-import { chargingSession } from '$lib/testing/fixtures';
+import { chargingSession, limits } from '$lib/testing/fixtures';
 import { PLAN } from '$lib/testing/plan';
 import {
 	assignmentLabel,
@@ -8,11 +8,15 @@ import {
 	CHARGE_MODES,
 	GUEST_MODES,
 	healthIsCurrent,
+	guestCurrentRange,
 	indicatorText,
 	latestSession,
 	modeLabel,
 	moveDown,
 	moveUp,
+	nowLimitChoice,
+	nowLimitOptions,
+	nowLimitText,
 	occupantText,
 	overrideVehicle,
 	parseSupportThreshold,
@@ -145,6 +149,7 @@ describe('Texte', () => {
 				reasonLabel
 			)
 		).toEqual(['Geplant', 'Plan: Laden', 'Späteste Startzeit', 'Ziel-SOC erreicht', 'Ladelimit']);
+		expect(reasonLabel('now_limit')).toBe('Sofort-Limit');
 		expect(reasonLabel('neu')).toBe('neu');
 		expect(reasonLabel(null)).toBe('–');
 	});
@@ -706,5 +711,70 @@ describe('Ladelimit im Zeitplan', () => {
 				plannedLine({ mode: null, vehicle: null, car: withLimit(limit, target), target })?.notes
 			).toEqual([]);
 		}
+	});
+});
+
+describe('Höchststrom in „Sofort“', () => {
+	const TESLA = { min_a: 5, max_a: 16, phases: 3 };
+	const EGOLF = { min_a: 6, max_a: 16, phases: 2 };
+
+	it('bietet „Volle Leistung“ und dann jeden Strom darunter mit kW', () => {
+		const options = nowLimitOptions(TESLA, 230);
+		expect(options).toHaveLength(12);
+		expect(options[0]).toEqual({ value: null, label: 'Volle Leistung (16 A · 11,0 kW)' });
+		expect(options[1]).toEqual({ value: 15, label: '15 A · 10,4 kW' });
+		expect(options.find((option) => option.value === 10)?.label).toBe('10 A · 6,9 kW');
+		expect(options.at(-1)).toEqual({ value: 5, label: '5 A · 3,5 kW' });
+		expect(options.slice(1).map((option) => option.value)).toEqual([
+			15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5
+		]);
+	});
+
+	it('rechnet die kW mit den Phasen des Fahrzeugs', () => {
+		const options = nowLimitOptions(EGOLF, 230);
+		expect(options[0]!.label).toBe('Volle Leistung (16 A · 7,4 kW)');
+		expect(options.at(-1)).toEqual({ value: 6, label: '6 A · 2,8 kW' });
+	});
+
+	it('hat ohne Spielraum nur die volle Leistung', () => {
+		expect(nowLimitOptions({ min_a: 16, max_a: 16, phases: 3 }, 230)).toEqual([
+			{ value: null, label: 'Volle Leistung (16 A · 11,0 kW)' }
+		]);
+	});
+
+	it('beschreibt das Limit in einem Satz, ohne Limit nicht', () => {
+		expect(nowLimitText(null, TESLA, 230)).toBeNull();
+		expect(nowLimitText(10, TESLA, 230)).toBe('Sofort mit höchstens 10 A (6,9 kW)');
+		expect(nowLimitText(8, EGOLF, 230)).toBe('Sofort mit höchstens 8 A (3,7 kW)');
+	});
+
+	it('behandelt ein Limit ab dem Höchststrom als volle Leistung und klemmt nach unten', () => {
+		expect(nowLimitChoice(null, TESLA)).toBeNull();
+		expect(nowLimitChoice(16, TESLA)).toBeNull();
+		expect(nowLimitChoice(20, TESLA)).toBeNull();
+		expect(nowLimitChoice(10, TESLA)).toBe(10);
+		expect(nowLimitChoice(3, TESLA)).toBe(5);
+		expect(nowLimitText(16, TESLA, 230)).toBeNull();
+		expect(nowLimitText(3, TESLA, 230)).toBe('Sofort mit höchstens 5 A (3,5 kW)');
+	});
+
+	it('nimmt für Gäste Bereich und Phasen der EVCS', () => {
+		expect(guestCurrentRange(limits().wallboxes)).toEqual({ min_a: 6, max_a: 16, phases: 3 });
+	});
+
+	it('nimmt für Gäste das kleinste min_a und das größte max_a aller EVCS', () => {
+		const evcs = { type: 'victron_evcs_ns', name: null, safe_a: 6, live_allowed: false } as const;
+		expect(
+			guestCurrentRange({
+				one: { ...evcs, min_a: 8, max_a: 10, phase_map: ['L1'] },
+				two: { ...evcs, min_a: 6, max_a: 13, phase_map: ['L1', 'L2', 'L3'] }
+			})
+		).toEqual({ min_a: 6, max_a: 13, phases: 1 });
+	});
+
+	it('bietet Gästen ohne EVCS nichts an', () => {
+		const { twc } = limits().wallboxes;
+		expect(guestCurrentRange({ twc: twc! })).toBeNull();
+		expect(guestCurrentRange({})).toBeNull();
 	});
 });
