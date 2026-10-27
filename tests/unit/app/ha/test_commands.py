@@ -593,25 +593,34 @@ async def test_target_number_out_of_range_or_no_whole_number_is_rejected(
     ]
 
 
-async def test_departure_text_sets_only_the_departure(handler, intents, clock) -> None:
-    for payload in ("06:30", "00:00", "23:59"):
+async def test_departure_time_sets_only_the_departure(handler, intents, clock) -> None:
+    for payload in ("06:30", "06:30:00", "00:00:00", "23:59:59"):
         await handler("tesla_departure", payload)
         clock.advance(1.0)
     assert [change for change, _, _ in intents.applied] == [
-        SetTarget("tesla", None, "06:30"),
-        SetTarget("tesla", None, "00:00"),
-        SetTarget("tesla", None, "23:59"),
+        SetTarget("tesla", None, shown) for shown in ("06:30", "06:30", "00:00", "23:59")
     ]
 
 
-async def test_departure_text_rejects_bad_time(handler, intents, rejections, clock) -> None:
-    for payload in ("7.00", "7:00", "24:00", "06:60", ""):
+async def test_departure_time_rejects_bad_time(handler, intents, rejections, clock) -> None:
+    payloads = (
+        "7.00",
+        "7:00",
+        "24:00",
+        "06:60",
+        "",
+        "06:30:60",
+        "6:30:00",
+        "06:30:0",
+        "24:00:00",
+        "06:30:00:00",
+    )
+    for payload in payloads:
         await handler("tesla_departure", payload)
         clock.advance(1.0)
     assert intents.applied == []
     assert rejections.texts == [
-        PREFIX + f"Abfahrt „{shown}“ ist keine Uhrzeit (HH:MM)."
-        for shown in ("7.00", "7:00", "24:00", "06:60", "")
+        PREFIX + f"Abfahrt „{shown}“ ist keine Uhrzeit (HH:MM)." for shown in payloads
     ]
 
 
@@ -622,7 +631,7 @@ async def test_target_and_departure_through_the_real_service(
     service = IntentService(client, LiveState(), FakeFeed(), audit, clock, cfg)  # type: ignore[arg-type]
     handler = HaCommandHandler(cfg, service, rejections, clock)
     await handler("tesla_target_soc", "90")
-    await handler("tesla_departure", "06:30")
+    await handler("tesla_departure", "06:30:00")
     assert client.valid is not None
     tesla = client.valid.vehicles["tesla"]
     assert (tesla.target_soc_pct, tesla.departure) == (90, "06:30")

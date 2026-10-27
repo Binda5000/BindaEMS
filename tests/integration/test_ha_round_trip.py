@@ -120,7 +120,7 @@ def _cases(cfg: Config) -> dict[str, Case]:
                 shown="75",
             ),
             f"{oid}_departure": Case(
-                "06:30",
+                "06:30:00",
                 lambda w, get=get: get(w).departure == "06:30",
                 api=(f"{path}/target", {"target_soc_pct": None, "departure": "08:15"}),
                 published="06:30:00",

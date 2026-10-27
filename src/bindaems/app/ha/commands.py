@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -57,6 +58,9 @@ RATE_S: Final = 1.0  # höchstens ein Befehl je Sekunde und Entität
 ON: Final = "ON"
 OFF: Final = "OFF"
 PRESS: Final = "PRESS"
+_TIME: Final = re.compile(
+    rf"({DEPARTURE_PATTERN.pattern})(:[0-5]\d)?"
+)  # ``HH:MM`` oder ``HH:MM:SS``
 
 
 class PlanningCommands(Protocol):
@@ -181,12 +185,16 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         return parse
 
     def departure(key: str) -> Callable[[str], Change | None]:
-        """Nur die Abfahrt (``HH:MM``); das Ziel bleibt (``None``)."""
+        """Nur die Abfahrt (``HH:MM``, von Home Assistant ``HH:MM:SS``; die Sekunden fallen weg).
+
+        Das Ziel bleibt (``None``).
+        """
 
         def parse(payload: str) -> Change | None:
-            if DEPARTURE_PATTERN.fullmatch(payload) is None:
+            time = _TIME.fullmatch(payload)
+            if time is None:
                 raise Refused(f"Abfahrt „{_shown(payload)}“ ist keine Uhrzeit (HH:MM).")
-            return SetTarget(key, None, payload)
+            return SetTarget(key, None, time[1])
 
         return parse
 
