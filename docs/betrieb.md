@@ -1447,8 +1447,9 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   beim Tesla mit 3 Phasen „5 A · 3,5 kW“ bis „16 A · 11,0 kW“, beim e-Golf mit 2 Phasen „6 A · 2,8 kW“
   bis „16 A · 7,4 kW“). Die Wahl schickt `PUT /api/control/vehicles/{key}/now-limit`, gilt sofort und
   bleibt über Abstecken, Neustart und Moduswechsel stehen, bis du sie änderst. „Lesen“ sieht statt der
-  Auswahl den Satz „Sofort mit höchstens {n} A ({kW} kW)“, und nur bei einem Limit. In anderen Modi
-  steht die Auswahl nicht da. Läuft in „Sofort“ ein Boost, bleibt sie sichtbar, das Limit ruht aber:
+  Auswahl den Satz „Sofort mit höchstens {n} A ({kW} kW)“, und nur bei einem Limit und ohne Boost. In
+  anderen Modi steht die Auswahl nicht da. Läuft in „Sofort“ ein Boost, bleibt sie sichtbar (der Satz
+  für „Lesen“ fehlt dann), das Limit ruht aber:
   Boost lädt mit voller Leistung, und „Geplant“ rechnet mit voller Leistung (Abschnitt „Laderegelung“, „Lademodi“, „Sofort-Limit“).
 - **Geplant:** Steht das Fahrzeug auf „Geplant“, hat die Karte ab „Bedienen“ die Felder „Ziel-SOC“ (%,
   ganze Zahl von 20 bis 100) und „Abfahrt“ (tägliche Uhrzeit) mit der Taste „Übernehmen“; sie schickt

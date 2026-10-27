@@ -118,9 +118,10 @@
 	);
 
 	const costText = $derived(boostCostText(boostCost, vehicle.id));
-	// Lesende sehen das Limit als Satz; Bedienende sehen es in der Auswahl
+	// Lesende sehen das Limit als Satz; Bedienende sehen es in der Auswahl. Solange Boost gilt,
+	// ruht das Limit (Boost lädt mit voller Leistung): kein Satz
 	const nowLimitLine = $derived(
-		mode === 'now' && !operate && nowLimit !== null
+		mode === 'now' && !operate && !boost.active && nowLimit !== null
 			? nowLimitText(nowLimit.max_a, nowLimit.range, nowLimit.voltage)
 			: null
 	);

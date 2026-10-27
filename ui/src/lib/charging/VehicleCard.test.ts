@@ -368,6 +368,17 @@ describe('Höchststrom in „Sofort“', () => {
 		expect(screen.queryByText(/Sofort mit höchstens/)).toBeNull();
 	});
 
+	it('nennt das Limit Lesenden nicht, solange Boost gilt', () => {
+		// Boost lädt mit voller Leistung, das Limit ruht (Entscheidung 3)
+		show({
+			mode: 'now',
+			nowLimit: { ...SETUP, max_a: 10 },
+			operate: false,
+			boost: { active: true, until: '2026-10-08T12:00:00Z', pending: false }
+		});
+		expect(screen.queryByText(/Sofort mit höchstens/)).toBeNull();
+	});
+
 	it('zeigt einen Fehler der Karte neben dem Limit', () => {
 		show({
 			mode: 'now',
