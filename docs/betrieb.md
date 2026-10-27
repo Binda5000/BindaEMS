@@ -5794,7 +5794,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der neununddreißig Szenarien bei jedem Push
+In der CI läuft jedes der vierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -5822,7 +5822,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der neununddreißig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der vierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -5838,7 +5838,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  neununddreißig zusammen rund 5 min.
+  vierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -5962,6 +5962,7 @@ Beginn kein Auto an, und die Klimaanlage ist live.
 | `geplant-pv` | Geplant mit PV-Überschuss, 2 h | 21.06.2026 ab 10:00, PV wie `sonnig`, Akku 60 %, nur der Tesla mit 60 %, in Geplant, Ziel 70 %, Abfahrt 07:00 (am nächsten Morgen); zu Beginn und alle 15 min ein Plan mit `EIGENVERBRAUCH`, der den Tesla mit 0 W nennt | Höchstens 5 % der Energie des Tesla kommen aus dem Akku (ohne Übergänge): Er lädt nur aus dem Überschuss, wie ein PV-Auto; er bekommt „Laden aus“ mit „target_reached“ bei mindestens 70 % und lädt danach nicht mehr, obwohl die Sonne weiter scheint. |
 | `geplant-unbekannt` | Geplant ohne Ladestand, 2 h | wie `geplant-spaet`, aber Home Assistant meldet keinen Ladestand des e-Golf; Abfahrt 23:15 | Jede Gesundheit, die einen Ladestand des e-Golf nennt, nennt ihn „angenommen“ mit 0 %; er lädt erst ab der spätesten Startzeit für 0 % (gegen 18:31) und beginnt binnen 30 s danach; keine Entscheidung nennt „target_reached“. |
 | `tesla-ladelimit` | Ladelimit des Tesla an das Ziel angleichen, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, nur der Tesla mit 65 % und dem Ladelimit 60 % im Auto, also „Complete“, `charge_limit_sync` an, in Geplant, Ziel 75 %, Abfahrt 19:00 (die späteste Startzeit ist schon vorbei) | Genau eine Entscheidung „Ladelimit 75 %“ an den Tesla, keine andere über das Ladelimit; am Ende zeigt die Gesundheit das Ladelimit 75 %; nach dem Laden meldet der Tesla „Complete“ bei 75 %. |
+| `sofort-limit` | Sofort mit Ladelimit, 1 h | 15.07.2026 ab 12:00, sonniger Tag, Akku 60 %, der e-Golf an der EVCS in Sofort mit dem Höchststrom 8 A (`now_max_a`), der Tesla am Wall Connector mit 50 % SOC in PV | Kein Strombefehl an die EVCS über 8 A, und der e-Golf lädt nie mit mehr; der Tesla lädt in mindestens der halben Zeit aus dem Überschuss. |
 | `klima-pv-kuehlen` | Klimaanlage nimmt PV-Überschuss beim Kühlen, 1 h | 15.07.2026 ab 12:00, PV konstant, Akku 100 %, die Klimaanlage kühlt mit 600 W, ohne Versatz 1,5 kW Einspeisung | Der Versatz an der UVR wechselt nur in Schritten von −0,5 K im Abstand von mindestens 600 s, mindestens dreimal; er liegt zwischen −3 K und 0 K und geht nur in Richtung „mehr“; jede Entscheidung an die Klimaanlage nennt `thermal_more`; die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. |
 | `klima-auto-vorrang` | Klimaanlage weicht einem Auto im Modus PV, 80 min | wie `klima-pv-kuehlen`, aber ohne Versatz 4 kW Einspeisung; ab 40 min steckt der e-Golf in PV an der EVCS | Bis 40 min mindestens drei Schritte von −0,5 K; danach geht der Versatz nur in Schritten von 0,5 K zurück, jede Entscheidung dazu nennt `thermal_cars`, und er wird nie größer; am Ende wendet die UVR 0 K an, der e-Golf lädt, und die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. |
 | `klima-moduswechsel` | Betriebsart der Klimaanlage wechselt, 50 min | wie `klima-pv-kuehlen`; bei 2115 s, nach drei Stufen, wechselt die Klimaanlage auf Heizen | Vor dem Wechsel drei Schritte bis −1,5 K; in der Sekunde des Wechsels bekommt die UVR 0 K, und die Regelung wünscht 0 Stufen mit `thermal_mode`; kein Versatz an der UVR gegen „mehr“ der Betriebsart, keine Entscheidung vor dem Wechsel über 0 K und danach unter 0 K. |

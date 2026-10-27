@@ -81,6 +81,8 @@ TESLA_OFF = ["tesla-aus", "tesla-selbststart"]
 PLAN = ["plan-halten", "plan-netzladen", "plan-abgelaufen", "plan-budget", "plan-boost"]
 # die Szenarien für „Geplant“ und das Ladelimit des Tesla (Plan 4b, Entscheidung 16), Victron live
 PLANNED = ["geplant-plan", "geplant-spaet", "geplant-pv", "geplant-unbekannt", "tesla-ladelimit"]
+# das Szenario für den Höchststrom in „Sofort“ (Plan Sofort-Limit, Task 3), Victron im Dry-Run
+SOFORT = ["sofort-limit"]
 # die Szenarien für die Klimaanlage (Plan 6a, Entscheidung 15), am CoE-Adapter und live
 KLIMA = [
     "klima-pv-kuehlen",
@@ -90,7 +92,7 @@ KLIMA = [
     "klima-spitze",
     "klima-teuer-heizen",
 ]
-ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *KLIMA]
+ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *SOFORT, *KLIMA]
 # Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen. Der
 # Befund aus „klima-auto-vorrang“ (Schritt der Klimaanlage beim Start des e-Golf) ist mit dem
 # Anlauf behoben (Ruling R23 a).
@@ -109,7 +111,7 @@ def test_battery_and_peak_scenarios_are_registered() -> None:
 
 def test_assignment_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[18:21] == ["tesla-evcs", "egolf-twc", "gast-evcs"]
-    assert len(SCENARIOS) == 39
+    assert len(SCENARIOS) == 40
 
 
 def test_tesla_off_scenarios_are_registered() -> None:
@@ -125,6 +127,11 @@ def test_plan_scenarios_are_registered() -> None:
 def test_planned_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[28:33] == PLANNED
     assert all(SCENARIOS[name].victron_live for name in PLANNED)
+
+
+def test_sofort_scenario_is_registered() -> None:
+    assert list(SCENARIOS)[33:34] == SOFORT
+    assert SCENARIOS["sofort-limit"].intent.vehicles["egolf"].now_max_a == 8
 
 
 def test_klima_scenarios_are_registered() -> None:
