@@ -33,6 +33,8 @@ from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import SLOT, ensure_utc, slots_between
 
 STEP: Final = "15m"
+# PV am Gleichstrom (MPPT, ``pv_dc.power_w`` im Sampler): fehlt sie, zählt sie wie im core 0 W
+PV_DC_ID: Final = "dc"
 # Ab diesem Anteil gilt ein Bit als gesetzt, bis zu ``1 - ON_SHARE`` als nicht gesetzt
 ON_SHARE: Final = 0.8
 OFF_SHARE: Final = 1 - ON_SHARE
@@ -115,9 +117,10 @@ async def _means(
 
 async def _pv(reader: InfluxReader, window: str) -> dict[datetime, float]:
     """PV gesamt je Viertelstunde: die Summe aller Reihen mit ``source=pv`` und ``phase=total``
-    (Wechselrichter und ``dc``). Unbekannt bleibt unbekannt: Hat in einer Viertelstunde nicht jede
-    Reihe, die in der Antwort vorkommt, einen Wert, gibt es dafür keinen PV-Wert (eine Teilsumme
-    wäre zu klein und ginge als Wert in die Anpassung)."""
+    (Wechselrichter und ``dc``). Unbekannt bleibt unbekannt: Hat in einer Viertelstunde nicht jeder
+    Wechselrichter, der in der Antwort vorkommt, einen Wert, gibt es dafür keinen PV-Wert (eine
+    Teilsumme wäre zu klein und ginge als Wert in die Anpassung). ``dc`` fehlt wie im core
+    (``Derived.pv_total_w``) als 0 W."""
     text = (
         f'SELECT mean("p_w") AS "p_w" FROM {quote_ident(RP_RAW)}."power" '  # noqa: S608
         f"WHERE \"source\"='pv' AND \"phase\"='total' AND {window} "
@@ -132,7 +135,8 @@ async def _pv(reader: InfluxReader, window: str) -> dict[datetime, float]:
             value = _number(cells.get("p_w"))
             if value is not None:
                 parts.setdefault(ts, {})[series_id] = value
-    return {ts: sum(values.values()) for ts, values in parts.items() if len(values) == len(ids)}
+    required = ids - {PV_DC_ID}
+    return {ts: sum(values.values()) for ts, values in parts.items() if required <= values.keys()}
 
 
 @dataclass(frozen=True)

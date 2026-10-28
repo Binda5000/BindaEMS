@@ -4757,9 +4757,10 @@ das Komfortband liegt immer innerhalb von `max_offset_k`.
   nicht neu. **Ein neues Modell löst neu planen aus** (Anlass „Klimaanlage geändert“, höchstens alle
   5 min, Abschnitt „Planung“), ebenso das Laden des abgelegten Modells beim Start der app.
 - **PV im Modell:** Die PV einer Viertelstunde ist die Summe aller PV-Reihen (Wechselrichter und
-  `dc`). Hat in einer Viertelstunde nicht jede Reihe, die InfluxDB im Fenster überhaupt liefert, einen
-  Wert, ist die PV dort **unbekannt**, nicht eine zu kleine Teilsumme: Die Viertelstunde geht weder in
-  die Grundleistung noch in die Auskühl-Phasen oder Versatz-Ereignisse ein.
+  `dc`). Hat in einer Viertelstunde nicht jeder Wechselrichter, den InfluxDB im Fenster überhaupt
+  liefert, einen Wert, ist die PV dort **unbekannt**, nicht eine zu kleine Teilsumme: Die Viertelstunde
+  geht weder in die Grundleistung noch in die Auskühl-Phasen oder Versatz-Ereignisse ein. Fehlt nur
+  `dc`, zählt es wie im core (PV gesamt) als 0 W.
 - **Das Modell einer Betriebsart** besteht aus der **Grundleistung** (Watt je Kelvin Temperaturdifferenz
   zwischen Sollwert und außen, dazu ein Anteil je kW PV und ein fester Anteil), der **Zeitkonstante** τ
   (aus den Auskühl-Phasen, in denen die Klimaanlage nicht lief) und dem **Speicher** `C` (kWh Strom je

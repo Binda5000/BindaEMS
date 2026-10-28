@@ -262,6 +262,20 @@ async def test_pv_with_a_missing_plane_is_unknown(fake_reader, weather) -> None:
     assert [s.pv_w for s in slots] == [None, 1000.0, None, None]
 
 
+async def test_pv_without_dc_counts_it_as_zero(fake_reader, weather) -> None:
+    _basic(fake_reader)
+    fake_reader.answer(
+        "'pv'",
+        [
+            _means("power", "p_w", {START: 1000.0, START + SLOT: 0.0}, id="south"),
+            _means("power", "p_w", {START: 50.0}, id="dc"),
+        ],
+    )
+    slots = await _read(fake_reader, weather)
+    # wie Derived.pv_total_w im core: ohne dc zählt nur der Wechselrichter
+    assert [s.pv_w for s in slots] == [1050.0, 0.0, None, None]
+
+
 async def test_read_error_raises_thermal_data_error(fake_reader, weather, unreadable) -> None:
     fake_reader.answer('"thermal"', unreadable())
     with pytest.raises(ThermalDataError, match="nicht lesbar"):
