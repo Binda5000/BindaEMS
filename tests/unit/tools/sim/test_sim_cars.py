@@ -293,6 +293,18 @@ def test_tessie_reports_the_soc_rounded_down(model, store, clock) -> None:
     assert tesla.state(230.0)["charge_state"]["battery_level"] == 80 and tesla.complete
 
 
+def test_tessie_reports_the_climate_and_the_adapter_reads_it(model, store, clock) -> None:
+    tesla = model.teslas["tesla"]
+    assert tesla.state(230.0)["climate_state"] == {
+        "is_climate_on": False,
+        "is_preconditioning": False,
+    }
+    tesla.climate_on = True
+    assert tesla.state(230.0)["climate_state"]["is_climate_on"] is True
+    values = tesla.poll(clock.now(), 230.0, reachable=True)
+    assert values is not None and values["climate_on"] is True
+
+
 def test_tesla_sleeps_15_min_after_charging(model, store, clock) -> None:
     tesla = model.teslas["tesla"]
     tesla.charge_enabled = True

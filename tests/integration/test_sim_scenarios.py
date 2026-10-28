@@ -94,7 +94,21 @@ KLIMA = [
 ]
 # die Szenarien für Vorheizen und Vorkühlen (Plan 5c, Task 8), am CoE-Adapter und live
 KLIMA_PLAN = ["klima-plan-vorheizen", "klima-plan-akku", "klima-plan-ende"]
-ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *SOFORT, *KLIMA, *KLIMA_PLAN]
+# die Szenarien fürs Vorklimatisieren über die Wallbox (Plan Vorklimatisieren, Task 4), Victron im
+# Dry-Run
+PRECONDITION = ["tesla-vorklimatisieren", "egolf-voll-bleibt-an"]
+ALL = [
+    *NAMES,
+    *NEW,
+    *ASSIGNMENT,
+    *TESLA_OFF,
+    *PLAN,
+    *PLANNED,
+    *SOFORT,
+    *KLIMA,
+    *KLIMA_PLAN,
+    *PRECONDITION,
+]
 # Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen. Der
 # Befund aus „klima-auto-vorrang“ (Schritt der Klimaanlage beim Start des e-Golf) ist mit dem
 # Anlauf behoben (Ruling R23 a).
@@ -113,7 +127,7 @@ def test_battery_and_peak_scenarios_are_registered() -> None:
 
 def test_assignment_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[18:21] == ["tesla-evcs", "egolf-twc", "gast-evcs"]
-    assert len(SCENARIOS) == 43
+    assert len(SCENARIOS) == 45
 
 
 def test_tesla_off_scenarios_are_registered() -> None:
@@ -137,10 +151,16 @@ def test_sofort_scenario_is_registered() -> None:
 
 
 def test_klima_scenarios_are_registered() -> None:
-    assert list(SCENARIOS)[-9:] == [*KLIMA, *KLIMA_PLAN]
+    assert list(SCENARIOS)[-11:-2] == [*KLIMA, *KLIMA_PLAN]
     assert all(SCENARIOS[name].thermal and SCENARIOS[name].live for name in [*KLIMA, *KLIMA_PLAN])
-    assert not any(SCENARIOS[name].thermal for name in list(SCENARIOS)[:-9])
+    assert not any(SCENARIOS[name].thermal for name in list(SCENARIOS)[:-11])
     assert not any(SCENARIOS[name].victron_live for name in KLIMA_PLAN)
+
+
+def test_precondition_scenarios_are_registered() -> None:
+    assert list(SCENARIOS)[-2:] == PRECONDITION
+    assert all(SCENARIOS[name].live and not SCENARIOS[name].thermal for name in PRECONDITION)
+    assert not any(SCENARIOS[name].victron_live for name in PRECONDITION)
 
 
 @pytest.mark.parametrize("name", ALL)

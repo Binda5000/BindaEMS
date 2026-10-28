@@ -6276,7 +6276,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der dreiundvierzig Szenarien bei jedem Push
+In der CI läuft jedes der fünfundvierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -6304,7 +6304,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der dreiundvierzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der fünfundvierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -6320,7 +6320,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  dreiundvierzig zusammen rund 5 min.
+  fünfundvierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -6454,6 +6454,8 @@ Beginn kein Auto an, und die Klimaanlage ist live.
 | `klima-plan-vorheizen` | Vorheizen in der billigen Nacht, 75 min | 16.12.2026 ab 06:00, keine PV, Akku 60 % auf „Nur Laden“, die Klimaanlage heizt mit 1500 W; zu Beginn und alle 15 min ein Plan mit Planwert +3 (600 W aus dem Netz), ab 06:45 −2 mit dem Hinweis „weniger“ | Vor 45 min +1,5 K; zu Beginn des teuren Blocks bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach −1 K; der Versatz liegt zwischen −1 K und +1,5 K; jede Erhöhung des Betrags ist eine Stufe, geht nicht über 0 hinweg und kommt mindestens 600 s nach der vorigen; die Safety-Schicht lehnt nichts ab; jede Entscheidung außer 0 nennt `thermal_plan`. |
 | `klima-plan-akku` | Akku deckt das geplante Vorheizen, 40 min | wie `klima-plan-vorheizen`, mit Planwert +2 in jedem Slot; ab 25 min darf der Akku entladen und deckt mit Victron im Dry-Run die ganze Last | Vor 25 min +1 K; danach geht der Versatz binnen 360 s zurück, nur mit `thermal_battery`, und wird nie größer; am Ende 0 K; kein Versatz gegen „mehr“; die Schrittregel hält; die Safety-Schicht lehnt nichts ab. |
 | `klima-plan-ende` | Plan der Klimaanlage läuft ab, 35 min | wie `klima-plan-akku` ohne Entladung; ein einziger Plan mit Planwert +2, gültig 20 min, danach kommt keiner mehr | Vor 20 min +1 K; am Ende des Plans bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach nur 0 K; die Regelung nennt keinen Planwert mehr und keine Entscheidung außer 0 `thermal_plan`; kein Versatz gegen „mehr“. |
+| `tesla-vorklimatisieren` | Tesla klimatisiert vor und lädt dabei, 40 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Tesla am Wall Connector mit 60 % SOC und 10 A im Auto, in PV-Überschuss; e-Golf abgesteckt; bei 5 min klimatisiert der Tesla und lädt selbst („Laden an“ im Auto), bei 25 min endet die Klimatisierung | Von 5 bis 25 min bekommt der Tesla kein „Laden aus“ (Regel „Vorklimatisieren“); ab 7 min fordert die Regelung höchstens 5 A (`min_a`); nach 25 min bekommt er „Laden aus“ binnen 210 s (Selbststart, wie in `tesla-selbststart`); ab 30 min lädt er nicht mehr. |
+| `egolf-voll-bleibt-an` | e-Golf geladen, die EVCS bleibt an, 30 min | 21.6.2026 ab 09:00, sonniger Morgen, Akku 60 %, e-Golf an der EVCS mit 98 % SOC, in PV-Überschuss; Tesla abgesteckt | Der e-Golf wird „geladen“ (Status 3); ab da bekommt die EVCS kein „Laden aus“ (Regel „Geladen, bleibt an“), und ihr letzter Strombefehl fordert 6 A (`min_a` des e-Golf). |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

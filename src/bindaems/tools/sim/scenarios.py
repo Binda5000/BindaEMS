@@ -276,6 +276,15 @@ SELF_START_S: Final = 5 * MINUTE_S  # „tesla-selbststart“: der Tesla startet
 SELF_START_WITHIN_S: Final = 210
 IDLE_FROM_S: Final = 9 * MINUTE_S  # … und lädt ab hier nicht mehr
 SELF_START_TESLA_PCT: Final = 50.0
+# Szenarien „tesla-vorklimatisieren“ und „egolf-voll-bleibt-an“ (Plan Vorklimatisieren über die
+# Wallbox, Task 4)
+CLIMATE_ON_S: Final = 5 * MINUTE_S  # der Tesla klimatisiert und lädt selbst …
+CLIMATE_OFF_S: Final = 25 * MINUTE_S  # … bis hierher, dann endet die Klimatisierung
+CLIMATE_HOLD_FROM_S: Final = 7 * MINUTE_S  # ab hier fordert die Regelung höchstens …
+CLIMATE_HOLD_A: Final = 5  # … diesen Strom (``min_a`` des Tesla) bis zum Ende der Klimatisierung
+CLIMATE_IDLE_FROM_S: Final = 30 * MINUTE_S  # danach (25 min + 210 s) lädt er nicht mehr
+KEEP_ON_EGOLF_PCT: Final = 98.0  # „egolf-voll-bleibt-an“: SOC des e-Golf, er wird bald „geladen“
+KEEP_ON_A: Final = 6.0  # … und die EVCS bleibt danach an, mit dem Mindeststrom des e-Golf
 PEAK_GUARD: Final = "peak_guard"  # Grund einer Drosselung durch den 15-min-Wächter
 # Szenarien zur Planausführung (Plan 3c, Entscheidung 13)
 NIGHT: Final = datetime(2026, 10, 13, 2, tzinfo=LOCAL_TZ).astimezone(UTC)
@@ -654,6 +663,26 @@ class _SelfStart:
 
 
 @dataclass(frozen=True, slots=True)
+class _Climate:
+    """Der Tesla ``vehicle`` fängt an zu klimatisieren (``on``) oder hört damit auf, als Ereignis.
+
+    Beim Einschalten startet das Auto wie bei ``_SelfStart`` zugleich das Laden („Laden an“ im
+    Auto), denn ein Tesla am Kabel lädt, sobald er klimatisiert, wenn die Wallbox Strom gibt. Beim
+    Ausschalten ändert sich nur ``climate_on``; das Laden im Auto bleibt, bis die Regelung es
+    stoppt. Der core sendet nichts dazu.
+    """
+
+    vehicle: str
+    on: bool
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        car = model.teslas[self.vehicle]
+        car.climate_on = self.on
+        if self.on:
+            car.charge_enabled = True
+
+
+@dataclass(frozen=True, slots=True)
 class _Unplug:
     """Das Fahrzeug ``vehicle`` wird abgesteckt, als Ereignis."""
 
@@ -749,6 +778,7 @@ def _setup(
     evcs_on: bool = False,
     tesla_limit_pct: float | None = None,
     egolf_soc_known: bool = True,
+    egolf_soc_pct: float | None = None,
 ) -> None:
     """Akku, Multi, fremder Regler und Dynamic ESS (``dess``); der Tesla an der Wallbox ``tesla``,
     der e-Golf an ``egolf`` (``None``: abgesteckt).
@@ -764,7 +794,8 @@ def _setup(
     sind alle zu Hause. Mit ``evcs_on`` steht die EVCS ``EVCS_BOX`` schon vor dem Start des core auf
     „Laden an“ (ihr Sollstrom ist noch ihr sicherer Strom): Ein Auto an ihr lädt von der ersten
     Sekunde an. Mit ``egolf_soc_known`` falsch meldet Home Assistant den Ladestand des e-Golf
-    nicht (``PlantModel.egolf_soc_known``).
+    nicht (``PlantModel.egolf_soc_known``). ``egolf_soc_pct`` setzt, wenn angegeben, seinen
+    Ladestand.
     """
     model.soc_pct = soc_pct
     model.charger_only = charger_only
@@ -784,6 +815,8 @@ def _setup(
     car.elsewhere = tesla_elsewhere
     if egolf is not None:
         model.plug(EGOLF, egolf)
+    if egolf_soc_pct is not None:
+        model.cars[EGOLF].soc_pct = egolf_soc_pct
     model.cars[GUEST_CAR].phases = guest_phases
     if guest is not None:
         model.plug(GUEST_CAR, guest)
@@ -1149,6 +1182,112 @@ def _idle_from(key: str, begin_s: int) -> Check:
         return [] if charging is None else [f"„{key}“ lädt bei {charging} s."]
 
     return Check(f"Ab {de(begin_s / MINUTE_S)} min lädt „{key}“ nicht.", find)
+
+
+def _no_stop_between(actuator: str, begin_s: int, end_s: int) -> Check:
+    """Der Aktor ``actuator`` bekommt von ``begin_s`` bis ``end_s`` kein „Laden aus“: keine
+    Entscheidung über ``charging`` mit dem Wert falsch, die ein Befehl war (nicht abgelehnt,
+    zurückgestellt oder eine fremde Änderung); auch ein Dry-Run oder ein Fehlschlag zählt."""
+
+    def find(result: SimResult) -> list[str]:
+        begin = result.scenario.start + timedelta(seconds=begin_s)
+        end = result.scenario.start + timedelta(seconds=end_s)
+        stops = [
+            _second(result, d.ts)
+            for d in result.decisions
+            if d.actuator == actuator
+            and d.kind is CommandKind.CHARGING
+            and d.requested is False
+            and d.result not in _HELD_BACK
+            and begin <= d.ts <= end
+        ]
+        if not stops:
+            return []
+        return [f"„{actuator}“ bekam {len(stops)} × „Laden aus“, das erste bei {min(stops)} s."]
+
+    text = (
+        f"„{actuator}“ bekommt von {de(begin_s / MINUTE_S)} bis {de(end_s / MINUTE_S)} min "
+        "kein „Laden aus“."
+    )
+    return Check(text, find)
+
+
+def _current_at_most(actuator: str, amps: float, begin_s: int, end_s: int) -> Check:
+    """Der Strom, den der Aktor ``actuator`` anfordert, ist von ``begin_s`` bis ``end_s`` höchstens
+    ``amps``: der Wert seines letzten Strombefehls vor ``begin_s`` und die Werte aller Strombefehle
+    bis ``end_s``. Zurückgehaltene Befehle (abgelehnt, zurückgestellt, fremd) zählen nicht. Gab es
+    bis ``begin_s`` keinen Strombefehl, bliebe der Strom im Auto, wie er ist: ein Verstoß."""
+
+    def find(result: SimResult) -> list[str]:
+        begin = result.scenario.start + timedelta(seconds=begin_s)
+        end = result.scenario.start + timedelta(seconds=end_s)
+        commands = [
+            d
+            for d in _at(result.decisions, actuator)
+            if d.kind is CommandKind.CURRENT and d.result not in _HELD_BACK and d.ts <= end
+        ]
+        before = [d for d in commands if d.ts <= begin]
+        if not before:
+            return [f"Kein Strombefehl an „{actuator}“ bis {begin_s} s."]
+        in_force = [before[-1], *(d for d in commands if d.ts > begin)]
+        for d in in_force:
+            asked = d.requested
+            if isinstance(asked, bool) or not isinstance(asked, int | float) or asked > amps:
+                shown = f"{de(float(asked))} A" if isinstance(asked, int | float) else f"„{asked}“"
+                second = max(begin_s, _second(result, d.ts))
+                return [
+                    f"„{actuator}“ fordert bei {second} s {shown}, verlangt höchstens {de(amps)} A."
+                ]
+        return []
+
+    text = (
+        f"Der Strom an „{actuator}“ ist von {de(begin_s / MINUTE_S)} bis "
+        f"{de(end_s / MINUTE_S)} min höchstens {de(amps)} A."
+    )
+    return Check(text, find)
+
+
+def _evcs_on_when_complete(box: str, key: str, amps: float) -> Check:
+    """Ab der ersten Sekunde, in der das Auto ``key`` sein Ladelimit erreicht hat („geladen“), bis
+    zum Ende bekommt die EVCS ``box`` kein „Laden aus“ (eine Entscheidung über ``charging`` mit dem
+    Wert falsch, die ein Befehl war), und ihr letzter Strombefehl fordert ``amps``. Wird das Auto
+    nie „geladen“, ist das ein Verstoß: Die Prüfung wäre sonst leer."""
+    actuator = wallbox_actuator(box)
+
+    def find(result: SimResult) -> list[str]:
+        done = next((s.t for s in result.samples if s.cars[key].complete), None)
+        if done is None:
+            return [f"„{key}“ wird nie „geladen“."]
+        begin = result.scenario.start + timedelta(seconds=done)
+        found: list[str] = []
+        stop = next(
+            (
+                d
+                for d in _at(result.decisions, actuator)
+                if d.kind is CommandKind.CHARGING
+                and d.requested is False
+                and d.result not in _HELD_BACK
+                and d.ts >= begin
+            ),
+            None,
+        )
+        if stop is not None:
+            found.append(f"Die EVCS „{box}“ bekommt bei {_second(result, stop.ts)} s „Laden aus“.")
+        currents = [
+            d
+            for d in _at(result.decisions, actuator)
+            if d.kind is CommandKind.CURRENT and d.result not in _HELD_BACK
+        ]
+        if not currents or currents[-1].requested != amps:
+            last = currents[-1].requested if currents else None
+            shown = f"{de(float(last))} A" if isinstance(last, int | float) else "keinen Strom"
+            found.append(
+                f"Der letzte Strombefehl an „{actuator}“ fordert {shown}, verlangt {de(amps)} A."
+            )
+        return found
+
+    text = f"Ab „geladen“ bleibt die EVCS „{box}“ an, ihr letzter Strombefehl fordert {de(amps)} A."
+    return Check(text, find)
 
 
 def _any_charging(sample: Sample) -> bool:
@@ -3902,6 +4041,62 @@ def _klima_plan_ende() -> Scenario:
     )
 
 
+# --- Szenarien 44 und 45: Vorklimatisieren über die Wallbox (Regeln K1 und K2) -------------------
+
+
+def _tesla_vorklimatisieren() -> Scenario:
+    """Der Tesla steht am Wall Connector in „PV-Überschuss“, abends ohne Überschuss. Bei 5 min
+    klimatisiert er und lädt dabei selbst (Regel K1): Die Regelung stoppt ihn nicht und senkt den
+    Strom auf den Mindeststrom, ab 7 min höchstens 5 A. Bei 25 min endet die Klimatisierung; lädt er
+    dann noch, stoppt ihn die Regelung wie bei einem Selbststart binnen ``SELF_START_WITHIN_S``."""
+    start, duration_s, seed = EVENING, 40 * MINUTE_S, 44
+    actuator = vehicle_actuator(TESLA)
+    checks = (
+        _no_stop_between(actuator, CLIMATE_ON_S, CLIMATE_OFF_S),
+        _current_at_most(actuator, CLIMATE_HOLD_A, CLIMATE_HOLD_FROM_S, CLIMATE_OFF_S),
+        _stops_within(actuator, CLIMATE_OFF_S, SELF_START_WITHIN_S),
+        _idle_from(TESLA, CLIMATE_IDLE_FROM_S),
+    )
+    return Scenario(
+        name="tesla-vorklimatisieren",
+        title="Tesla klimatisiert vor und lädt dabei",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _setup, soc_pct=60.0, egolf=None, tesla_soc_pct=60.0, tesla_amps=TESLA_START_A
+        ),
+        intent=_intent(tesla=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (CLIMATE_ON_S, _Climate(TESLA, on=True)),
+            (CLIMATE_OFF_S, _Climate(TESLA, on=False)),
+        ),
+        checks=Checks(checks),
+    )
+
+
+def _egolf_voll_bleibt_an() -> Scenario:
+    """Der e-Golf steht an der EVCS in „PV-Überschuss“, an einem sonnigen Morgen, mit 98 % SOC.
+    Er wird „geladen“ (Status 3), und die EVCS bleibt danach an (Regel K2): kein „Laden aus“, ihr
+    letzter Strombefehl ist der Mindeststrom des e-Golf, 6 A."""
+    start, duration_s, seed = MORNING, 30 * MINUTE_S, 45
+    checks = (_evcs_on_when_complete(EVCS_BOX, EGOLF, KEEP_ON_A),)
+    return Scenario(
+        name="egolf-voll-bleibt-an",
+        title="e-Golf geladen, die EVCS bleibt an",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None, egolf_soc_pct=KEEP_ON_EGOLF_PCT),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=_weather(start, duration_s, seed, pv=_sun(start)),
+        checks=Checks(checks),
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -3948,5 +4143,7 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _klima_plan_vorheizen(),
         _klima_plan_akku(),
         _klima_plan_ende(),
+        _tesla_vorklimatisieren(),
+        _egolf_voll_bleibt_an(),
     )
 }
