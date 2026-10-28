@@ -43,6 +43,7 @@ from bindaems.tools.sim.scenarios import (
     _changes,
     _klima_pv_w,
     _klima_setup,
+    _Plan,
     _Plug,
     _receipts,
     _setup,
@@ -94,7 +95,20 @@ KLIMA = [
 ]
 # die Szenarien für Vorheizen und Vorkühlen (Plan 5c, Task 8), am CoE-Adapter und live
 KLIMA_PLAN = ["klima-plan-vorheizen", "klima-plan-akku", "klima-plan-ende"]
-ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *SOFORT, *KLIMA, *KLIMA_PLAN]
+# die Szenarien für Akku ins Auto (Plan Akku ins Auto, Task 8), mit Victron live
+SPARE = ["akku-uebrig-sofort", "akku-uebrig-geplant"]
+ALL = [
+    *NAMES,
+    *NEW,
+    *ASSIGNMENT,
+    *TESLA_OFF,
+    *PLAN,
+    *PLANNED,
+    *SOFORT,
+    *KLIMA,
+    *KLIMA_PLAN,
+    *SPARE,
+]
 # Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen. Der
 # Befund aus „klima-auto-vorrang“ (Schritt der Klimaanlage beim Start des e-Golf) ist mit dem
 # Anlauf behoben (Ruling R23 a).
@@ -113,7 +127,7 @@ def test_battery_and_peak_scenarios_are_registered() -> None:
 
 def test_assignment_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[18:21] == ["tesla-evcs", "egolf-twc", "gast-evcs"]
-    assert len(SCENARIOS) == 43
+    assert len(SCENARIOS) == 45
 
 
 def test_tesla_off_scenarios_are_registered() -> None:
@@ -137,10 +151,24 @@ def test_sofort_scenario_is_registered() -> None:
 
 
 def test_klima_scenarios_are_registered() -> None:
-    assert list(SCENARIOS)[-9:] == [*KLIMA, *KLIMA_PLAN]
+    assert list(SCENARIOS)[34:43] == [*KLIMA, *KLIMA_PLAN]
     assert all(SCENARIOS[name].thermal and SCENARIOS[name].live for name in [*KLIMA, *KLIMA_PLAN])
-    assert not any(SCENARIOS[name].thermal for name in list(SCENARIOS)[:-9])
+    others = [name for name in SCENARIOS if name not in {*KLIMA, *KLIMA_PLAN}]
+    assert not any(SCENARIOS[name].thermal for name in others)
     assert not any(SCENARIOS[name].victron_live for name in KLIMA_PLAN)
+
+
+def test_spare_scenarios_are_registered() -> None:
+    assert list(SCENARIOS)[43:] == SPARE
+    assert all(SCENARIOS[name].victron_live for name in SPARE)
+    plan = SCENARIOS["akku-uebrig-sofort"].events[-1][1]
+    assert isinstance(plan, _Plan)
+    assert all(slot.now_battery and slot.support_soc_pct == 70 for slot in plan.plan().slots)
+    plan = SCENARIOS["akku-uebrig-geplant"].events[-1][1]
+    assert isinstance(plan, _Plan)
+    slots = plan.plan().slots
+    assert [slot.ev_battery_w for slot in slots] == [{EGOLF: 2760}] * 3
+    assert [slot.soc_end_pct for slot in slots] == [56.0, 53.0, 52.0]
 
 
 @pytest.mark.parametrize("name", ALL)

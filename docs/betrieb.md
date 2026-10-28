@@ -6350,7 +6350,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der dreiundvierzig Szenarien bei jedem Push
+In der CI läuft jedes der fünfundvierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -6378,7 +6378,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der dreiundvierzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der fünfundvierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -6394,7 +6394,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  dreiundvierzig zusammen rund 5 min.
+  fünfundvierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -6481,7 +6481,8 @@ fünf zur Planausführung, ab `plan-halten`, ist er live, ebenso in den fünf f�
 nächsten Versionsnummer; die `id` des Plans ist die Sekunde des Laufs, in der er kommt. In den
 Szenarien für „Geplant“ kommen Ziel und Abfahrt zu Beginn als Version 2 der Absicht. In den sechs
 für die Klimaanlage, ab `klima-pv-kuehlen`, entscheidet Victron im Dry-Run mit; dort steckt zu
-Beginn kein Auto an, und die Klimaanlage ist live.
+Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Auto, ab
+`akku-uebrig-sofort`, ist er wieder live, und nur ein Auto steckt an.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -6528,6 +6529,8 @@ Beginn kein Auto an, und die Klimaanlage ist live.
 | `klima-plan-vorheizen` | Vorheizen in der billigen Nacht, 75 min | 16.12.2026 ab 06:00, keine PV, Akku 60 % auf „Nur Laden“, die Klimaanlage heizt mit 1500 W; zu Beginn und alle 15 min ein Plan mit Planwert +3 (600 W aus dem Netz), ab 06:45 −2 mit dem Hinweis „weniger“ | Vor 45 min +1,5 K; zu Beginn des teuren Blocks bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach −1 K; der Versatz liegt zwischen −1 K und +1,5 K; jede Erhöhung des Betrags ist eine Stufe, geht nicht über 0 hinweg und kommt mindestens 600 s nach der vorigen; die Safety-Schicht lehnt nichts ab; jede Entscheidung außer 0 nennt `thermal_plan`. |
 | `klima-plan-akku` | Akku deckt das geplante Vorheizen, 40 min | wie `klima-plan-vorheizen`, mit Planwert +2 in jedem Slot; ab 25 min darf der Akku entladen und deckt mit Victron im Dry-Run die ganze Last | Vor 25 min +1 K; danach geht der Versatz binnen 360 s zurück, nur mit `thermal_battery`, und wird nie größer; am Ende 0 K; kein Versatz gegen „mehr“; die Schrittregel hält; die Safety-Schicht lehnt nichts ab. |
 | `klima-plan-ende` | Plan der Klimaanlage läuft ab, 35 min | wie `klima-plan-akku` ohne Entladung; ein einziger Plan mit Planwert +2, gültig 20 min, danach kommt keiner mehr | Vor 20 min +1 K; am Ende des Plans bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach nur 0 K; die Regelung nennt keinen Planwert mehr und keine Entscheidung außer 0 `thermal_plan`; kein Versatz gegen „mehr“. |
+| `akku-uebrig-sofort` | Sofort am Abend mit übrigem Akku, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 72 %, nur der Tesla, in Sofort mit höchstens 10 A (`now_max_a`); zu Beginn ein Plan mit `EIGENVERBRAUCH` über 2 Slots, übrigem Akku für Sofort (`now_battery`) und der Plan-Schwelle 70 % (`support_soc_pct`), gültig 30 min | Solange der SOC über 70 % liegt, ab 2 min kein Override: Netzbezug höchstens Haus und Autos über der Entladegrenze des Modells (12000 W) plus 300 W; ab 2 min, nachdem der SOC 70 % erreicht hat, Netzbezug mindestens die Leistung der Autos minus 300 W (der Akku gibt dem Auto nichts mehr); vor der ersten Entscheidung mit „battery_comp“ zeigt die Gesundheit `battery.spare` „on“ mit einem Anteil über 0 W. |
+| `akku-uebrig-geplant` | Geplant in der Nacht aus dem Akku, 45 min | 13.10.2026 ab 02:00, keine PV, Akku 60 %, nur der e-Golf, in Geplant, Ziel 80 %, Abfahrt 07:00; zu Beginn ein Plan mit `EIGENVERBRAUCH` über 3 Slots, der den e-Golf mit 2760 W nennt, alle aus dem Akku (`ev_battery_w`), geplanter SOC am Ende 56, 53 und 52 %, gültig 45 min | Ab 2 min, bis der SOC das geplante Ende seines Slots erreicht (im dritten Slot), höchstens 300 W Netzbezug; ab 2 min danach Netzbezug mindestens die Leistung der Autos minus 300 W; der SOC fällt nie unter 51 % (kleinstes SOC am Ende minus 1 Punkt). |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
@@ -6596,6 +6599,22 @@ begrenzt er sich nach der Haltezeit selbst, und die Klimaanlage nimmt den Übers
 Laderegelung darauf auf 7 A, bleibt er selbst begrenzt, und die Klimaanlage flackert nicht. Ein
 Auto, das die Regelung gerade startet, gilt im Anlauf als seinem Befehl folgend: Die Klimaanlage
 geht beim Start des e-Golf keine Stufe hoch (Ruling R23).
+
+In den Szenarien für Akku ins Auto weicht der Aufbau von der Vorgabe des Plans ab, weil sich ihre
+Prüfung im Modell sonst nicht erfüllen ließe:
+
+- In `akku-uebrig-sofort` lädt der Tesla mit höchstens 10 A (6,9 kW). Mit 16 A (11 kW) kappt
+  Regel 2 den Override nach dem Erreichen der Plan-Schwelle auf `max_grid_charge_setpoint_w`
+  (8 kW, wie in `akku-sofort`), und der Akku gäbe dem Auto weiter rund 3 kW.
+- Ebenda zeigt die Gesundheit den übrigen Akku, nicht das Entscheidungslog: Solange er gilt, trägt
+  der Akku den ganzen Fehlbetrag des Autos in Sofort. Ohne Rest fürs Netz gibt es keinen Override
+  und damit keine Entscheidung, die `battery_spare` nennen könnte (wie Boost aus dem Akku in
+  `boost-abend`); den Grund trägt nur ein Override für einen Rest. Die erste Entscheidung an
+  `victron` ist der Override mit `battery_comp`.
+- In `akku-uebrig-geplant` nennt der Plan 2760 W statt 2800 W, als Leistung und Akkuanteil des
+  e-Golf. Er lädt auf zwei Phasen in Stufen von 460 W (1 A bei 230 V): Für 2800 W rundet der core
+  den Strom auf 7 A auf (3220 W, Abschnitt „Geplant“), und der Akku gibt nur den Akkuanteil des
+  Slots, 2800 W; 420 W kämen aus dem Netz, mehr als die 300 W der Prüfung. 2760 W sind genau 6 A.
 
 ### Was das Modell nicht leistet
 

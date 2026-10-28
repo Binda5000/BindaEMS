@@ -118,6 +118,26 @@ Winternacht ohne PV. Abweichungen vom Plan:
 - Geht ein Wunsch über 0 hinweg (+3 → −2), bekommt die UVR im selben Zyklus 0 und das Negative
   erst, wenn die Schrittregel eine Erhöhung des Betrags zulässt: Ein Vorzeichenwechsel geht nur
   über 0.
+
+Die Szenarien für Akku ins Auto (Plan Akku ins Auto, Task 8) schalten Victron live und lassen nur
+ein Auto angesteckt; ein einziger Plan kommt zu Beginn (``_plan`` mit ``vehicles_battery``,
+``now_battery``, ``support_soc_pct`` und ``soc_end_pct``). Abweichungen von der Vorgabe des Plans,
+weil sie im Modell nicht zu schaffen ist:
+
+- In ``akku-uebrig-sofort`` lädt der Tesla mit höchstens ``SPARE_TESLA_A`` (10 A, 6,9 kW, über
+  ``now_max_a``). Mit 16 A (11 kW) kappt Regel 2 den Override nach dem Erreichen der Plan-Schwelle
+  auf ``max_grid_charge_setpoint_w`` (8 kW, wie in ``akku-sofort``); der Akku gäbe dem Auto dann
+  weiter rund 3 kW, und „Netzbezug mindestens Autoleistung minus 300 W“ ginge nicht.
+- Ebenda prüft der dritte Punkt die Gesundheit (``battery.spare``) statt des Entscheidungslogs:
+  Solange der übrige Akku gilt, trägt der Akku den ganzen Fehlbetrag des Autos in Sofort. Ohne Rest
+  fürs Netz gibt es keinen Override und damit keine Entscheidung, die ``battery_spare`` nennen
+  könnte, wie bei Boost aus dem Akku in ``boost-abend``; den Grund trägt nur ein Override für einen
+  Rest. Die erste Entscheidung an Victron ist der Override mit ``battery_comp``.
+- In ``akku-uebrig-geplant`` nennt der Plan ``PLANNED_BATTERY_W`` (2760 W) statt 2800 W, als
+  Leistung und Akkuanteil des e-Golf. Er lädt auf zwei Phasen in Stufen von 460 W (1 A bei
+  230 V): Für 2800 W rundet der core den Strom auf 7 A auf (3220 W, Plan 4b, Präzisierung 7), und
+  der Akku gibt nach Entscheidung 4 höchstens den Akkuanteil des Slots, 2800 W; 420 W kämen aus
+  dem Netz, mehr als die 300 W der Prüfung. 2760 W sind genau 6 A.
 """
 
 from __future__ import annotations
@@ -535,7 +555,11 @@ class _Plan:
     ``slots`` nennt je Slot den Versatz in Viertelstunden ab der Viertelstunde, in der das
     Szenario beginnt (``start``), die Absicht und ``budget_kw``; ``vehicles`` die Ladeleistung je
     Fahrzeug in W, gleich in jedem Slot (Plan 4b; ohne Angabe kein Auto), ``thermal`` den Hinweis
-    für die Klimaanlage, gleich in jedem Slot (Plan 6a). Der Plan entsteht in der
+    für die Klimaanlage, gleich in jedem Slot (Plan 6a). Für Akku ins Auto (Plan Akku ins Auto)
+    nennt ``vehicles_battery`` je Fahrzeug den Akkuanteil in W (``ev_battery_w``), ``now_battery``
+    erlaubt Sofort übrigen Akku und ``support_soc_pct`` ist die Plan-Schwelle, alle drei gleich in
+    jedem Slot; ``soc_end_pct`` nennt je Slot den geplanten SOC am Ende, in der Reihenfolge von
+    ``slots`` (ohne Angabe keiner). Der Plan entsteht in der
     Sekunde ``at_s`` des Laufs: Das ist sein ``created_at`` und seine ``id``, und er gilt
     ``valid_s`` danach. Beginn und Sekunde kennt ein Ereignis nicht; das Szenario gibt sie mit
     (``_plan``).
@@ -553,10 +577,17 @@ class _Plan:
     grid_charge_allowed: bool = True
     vehicles: Mapping[str, int] = MappingProxyType({})
     thermal: ThermalHint = "neutral"
+    vehicles_battery: Mapping[str, int] = MappingProxyType({})
+    now_battery: bool = False
+    support_soc_pct: float | None = None
+    soc_end_pct: Sequence[float] | None = None
 
     def plan(self) -> IntentPlan:
         created = self.start + timedelta(seconds=self.at_s)
         first = slot_start(self.start)
+        ends = self.soc_end_pct
+        if ends is not None and len(ends) != len(self.slots):
+            raise ValueError(f"{len(ends)} SOC am Ende für {len(self.slots)} Slots.")
         return IntentPlan(
             id=self.at_s,
             created_at=created,
@@ -569,8 +600,12 @@ class _Plan:
                     budget_kw=budget_kw,
                     vehicles=dict(self.vehicles),
                     thermal=self.thermal,
+                    ev_battery_w=dict(self.vehicles_battery),
+                    now_battery=self.now_battery,
+                    support_soc_pct=self.support_soc_pct,
+                    soc_end_pct=None if ends is None else ends[index],
                 )
-                for offset, intent, budget_kw in self.slots
+                for index, (offset, intent, budget_kw) in enumerate(self.slots)
             ],
         )
 
@@ -599,6 +634,10 @@ def _plan(
     grid_charge_allowed: bool = True,
     vehicles: Mapping[str, int] = MappingProxyType({}),
     thermal: ThermalHint = "neutral",
+    vehicles_battery: Mapping[str, int] = MappingProxyType({}),
+    now_battery: bool = False,
+    support_soc_pct: float | None = None,
+    soc_end_pct: Sequence[float] | None = None,
 ) -> tuple[int, Action]:
     """Das Ereignis ``_Plan`` in der Sekunde ``at_s`` eines Szenarios ab ``start``."""
     plan = _Plan(
@@ -609,6 +648,10 @@ def _plan(
         grid_charge_allowed=grid_charge_allowed,
         vehicles=vehicles,
         thermal=thermal,
+        vehicles_battery=vehicles_battery,
+        now_battery=now_battery,
+        support_soc_pct=support_soc_pct,
+        soc_end_pct=None if soc_end_pct is None else tuple(soc_end_pct),
     )
     return at_s, plan
 
@@ -3902,6 +3945,253 @@ def _klima_plan_ende() -> Scenario:
     )
 
 
+# --- Szenarien 44 und 45: Akku ins Auto, Victron live (Plan Akku ins Auto, Task 8) ---------------
+
+SPARE_BAND_W: Final = 300.0  # Toleranz der Prüfungen auf den Netzbezug in beiden Szenarien
+DISCHARGE_W: Final = 12000.0  # max_discharge_w der Beispielkonfiguration: Entladegrenze des Modells
+SPARE_THRESHOLD_PCT: Final = 70.0  # „akku-uebrig-sofort“: Plan-Schwelle des Slots …
+SPARE_SOC_PCT: Final = 72.0  # … und SOC des Akkus zu Beginn
+SPARE_SLOTS: Final = 2  # … der Plan hat so viele Slots, je mit übrigem Akku für Sofort
+SPARE_TESLA_A: Final = 10  # … der Tesla lädt in Sofort mit höchstens so viel Strom (now_max_a)
+# „akku-uebrig-geplant“: Slot-Leistung und Akkuanteil des e-Golf, 6 A auf zwei Phasen …
+PLANNED_BATTERY_W: Final = 2760
+PLANNED_SOC_PCT: Final = 60.0  # … SOC des Akkus zu Beginn …
+# … und der geplante SOC am Ende je Slot: Der Akkuanteil endet im dritten Slot, wenn der SOC
+# seinen Wert erreicht
+PLANNED_SOC_END_PCT: Final = (56.0, 53.0, 52.0)
+PLANNED_SHARE_SLOT: Final = 2  # in diesem Slot (vom ersten an gezählt ab 0) endet der Akkuanteil
+SOC_END_MARGIN_PCT: Final = 1.0  # der SOC fällt höchstens so weit unter das kleinste SOC am Ende
+SPARE_TARGET_PCT: Final = 80  # das Ziel des e-Golf in „akku-uebrig-geplant“, …
+SPARE_DEPARTURE: Final = "07:00"  # … seine Abfahrt: Die späteste Startzeit liegt nach dem Lauf
+BATTERY_SPARE: Final = "battery_spare"  # Grund: Geplant oder Sofort laden aus übrigem Akku
+BATTERY_COMP: Final = "battery_comp"  # Grund: Der Fehlbetrag der Autos geht aufs Netz
+
+
+def _first_soc_at_or_below(samples: Sequence[Sample], pct: float) -> int | None:
+    """Die erste Sekunde, in der der SOC ``pct`` erreicht (``≤``); ``None``, wenn nie."""
+    return next((s.t for s in samples if s.soc_pct <= pct), None)
+
+
+def _grid_at_most_over_the_discharge_limit(result: SimResult) -> list[str]:
+    """Ab ``SETTLED_S``, solange der SOC über ``SPARE_THRESHOLD_PCT`` liegt, ist der Netzbezug in
+    jeder Sekunde höchstens ``max(0, Haus + Autos − DISCHARGE_W) + SPARE_BAND_W``: Der Akku trägt
+    Haus und Auto, kein Override des core holt das Auto aus dem Netz. Es muss solche Sekunden
+    geben, und mindestens eine, in der ein Auto lädt."""
+    reached = _first_soc_at_or_below(result.samples, SPARE_THRESHOLD_PCT)
+    above = [s for s in result.samples if s.t >= SETTLED_S and (reached is None or s.t < reached)]
+    if not any(_any_charging(s) for s in above):
+        return [
+            f"Ab {SETTLED_S} s lädt kein Auto, solange der SOC über "
+            f"{de(SPARE_THRESHOLD_PCT)} % liegt."
+        ]
+    over = [
+        (s, max(0.0, s.house_w + cars_w(s) - DISCHARGE_W) + SPARE_BAND_W)
+        for s in above
+        if s.grid_w > max(0.0, s.house_w + cars_w(s) - DISCHARGE_W) + SPARE_BAND_W
+    ]
+    if not over:
+        return []
+    first, limit = over[0]
+    return [
+        f"Netzbezug bei {first.t} s {shown_number(first.grid_w, 0, lambda n: n <= limit)} W, "
+        f"verlangt höchstens {de(round(limit))} W ({len(over)} s darüber)."
+    ]
+
+
+def _grid_carries_the_cars_from(begin: Callable[[SimResult], int | None], what: str) -> Check:
+    """Ab ``SETTLED_S`` nach der Sekunde ``begin`` ist der Netzbezug in jeder Sekunde mindestens
+    die Leistung der Autos minus ``SPARE_BAND_W``: Der Akku gibt den Autos nichts mehr. ``what``
+    nennt die Sekunde in der Prüfung; ohne sie oder ohne ladendes Auto danach ist das ein
+    Verstoß."""
+
+    def find(result: SimResult) -> list[str]:
+        at = begin(result)
+        if at is None:
+            return [f"Es gibt keine Sekunde „{what}“."]
+        after = [s for s in result.samples if s.t >= at + SETTLED_S]
+        if not any(_any_charging(s) for s in after):
+            return [f"Ab {at + SETTLED_S} s ({what} plus {SETTLED_S} s) lädt kein Auto."]
+        under = [s for s in after if s.grid_w < cars_w(s) - SPARE_BAND_W]
+        if not under:
+            return []
+        first = under[0]
+        low = cars_w(first) - SPARE_BAND_W
+        shown = shown_number(first.grid_w, 0, lambda n: n >= low)
+        return [
+            f"Netzbezug bei {first.t} s {shown} W, verlangt mindestens {de(round(low))} W "
+            f"(Autos {de(round(cars_w(first)))} W, {len(under)} s darunter)."
+        ]
+
+    text = (
+        f"Ab {de(SETTLED_S / MINUTE_S)} min nach {what} liegt der Netzbezug in jeder Sekunde "
+        f"mindestens bei der Leistung der Autos minus {de(SPARE_BAND_W)} W."
+    )
+    return Check(text, find)
+
+
+def _spare_before_comp(result: SimResult) -> list[str]:
+    """Vor der ersten Entscheidung mit ``BATTERY_COMP`` zeigt mindestens eine Gesundheit den
+    übrigen Akku für Sofort mit einem Anteil (``battery.spare`` „on“, ``battery.spare_w`` über 0);
+    die Entscheidung gibt es. Im Log selbst steht ``BATTERY_SPARE`` hier nie: Der Akku trägt den
+    ganzen Fehlbetrag, und ohne Rest fürs Netz gibt es keinen Override und keine Entscheidung
+    (Abweichung, Docstring des Moduls)."""
+    comp = next((d for d in result.decisions if BATTERY_COMP in d.codes), None)
+    if comp is None:
+        return [f"Keine Entscheidung nennt „{BATTERY_COMP}“."]
+    until = _second(result, comp.ts)
+    for t, health in result.health:
+        if t >= until:
+            break
+        share = finite_number(health.battery.get("spare_w"))
+        if health.battery.get("spare") == "on" and share is not None and share > 0:
+            return []
+    return [
+        f"Vor der ersten Entscheidung mit „{BATTERY_COMP}“ bei {until} s zeigt keine Gesundheit "
+        f"„battery.spare“ „on“ mit einem Anteil über 0 W."
+    ]
+
+
+def _planned_share_ends(result: SimResult) -> int | None:
+    """Die erste Sekunde, in der der SOC den geplanten SOC am Ende seines Slots erreicht
+    (``PLANNED_SOC_END_PCT``): Dort endet der Akkuanteil des Autos in Geplant."""
+    for s in result.samples:
+        slot = min(s.t // QUARTER_S, len(PLANNED_SOC_END_PCT) - 1)
+        if s.soc_pct <= PLANNED_SOC_END_PCT[slot]:
+            return s.t
+    return None
+
+
+def _no_grid_for_the_car(result: SimResult) -> list[str]:
+    """Ab ``SETTLED_S`` bis zum Ende des Akkuanteils (``_planned_share_ends``) ist der Netzbezug
+    in jeder Sekunde höchstens ``SPARE_BAND_W``; der Akkuanteil endet im Slot
+    ``PLANNED_SHARE_SLOT``, und davor lädt ein Auto."""
+    end = _planned_share_ends(result)
+    found: list[str] = []
+    if end is None or end // QUARTER_S != PLANNED_SHARE_SLOT:
+        where = "nie" if end is None else f"bei {end} s"
+        found.append(f"Der Akkuanteil endet {where}, verlangt im Slot {PLANNED_SHARE_SLOT + 1}.")
+    before = [s for s in result.samples if SETTLED_S <= s.t and (end is None or s.t < end)]
+    if not any(_any_charging(s) for s in before):
+        return [*found, "Kein Auto lädt, solange der Akkuanteil gilt."]
+    return [*found, *_above(before, lambda s: s.grid_w, SPARE_BAND_W, "Netzbezug")]
+
+
+def _soc_above_the_plan(result: SimResult) -> list[str]:
+    """Der SOC fällt nie unter das kleinste SOC am Ende (``PLANNED_SOC_END_PCT``) minus
+    ``SOC_END_MARGIN_PCT``."""
+    floor = min(PLANNED_SOC_END_PCT) - SOC_END_MARGIN_PCT
+    low = min(result.samples, key=lambda s: s.soc_pct)
+    if low.soc_pct >= floor:
+        return []
+    shown = shown_number(low.soc_pct, 2, lambda n: n >= floor)
+    return [f"Der SOC fällt bei {low.t} s auf {shown} %, verlangt mindestens {de(floor)} %."]
+
+
+def _akku_uebrig_sofort() -> Scenario:
+    """Der Tesla lädt am Abend in Sofort, der Plan erlaubt in jedem Slot übrigen Akku für Sofort
+    über der Plan-Schwelle von 70 % (Plan Akku ins Auto, Entscheidung 6). Solange der SOC darüber
+    liegt, trägt der Akku Haus und Auto ohne Override; erreicht er sie, holt der Override das Auto
+    aus dem Netz (``battery_comp``), und ohne PV kommt der SOC nicht mehr 5 Punkte darüber."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 44
+    slots = tuple((k, OWN_USE, None) for k in range(SPARE_SLOTS))
+    plan = _plan(
+        start,
+        0,
+        slots,
+        valid_s=duration_s,
+        now_battery=True,
+        support_soc_pct=SPARE_THRESHOLD_PCT,
+    )
+    carried = Check(
+        f"Solange der SOC über {de(SPARE_THRESHOLD_PCT)} % liegt, ab "
+        f"{de(SETTLED_S / MINUTE_S)} min kein Override des core: Netzbezug höchstens Haus und "
+        f"Autos über der Entladegrenze des Modells ({de(DISCHARGE_W)} W) plus "
+        f"{de(SPARE_BAND_W)} W.",
+        _grid_at_most_over_the_discharge_limit,
+    )
+
+    def reached(result: SimResult) -> int | None:
+        return _first_soc_at_or_below(result.samples, SPARE_THRESHOLD_PCT)
+
+    return Scenario(
+        name="akku-uebrig-sofort",
+        title="Sofort am Abend mit übrigem Akku",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=SPARE_SOC_PCT, egolf=None),
+        intent=_intent(tesla=ChargeMode.NOW, limits={TESLA: SPARE_TESLA_A}),
+        live=True,
+        events=(*_weather(start, duration_s, seed), plan),
+        checks=Checks(
+            (
+                carried,
+                _grid_carries_the_cars_from(
+                    reached, f"dem SOC {de(SPARE_THRESHOLD_PCT)} % (Akku nicht ins Auto)"
+                ),
+                Check(
+                    f"Vor der ersten Entscheidung mit „{BATTERY_COMP}“ zeigt die Gesundheit den "
+                    f"übrigen Akku („battery.spare“ „on“, Anteil über 0 W; Grund "
+                    f"„{BATTERY_SPARE}“).",
+                    _spare_before_comp,
+                ),
+            )
+        ),
+        victron_live=True,
+    )
+
+
+def _akku_uebrig_geplant() -> Scenario:
+    """Der e-Golf lädt in der Nacht „Geplant“ mit 2800 W, alle aus dem Akku (``ev_battery_w``),
+    solange der SOC über dem geplanten SOC am Ende des Slots liegt (Plan Akku ins Auto,
+    Entscheidung 4). Das Haus braucht mehr, als der Plan annimmt: Im dritten Slot erreicht der SOC
+    sein Ende, und der Rest kommt aus dem Netz; der Akku trägt nur noch das Haus."""
+    start, duration_s, seed = NIGHT, 45 * MINUTE_S, 45
+    slots = tuple((k, OWN_USE, None) for k in range(len(PLANNED_SOC_END_PCT)))
+    plan = _plan(
+        start,
+        0,
+        slots,
+        valid_s=duration_s,
+        vehicles={EGOLF: PLANNED_BATTERY_W},
+        vehicles_battery={EGOLF: PLANNED_BATTERY_W},
+        soc_end_pct=PLANNED_SOC_END_PCT,
+    )
+    floor = min(PLANNED_SOC_END_PCT) - SOC_END_MARGIN_PCT
+    return Scenario(
+        name="akku-uebrig-geplant",
+        title="Geplant in der Nacht aus dem Akku",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=PLANNED_SOC_PCT, tesla=None),
+        intent=_intent(egolf=ChargeMode.PLANNED),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (0, _Target(2, EGOLF, SPARE_TARGET_PCT, SPARE_DEPARTURE)),
+            plan,
+        ),
+        checks=Checks(
+            (
+                Check(
+                    f"Ab {de(SETTLED_S / MINUTE_S)} min, bis der SOC das geplante Ende seines "
+                    f"Slots erreicht (im Slot {PLANNED_SHARE_SLOT + 1}), höchstens "
+                    f"{de(SPARE_BAND_W)} W Netzbezug für das Auto.",
+                    _no_grid_for_the_car,
+                ),
+                _grid_carries_the_cars_from(_planned_share_ends, "dem Ende des Akkuanteils"),
+                Check(
+                    f"Der SOC fällt nie unter {de(floor)} % (kleinstes SOC am Ende minus "
+                    f"{de(SOC_END_MARGIN_PCT)} Punkt).",
+                    _soc_above_the_plan,
+                ),
+            )
+        ),
+        victron_live=True,
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -3948,5 +4238,7 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _klima_plan_vorheizen(),
         _klima_plan_akku(),
         _klima_plan_ende(),
+        _akku_uebrig_sofort(),
+        _akku_uebrig_geplant(),
     )
 }
