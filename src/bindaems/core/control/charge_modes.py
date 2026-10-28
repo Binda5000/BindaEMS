@@ -4,6 +4,7 @@
   Grund-Code im Entscheidungslog, die Modi mit vollem Strom und der Grund-Code ``pv_surplus``
 - ``PLAN_POWER``, ``LATEST_START`` und ``TARGET_REACHED``: die Grund-Codes von „Geplant“
 - ``NOW_LIMIT``: der Grund-Code des Höchststroms in „Sofort“
+- ``KEEP_ON_COMPLETE``: der Grund-Code der EVCS, die nach „geladen“ an bleibt (Regel K2)
 - ``ModeTimers``: die Zeiten aus ``control`` der Konfiguration
 - ``ModeInput`` und ``ModeDecision``: Eingaben und Urteil eines Schritts
 - ``ModeMachine``: der Zustand eines Fahrzeugs; sie entscheidet nur, ob geladen werden soll,
@@ -37,6 +38,9 @@ TARGET_REACHED: Final = "target_reached"
 # Grund-Code (Plan Sofort-Limit, Entscheidung 8): In „Sofort“ begrenzt der Höchststrom der Absicht
 # (``now_max_a``) den Strom, kein Wächter darunter.
 NOW_LIMIT: Final = "now_limit"
+# Grund-Code (Plan Vorklimatisieren, Regel K2): Das Auto ist im Ansteckvorgang „geladen“, die EVCS
+# bleibt mit dem Mindeststrom an, damit es über sie klimatisieren kann.
+KEEP_ON_COMPLETE: Final = "keep_on_complete"
 
 
 class Effective(StrEnum):

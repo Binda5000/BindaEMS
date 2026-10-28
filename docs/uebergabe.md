@@ -209,17 +209,33 @@ Standard-Lademodus“: Einstellungen als YAML exportieren, den Schlüssel `wallb
 Auto mit der Automatik für Ziel und Abfahrt (5b) hat, stellt dessen Ladepunkt auf „Geplant“ oder „Unverändert“. Betrieb: `docs/betrieb.md`, „Laden“,
 „Standard-Lademodus je Ladestation“. Die Liste „Deferred minors Standard-Lademodus“ steht unter „Bewusst offen gelassen“.
 
+**Plan Vorklimatisieren (Vorklimatisieren über die Wallbox) ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt**
+(`docs/superpowers/plans/2026-10-28-vorklimatisieren-ueber-wallbox.md`, 5 Tasks, freigegeben vom Betreiber am 28.10.2026 mit allen
+11 Entscheidungen: „Freigegeben“): Branch `claude/project-thread-xqrmsn`, **seit dem 28.10.2026 per Fast-Forward auf `main`** (Zustimmung des Betreibers, Branch-CI grün), **nicht ausgerollt**; `latest` enthält damit das Vorklimatisieren. Beim Vorheizen und
+Vorkühlen nimmt das Auto den Strom von der Wallbox statt aus seinem Akku. Regel K1 („Vorklimatisieren“, Grund `climate`): Meldet Tessie
+die Klimatisierung (neues Signal `vehicle.<Schlüssel>.climate_on` aus `climate_state.is_climate_on` oder `is_preconditioning`) und lädt
+der Tesla, stoppt ihn die Regelung nicht (weder nach dem Modus noch als Selbststart) und fordert den Mindeststrom des Ladepunkts, ohne
+eigenes „Laden an“; nach dem Ende der Klimatisierung stoppt ihn der Selbststart nach `control.tesla_against_s` (120 s) plus der Abfrage von
+Tessie. Regel K2 („Geladen, bleibt an“, Grund `keep_on_complete`): Ein „geladenes“ Auto an einer EVCS (nicht ein erreichtes Ziel in
+„Geplant“) behält die EVCS an, mit dem Mindeststrom, in jedem Modus außer „Aus“. Beides schaltet `vehicles.<Schlüssel>.climate_via_wallbox`
+(Standard `true`) je Fahrzeug ab; Gäste sind nicht erfasst; Überlast und Wächter gehen vor, die Senkung auf den Haltestrom ist nur dringend,
+wenn die Sicherung es verlangt. Neu sind die Simulator-Szenarien `tesla-vorklimatisieren` und `egolf-voll-bleibt-an` (jetzt 45).
+**Ausgerollt werden core und app gemeinsam** mit dem nächsten gemeinsamen Pull; **keine Migration, keine Änderung der Absicht, keine
+ACL-Zeile, kein Schritt an `config.yaml`**. Rückweg: Wurde `climate_via_wallbox` in `config.yaml` eingetragen, vorher entfernen
+(`extra="forbid"`; Betrieb: `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor dem Vorklimatisieren über die Wallbox“). An der
+Anlage einmal bestätigen (Punkt 15 unter „Offen an der Anlage“). Betrieb: `docs/betrieb.md`, „Laderegelung“, „Lademodi“ und „Tesla“.
+
 **Plan „Akku ins Auto, wenn er übrig ist“ ist umgesetzt und je Task geprüft** (Gesamtreview und Fix-Welle erledigt)
 (`docs/superpowers/plans/2026-10-28-akku-ins-auto-wenn-uebrig.md`, 10 Tasks, freigegeben vom Betreiber am 28.10.2026 mit allen
 11 Entscheidungen: „Freigegeben“; Anlass war seine Frage vom selben Tag, ob „Sofort“ und „Geplant“ Strom aus dem Akku nehmen
 sollen, wenn das billiger ist): Branch `claude/project-thread-c3k9h7` (auf den Stand von `main` `779dd47` mit dem Standard-Lademodus
-rebased), **nicht auf `main`** (die Integration braucht die Zustimmung des Betreibers), **nicht ausgerollt**.
+rebased, dann mit `main` `b187808` mit dem Vorklimatisieren zusammengeführt), **nicht auf `main`** (die Integration braucht die Zustimmung des Betreibers), **nicht ausgerollt**.
 Mit dem Schalter „Akku ins Auto, wenn übrig“ (Einstellungen → „Planung“, **ab Werk aus**) plant der Optimierer für Autos in
 „Geplant“ Akkustrom ein, wo er sich lohnt (Fluss Akku → Auto mit Verschleiß plus Marge als Kosten, gesperrt, solange
 Netzenergie im Akku sein kann), und Autos in „Sofort“ (auch Gäste) laden in lohnenden Slots aus übrigem Akku, bis der SOC die
 Plan-Schwelle erreicht. Der Zeitplan nennt das mit `AUTO_AUS_AKKU` und `SOFORT_AUS_AKKU`, das Entscheidungslog mit
 `battery_spare` („Akku übrig fürs Auto“), Health mit `battery.spare` und `battery.spare_w`; neu sind die Simulator-Szenarien
-`akku-uebrig-sofort` und `akku-uebrig-geplant` (jetzt 45). PV-Überschuss, Min+PV (Unterstützung ab 70 %) und Boost bleiben,
+`akku-uebrig-sofort` und `akku-uebrig-geplant` (jetzt 47). PV-Überschuss, Min+PV (Unterstützung ab 70 %) und Boost bleiben,
 wie sie sind. **Ausgerollt werden core und app gemeinsam** (jeder Plan-Slot der Absicht hat zwei neue Felder, ein alter core
 lehnt sie ab), mit dem nächsten gemeinsamen Pull; **keine Migration, keine ACL-Zeile**. **Den Schalter schaltest du erst ein,
 wenn Victron live ist.** Der Rückweg braucht Schritte an `intent.json` (Felder per Skript entfernen) und an den gespeicherten Einstellungen (wie beim
@@ -1003,7 +1019,7 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
         plant; die Grenze `soc_end_pct` fängt das ab.
   - **Aufgeschobene Kleinigkeiten:** unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan Akku ins Auto“.
   - **Offen:** Integration nach `main` mit Zustimmung des Betreibers, dann
-    das gemeinsame Ausrollen und die Abnahme an der Anlage (Punkt 16 unter
+    das gemeinsame Ausrollen und die Abnahme an der Anlage (Punkt 17 unter
     „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
@@ -1053,7 +1069,7 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
     (Punkt 11 unter „Offen an der Anlage“); danach die Abnahme 5b (28 Tage,
     `docs/verification/abnahme-phase-5b.md`)
   - an der Anlage: Plan „Akku ins Auto, wenn er übrig ist“ (core und app gemeinsam, keine Migration) nach Gesamtreview,
-    Fix-Welle und Integration ausrollen; den Schalter erst einschalten, wenn Victron live ist (Punkt 16 unter „Offen an der
+    Fix-Welle und Integration ausrollen; den Schalter erst einschalten, wenn Victron live ist (Punkt 17 unter „Offen an der
     Anlage“)
   - an der Anlage: Plan 5c (core und app gemeinsam, Regelbetrieb aus) frühestens nach den Abnahmen 5a und
     5b am 22.11.2026 ausrollen (Punkt 14 unter „Offen an der Anlage“); danach die Abnahme 5c Teil A (14 Tage
@@ -1180,6 +1196,7 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
 | `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty`, seit dem 21.10.2026 auf `main` (Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md` | Welle „Aufgeschobene Kleinigkeiten“, 13 Tasks, 56 Punkte K1 bis K56 vor dem gemeinsamen Ausrollen; vom Betreiber am 21.10.2026 freigegeben |
 | `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` | Plan 5c, 11 Tasks (Task 1 entfällt: die Betriebsart steht schon in InfluxDB `status`), 17 Entscheidungen, freigegeben vom Betreiber am 27.10.2026; **umgesetzt, seit 28.10.2026 auf `main`, nicht ausgerollt**: Wärmemodell je Betriebsart (Grundleistung, Zeitkonstante, Speicher je K), zweiter Planungsschritt nach Akku und Autos mit Vorschau, Planwert an den core, Schalter „Vorheizen und Vorkühlen“ ab Werk aus |
+| `docs/superpowers/plans/2026-10-28-vorklimatisieren-ueber-wallbox.md` | Plan Vorklimatisieren, 5 Tasks, 11 Entscheidungen, freigegeben vom Betreiber am 28.10.2026; umgesetzt auf dem Branch `claude/project-thread-xqrmsn`, seit dem 28.10.2026 auf `main`, nicht ausgerollt, Gesamtreview und Fix-Welle erledigt: Tesla beim Klimatisieren nicht stoppen, EVCS nach „geladen“ anlassen, Schalter `climate_via_wallbox` |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
@@ -1972,7 +1989,22 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Danach prüfen: Auto an einem Ladepunkt mit einem Standard abstecken, im Änderungsprotokoll steht ein Eintrag mit dem Urheber
       „Standard-Lademodus“ und der Quelle `system`, und auf „Laden“ steht der neue Modus. Der Rückweg steht in `docs/betrieb.md`,
       Abschnitt 4, „Rollback auf einen Stand vor dem Standard-Lademodus“.
-  16. **Akku ins Auto, wenn übrig (Plan „Akku ins Auto, wenn er übrig ist“) ausrollen:** core **und** app gemeinsam (jeder
+  16. **Vorklimatisieren über die Wallbox (Plan Vorklimatisieren) ausrollen:** core **und** app gemeinsam, mit dem nächsten
+      gemeinsamen Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`); der core sendet neue Grund-Codes, die app
+      kennt ihren Text (ein alter UI-Stand zeigt nur den Code). **Keine Migration, keine Änderung der Absicht, keine ACL-Zeile, kein
+      Schritt an `config.yaml`** (der Schalter `climate_via_wallbox` ist ab Werk an). Seit dem 28.10.2026 auf `main`; wann
+      ausgerollt wird, entscheidet der Betreiber. Bei der Abnahme **einmal bestätigen** (die Ursache im Plan ist
+      eine Annahme aus dem Code):
+      1. **Tesla:** Beim Vorheizen oder Vorkühlen, während er angesteckt ist, zeigt das Entscheidungslog (Seite „Entscheidungen“) den Grund
+         „Vorklimatisieren“ und **keinen** Stopp „Selbststart“ („Tesla Model 3 (…, Selbststart): Laden aus“). Endet die Klimatisierung,
+         und lädt der Tesla weiter, stoppt ihn der Selbststart nach rund 2 bis 3 min.
+      2. **e-Golf:** Bei vollem Akku (EVCS „geladen“) bleibt die EVCS an, im Log „Geladen, bleibt an“, und die Standheizung zieht aus dem
+         Netz statt aus dem Akku des Autos.
+      Zeigt das Log beim Vorheizen doch „Selbststart“, meldet Tessie die Klimatisierung nicht: den Tessie-Cache (`climate_state`)
+      ansehen und den Befund weitergeben, bevor der Schalter geändert wird. Der Rückweg steht in `docs/betrieb.md`, Abschnitt 4
+      („Rollback auf einen Stand vor dem Vorklimatisieren über die Wallbox“): `climate_via_wallbox` aus `config.yaml` entfernen,
+      falls eingetragen, dann den core zurückrollen.
+  17. **Akku ins Auto, wenn übrig (Plan „Akku ins Auto, wenn er übrig ist“) ausrollen:** core **und** app gemeinsam (jeder
       Plan-Slot der Absicht hat die neuen Felder `ev_battery_w` und `now_battery`, ein alter core lehnt sie ab,
       `extra="forbid"`), **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**. Noch nicht auf `main`;
       Gesamtreview und Fix-Welle sind erledigt, wann integriert und ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem
@@ -2192,7 +2224,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 11. **Plan „Akku ins Auto, wenn er übrig ist“** (Autos in „Geplant“ und „Sofort“ aus übrigem Akku): umgesetzt und je Task
     geprüft, auf dem Branch `claude/project-thread-c3k9h7`; nicht auf `main` (Zustimmung des Betreibers nötig), nicht
     ausgerollt (Kurzfassung oben, „Plan Akku ins Auto“). Gesamtreview und Fix-Welle sind erledigt; es folgen die Integration
-    und das gemeinsame Ausrollen von core und app (Punkt 16 unter „Offen an
+    und das gemeinsame Ausrollen von core und app (Punkt 17 unter „Offen an
     der Anlage“); wann, entscheidet der Betreiber. Den Schalter schaltet er erst ein, wenn Victron live ist.
 
 ### Nächster Schritt: die Anlage

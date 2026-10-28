@@ -11,8 +11,9 @@ Die Bausteine, die ``ChargeController`` für Fahrzeuge mit Tessie braucht (Präz
 - ``tessie_current``: der Strom, den Tessie meldet, auf den Phasen der Wallbox
 - ``AgainstMode``: wie lange ein Fahrzeug gegen seinen Modus lädt (Selbststart)
 - ``ChargeLimits``: das Ladelimit des Tesla in „Geplant“, einmal je Ansteckvorgang und Ziel
-- die Gründe ``wake``, ``assignment_unclear``, ``assignment_detected``, ``self_start`` und
-  ``charge_limit``
+- ``climate_hold``: ob ein Fahrzeug beim Klimatisieren lädt und deshalb nicht stoppt (Regel K1)
+- die Gründe ``wake``, ``assignment_unclear``, ``assignment_detected``, ``self_start``,
+  ``charge_limit`` und ``climate``
 
 Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbindet die Bausteine):
 
@@ -37,6 +38,16 @@ Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbin
   ohne Unterbrechung gegen seinen Modus, vergisst die Regelung ihren letzten Wert für ``charging``;
   so geht „Laden aus“ erneut hinaus, mit dem Grund ``self_start``, höchstens alle
   ``control.tesla_against_retry_s``. Ein neuer Vorgang und ``idle`` beginnen neu.
+- Vorklimatisieren (Regel K1; Plan Vorklimatisieren, Entscheidungen 1 bis 3 und 6 bis 9): Meldet
+  Tessie die Klimatisierung an und lädt das Fahrzeug dabei, obwohl sein Modus nicht laden will,
+  gilt das Urteil als „laden“ (``climate_hold``): kein „Laden aus“, weder nach dem Modus noch als
+  Selbststart, und kein eigenes „Laden an“; der Strom ist der Mindeststrom des Ladepunkts mit dem
+  Grund ``climate``, dringend nur, wenn die Sicherung allein es verlangt. Nicht im Modus „Aus“,
+  nicht bei unklarer Zuordnung, nicht ohne erreichbares Tessie und nicht mit
+  ``climate_via_wallbox: false``; in der Pause nach einem Stopp der Überlast und unter einer
+  Grenze des 15-min-Wächters, die den Mindeststrom nicht trägt, ruht die Regel (``charging``).
+  Endet die Klimatisierung, beginnen die Zeiten des Selbststarts neu: Lädt das Fahrzeug weiter,
+  stoppt es ``control.tesla_against_s`` danach.
 - Ladelimit (Plan 4b, Entscheidung 11, Präzisierung 9): Mit ``charge_limit_sync`` setzt die
   Regelung in „Geplant“ das Ladelimit eines angesteckten, wachen Tesla auf ``max(Ziel, 50)``,
   höchstens einmal je (Ansteckvorgang, Ziel), nie mit Weckerlaubnis und nie dringend. Eine Änderung
@@ -64,7 +75,7 @@ from typing import Final
 from bindaems.core.control.actuator import matches
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_inputs import ChargeInputs, VehicleObs
-from bindaems.core.control.charge_modes import MODE_CODES, Effective
+from bindaems.core.control.charge_modes import MODE_CODES, Effective, ModeDecision
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import FAILED_RESULTS, Key, LastValues
 from bindaems.core.control.phase_guard import SlidingMin
@@ -81,6 +92,8 @@ ASSIGNMENT_DETECTED: Final = "assignment_detected"
 # der Befehl folgt aus einem Auto, das gegen seinen Modus lädt (Plan 2d, Präzisierung 10)
 SELF_START: Final = "self_start"
 CHARGE_LIMIT: Final = "charge_limit"  # das Ladelimit des Tesla (Plan 4b, Präzisierung 9)
+# das Fahrzeug lädt beim Klimatisieren und bleibt an (Regel K1, Plan Vorklimatisieren)
+CLIMATE: Final = "climate"
 LIMIT_MIN_PCT: Final = 50  # tiefstes Ladelimit, das die Regelung setzt (Entscheidung 11)
 
 # So steht ein Fahrzeug „an der EVCS“ (Plan 2c-2b, Präzisierung 7)
@@ -295,6 +308,38 @@ class ChargeLimits:
         for actuator in actuators:
             self._done.pop(actuator, None)
             self._asked.pop(actuator, None)
+
+
+def climate_hold(
+    cfg: Config,
+    key: str,
+    obs: VehicleObs,
+    vehicle: VehicleState,
+    mode: Effective,
+    decision: ModeDecision,
+) -> bool:
+    """Ob das Fahrzeug ``key`` beim Klimatisieren lädt und deshalb nicht stoppt (Regel K1).
+
+    Wahr genau dann, wenn ``key`` ein Fahrzeug der Konfiguration mit Tessie und
+    ``climate_via_wallbox`` ist (ein Gast nie), Tessie erreichbar ist und das Fahrzeug
+    klimatisierend (``climate_on``) und ladend meldet, die Zuordnung es angesteckt und klar sieht,
+    der Modus nicht „Aus“ ist und das Urteil der ``ModeMachine`` nicht laden will. Ein Fahrzeug,
+    das beim Klimatisieren nicht selbst lädt (etwa „Complete“), betrifft das nicht: Die Regel
+    duldet nur (Entscheidung 1). Will der Modus laden, gilt sein Strom (Entscheidung 3).
+    """
+    config = cfg.vehicles.get(key)
+    return (
+        config is not None
+        and config.tessie is not None
+        and config.climate_via_wallbox
+        and obs.reachable
+        and obs.climate_on is True
+        and obs.charging is True
+        and vehicle.plugged is True
+        and vehicle.kind is not AssignmentKind.UNCLEAR
+        and mode is not Effective.OFF
+        and not decision.charge
+    )
 
 
 def maximum_command(

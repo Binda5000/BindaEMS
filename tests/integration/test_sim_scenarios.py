@@ -95,6 +95,9 @@ KLIMA = [
 ]
 # die Szenarien für Vorheizen und Vorkühlen (Plan 5c, Task 8), am CoE-Adapter und live
 KLIMA_PLAN = ["klima-plan-vorheizen", "klima-plan-akku", "klima-plan-ende"]
+# die Szenarien fürs Vorklimatisieren über die Wallbox (Plan Vorklimatisieren, Task 4), Victron im
+# Dry-Run
+PRECONDITION = ["tesla-vorklimatisieren", "egolf-voll-bleibt-an"]
 # die Szenarien für Akku ins Auto (Plan Akku ins Auto, Task 8), mit Victron live
 SPARE = ["akku-uebrig-sofort", "akku-uebrig-geplant"]
 ALL = [
@@ -107,6 +110,7 @@ ALL = [
     *SOFORT,
     *KLIMA,
     *KLIMA_PLAN,
+    *PRECONDITION,
     *SPARE,
 ]
 # Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen. Der
@@ -127,7 +131,7 @@ def test_battery_and_peak_scenarios_are_registered() -> None:
 
 def test_assignment_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[18:21] == ["tesla-evcs", "egolf-twc", "gast-evcs"]
-    assert len(SCENARIOS) == 45
+    assert len(SCENARIOS) == 47
 
 
 def test_tesla_off_scenarios_are_registered() -> None:
@@ -158,8 +162,14 @@ def test_klima_scenarios_are_registered() -> None:
     assert not any(SCENARIOS[name].victron_live for name in KLIMA_PLAN)
 
 
+def test_precondition_scenarios_are_registered() -> None:
+    assert list(SCENARIOS)[43:45] == PRECONDITION
+    assert all(SCENARIOS[name].live and not SCENARIOS[name].thermal for name in PRECONDITION)
+    assert not any(SCENARIOS[name].victron_live for name in PRECONDITION)
+
+
 def test_spare_scenarios_are_registered() -> None:
-    assert list(SCENARIOS)[43:] == SPARE
+    assert list(SCENARIOS)[45:] == SPARE
     assert all(SCENARIOS[name].victron_live for name in SPARE)
     plan = SCENARIOS["akku-uebrig-sofort"].events[-1][1]
     assert isinstance(plan, _Plan)

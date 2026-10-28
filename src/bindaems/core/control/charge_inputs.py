@@ -84,6 +84,8 @@ class VehicleObs:
       Wert nach dessen Frische veraltet und damit unbekannt
     - ``soc_at``: der Zeitstempel dieses Werts (wie bei ``plugged_at``); ``None`` ohne Ladestand
     - ``charge_limit_pct``: das Ladelimit im Fahrzeug; nur mit Tessie
+    - ``climate_on``: das Fahrzeug klimatisiert (Klima an oder Vorkonditionierung, aus
+      ``vehicle.<Schlüssel>.climate_on``); nur mit Tessie
     """
 
     reachable: bool
@@ -98,6 +100,7 @@ class VehicleObs:
     soc_pct: float | None = None
     soc_at: datetime | None = None
     charge_limit_pct: float | None = None
+    climate_on: bool | None = None
 
 
 # Ein Fahrzeug ohne Tessie: Die Regelung sieht nichts von ihm, nur die Wallbox sieht es
@@ -332,6 +335,7 @@ def _vehicle_obs(snap: Snapshot, key: str, *, reachable: bool) -> VehicleObs:
         soc_pct=ok_number(snap, soc_signal(key)),
         soc_at=_number_at(snap, soc_signal(key)),
         charge_limit_pct=ok_number(snap, prefix + "charge_limit_pct"),
+        climate_on=_flag(snap, prefix + "climate_on"),
     )
 
 

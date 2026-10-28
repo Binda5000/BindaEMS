@@ -18,8 +18,16 @@ from tests.unit.core.control.charge_helpers import (
 )
 from tests.unit.core.safety.conftest import make_ctx
 
+from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_modes import Effective
-from bindaems.core.control.charging import FOLLOW_HOLD_S, RAMP_UP_S, CarView, ChargeController
+from bindaems.core.control.charge_points import ChargePoint
+from bindaems.core.control.charging import (
+    FOLLOW_HOLD_S,
+    RAMP_UP_S,
+    CarView,
+    ChargeController,
+    keep_on_complete,
+)
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.control.phase_guard import OverloadLevel
@@ -2735,6 +2743,39 @@ def test_unmet_surplus_leaves_out_a_held_car_that_could_never_start(cfg) -> None
     assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_8_a) == 3680.0
 
 
+def test_unmet_surplus_counts_a_climatising_tesla_as_held_off(cfg) -> None:  # Gesamtreview M2
+    # Der Tesla wird bei 10 in PV ohne Überschuss angesteckt, klimatisiert und lädt dabei selbst mit
+    # 5 A (3450 W): Die Regel K1 hält ihn ohne „Laden aus“, mit dem Mindeststrom. Er folgt damit
+    # keinem Wunsch nach Überschuss; er zählt wie ein Auto bei „Laden aus“ erst, wenn ``spare_w``
+    # seine Startleistung (3450 W) erreicht, nicht mit den 7590 W bis zu seinem Höchststrom.
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+    at_5_a = twc(connected=True, charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 5.0))
+    climatising = tesla(plugged=True, charging=True, actual_current_a=5.0, climate_on=True)
+
+    def make(cfg, *, s: int):
+        if s < 10:
+            return inputs(
+                cfg, s=s, intent=intent, controllable=BOTH, evcs_obs=evcs(connected=False)
+            )
+        return inputs(
+            cfg,
+            s=s,
+            intent=intent,
+            controllable=BOTH,
+            evcs_obs=evcs(connected=False),
+            twc_obs=replace(at_5_a, power_w=3450.0),
+            tesla_obs=climatising,
+            present={("vehicle.tesla", CURRENT): 5.0, ("vehicle.tesla", CHARGING): True},
+            grid_obs=grid(grid_w=3450.0),
+        )
+
+    c = controller(cfg)
+    found = run(c, cfg, 12, make=make)
+    assert [x.command.reasons[-1] for s, x in found if s >= 10] == ["climate"]
+    assert c.unmet_surplus_w(0.0) == 0.0
+    assert c.unmet_surplus_w(3450.0) == 11040.0 - 3450.0
+
+
 def test_unmet_surplus_start_power_has_a_hysteresis(cfg) -> None:  # Ruling R28 (T12b #6)
     # Der e-Golf bei „Laden aus“ zählt ab seiner Startleistung (2760 W) und bleibt dabei, bis
     # ``spare_w`` eine Stufe von 1 A auf seinen Phasen (460 W) darunter fällt; erst dann zählt er
@@ -3223,3 +3264,264 @@ def test_guest_now_limit_at_the_wall_connector_sends_nothing(cfg) -> None:
     assert c.health()[1]["limit_a"] == 15.0
     guest = next(car for car in c.cars() if car.wallbox == "twc")
     assert (guest.vehicle, guest.mode, guest.regulated) == ("guest@twc", Effective.NOW, False)
+
+
+# --- Vorklimatisieren, Regel K2 (Plan Vorklimatisieren, Entscheidungen 4 bis 8 und 11) -----------
+
+KEEP_ON = ("mode_pv", "keep_on_complete")
+COMPLETE = evcs(complete=True)  # „geladen“: Die EVCS lädt nicht, der e-Golf zieht nichts
+
+
+def charging_of(found) -> list:
+    """Die Befehle „Laden an/aus“ an der EVCS als ``(Sekunde, Wert)``."""
+    return [(t, c.command.value) for t, c in found if c.command.kind == CHARGING]
+
+
+def test_a_complete_egolf_keeps_the_evcs_on(cfg) -> None:
+    # Der e-Golf lädt in PV mit 10 A aus dem Überschuss; ab 10 meldet die EVCS „geladen“. Sie
+    # bleibt an, mit dem Mindeststrom, auch 30 min später.
+    found = run(
+        controller(cfg),
+        cfg,
+        10 + 1801,
+        evcs_obs=lambda s: AT_8_A if s < 10 else COMPLETE,
+        grid_obs=grid(grid_w=-1380.0),
+        present=at_evcs(10.0, True),
+    )
+    assert as_commands(found)[:2] == [
+        cmd(0, CURRENT, 10.0, ("mode_pv", "pv_surplus")),
+        cmd(0, CHARGING, True, ("mode_pv", "pv_surplus")),
+    ]
+    assert [x for x in as_commands(found) if x[0] >= 10] == [cmd(10, CURRENT, 6.0, KEEP_ON)]
+
+
+def complete_from_10(cfg, seconds: int = 20, **kw) -> list:
+    """Der e-Golf in PV ohne Überschuss, angesteckt: Bis 10 lädt er nicht (die EVCS bekommt
+    „Laden aus“), ab 10 meldet die EVCS „geladen“."""
+    kw.setdefault("grid_obs", NO_SHARE)
+    return run(
+        controller(cfg),
+        cfg,
+        seconds,
+        evcs_obs=lambda s: evcs() if s < 10 else COMPLETE,
+        **kw,
+    )
+
+
+def test_a_complete_egolf_starts_a_stopped_evcs(cfg) -> None:  # Entscheidung 5
+    # Die Grenze trägt 6 A (frei 33 − 2 = 31 A): erst der Strom, dann „Laden an“
+    assert as_commands(complete_from_10(cfg)) == [
+        cmd(0, CHARGING, False, ("mode_pv",)),
+        cmd(10, CURRENT, 6.0, KEEP_ON),
+        cmd(10, CHARGING, True, KEEP_ON),
+    ]
+
+
+def test_keep_on_respects_the_start_lock(cfg) -> None:  # Entscheidung 8
+    locked = PeakLimits(no_start=frozenset({"egolf"}))
+    assert as_commands(complete_from_10(cfg, peak=locked)) == [
+        cmd(0, CHARGING, False, ("mode_pv",)),
+        cmd(10, CURRENT, 6.0, KEEP_ON),
+    ]
+
+
+def test_peak_guard_goes_before_keep_on(cfg) -> None:  # Entscheidung 8, Gesamtreview I1
+    # Die Grenze des 15-min-Wächters (0 W bis 100) trägt den Mindeststrom nicht: Die Regel K2
+    # ruht, die EVCS geht wie ohne sie aus („geladen“). Ab 100 gilt keine Grenze mehr, und K2
+    # startet sie wieder.
+    capped = PeakLimits(caps_w={"egolf": 0.0})
+    found = run(
+        controller(cfg),
+        cfg,
+        120,
+        evcs_obs=COMPLETE,
+        present=at_evcs(6.0, True),
+        grid_obs=NO_SHARE,
+        peak=lambda s: capped if s < 100 else NO_LIMITS,
+    )
+    assert as_commands(found) == [
+        cmd(0, CHARGING, False, ("mode_pv",)),
+        cmd(100, CURRENT, 6.0, KEEP_ON),
+        cmd(100, CHARGING, True, KEEP_ON),
+    ]
+
+
+def test_keep_on_waits_for_a_limit_that_carries_the_minimum(cfg) -> None:  # Entscheidung 5
+    # Frei sind 33 − 30 = 3 A: kein Start; ab 15 trägt die Grenze die 6 A wieder.
+    found = complete_from_10(
+        cfg, grid_obs=lambda s: grid(l1=30.0, l2=30.0, grid_w=0.0) if s < 15 else NO_SHARE
+    )
+    assert charging_of(found) == [(0, False), (15, True)]
+
+
+def test_reached_target_is_not_complete_for_keep_on(cfg) -> None:  # Entscheidung 4
+    c = controller(cfg)
+    kw = {"intent": planned_for(departure="14:00"), "grid_obs": NO_SHARE}
+
+    def step(s: int, soc: float) -> list:
+        found = c.step(inputs(cfg, s=s, egolf_obs=egolf_soc(soc, T0 + timedelta(seconds=s)), **kw))
+        accept(c, found)
+        return [x.command for x in found]
+
+    assert [x.kind for x in step(0, 30.0)] == [CURRENT, CHARGING]
+    assert step(10, 80.0) == [
+        Command("wallbox.evcs", CHARGING, False, reasons=("mode_planned", "target_reached"))
+    ]
+    assert [step(s, 80.0) for s in range(11, 100)] == [[]] * 89
+
+
+def test_keep_on_not_in_off(cfg) -> None:  # Entscheidung 6
+    found = run(controller(cfg), cfg, 60, intent=egolf_in(ChargeMode.OFF), evcs_obs=COMPLETE)
+    assert as_commands(found) == [cmd(0, CHARGING, False, ("mode_off",), urgent=True)]
+
+
+def test_overload_stops_a_kept_evcs(cfg) -> None:  # Entscheidung 8
+    # Überlast von 0 bis 6: ``MINIMUM`` bei 3, ``EVCS_STOP`` bei 6. Danach bleibt die EVCS in der
+    # Mindestpause (``min_off_s`` 600 s) aus und startet erst bei 606 wieder.
+    found = run(
+        controller(cfg),
+        cfg,
+        700,
+        evcs_obs=COMPLETE,
+        present=at_evcs(6.0, True),
+        grid_obs=lambda s: grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE,
+    )
+    stop = cmd(6, CHARGING, False, ("mode_pv", "overload"), urgent=True)
+    assert stop in as_commands(found)
+    assert charging_of(found) == [(6, False), (606, True)]
+    assert as_commands(found)[-1] == cmd(606, CHARGING, True, KEEP_ON)
+
+
+def test_unplugging_ends_the_pause_of_keep_on(cfg) -> None:
+    # Wie oben, aber der e-Golf wird von 100 bis 110 abgesteckt: Der neue Vorgang ist gleich
+    # „geladen“, und die EVCS startet ohne die Mindestpause des alten.
+    found = run(
+        controller(cfg),
+        cfg,
+        200,
+        evcs_obs=lambda s: evcs(connected=False) if 100 <= s < 110 else COMPLETE,
+        present=at_evcs(6.0, True),
+        grid_obs=lambda s: grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE,
+    )
+    assert charging_of(found) == [(6, False), (110, True)]
+
+
+def test_a_mode_change_ends_the_pause_of_keep_on(cfg) -> None:  # Präzisierung 8, Gesamtreview I2
+    # Wie ``test_overload_stops_a_kept_evcs``, aber bei 100 wechselt der e-Golf von PV auf Sofort:
+    # Der Moduswechsel hebt die Mindestpause auf wie in der Maschine, die EVCS startet gleich.
+    found = run(
+        controller(cfg),
+        cfg,
+        200,
+        intent=lambda s: egolf_in(ChargeMode.PV) if s < 100 else egolf_in(ChargeMode.NOW, 2),
+        evcs_obs=COMPLETE,
+        present=at_evcs(6.0, True),
+        grid_obs=lambda s: grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE,
+    )
+    assert charging_of(found) == [(6, False), (100, True)]
+    assert as_commands(found)[-1] == cmd(100, CHARGING, True, ("mode_now", "keep_on_complete"))
+
+
+def test_a_new_session_seen_unregulated_ends_the_pause_of_keep_on(cfg) -> None:  # Gesamtreview I2
+    # Nach dem Stopp der Überlast bei 6 ist die EVCS von 100 bis 104 nicht steuerbar; der e-Golf
+    # wird dabei ab- und wieder angesteckt. Die Regelung sieht das Abstecken nie, nur den gemerkten
+    # neuen Vorgang bei 105: Er erbt die Pause des alten nicht.
+    def make(cfg, *, s: int):
+        if 100 <= s < 105:
+            seen = evcs(connected=False) if s < 102 else COMPLETE
+            return inputs(cfg, s=s, evcs_obs=seen, controllable={"wallbox.evcs": False})
+        overload = grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE
+        return inputs(cfg, s=s, evcs_obs=COMPLETE, present=at_evcs(6.0, True), grid_obs=overload)
+
+    found = run(controller(cfg), cfg, 200, make=make)
+    assert charging_of(found) == [(6, False), (105, True)]
+
+
+def test_idle_ends_the_pause_of_keep_on(cfg) -> None:  # Präzisierung 9, Gesamtreview I2
+    # Ein Zyklus ohne Regelung (``idle``) bei 100: Danach übernimmt die Regelung neu wie die
+    # Maschine, ohne die Pause von vorher.
+    c = controller(cfg)
+    kw = {"evcs_obs": COMPLETE, "present": at_evcs(6.0, True)}
+    overload = grid(l1=34.0, l2=20.0, grid_w=0.0)
+    found = run(c, cfg, 100, grid_obs=lambda s: overload if s < 7 else NO_SHARE, **kw)
+    c.idle(T0 + timedelta(seconds=100))
+    found += [(101, x) for x in c.step(inputs(cfg, s=101, grid_obs=NO_SHARE, **kw))]
+    assert charging_of(found) == [(6, False), (101, True)]
+
+
+def test_a_complete_guest_evcs_goes_off(cfg) -> None:  # Entscheidung 7
+    found = run(controller(cfg), cfg, 60, evcs_obs=COMPLETE, homes={"egolf": False})
+    assert as_commands(found) == [cmd(0, CHARGING, False, ("mode_pv",))]
+
+
+def test_keep_on_off_by_config(cfg) -> None:  # Entscheidung 7
+    off = with_vehicle(cfg, "egolf", climate_via_wallbox=False)
+    assert as_commands(complete_from_10(off, 60)) == [cmd(0, CHARGING, False, ("mode_pv",))]
+
+
+def test_unplugging_ends_keep_on(cfg) -> None:
+    found = run(
+        controller(cfg),
+        cfg,
+        200,
+        evcs_obs=lambda s: COMPLETE if s < 100 else evcs(connected=False),
+        present=at_evcs(6.0, True),
+        grid_obs=NO_SHARE,
+    )
+    assert as_commands(found) == [
+        cmd(0, CURRENT, 6.0, KEEP_ON),
+        cmd(0, CHARGING, True, KEEP_ON),
+        cmd(100, CHARGING, False, ("mode_pv",)),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("loaded", "urgent"),
+    [
+        # Der Akku liefert 20 A auf L1 und L2: Frei sind 33 − (20 + 20 − 16) = 9 A, ohne Überlast.
+        (grid(l1=20.0, l2=20.0, feed=(20.0, 20.0, 0.0)), True),
+        (grid(l1=18.0, l2=18.0), False),  # frei 31 A: Nur die Regel senkt
+    ],
+    ids=["fuse", "rule_only"],
+)
+def test_keep_on_cut_is_urgent_only_when_the_fuse_demands_it(cfg, loaded, urgent) -> None:
+    # Sofort, „geladen“, und die EVCS lädt noch mit 16 A: Die Regel senkt auf 6 A, mit dem Ziel des
+    # Phasenwächters an der Sicherung (Präzisierung 11).
+    found = controller(cfg).step(
+        inputs(cfg, grid_obs=loaded, **{**NOW_AT_16_A, "evcs_obs": replace(AT_16_A, complete=True)})
+    )
+    reasons = ("mode_now", "keep_on_complete")
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 6.0, urgent=urgent, reasons=reasons),
+        Command("wallbox.evcs", CHARGING, True, reasons=reasons),
+    ]
+
+
+AT_THE_EVCS = VehicleState("evcs", AssignmentKind.DEFAULT, True, False, True, False, None)
+EVCS_POINT = ChargePoint(
+    "egolf", "evcs", "wallbox.evcs", True, ("L1", "L2"), 6, 16, {"L1": 0.0, "L2": 0.0}, True
+)
+KEEP_ARGS = {"key": "egolf", "point": EVCS_POINT, "vehicle": AT_THE_EVCS, "mode": Effective.PV}
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ({}, True),
+        ({"mode": Effective.NOW}, True),
+        ({"mode": Effective.PLANNED}, True),
+        ({"key": "guest@evcs"}, False),
+        ({"via_wallbox": False}, False),
+        ({"point": replace(EVCS_POINT, evcs=False)}, False),
+        ({"vehicle": replace(AT_THE_EVCS, plugged=None)}, False),
+        ({"vehicle": replace(AT_THE_EVCS, plugged=False)}, False),
+        ({"vehicle": replace(AT_THE_EVCS, complete=False)}, False),
+        ({"vehicle": replace(AT_THE_EVCS, kind=AssignmentKind.UNCLEAR)}, False),
+        ({"mode": Effective.OFF}, False),
+    ],
+)
+def test_keep_on_complete_conditions(cfg, change, expected) -> None:
+    args = {**KEEP_ARGS, **change}
+    if not args.pop("via_wallbox", True):
+        cfg = with_vehicle(cfg, "egolf", climate_via_wallbox=False)
+    assert keep_on_complete(cfg, **args) is expected

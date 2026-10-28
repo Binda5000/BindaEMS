@@ -61,11 +61,26 @@ def _at_home(drive: Mapping[str, Any], home: LatLon, radius_m: float) -> bool | 
     return haversine_m(home, LatLon(lat=lat, lon=lon)) <= radius_m
 
 
+def _climate_on(climate: Mapping[str, Any]) -> bool | None:
+    """Ob das Auto klimatisiert: ``is_climate_on`` oder ``is_preconditioning`` wahr.
+
+    ``False``, wenn beide ``False`` sind; ohne Abschnitt oder ohne Wahrheitswert ist es unbekannt.
+    Ist einer wahr, zählt das, auch wenn der andere fehlt.
+    """
+    on, pre = climate.get("is_climate_on"), climate.get("is_preconditioning")
+    if on is True or pre is True:
+        return True
+    if on is False and pre is False:
+        return False
+    return None
+
+
 def parse_state(data: Mapping[str, Any], home: LatLon, radius_m: float) -> dict[str, Value]:
     charge = _mapping(data.get("charge_state"))
     charging_state = _text(charge.get("charging_state"))
     scheduled_mode = _text(charge.get("scheduled_charging_mode"))
     state = _text(data.get("state"))
+    climate = _mapping(data.get("climate_state"))
     return {
         "soc_pct": _number(charge.get("battery_level")),
         "charge_limit_pct": _number(charge.get("charge_limit_soc")),
@@ -79,6 +94,7 @@ def parse_state(data: Mapping[str, Any], home: LatLon, radius_m: float) -> dict[
         "scheduled_charging": None if scheduled_mode is None else scheduled_mode != "Off",
         "at_home": _at_home(_mapping(data.get("drive_state")), home, radius_m),
         "online": None if state is None else state == "online",
+        "climate_on": _climate_on(climate),
     }
 
 

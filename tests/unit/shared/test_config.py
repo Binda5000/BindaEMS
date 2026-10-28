@@ -539,6 +539,15 @@ def test_charge_efficiency_defaults_to_90_and_is_limited(cfg, tmp_path) -> None:
     assert ok.vehicles["egolf"].charge_efficiency_pct == 50.0
 
 
+def test_climate_via_wallbox_defaults_on(cfg, tmp_path) -> None:
+    assert cfg.vehicles["tesla"].climate_via_wallbox is True
+    assert cfg.vehicles["egolf"].climate_via_wallbox is True
+    off = load_config(
+        write_cfg(tmp_path, lambda d: d["vehicles"]["tesla"].update({"climate_via_wallbox": False}))
+    )
+    assert off.vehicles["tesla"].climate_via_wallbox is False
+
+
 def test_charge_limit_sync_is_off_by_default_and_needs_tessie(cfg, tmp_path) -> None:
     assert not cfg.vehicles["tesla"].charge_limit_sync
     synced = load_config(

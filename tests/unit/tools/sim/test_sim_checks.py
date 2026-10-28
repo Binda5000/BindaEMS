@@ -4,7 +4,9 @@ Dazu das Ereignis ``_Boost`` und die Option ``dess`` von ``_setup``, die die Sze
 Spitzen brauchen, die Optionen von ``_setup`` und ``_intent`` für Gast, Home Assistant und den
 Tesla woanders und die Szenarien für die Zuordnung (Plan 2c-2b, Design 10.3): ``zuordnung``,
 ``tesla-evcs``, ``egolf-twc`` und ``gast-evcs``, dazu die Szenarien für „Aus“ und Selbststart des
-Tesla (Plan 2d, Task 6): ``tesla-aus`` und ``tesla-selbststart``. Die ganzen Läufe prüft
+Tesla (Plan 2d, Task 6): ``tesla-aus`` und ``tesla-selbststart``, dazu die Szenarien fürs
+Vorklimatisieren über die Wallbox: ``tesla-vorklimatisieren`` und ``egolf-voll-bleibt-an``. Die
+ganzen Läufe prüft
 ``tests/integration/test_sim_scenarios.py``.
 """
 
@@ -928,6 +930,143 @@ def test_the_new_tesla_scenarios_follow_the_table_of_the_plan(cfg) -> None:
     car = model.teslas["tesla"]
     assert (car.wallbox, car.charge_enabled) == ("twc", False)
     assert model.cars["egolf"].wallbox is None
+
+
+def current(seconds: float, value: object, result: DecisionResult = OK) -> Decision:
+    return decision(seconds, TESLA, CURRENT, value, result)
+
+
+def test_no_stop_between_counts_only_commands_in_the_window(cfg) -> None:
+    none = check("tesla-vorklimatisieren", 0)
+    assert none.text == "„vehicle.tesla“ bekommt von 5 bis 25 min kein „Laden aus“."
+
+    def found(*decisions: Decision) -> list[str]:
+        return none.find(result_of(cfg, "tesla-vorklimatisieren", decisions=list(decisions)))
+
+    # außerhalb des Fensters; sein Ende zählt nicht mehr: Dort endet die Klimatisierung
+    assert found() == [] and found(stop(299), stop(1500), stop(1501)) == []
+    assert found(stop(300)) != [] and found(stop(1499)) != []  # der Beginn zählt
+    elsewhere = decision(400, EVCS, CHARGING, False, OK)
+    start = stop(400, value=True)
+    held = [stop(400, REJECTED), stop(400, DecisionResult.DEFERRED)]
+    assert found(elsewhere, start, current(400, False), *held) == []
+    assert found(stop(400, DecisionResult.FOREIGN)) == []
+    assert found(stop(900), stop(400)) == [
+        "„vehicle.tesla“ bekam 2 × „Laden aus“, das erste bei 400 s."
+    ]
+    # Auch ein Stopp im Dry-Run oder ein fehlgeschlagener ging hinaus.
+    assert found(stop(400, DRY_RUN)) != [] and found(stop(400, ERROR)) != []
+
+
+def test_current_at_most_reads_the_requested_current_in_force(cfg) -> None:
+    most = check("tesla-vorklimatisieren", 1)
+    assert most.text == "Der Strom an „vehicle.tesla“ ist von 7 bis 25 min höchstens 5 A."
+
+    def found(*decisions: Decision) -> list[str]:
+        return most.find(result_of(cfg, "tesla-vorklimatisieren", decisions=list(decisions)))
+
+    # Der Befehl vor 7 min gilt noch bei 7 min; spätere dürfen ihn nicht heben.
+    assert found(current(400, 5)) == [] and found(current(100, 10), current(400, 5)) == []
+    assert found(current(100, 5), current(1000, 5.0), current(1600, 16)) == []  # nach 25 min egal
+    assert found() == ["Kein Strombefehl an „vehicle.tesla“ bis 420 s."]
+    assert found(current(500, 5)) == ["Kein Strombefehl an „vehicle.tesla“ bis 420 s."]
+    assert found(current(300, 10)) == [
+        "„vehicle.tesla“ fordert bei 420 s 10 A, verlangt höchstens 5 A."
+    ]
+    assert found(current(400, 5), current(900, 8)) == [
+        "„vehicle.tesla“ fordert bei 900 s 8 A, verlangt höchstens 5 A."
+    ]
+    # Zurückgehaltene Befehle, ein anderer Aktor und eine andere Art zählen nicht.
+    held = [current(900, 16, REJECTED), current(900, 16, DecisionResult.DEFERRED)]
+    others = [decision(900, EVCS, CURRENT, 16, OK), stop(900)]
+    assert found(current(400, 5), *held, *others, current(900, 16, DecisionResult.FOREIGN)) == []
+    # Ein nicht numerischer Wert ist kein Strom.
+    assert found(current(400, None)) == [
+        "„vehicle.tesla“ fordert bei 420 s „None“, verlangt höchstens 5 A."
+    ]
+
+
+def complete_at(t: int, *, complete: bool) -> Sample:
+    sample = cars_at(t)
+    egolf = replace(sample.cars["egolf"], complete=complete)
+    return replace(sample, cars={**sample.cars, "egolf": egolf})
+
+
+def test_the_evcs_must_stay_on_from_complete_with_6_a(cfg) -> None:
+    on = check("egolf-voll-bleibt-an", 0)
+    assert on.text == "Ab „geladen“ bleibt die EVCS „evcs“ an, ihr letzter Strombefehl fordert 6 A."
+    samples = [complete_at(t, complete=t >= 600) for t in range(0, 900, 100)]
+
+    def found(*decisions: Decision, full: list[Sample] = samples) -> list[str]:
+        return on.find(
+            result_of(cfg, "egolf-voll-bleibt-an", samples=full, decisions=list(decisions))
+        )
+
+    def evcs(
+        seconds: float, kind: CommandKind, value: object, result: DecisionResult = OK
+    ) -> Decision:
+        return decision(seconds, "wallbox.evcs", kind, value, result)
+
+    keep = evcs(650, CURRENT, 6)
+    assert found(evcs(100, CURRENT, 11), keep) == []
+    # Ein Stopp vor „geladen“ gehört nicht dazu, ein Stopp danach schon, auch im Dry-Run.
+    assert found(evcs(500, CHARGING, False), keep) == []
+    stopped = ["Die EVCS „evcs“ bekommt bei 700 s „Laden aus“."]
+    assert found(keep, evcs(700, CHARGING, False)) == stopped
+    assert found(keep, evcs(700, CHARGING, False, DRY_RUN)) == stopped
+    assert found(keep, evcs(700, CHARGING, False, REJECTED)) == []
+    assert found(keep, evcs(700, CHARGING, True)) == []
+    # Der letzte Strombefehl zählt, zurückgehaltene nicht.
+    low = ["Der letzte Strombefehl an „wallbox.evcs“ fordert 11 A, verlangt 6 A."]
+    assert found(keep, evcs(700, CURRENT, 11)) == low
+    assert found(keep, evcs(700, CURRENT, 11, DecisionResult.DEFERRED)) == []
+    assert found() == [
+        "Der letzte Strombefehl an „wallbox.evcs“ fordert keinen Strom, verlangt 6 A."
+    ]
+    # Ohne „geladen“ wäre die Prüfung leer.
+    never = [complete_at(t, complete=False) for t in range(0, 900, 100)]
+    assert found(keep, full=never) == ["„egolf“ wird nie „geladen“."]
+    assert found(keep, full=[]) == ["„egolf“ wird nie „geladen“."]
+
+
+def test_the_climate_event_starts_the_charge_in_the_car_only_when_it_turns_on(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _Climate
+
+    ((on_s, on), (off_s, off)) = actions("tesla-vorklimatisieren", _Climate)
+    assert (on_s, on.vehicle, on.on) == (300, "tesla", True)
+    assert (off_s, off.vehicle, off.on) == (1500, "tesla", False)
+    model = set_up(cfg, "tesla-vorklimatisieren")
+    car = model.teslas["tesla"]
+    assert (car.wallbox, car.charge_enabled, car.climate_on, car.charge_amps) == (
+        "twc",
+        False,
+        False,
+        10,
+    )
+    assert model.cars["egolf"].wallbox is None
+    on(model, None)  # type: ignore[arg-type]
+    assert (car.charge_enabled, car.climate_on) == (True, True)
+    car.charge_enabled = False  # die Regelung hat gestoppt; das Ausschalten startet nichts
+    off(model, None)  # type: ignore[arg-type]
+    assert (car.charge_enabled, car.climate_on) == (False, False)
+    on(model, None)  # type: ignore[arg-type]
+    car.charge_enabled = True
+    off(model, None)  # type: ignore[arg-type]
+    assert (car.charge_enabled, car.climate_on) == (True, False)  # das Laden im Auto bleibt
+
+
+def test_the_scenarios_for_the_climate_follow_the_plan(cfg) -> None:
+    tesla, egolf = SCENARIOS["tesla-vorklimatisieren"], SCENARIOS["egolf-voll-bleibt-an"]
+    assert (tesla.start, tesla.duration_s, tesla.live) == (vienna(10, 12, 18), 2400, True)
+    assert (egolf.start, egolf.duration_s, egolf.live) == (vienna(6, 21, 9), 1800, True)
+    assert tesla.intent.vehicles["tesla"].mode is ChargeMode.PV
+    assert egolf.intent.vehicles["egolf"].mode is ChargeMode.PV
+    model = set_up(cfg, "tesla-vorklimatisieren")
+    assert model.teslas["tesla"].soc_pct == 60.0
+    model = set_up(cfg, "egolf-voll-bleibt-an")
+    car = model.cars["egolf"]
+    assert (car.wallbox, car.soc_pct, car.complete) == ("evcs", 98.0, False)
+    assert model.cars["tesla"].wallbox is None
 
 
 def test_every_scenario_has_described_checks() -> None:

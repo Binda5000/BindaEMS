@@ -134,8 +134,8 @@ class _Request:
 
 
 class Tesla(Car):
-    """Ein Tesla mit Tessie; Stellgrößen dazu ``charge_amps``, ``charge_enabled``, ``asleep`` und
-    ``elsewhere``.
+    """Ein Tesla mit Tessie; Stellgrößen dazu ``charge_amps``, ``charge_enabled``, ``asleep``,
+    ``elsewhere`` und ``climate_on``.
 
     - **Laden:** nur wach und mit „Laden an“ im Auto (``charge_enabled``), höchstens mit
       ``charge_amps``; Ladelimit ``limit_pct``, zu Beginn ``TESLA_LIMIT_PCT``. Tessie meldet den
@@ -145,6 +145,10 @@ class Tesla(Car):
       „Stopped“, also angesteckt, und zu Hause (``state`` liefert immer den Ort der Anlage). So
       steht Tessie im Widerspruch zu dem, was die Wallboxen zeigen. An einer Wallbox gilt
       ``elsewhere`` nicht.
+    - **Klimatisieren:** Mit ``climate_on`` meldet Tessie im ``climate_state`` die laufende
+      Klimaanlage (``is_climate_on``). Das Modell rechnet sie nicht in den Strom ein; ein Ereignis
+      des Szenarios startet das Laden im Auto, wie es das Auto beim Vorklimatisieren am Kabel
+      selbst tut.
     - **Schlaf:** ``SLEEP_AFTER`` nach dem letzten Laden oder Befehl (``tick``).
     - **Tessie:** ``handle`` nimmt einen Befehl des Tesla-Aktors an. Die Antwort kommt mit
       ``resolve`` nach ``TESSIE_DELAY_S``, bei schlafendem Auto erst nach dem Wecken (``WAKE_S``
@@ -168,6 +172,7 @@ class Tesla(Car):
         self.charge_enabled = False
         self.asleep = False
         self.elsewhere = False
+        self.climate_on = False
         self.next_poll: datetime | None = None
         self._home = home
         self._radius_m = cfg.home_radius_m
@@ -223,6 +228,7 @@ class Tesla(Car):
                 "charger_power": round(self.current_a * self.phases * voltage_v / 1000),
                 "scheduled_charging_mode": "Off",
             },
+            "climate_state": {"is_climate_on": self.climate_on, "is_preconditioning": False},
             "drive_state": {"latitude": self._home.lat, "longitude": self._home.lon},
         }
 
