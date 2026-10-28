@@ -226,6 +226,87 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Update mit Akku ins Auto:** Der Plan „Akku ins Auto, wenn er übrig ist“ ändert core und app; beide
+  rollen **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose
+  up -d`). Jeder Slot des Plans in der Absicht hat zwei neue Felder (`ev_battery_w`, `now_battery`),
+  ein alter core lehnt sie ab (`extra="forbid"`). Es gibt keine Migration, keine neue Zeile in der ACL
+  des Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Der Schalter „Akku ins Auto,
+  wenn übrig“ ist ab Werk aus; **schalte ihn erst ein, wenn Victron live ist** (im Dry-Run stehen die
+  Befehle nur im Entscheidungslog). Was er tut, steht im Abschnitt „Planung“, „Akku ins Auto, wenn
+  übrig“, und im Abschnitt „Akku und Spitzen“, „Akku-Sollwert“. Den Rückweg beschreibt der nächste
+  Punkt.
+- **Rollback auf einen Stand vor Akku ins Auto:** Core und app gehen gemeinsam zurück, auf dasselbe
+  Tag. Drei Stellen tragen die neuen Felder, auch mit ausgeschaltetem Schalter, und ein älterer Stand
+  lehnt unbekannte Felder ab:
+  - **Die Absicht des core** (`intent.json` unter `core.data_dir`, im Volume `core-data`
+    `/data/intent.json`): Der core schreibt in **jeden** Slot des Plans `ev_battery_w` und
+    `now_battery`, auch als `{}` und `false`. Ein älterer core liest die Datei sonst nicht, startet
+    ohne Absicht (Regelbetrieb aus) und meldet den Alarm `intent.file`, wie beim Rollback vor dem
+    Sofort-Limit (unten). Warten, bis der Plan abläuft, reicht nicht: Auch ein abgelaufener Plan
+    bleibt mit den Feldern in der Datei, bis eine neue Absicht sie ersetzt.
+  - **Die Einstellungen der app:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `planning.car_battery_allowed`, auch mit `false`. Eine ältere app lehnt eine solche Version ab und
+    rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“, als Warnung „Gespeicherte
+    Einstellungen (Version …) passen nicht zum Schema – Standardwerte aktiv.“).
+  - **Die Pläne seit dem Ausrollen** tragen je Slot `ev_battery_w` und `now_battery`. Eine ältere app
+    überspringt sie als unlesbar (im Log „Plan-Zeile nicht lesbar“, `code=plan_row_unreadable`), bis
+    sie nach 30 Tagen aus der Planablage fallen. Bis dahin fehlen sie im Verlauf und im Vergleich Plan
+    gegen Ist (`GET /api/plan/review`); daran musst du nichts tun.
+
+  So gehst du zurück:
+
+  1. **Schalter aus:** **Einstellungen** → „Planung“ → „Akku ins Auto, wenn übrig“ aus, speichern, und
+     warten, bis auf der Seite **Zeitplan** der neue Plan steht (ohne die Sätze „… aus dem Akku statt
+     aus dem Netz.“ und „Autos in Sofort dürfen aus dem Akku laden, …“) und die Zeile oben nicht mehr
+     „Der Plan ist noch nicht beim core.“ sagt. Bis zum Wechsel gibt der core dann keinem Auto mehr
+     etwas aus dem Akku.
+  2. **Regelbetrieb aus** (System → „Bedienung“).
+  3. **Felder aus `intent.json` entfernen:**
+
+     ```bash
+     cd /opt/bindaems
+     docker compose stop ems-core
+     docker compose run --rm --no-deps --entrypoint python ems-core -c '
+     import json
+     from pathlib import Path
+     path = Path("/data/intent.json")
+     document = json.loads(path.read_text())
+     plan = document["intent"].get("plan") or {}
+     for slot in plan.get("slots", []):
+         slot.pop("ev_battery_w", None)
+         slot.pop("now_battery", None)
+     path.write_text(json.dumps(document))
+     print("ev_battery_w und now_battery entfernt")'
+     ```
+
+  4. **Schalter aus den Einstellungen entfernen** (alle Versionen, die ihn nennen; die übrigen Werte
+     bleiben):
+
+     ```bash
+     docker compose stop ems-app
+     docker compose run --rm --no-deps --entrypoint python ems-app -c '
+     import sqlite3
+     key = "$.planning.car_battery_allowed"
+     connection = sqlite3.connect("/data/bindaems.sqlite3")
+     with connection:
+         changed = connection.execute(
+             "UPDATE settings_version SET data = json_remove(data, ?) "
+             "WHERE json_type(data, ?) IS NOT NULL",
+             (key, key),
+         ).rowcount
+     connection.close()
+     print(f"car_battery_allowed aus {changed} Versionen entfernt")'
+     ```
+
+  5. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app), dann den
+     **Regelbetrieb wieder an**, sobald **System** beide mit demselben Stand zeigt.
+
+  Lässt du Schritt 3 aus, setzt du die Absicht danach neu (Bedienung oder `PUT /v1/intent`); die erste
+  angenommene Absicht beendet den Alarm. Schritt 4 kannst du nachholen, auch mit dem älteren Image (der
+  Befehl braucht nur Python); bis dahin rechnet die ältere app mit den Standardwerten. Speichere die
+  Einstellungen in dieser Zeit nicht, sonst werden die Standardwerte zur neuen Version. Gehst du später
+  wieder auf den Stand mit Akku ins Auto, ist der Schalter aus.
 - **Update mit dem Sofort-Limit:** Der Plan Sofort-Limit ändert core und app; beide rollen
   **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`).
   Die Absicht hat ein neues Feld, ein alter core lehnt es ab. Es gibt keine Migration, und die ACL des
@@ -2740,6 +2821,9 @@ laden: Für ihn gibt es weder Ladestand noch Abfahrt.
   Zeiten, ohne sofortigen Stopp in der Mindestlaufzeit.
 - **Akku:** „Geplant“ bekommt keine Akku-Unterstützung; was dem Auto fehlt, kommt wie bei Sofort aus
   dem Netz, denn über das Netzladen des Autos entscheidet der Plan (Abschnitt „Akku und Spitzen“).
+  Mit dem Schalter „Akku ins Auto, wenn übrig“ kann der Plan einen Akkuanteil nennen; dann bekommt
+  das Auto ihn aus dem Akku, solange der SOC über dem geplanten SOC am Slotende liegt (Abschnitt
+  „Akku und Spitzen“, „Akku-Sollwert“).
 - **15-min-Wächter:** Er drosselt „Geplant“ nach PV-Überschuss und Min+PV und vor Sofort, höchstens
   bis zur Mindestleistung des Autos (Abschnitt „Akku und Spitzen“).
 - **Ladelimit des Tesla:** Mit `charge_limit_sync` setzt der core es in „Geplant“ an das Ziel (unten,
@@ -3694,7 +3778,9 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
 | Modus | Aus dem Akku erlaubt |
 |---|---|
 | PV-Überschuss, Min+PV | Wenn die Unterstützung gilt (unten): für diese Autos zusammen höchstens `support_max_w`, verteilt in der Reihenfolge `priority`. Sonst nichts. |
-| Sofort, Geplant, Aus | Nichts. Sofort lädt aus Netz und PV mit vollem Strom; was einem Auto in Geplant fehlt, kommt aus dem Netz, denn über das Netzladen des Autos entscheidet der Plan. |
+| Sofort | Ohne „Akku ins Auto, wenn übrig“ nichts: Sofort lädt aus Netz und PV mit vollem Strom. Mit dem Schalter in einem Slot, in dem der Plan übrigen Akku für Sofort erlaubt (`now_battery`), den ganzen Fehlbetrag, solange der SOC über der Plan-Schwelle des Slots liegt (unten, „Akku ins Auto, wenn übrig“). Das gilt auch für einen Gast in Sofort. |
+| Geplant | Ohne „Akku ins Auto, wenn übrig“ nichts: Was dem Auto fehlt, kommt aus dem Netz, denn über das Netzladen des Autos entscheidet der Plan. Mit dem Schalter höchstens den Akkuanteil, den der gültige Slot für das Fahrzeug nennt (`ev_battery_w`), solange der SOC über dem geplanten SOC am Ende des Slots liegt. |
+| Aus | Nichts. |
 | Boost | Alles, ohne SOC-Schwelle und ohne die Grenzen von Leistung und Dauer. Boost begrenzt nur der Schutz der USV-Reserve (Abschnitt „Lademodi“). |
 
 - **Sofort** bleibt beim vollen Strom. Regel 2 der Safety-Schicht begrenzt den Override auf
@@ -3709,6 +3795,34 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   `reserve_guard_pct` oder unbekannt) hält Regel 2 den Override ebenfalls bei der festen Grenze:
   Liegt `P_zul` darunter, drosselt der Wächter die Autos um alles, was über `P_zul` liegt, sonst
   gar nicht.
+- **Akku ins Auto, wenn übrig** (Schalter in den **Einstellungen** unter „Planung“, ab Werk aus;
+  Abschnitt „Planung“, „Akku ins Auto, wenn übrig“): Ist er an, nennt der Plan je Slot, was Autos in
+  Geplant und Sofort aus dem Akku bekommen dürfen, und der Akku-Sollwert verschiebt nur den Rest
+  ihres Fehlbetrags aufs Netz. Im Dry-Run stehen die Befehle nur im Entscheidungslog.
+  - **Geplant:** höchstens der Akkuanteil, den der gültige Slot für das Fahrzeug nennt, nur bei
+    `EIGENVERBRAUCH` und nur, solange der SOC über dem geplanten SOC am Ende des Slots liegt. Braucht
+    das Haus mehr als geplant, fällt der SOC früher auf diesen Wert, der Akkuanteil endet, und der
+    Rest kommt aus dem Netz. Ohne gültigen Slot gibt es nichts aus dem Akku.
+  - **Sofort** (auch ein Gast): in einem Slot, in dem der Plan übrigen Akku für Sofort erlaubt
+    (`now_battery`), der ganze Fehlbetrag, solange der SOC über der Plan-Schwelle des Slots liegt
+    (Health `plan.support_soc_pct`, der SOC, den der Plan später noch fürs Haus braucht). Erreicht er
+    sie, ist Schluss, bis er wieder 5 Punkte (`control.support_hysteresis_pct`) darüber liegt. Anders
+    als die Unterstützung beginnt dieser Stand **frei**, auch nach einer Pause: Liegt der SOC beim
+    ersten Zyklus zwischen der Schwelle und 5 Punkten darüber, darf das Auto aus dem Akku laden, bis
+    der SOC die Schwelle erreicht. Ein unbekannter SOC sperrt im Zyklus und ändert den Stand nicht;
+    ein Slot ohne Plan-Schwelle gibt nichts. Eine eigene Leistungsgrenze gibt es nicht.
+  - Diese Anteile zählen nicht gegen die 3 kW der Unterstützung (`support_max_w`) und nicht zur
+    Überbrückung; die Reihenfolge ist die von `priority`, jede Wallbox bekommt höchstens ihren
+    Fehlbetrag. Will der Slot `HALTEN` oder `NETZLADEN`, bekommt kein Auto etwas.
+  - **Stromstufen:** Der core lädt ein Auto in Geplant mit der Leistung des Plans, auf ganze A
+    aufgerundet (Abschnitt „Laderegelung“, „Geplant“), der Akku gibt aber nur den Akkuanteil. Lädt der
+    Plan ein Auto ganz aus dem Akku, kommt deshalb bis zu eine Stromstufe aus dem Netz: 460 W beim
+    e-Golf (zwei Phasen), 690 W beim Tesla (drei Phasen).
+  - **Regel 2:** Erreicht der SOC die Plan-Schwelle, verschiebt der Override den Fehlbetrag eines
+    Autos in Sofort nur bis `victron.max_grid_charge_setpoint_w` (8000 W) aufs Netz; den Rest liefert
+    der Akku weiter (beim Tesla mit 16 A rund 3 kW, nächster Punkt), wie ohne den Schalter.
+  - Health zeigt den Stand als `battery.spare` und `battery.spare_w` (unten, „Health“), das
+    Entscheidungslog den Grund `battery_spare` (unten, „Gründe“).
 - **Unterstützung** heißt: Der Akku liefert Autos in PV-Überschuss und Min+PV ihren Fehlbetrag, bis
   zu `support_max_w` (3 kW). Sie gilt, wenn
   - ein Auto in einem dieser Modi steht (sonst zeigt Health `mode`),
@@ -3773,7 +3887,8 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   (Abschnitt 14).
 - **Absicht des Plans** (seit Plan 3c): Gilt ein Slot des Plans (Abschnitt „Planung“), bestimmt seine
   Absicht für den Akku den gewollten Netzbezug über dem Basis-Sollwert:
-  - **`EIGENVERBRAUCH`:** wie ohne Plan, die Regeln dieses Abschnitts.
+  - **`EIGENVERBRAUCH`:** wie ohne Plan, die Regeln dieses Abschnitts, mit „Akku ins Auto, wenn
+    übrig“ samt den Anteilen für Geplant und Sofort aus dem Slot (oben).
   - **`HALTEN`:** Hauslast plus Autos minus PV minus Basis-Sollwert, nie unter 0. Der Akku gibt
     nichts ab, auch nicht an ein Auto in Boost: Boost lädt dann aus dem Netz. Ein PV-Überschuss lädt
     den Akku weiter.
@@ -4072,6 +4187,13 @@ Gründe in `codes`, vor den Befunden der Safety-Schicht:
   wenn Autos in Geplant oder Sofort etwas aus dem Akku bekommen, dann `battery_support`, wenn der
   Akku zusammen etwas liefern darf, und `battery_comp`. Dahinter folgt `peak_guard`, wenn das
   Budget des Wächters den gewollten Netzbezug gesenkt hat.
+- `battery_spare` steht nur an einem Befehl: Deckt der Akku den ganzen Fehlbetrag eines Autos in
+  Sofort, gibt es keinen Override und darum keine Entscheidung (wie bei Boost aus dem Akku). Dass ein
+  Auto in Sofort aus dem Akku lädt, siehst du dann in Health (`battery.spare` `on`,
+  `battery.spare_w`) und im Zeitplan (Satz „Autos in Sofort dürfen aus dem Akku laden, solange er
+  über … % liegt.“). Im Log steht der Grund bei einem Override für einen Rest, etwa die Stromstufe
+  eines Autos in Geplant oder ein weiteres Auto ohne Akkuanteil, und wenn ein Override wegfällt,
+  während Autos etwas aus dem Akku bekommen.
 - Ein Beispiel: `Victron (ESS) (Akku nicht ins Auto): Netz-Sollwert 2340 W – Dry-Run, nicht
   gesendet.` Hebt der Akku-Sollwert den Override auf, steht dort „Netz-Sollwert-Override aufheben“.
 - Zu den Eingaben einer Entscheidung des Overrides gehören die der Laderegelung (`soc_pct`,
@@ -5213,7 +5335,8 @@ stellt er den Akku danach (Abschnitt „Akku und Spitzen“, „Absicht des Plan
 ist, sagt der **Stand der Ausführung** (unten). Pläne entstehen etwa alle 15 min; jeder wird mit
 seinen Eingangsdaten in SQLite gespeichert (`plan` und `plan_inputs`, die Migration `0009` legt
 beide Tabellen beim Start der app an). Seit Plan 4b stehen die angesteckten Autos im Modus „Geplant“
-mit im Plan (unten, „Autos im Plan“).
+mit im Plan (unten, „Autos im Plan“). Mit dem Schalter „Akku ins Auto, wenn übrig“ dürfen Autos in
+„Geplant“ und „Sofort“ aus übrigem Akku laden (unten, „Akku ins Auto, wenn übrig“).
 
 ### Die Seite „Zeitplan“
 
@@ -5341,10 +5464,12 @@ nennt.
   erwartet ab {HH:MM}“.
 - **Im Modell** hat jedes Auto je Slot bis zur Abfahrt eine Ladeleistung von 0 oder zwischen seiner
   kleinsten (`min_a` · `grid.voltage_nominal_v` · Phasen) und seiner vollen Leistung (Abschnitt
-  „Laderegelung“, „Geplant“), aus PV und Netz, nie aus dem Akku. Die PV deckt zuerst das Haus, dann
-  die Autos, dann den Akku: Solange ein Auto aus dem Netz lädt, lädt die PV den Akku nicht und speist
-  nicht ein; sonst könnte der Plan Netzstrom über das Auto in den Akku schieben, an Regel R und
-  „Netzladen erlaubt“ vorbei. Haus, Akku und Autos zusammen beziehen höchstens die Grenze des
+  „Laderegelung“, „Geplant“), aus PV und Netz; ohne den Schalter „Akku ins Auto, wenn übrig“ nie aus
+  dem Akku (mit ihm auch aus dem Akku, unten). Die PV deckt zuerst das Haus, dann die Autos, dann den
+  Akku: Solange ein Auto aus dem Netz lädt, lädt die PV den Akku nicht und speist nicht ein; sonst
+  könnte der Plan Netzstrom über das Auto in den Akku schieben, an Regel R und „Netzladen erlaubt“
+  vorbei. Dasselbe gilt, solange ein Auto aus dem Akku lädt; sonst entlüde der Plan den Akku über das
+  Auto ins Netz. Haus, Akku und Autos zusammen beziehen höchstens die Grenze des
   Netzbezugs. Die Netzenergie der Autos kostet den Bezugspreis, PV-Strom ins Auto nichts. Die
   Planträgheit gilt in den ersten vier Slots auch für die Ladeleistung jedes Autos. Ein Auto lädt
   höchstens seinen Bedarf (oder eine Viertelstunde mit der kleinsten Leistung, wenn das mehr ist).
@@ -5362,7 +5487,8 @@ nennt.
   kostet 200 ct je kWh. Die Rangfolge ist damit: Ziel vor Regel R vor Kosten. Sofort, Boost und
   Min+PV stehen nicht im Modell und unterliegen R2 nicht.
 - **Nachrechnung:** wie der core: PV zuerst ins Haus, dann in die Autos, dann in den Akku; der Akku
-  entlädt nur für das Haus, was den Autos fehlt, kommt aus dem Netz.
+  entlädt nur für das Haus, was den Autos fehlt, kommt aus dem Netz. Mit „Akku ins Auto, wenn übrig“
+  gibt der Akku bei `Eigenverbrauch` nach dem Haus den Autos höchstens ihren Akkuanteil.
 - **Je Auto** fasst der Plan zusammen (`plan.vehicles`, unten „API“): Ziel, Abfahrt, Ladestand zu
   Beginn und ob er angenommen ist, Ladelimit, Bedarf, geplante Energie (an der Wallbox), Fehlmenge,
   den erwarteten Ladestand an der Abfahrt (`Ladestand + geplante Energie · Wirkungsgrad /
@@ -5400,6 +5526,50 @@ folgt (unten, „Übergabe an den core“). Regelt der core in dem Moment nicht 
 Neustart), wartet die Übergabe, bis er wieder regelt; ein gespeicherter `Netzladen`-Slot kann dann
 noch etwa 11 s laufen (eine Abfrage der Health und ein Regelzyklus).
 
+### Akku ins Auto, wenn übrig
+
+Der Schalter **Akku ins Auto, wenn übrig** ist ab Werk aus. Ist er an, laden Autos in „Geplant“ und
+„Sofort“ aus dem Hausakku, wenn das Haus diese Energie bis zur nächsten PV-Füllung nicht braucht und
+Akkustrom im Slot billiger ist als Netzstrom; sonst bleibt es bei „kein Akku ins Auto“. Im Winter
+kommt das fast nie vor, im Sommer oft. PV-Überschuss, Min+PV (Akku-Unterstützung ab 70 %) und Boost
+bleiben, wie sie sind.
+
+- **Umschalten** kannst du nur im Editor der **Einstellungen** unter „Planung“ (Admins), nicht auf der
+  Seite „Zeitplan“ und nicht in Home Assistant. Jede Änderung ist eine neue Version der Einstellungen
+  und plant neu (Anlass „Einstellungen geändert“). Anders als bei „Netzladen erlaubt“ gilt beim
+  Ausschalten der Plan beim core weiter, bis der neue Plan ohne Akkuanteil dort ist (ein Planungslauf).
+- **Erst mit Victron live einschalten:** Im Dry-Run stehen die Befehle nur im Entscheidungslog, und
+  der Plan rechnet mit Akkustrom im Auto, den es nicht gibt.
+- **Geplant:** Der Optimierer darf ein Auto in „Geplant“ aus dem Akku laden, wo es sich lohnt. Jede
+  kWh aus dem Akku ins Auto kostet im Modell den Verschleiß und die Marge (`planning.wear_ct` plus
+  `planning.margin_ct`, ab Werk zusammen 4 ct), wie beim Netzladen; die Verluste stecken im SOC. Die
+  Marge hält den Plan von kleinen, unsicheren Gewinnen fern, und weil das Haus nur den Verschleiß
+  kostet, deckt der Akku zuerst das Haus. **Nur PV-Energie aus dem Akku ins Auto:** Solange nach
+  einem Netzladen Netzenergie im Akku sein kann (bis er wieder leer ist, wie bei Regel R oben), gibt
+  der Akku keinem Auto etwas; sonst ginge Netzstrom über den Akku ins Auto, an Regel R2 vorbei und
+  mit rund 12 % Verlust. Regel R2 zählt den Akkuanteil nicht.
+- **Sofort:** Autos in „Sofort“ kennt der Optimierer nicht. Der Plan sagt je Slot nur, ob übriger
+  Akku für sie da ist und sich rechnet: Der Plan kommt vom Optimierer (nie im Ersatzplan), die Absicht
+  ist `Eigenverbrauch`, keine Netzenergie kann im Akku sein, und `Bezugspreis − Verschleiß − Marge ≥
+  v / η_dis`. `v` ist der Wert einer kWh, die im Akku bliebe: der Einspeisepreis des ersten späteren
+  Slots, in dem der Akku laut Nachrechnung voll ist und einspeist (ohne Einspeisepreis 0), sonst der
+  Restwert. Wie viel ein Auto bekommt, begrenzt der core mit der Plan-Schwelle (Abschnitt „Akku und
+  Spitzen“, „Akku-Sollwert“).
+- **Im Zeitplan** stehen die Sätze „{Auto} lädt {kW} kW aus dem Akku statt aus dem Netz.“
+  (`AUTO_AUS_AKKU`) und „Autos in Sofort dürfen aus dem Akku laden, solange er über {soc} % liegt.“
+  (`SOFORT_AUS_AKKU`), unten, „Erklärungen“. Das Diagramm „Autos“ zeigt die Ladeleistung je Auto mit
+  dem Akkuanteil. Die Statistik zeigt die Energie in der Zeile „Akku → Autos“ (Abschnitt 12,
+  „Statistik“), Health `battery.spare` und das Entscheidungslog den Grund `battery_spare` („Akku
+  übrig fürs Auto“, Abschnitt „Akku und Spitzen“).
+- **Ersatzplan:** kein Akku ins Auto. **„Victron allein“** bleibt, wie er ist (Autos aus PV und Netz).
+- **Kleine Akkuanteile:** Gibt der Optimierer einem Auto in einem Slot, der `Halten` oder `Netzladen`
+  wird, weniger als 100 W aus dem Akku, fällt dieser Anteil weg, und das Auto lädt ihn aus dem Netz;
+  ein Slot mit mindestens 100 W Akkuanteil wird nie `Halten`.
+- **Rechenzeit:** Mit „Netzladen erlaubt“ und diesem Schalter zugleich rechnet der Solver länger: In
+  den Szenarien der CI stieg `winter-leistung` von 87 s auf 112 s, und einzelne Pläne mit stark
+  wechselnden Preisen erreichen das Zeitlimit von 20 s, mit einer Lösung, die dann gilt. Nähert sich
+  `solve_ms` an der Anlage oft 20 s, ist das ein Befund (unten, „An der Anlage prüfen“).
+
 ### Übergabe an den core
 
 Die app schickt den Plan als Teil der Absicht (Abschnitt 13, „Absicht und Regelbetrieb“), mit einer
@@ -5411,7 +5581,9 @@ Absicht, und ein neuer Plan wird wie eine Bedienung aus der gültigen Absicht ab
 - **Was hinausgeht:** nur der bindende Teil des neuesten gültigen Plans, die Slots vor seinem
   `valid_until` (höchstens 8), je Slot Absicht, Budget, Bezugspreis und Plan-Schwelle, dazu `id`,
   `created_at`, `valid_until` und der Stand von „Netzladen erlaubt“. Ist der Schalter aus, werden
-  `Netzladen`-Slots zu `Eigenverbrauch`.
+  `Netzladen`-Slots zu `Eigenverbrauch`. Seit Akku ins Auto trägt jeder Slot den Akkuanteil je
+  angestecktem Auto in „Geplant“ (`ev_battery_w`, ganze W) und `now_battery`, beides nur in
+  `Eigenverbrauch`-Slots.
 - **Wann:** beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder Abfrage
   von Health (alle 10 s), nach jeder Änderung der Einstellungen und sonst alle 30 s, solange der core
   diesen Plan nicht hat. Er hat ihn, wenn `intent.plan` in seinem Health dieselbe `id` und denselben
@@ -5467,6 +5639,7 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 | Einstellung | Feld | Standard | Bedeutung |
 |---|---|---|---|
 | `planning.grid_charge_allowed` | Netzladen erlaubt | aus | der Schalter oben |
+| `planning.car_battery_allowed` | Akku ins Auto, wenn übrig | aus | der Schalter oben („Akku ins Auto, wenn übrig“); Hilfetext im Editor: „Autos in Geplant und Sofort laden aus dem Akku, wenn das Haus die Energie bis zur nächsten PV-Füllung nicht braucht und Akkustrom billiger ist als Netzstrom.“ |
 | `planning.margin_ct` | Marge (ct/kWh) | 2,0 | Mindestgewinn je kWh, damit sich Netzladen lohnt; geht als Kosten ins Modell |
 | `planning.roundtrip_pct` | Roundtrip-Wirkungsgrad (%) | 88 | Laden und Entladen zusammen; je Richtung die Wurzel daraus |
 | `planning.wear_ct` | Verschleiß (ct/kWh) | 2,0 | Kosten je entladener kWh |
@@ -5537,7 +5710,10 @@ obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} k
 bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, mit Autos (seit Plan 4b)
 dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
 Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
-(die Uhrzeit ist die erwartete Ankunft).
+(die Uhrzeit ist die erwartete Ankunft). Gibt der Akku einem Auto mehr als 1 W (Akku ins Auto), kommen
+„Akku ins Auto um HH:MM, obwohl ausgeschaltet“, „Akku ins Auto um HH:MM bei Halten oder
+Netzladen“, „Akku ins Auto um HH:MM, solange Netzstrom im Akku ist“ und „Akku ins Auto um HH:MM,
+während eingespeist wird“ dazu; die Leistung je Auto und die Entladegrenze zählen den Akkuanteil mit.
 
 Der Ersatzplan plant zuerst die Autos im Modus „Geplant“, in der Reihenfolge `priority` (seit Plan
 4b):
@@ -5593,7 +5769,7 @@ Zahlen:
 | `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `EIGENVERBRAUCH` | Akku deckt den Eigenverbrauch. | sonst |
 | `AUTO_ERWARTET` | Tesla Model 3 wird um 17:30 Uhr mit etwa 41 % erwartet (Anwesenheitsprognose). | Zusatz im Slot der erwarteten Ankunft, vor den übrigen Codes der Autos (seit Plan 5b): ein Auto in „Geplant“ steckt noch nicht, die Anwesenheitsprognose erwartet es ab diesem Slot mit mindestens 50 %; „etwa“ ist der gelernte Ladestand bei der Ankunft. Das Auto steht nur im Plan, der core bekommt dafür nichts |
-| `ZIEL_SOC_ABFAHRT` | Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat. | Zusatz zum Hauptcode, je Auto in der Reihenfolge `priority`: ein Auto im Modus „Geplant“ lädt in diesem Slot mindestens 100 W aus dem Netz; „kW“ ist die Netzleistung, „um“ die Abfahrt |
+| `ZIEL_SOC_ABFAHRT` | Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat. | Zusatz zum Hauptcode, je Auto in der Reihenfolge `priority`: ein Auto im Modus „Geplant“ lädt in diesem Slot mindestens 100 W aus dem Netz; „kW“ ist die ganze Ladeleistung des Autos im Slot (mit dem Teil aus PV und Akku), „um“ die Abfahrt |
 | `AUTO_AUS_AKKU` | Tesla Model 3 lädt 2,5 kW aus dem Akku statt aus dem Netz. | Zusatz nach `ZIEL_SOC_ABFAHRT` desselben Autos (Schalter „Akku ins Auto, wenn übrig“): ein Auto im Modus „Geplant“ lädt in diesem Slot mindestens 100 W aus dem Akku; „kW“ ist der Akkuanteil. `ZIEL_SOC_ABFAHRT` zählt nur den Netzanteil (Ladeleistung minus PV minus Akku) |
 | `AUTO_WARTET_AUF_PV` | e-Golf wartet auf PV-Überschuss (Regel R). | Zusatz: ein Auto im Modus „Geplant“ lädt in diesem Slot vor der Abfahrt nicht, weil Regel R2 das Netzladen begrenzt und ein späterer Slot es aus PV lädt |
 | `ZIEL_SOC_UNERREICHBAR` | e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %. | Zusatz im ersten Slot: der Plan erreicht das Ziel eines Autos im Modus „Geplant“ nicht (Fehlmenge über 0,1 kWh); „nur“ ist der erwartete Ladestand an der Abfahrt; nicht für erwartete Autos |
@@ -5687,7 +5863,9 @@ Für Skripte, mit Sitzung und Rolle wie das UI:
   zusammen (Ziel, Abfahrt, Ladestand zu Beginn und „angenommen“, geplante Energie, erwarteter
   Ladestand, `finish_at` und `reachable`), leer ohne Auto im Modus „Geplant“.
   Seit Plan 5c kommen je Slot `thermal_w`, `thermal_grid_w` und `thermal_steps` und im Plan
-  `thermal` dazu (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“, „API für das Wärmemodell“).
+  `thermal` dazu (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“, „API für das Wärmemodell“). Seit
+  Akku ins Auto nennt jeder Slot `ev_battery_w` (der Teil von `ev_w` aus dem Akku, je Auto in W, oft
+  leer) und `now_battery` (Autos in Sofort dürfen aus dem Akku laden).
 - `GET /api/plan/review?day=JJJJ-MM-TT` (ab „Lesen“, ohne `day` heute): Plan gegen Ist je
   vergangener Viertelstunde des Tages (`slots` mit `planned` und `actual`, `null` ohne Plan bzw.
   ohne Abrechnung) und die Summen (`totals`). Tage vor den letzten 30 und künftige Tage ergeben 422.
@@ -5809,6 +5987,16 @@ Der Bericht „Szenario-Vergleich mit Victron allein“ hat je Tag eine Zeile mi
   sie unvermeidbar,
 - „Takt: n min“.
 
+Mit Autos und „Akku ins Auto, wenn übrig“ in der Datei (`export_days` übernimmt den Schalter aus den
+Einstellungen) kommt die Spalte „Akku → Auto (kWh)“ dazu: was der Akku den Autos gab. Die Kosten des
+Optimierers zählen dafür den Verschleiß je kWh, damit der Vergleich ihn nicht beschönigt; „Victron
+allein“ lädt die Autos weiter aus PV und Netz. Das Werkzeug gibt einem Auto den geplanten Akkuanteil,
+begrenzt durch Reserve und Entladegrenze, und bildet die Grenze des core „nur solange der SOC über
+dem geplanten SOC am Slotende liegt“ nicht nach; weicht der Verbrauch vom Plan ab, kann es damit
+etwas günstiger oder teurer rechnen als die Anlage. In der CI (`sommer-sonnig`, zwei Tage, stündlich
+neu geplant) gab der Akku dem Auto 16,0 kWh, und der Optimierer war bereinigt rund 5,06 € statt 2,64 €
+günstiger als „Victron allein“; an `winter-spread` gab er nichts (der Abend braucht den Akku).
+
 Hat `export_days` Tage übersprungen (`skipped_days`), steht direkt unter der Tabelle die Zeile
 „Übersprungene Tage: …“ mit ihren Daten; die Gründe nennt die Ausgabe von `export_days`.
 
@@ -5854,6 +6042,14 @@ Die Pläne 3b und 3c sind ohne die echte Anlage getestet; das zeigt sich erst im
   Zeitlimit von 20 s, mit einer Lösung, die dann gilt. Nähert sich `solve_ms` an der Anlage oft 20 s,
   ist das ein Befund. Ein Ersatzplan mit Auto lädt es zuerst aus der erwarteten PV, dann in den
   billigsten Slots (oben, „Ersatzplan“).
+- **Akku ins Auto, wenn übrig** (erst mit Victron live und Schalter an): An einem sonnigen Tag mit
+  einem Auto in „Geplant“ über Nacht zeigt der Zeitplan „… lädt … kW aus dem Akku statt aus dem
+  Netz.“ (`AUTO_AUS_AKKU`), das Entscheidungslog `battery_spare` („Akku übrig fürs Auto“), am
+  Folgetag die Statistik eine größere Zeile „Akku → Autos“, und der Akku ist am Mittag trotzdem
+  voll. An einem trüben Tag zeigt der Zeitplan keinen Akkuanteil. Am Abend mit einem SOC deutlich
+  über der Plan-Schwelle lädt ein Auto in „Sofort“ ohne Override aus dem Akku und hört an der
+  Schwelle auf: Health `battery.spare` wechselt von `on` auf `soc`, danach folgt ein Override mit
+  `battery_comp`.
 - **Planausführung:** Im Dry-Run zeigen die oberste Zeile der Seite **Zeitplan** („Dry-Run: …“), die
   Karte „Plan gegen Ist (heute)“ und die Entscheidungen mit `plan_hold` und `plan_grid_charge`, ob
   der core den Plan so umsetzen würde, wie er gerechnet ist (Abschnitt „Akku und Spitzen“, „Victron
