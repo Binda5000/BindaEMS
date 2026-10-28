@@ -3,6 +3,7 @@ from datetime import time
 import pytest
 from pydantic import ValidationError
 
+from bindaems.shared.control import ChargeMode
 from bindaems.shared.settings import (
     DrivingSettings,
     EnergyComponent,
@@ -223,3 +224,28 @@ def test_thermal_settings_round_trip() -> None:
         learning=LearningSettings(thermal=ThermalPlanSettings(enabled=True, heat_up_k=2.5))
     )
     assert RuntimeSettings.model_validate(settings.model_dump(mode="json")) == settings
+
+
+def test_default_modes_empty_by_default() -> None:
+    assert RuntimeSettings().wallbox_default_modes == {}
+
+
+def test_default_modes_accept_every_mode() -> None:
+    settings = RuntimeSettings.model_validate(
+        {"wallbox_default_modes": {"evcs": "pv", "twc": "planned"}}
+    )
+    assert settings.wallbox_default_modes == {
+        "evcs": ChargeMode.PV,
+        "twc": ChargeMode.PLANNED,
+    }
+
+
+def test_default_modes_reject_unknown_mode() -> None:
+    with pytest.raises(ValidationError):
+        RuntimeSettings.model_validate({"wallbox_default_modes": {"evcs": "boost"}})
+
+
+def test_stored_settings_without_default_modes_load() -> None:
+    old = RuntimeSettings().model_dump(mode="json")
+    del old["wallbox_default_modes"]
+    assert RuntimeSettings.model_validate(old).wallbox_default_modes == {}

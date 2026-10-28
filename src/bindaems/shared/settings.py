@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from bindaems.shared.config import _Model
+from bindaems.shared.control import ChargeMode
 
 Ct = Annotated[float, Field(allow_inf_nan=False)]
 NonNegative = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -308,6 +309,9 @@ class RuntimeSettings(_Model):
     learning: LearningSettings = Field(default_factory=LearningSettings)
     # eigene Namen der Ladestationen (Schlüssel wie in config.yaml); ohne Namen gilt der Typ
     wallbox_names: dict[WallboxKey, DisplayName] = Field(default_factory=dict)
+    # Lademodus nach dem Abstecken je Ladestation (Schlüssel wie in config.yaml); ohne Eintrag
+    # bleibt der Modus
+    wallbox_default_modes: dict[WallboxKey, ChargeMode] = Field(default_factory=dict)
 
 
 def settings_warnings(settings: RuntimeSettings) -> list[str]:
