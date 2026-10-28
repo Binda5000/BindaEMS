@@ -18,3 +18,14 @@ it('zeigt „nein“ bei ausgeschaltetem Netzladen', () => {
 	render(PlanningView, { planning: settingsCurrent().settings.planning });
 	expect(screen.getByText('Netzladen erlaubt').nextElementSibling).toHaveTextContent('nein');
 });
+
+it('zeigt Akku ins Auto, wenn übrig, als ja oder nein', () => {
+	const planning = settingsCurrent().settings.planning;
+	const { unmount } = render(PlanningView, { planning });
+	expect(screen.getByText('Akku ins Auto, wenn übrig').nextElementSibling).toHaveTextContent(
+		'nein'
+	);
+	unmount();
+	render(PlanningView, { planning: { ...planning, car_battery_allowed: true } });
+	expect(screen.getByText('Akku ins Auto, wenn übrig').nextElementSibling).toHaveTextContent('ja');
+});

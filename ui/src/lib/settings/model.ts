@@ -61,6 +61,7 @@ export interface TariffDraft {
 /** Planung des Akkus als Text (Zahlen mit Dezimalkomma) */
 export interface PlanningDraft {
 	gridChargeAllowed: boolean;
+	carBatteryAllowed: boolean;
 	marginCt: string;
 	roundtripPct: string;
 	wearCt: string;
@@ -334,6 +335,7 @@ export function newComponent(
 function planningDraft(planning: PlanningSettings): PlanningDraft {
 	return {
 		gridChargeAllowed: planning.grid_charge_allowed,
+		carBatteryAllowed: planning.car_battery_allowed,
 		marginCt: decimalText(planning.margin_ct),
 		roundtripPct: decimalText(planning.roundtrip_pct),
 		wearCt: decimalText(planning.wear_ct),
@@ -645,6 +647,7 @@ function applyPlanning(
 	const before = Object.keys(errors).length;
 	const planning = {
 		grid_charge_allowed: draft.gridChargeAllowed,
+		car_battery_allowed: draft.carBatteryAllowed,
 		margin_ct: planningNumber(
 			draft.marginCt,
 			'planning.margin_ct',

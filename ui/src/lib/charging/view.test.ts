@@ -150,6 +150,7 @@ describe('Texte', () => {
 			)
 		).toEqual(['Geplant', 'Plan: Laden', 'Späteste Startzeit', 'Ziel-SOC erreicht', 'Ladelimit']);
 		expect(reasonLabel('now_limit')).toBe('Sofort-Limit');
+		expect(reasonLabel('battery_spare')).toBe('Akku übrig fürs Auto');
 		expect(reasonLabel('neu')).toBe('neu');
 		expect(reasonLabel(null)).toBe('–');
 	});

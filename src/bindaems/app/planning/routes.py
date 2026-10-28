@@ -50,6 +50,8 @@ def slot_json(slot: PlanSlot) -> dict[str, Any]:
         "budget_kw": slot.budget_kw,
         "support_soc_pct": slot.support_soc_pct,
         "ev_w": dict(slot.ev_w),
+        "ev_battery_w": dict(slot.ev_battery_w),
+        "now_battery": slot.now_battery,
         "thermal_w": slot.thermal_w,
         "thermal_steps": slot.thermal_steps,
         "thermal_grid_w": slot.thermal_grid_w,

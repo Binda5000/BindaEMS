@@ -447,9 +447,15 @@ export const CoreHealthSchema = v.object({
 		v.object({
 			/** `null` vor dem ersten Zyklus */
 			support_soc_pct: v.optional(NullableNumber, null),
-			support_source: v.optional(v.nullable(SupportSourceSchema), null)
+			support_source: v.optional(v.nullable(SupportSourceSchema), null),
+			/**
+			 * Akku ins Auto: ob der Akku übrig ist (`on`, `off`, `plan`, `soc`) und wie viel er
+			 * Geplant und Sofort geben darf; `null` vor der ersten Bewertung und bei älterem core
+			 */
+			spare: v.optional(v.nullable(v.picklist(['on', 'off', 'plan', 'soc'])), null),
+			spare_w: v.optional(NullableNumber, null)
 		}),
-		{ support_soc_pct: null, support_source: null }
+		{ support_soc_pct: null, support_source: null, spare: null, spare_w: null }
 	),
 	watchdog: v.object({
 		state: v.picklist(['waiting', 'armed', 'tripped', 'disabled', 'unknown']),
@@ -579,6 +585,8 @@ export type PriceSettings = v.InferOutput<typeof PriceSettingsSchema>;
 
 export const PlanningSettingsSchema = v.looseObject({
 	grid_charge_allowed: v.boolean(),
+	/** Akku ins Auto, wenn übrig; ältere Einstellungen kennen den Schalter nicht */
+	car_battery_allowed: v.optional(v.boolean(), false),
 	margin_ct: v.number(),
 	roundtrip_pct: v.number(),
 	wear_ct: v.number(),
@@ -1435,7 +1443,9 @@ export const PlanReasonCodeSchema = v.picklist([
 	'ZIEL_SOC_UNERREICHBAR',
 	'AUTO_ERWARTET',
 	'KLIMA_MEHR',
-	'KLIMA_WENIGER'
+	'KLIMA_WENIGER',
+	'AUTO_AUS_AKKU',
+	'SOFORT_AUS_AKKU'
 ]);
 export type PlanReasonCode = v.InferOutput<typeof PlanReasonCodeSchema>;
 
@@ -1474,6 +1484,13 @@ export const PlanSlotSchema = v.object({
 	support_soc_pct: NullableNumber,
 	/** geplante Ladeleistung je Fahrzeug in W (Schlüssel aus `vehicles`; nur Autos mit Leistung) */
 	ev_w: v.record(v.string(), v.number()),
+	/**
+	 * Akku ins Auto: der Teil von `ev_w`, der aus dem Akku kommt (W je Fahrzeug, kann leer sein),
+	 * und ob Autos in Sofort in diesem Slot aus dem Akku laden dürfen. Ältere Pläne haben die
+	 * Felder nicht.
+	 */
+	ev_battery_w: v.optional(v.record(v.string(), v.number()), {}),
+	now_battery: v.optional(v.boolean(), false),
 	codes: v.array(PlanReasonCodeSchema),
 	text: v.string(),
 	/**

@@ -144,7 +144,8 @@
       "roundtrip_pct": 88.0,
       "wear_ct": 2.0,
       "end_value_factor": 0.9,
-      "inertia_ct": 0.5
+      "inertia_ct": 0.5,
+      "car_battery_allowed": false
     },
     "learning": {
       "load_model_enabled": true,

@@ -101,6 +101,8 @@ async def test_get_plan_shape(client_as, planning):
         "budget_kw",
         "support_soc_pct",
         "ev_w",
+        "ev_battery_w",
+        "now_battery",
         "thermal_w",
         "thermal_steps",
         "thermal_grid_w",
@@ -182,6 +184,21 @@ async def test_get_plan_shows_the_planned_cars(client_as, planning, live):
     for item, slot in zip(plan["slots"], stored.slots, strict=True):
         assert item["ev_w"] == slot.ev_w
     assert any(item["ev_w"].get("tesla", 0) > 0 for item in plan["slots"])
+    for item, slot in zip(plan["slots"], stored.slots, strict=True):
+        assert item["ev_battery_w"] == slot.ev_battery_w
+        assert item["now_battery"] is slot.now_battery
+
+
+async def test_slot_json_names_the_battery_share_of_the_cars(planning):
+    from bindaems.app.planning.routes import slot_json
+
+    stored = await planning.replan("manual")
+    assert stored is not None
+    slot = stored.slots[0].model_copy(
+        update={"ev_battery_w": {"tesla": 2300.0}, "now_battery": True}
+    )
+    item = slot_json(slot)
+    assert item["ev_battery_w"] == {"tesla": 2300.0} and item["now_battery"] is True
 
 
 async def test_get_plan_marks_expired_plan(client_as, planning, clock):

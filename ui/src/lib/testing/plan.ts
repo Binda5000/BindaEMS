@@ -44,6 +44,8 @@ export function slot(
 		budget_kw: null,
 		support_soc_pct: null,
 		ev_w: {},
+		ev_battery_w: {},
+		now_battery: false,
 		codes: [code],
 		text: `Satz ${code}`,
 		thermal_w: 0,

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Planung des Akkus im Editor: Netzladen, Marge, Wirkungsgrad, Verschleiß, Restwert, Trägheit
+	// Planung des Akkus im Editor: Netzladen, Akku ins Auto, Marge, Wirkungsgrad, Verschleiß, Restwert, Trägheit
 	import type { PlanningDraft } from './model';
 
 	interface Props {
@@ -10,7 +10,7 @@
 
 	let { draft = $bindable(), errors }: Props = $props();
 
-	type TextField = Exclude<keyof PlanningDraft, 'gridChargeAllowed'>;
+	type TextField = Exclude<keyof PlanningDraft, 'gridChargeAllowed' | 'carBatteryAllowed'>;
 
 	const uid = $props.id();
 
@@ -43,6 +43,14 @@
 		Netzladen erlaubt
 	</label>
 	<p class="hint">Der Optimierer darf den Akku zu günstigen Zeiten aus dem Netz laden.</p>
+	<label class="check">
+		<input type="checkbox" bind:checked={draft.carBatteryAllowed} />
+		Akku ins Auto, wenn übrig
+	</label>
+	<p class="hint">
+		Autos in Geplant und Sofort laden aus dem Akku, wenn das Haus die Energie bis zur nächsten
+		PV-Füllung nicht braucht und Akkustrom billiger ist als Netzstrom.
+	</p>
 	{@render field(
 		'marginCt',
 		'margin_ct',

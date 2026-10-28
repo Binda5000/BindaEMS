@@ -13,6 +13,8 @@
 <dl class="facts">
 	<dt>Netzladen erlaubt</dt>
 	<dd>{planning.grid_charge_allowed ? 'ja' : 'nein'}</dd>
+	<dt>Akku ins Auto, wenn übrig</dt>
+	<dd>{planning.car_battery_allowed ? 'ja' : 'nein'}</dd>
 	<dt>Marge</dt>
 	<dd>{formatNumber(planning.margin_ct, 1)}{NBSP}ct/kWh</dd>
 	<dt>Roundtrip-Wirkungsgrad</dt>

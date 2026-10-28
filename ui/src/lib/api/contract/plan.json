@@ -69,6 +69,8 @@
         "ev_w": {
           "tesla": 8623.937145078125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -96,6 +98,8 @@
         "ev_w": {
           "tesla": 8809.192625
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -123,6 +127,8 @@
         "ev_w": {
           "tesla": 9310.490687578125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -150,6 +156,8 @@
         "ev_w": {
           "tesla": 9877.832005
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -177,6 +185,8 @@
         "ev_w": {
           "tesla": 4643.793926328124
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -203,6 +213,8 @@
         "ev_w": {
           "tesla": 4845.437184453125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -229,6 +241,8 @@
         "ev_w": {
           "tesla": 4751.5775388281245
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -255,6 +269,8 @@
         "ev_w": {
           "tesla": 4391.8129350781255
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -281,6 +297,8 @@
         "ev_w": {
           "tesla": 9502.6054603125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -308,6 +326,8 @@
         "ev_w": {
           "tesla": 8190.186267578125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -335,6 +355,8 @@
         "ev_w": {
           "tesla": 9500.652985078124
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -362,6 +384,8 @@
         "ev_w": {
           "tesla": 8983.0145703125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -389,6 +413,8 @@
         "ev_w": {
           "tesla": 8652.510047812499
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -416,6 +442,8 @@
         "ev_w": {
           "tesla": 9071.1229778125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -443,6 +471,8 @@
         "ev_w": {
           "tesla": 5684.7714003124365
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 1100.0,
         "thermal_steps": 1,
         "thermal_grid_w": 1100.0,
@@ -470,6 +500,8 @@
         "ev_w": {
           "tesla": 9112.189608203123
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -497,6 +529,8 @@
         "ev_w": {
           "tesla": 9537.509005
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -524,6 +558,8 @@
         "ev_w": {
           "tesla": 9798.336691328124
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -551,6 +587,8 @@
         "ev_w": {
           "tesla": 9720.6106553125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -578,6 +616,8 @@
         "ev_w": {
           "tesla": 9211.0691453125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -605,6 +645,8 @@
         "ev_w": {
           "tesla": 9071.2183
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -632,6 +674,8 @@
         "ev_w": {
           "tesla": 7783.270655078125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -659,6 +703,8 @@
         "ev_w": {
           "tesla": 7124.61173125
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -686,6 +732,8 @@
         "ev_w": {
           "tesla": 6902.246451953124
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -713,6 +761,8 @@
         "ev_w": {
           "tesla": 3450.0
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 1400.0,
         "thermal_steps": 2,
         "thermal_grid_w": 1400.0,
@@ -740,6 +790,8 @@
         "ev_w": {
           "tesla": 3450.0
         },
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 150.0,
         "thermal_steps": 2,
         "thermal_grid_w": 150.0,
@@ -765,6 +817,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -300.0,
         "thermal_steps": 2,
         "thermal_grid_w": 0.0,
@@ -789,6 +843,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -300.0,
         "thermal_steps": 2,
         "thermal_grid_w": 0.0,
@@ -813,6 +869,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 50.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -837,6 +895,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 49.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -861,6 +921,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 49.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -885,6 +947,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 48.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
@@ -909,6 +973,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 47.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -933,6 +999,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 46.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -957,6 +1025,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 45.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -981,6 +1051,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 44.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1005,6 +1077,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 43.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
@@ -1029,6 +1103,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 41.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
@@ -1053,6 +1129,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 40.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
@@ -1077,6 +1155,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 39.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
@@ -1101,6 +1181,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 38.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1125,6 +1207,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 37.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1149,6 +1233,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 36.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1173,6 +1259,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 35.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1197,6 +1285,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 34.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1221,6 +1311,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 33.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1245,6 +1337,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 32.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1269,6 +1363,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 30.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1293,6 +1389,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 29.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1317,6 +1415,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 28.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1341,6 +1441,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 27.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1365,6 +1467,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 26.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1389,6 +1493,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 25.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1413,6 +1519,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 24.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1437,6 +1545,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 23.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
@@ -1461,6 +1571,8 @@
         "budget_kw": 5.5,
         "support_soc_pct": 22.0,
         "ev_w": {},
+        "ev_battery_w": {},
+        "now_battery": false,
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,

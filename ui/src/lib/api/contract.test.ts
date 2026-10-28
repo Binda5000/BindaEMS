@@ -255,7 +255,12 @@ describe('Gesundheitsbericht des core', () => {
 	});
 
 	it('akzeptiert Health ohne Schwelle der Akku-Unterstützung und füllt sie mit null', () => {
-		const unknown = { support_soc_pct: null, support_source: null };
+		const unknown = {
+			support_soc_pct: null,
+			support_source: null,
+			spare: null,
+			spare_w: null
+		};
 		const parse = (changes: Record<string, unknown>) =>
 			v.parse(s.CoreHealthSchema, { ...demo.core.health, ...changes }).battery;
 		expect(parse({ battery: {} })).toEqual(unknown);
@@ -265,6 +270,28 @@ describe('Gesundheitsbericht des core', () => {
 		expect(v.parse(s.CoreHealthSchema, withoutBattery).battery).toEqual(unknown);
 		expect(check({ battery: { support_soc_pct: 82, support_source: 'plan' } })).toEqual([]);
 		expect(check({ battery: { support_soc_pct: 82, support_source: 'amt' } })).not.toEqual([]);
+	});
+
+	it.each(['on', 'off', 'plan', 'soc'])('akzeptiert den übrigen Akku %s', (spare) => {
+		const battery = { ...(demo.core.health.battery as object), spare, spare_w: 1200 };
+		expect(check({ battery })).toEqual([]);
+		expect(v.parse(s.CoreHealthSchema, { ...demo.core.health, battery }).battery).toMatchObject({
+			spare,
+			spare_w: 1200
+		});
+	});
+
+	it('akzeptiert den übrigen Akku vor der ersten Bewertung und älteres Health ohne ihn', () => {
+		const battery = { ...(demo.core.health.battery as object), spare: null, spare_w: null };
+		expect(check({ battery })).toEqual([]);
+		const older = { ...(demo.core.health.battery as Record<string, unknown>) };
+		delete older.spare;
+		delete older.spare_w;
+		expect(check({ battery: older })).toEqual([]);
+		expect(
+			v.parse(s.CoreHealthSchema, { ...demo.core.health, battery: older }).battery
+		).toMatchObject({ spare: null, spare_w: null });
+		expect(check({ battery: { ...older, spare: 'maybe' } })).not.toEqual([]);
 	});
 
 	it('akzeptiert Absicht, Betriebsarten der Aktoren und den Beginn der Betriebsart', () => {
@@ -515,6 +542,54 @@ describe('Zeitplan', () => {
 		const incomplete: Partial<typeof car> = { ...car };
 		delete incomplete.reachable;
 		expect(issues(s.PlanSchema, { ...demo.plan, vehicles: [incomplete] })).not.toEqual([]);
+	});
+});
+
+describe('Akku ins Auto im Plan', () => {
+	const demo = files['./contract/plan.json'] as { plan: { slots: Record<string, unknown>[] } };
+
+	it('liest den Akkuanteil und Sofort aus dem Akku, die Demo nennt beides', () => {
+		const slots = v.parse(s.PlanResponseSchema, demo).plan!.slots;
+		expect(slots.every((slot) => typeof slot.now_battery === 'boolean')).toBe(true);
+		expect(slots.every((slot) => typeof slot.ev_battery_w === 'object')).toBe(true);
+		const slot = demo.plan.slots[0]!;
+		expect(Object.keys(slot)).toEqual(expect.arrayContaining(['ev_battery_w', 'now_battery']));
+		const parsed = v.parse(s.PlanSlotSchema, {
+			...slot,
+			ev_battery_w: { tesla: 2300 },
+			now_battery: true,
+			codes: ['AUTO_AUS_AKKU', 'SOFORT_AUS_AKKU']
+		});
+		expect(parsed.ev_battery_w).toEqual({ tesla: 2300 });
+		expect(parsed.now_battery).toBe(true);
+		expect(issues(s.PlanSlotSchema, { ...slot, ev_battery_w: { tesla: '2300' } })).not.toEqual([]);
+	});
+
+	it('liest ältere Pläne ohne die Felder mit {} und false', () => {
+		const slot: Record<string, unknown> = { ...demo.plan.slots[0] };
+		delete slot.ev_battery_w;
+		delete slot.now_battery;
+		const parsed = v.parse(s.PlanSlotSchema, slot);
+		expect(parsed.ev_battery_w).toEqual({});
+		expect(parsed.now_battery).toBe(false);
+	});
+});
+
+describe('Planung in den Einstellungen', () => {
+	it('liest ältere Einstellungen ohne Akku ins Auto mit false', () => {
+		const demo = files['./contract/settings.json'] as {
+			settings: { planning: Record<string, unknown> };
+		};
+		expect(demo.settings.planning.car_battery_allowed).toBe(false);
+		const older = { ...demo.settings.planning };
+		delete older.car_battery_allowed;
+		expect(v.parse(s.PlanningSettingsSchema, older).car_battery_allowed).toBe(false);
+		expect(v.parse(s.PlanningSettingsSchema, demo.settings.planning).car_battery_allowed).toBe(
+			false
+		);
+		expect(issues(s.PlanningSettingsSchema, { ...older, car_battery_allowed: 'ja' })).not.toEqual(
+			[]
+		);
 	});
 });
 

@@ -393,6 +393,7 @@ it('shows the planning numbers with a decimal comma', () => {
 	const draft = draftFrom(settings());
 	expect(draft.planning).toEqual({
 		gridChargeAllowed: false,
+		carBatteryAllowed: false,
 		marginCt: '2',
 		roundtripPct: '88',
 		wearCt: '2',
@@ -405,6 +406,7 @@ it('takes over edited planning numbers', () => {
 	const draft = draftFrom(settings());
 	draft.planning = {
 		gridChargeAllowed: true,
+		carBatteryAllowed: true,
 		marginCt: '2,5',
 		roundtripPct: '90',
 		wearCt: '1,5',
@@ -414,6 +416,7 @@ it('takes over edited planning numbers', () => {
 	const result = applyDraft(settings(), draft);
 	expect('settings' in result && result.settings.planning).toEqual({
 		grid_charge_allowed: true,
+		car_battery_allowed: true,
 		margin_ct: 2.5,
 		roundtrip_pct: 90,
 		wear_ct: 1.5,
