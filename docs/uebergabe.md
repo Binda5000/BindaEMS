@@ -194,7 +194,7 @@ an der `intent.json` (Betrieb: `docs/betrieb.md`, Abschnitt 4, „Rollback auf e
 als Uhrzeit“ ändern `app/ha/entities.py`, `commands.py` und `VehicleCard.svelte` an anderen Stellen; wer zuletzt nach `main`
 geht, rebased. Betrieb: `docs/betrieb.md`, „Laden“ und „Lademodi“.
 
-**Plan Vorklimatisieren (Vorklimatisieren über die Wallbox) ist umgesetzt; der Gesamtreview steht noch aus**
+**Plan Vorklimatisieren (Vorklimatisieren über die Wallbox) ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt**
 (`docs/superpowers/plans/2026-10-28-vorklimatisieren-ueber-wallbox.md`, 5 Tasks, freigegeben vom Betreiber am 28.10.2026 mit allen
 11 Entscheidungen: „Freigegeben“): Branch `claude/project-thread-xqrmsn`, **nicht auf `main`, nicht ausgerollt**. Beim Vorheizen und
 Vorkühlen nimmt das Auto den Strom von der Wallbox statt aus seinem Akku. Regel K1 („Vorklimatisieren“, Grund `climate`): Meldet Tessie
@@ -1058,7 +1058,7 @@ Anlage einmal bestätigen (Punkt 15 unter „Offen an der Anlage“). Betrieb: `
 | `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty`, seit dem 21.10.2026 auf `main` (Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md` | Welle „Aufgeschobene Kleinigkeiten“, 13 Tasks, 56 Punkte K1 bis K56 vor dem gemeinsamen Ausrollen; vom Betreiber am 21.10.2026 freigegeben |
 | `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` | Plan 5c, 11 Tasks (Task 1 entfällt: die Betriebsart steht schon in InfluxDB `status`), 17 Entscheidungen, freigegeben vom Betreiber am 27.10.2026; **umgesetzt, seit 28.10.2026 auf `main`, nicht ausgerollt**: Wärmemodell je Betriebsart (Grundleistung, Zeitkonstante, Speicher je K), zweiter Planungsschritt nach Akku und Autos mit Vorschau, Planwert an den core, Schalter „Vorheizen und Vorkühlen“ ab Werk aus |
-| `docs/superpowers/plans/2026-10-28-vorklimatisieren-ueber-wallbox.md` | Plan Vorklimatisieren, 5 Tasks, 11 Entscheidungen, freigegeben vom Betreiber am 28.10.2026; umgesetzt auf dem Branch `claude/project-thread-xqrmsn`, nicht auf `main`, nicht ausgerollt, Gesamtreview offen: Tesla beim Klimatisieren nicht stoppen, EVCS nach „geladen“ anlassen, Schalter `climate_via_wallbox` |
+| `docs/superpowers/plans/2026-10-28-vorklimatisieren-ueber-wallbox.md` | Plan Vorklimatisieren, 5 Tasks, 11 Entscheidungen, freigegeben vom Betreiber am 28.10.2026; umgesetzt auf dem Branch `claude/project-thread-xqrmsn`, nicht auf `main`, nicht ausgerollt, Gesamtreview und Fix-Welle erledigt: Tesla beim Klimatisieren nicht stoppen, EVCS nach „geladen“ anlassen, Schalter `climate_via_wallbox` |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
