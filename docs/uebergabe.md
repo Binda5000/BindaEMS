@@ -194,6 +194,21 @@ an der `intent.json` (Betrieb: `docs/betrieb.md`, Abschnitt 4, „Rollback auf e
 als Uhrzeit“ ändern `app/ha/entities.py`, `commands.py` und `VehicleCard.svelte` an anderen Stellen; wer zuletzt nach `main`
 geht, rebased. Betrieb: `docs/betrieb.md`, „Laden“ und „Lademodi“.
 
+**Plan Standard-Lademodus je Ladepunkt ist umgesetzt** (`docs/superpowers/plans/2026-10-28-standard-lademodus-je-ladepunkt.md`, 5 Tasks,
+freigegeben vom Betreiber am 28.10.2026 mit allen 8 Entscheidungen: „Rest passt so“; das Vorklimatisieren über die Wallbox ist ein eigener Plan): Branch
+`claude/project-thread-7dml9y`, **noch nicht auf `main`** (die Integration braucht die Zustimmung des Betreibers), **nicht ausgerollt**.
+Je Ladepunkt gibt es unter Einstellungen → „Ladestationen“ die Auswahl „Nach dem Abstecken“ („Unverändert“ ist der Standard, dazu PV-Überschuss,
+Min+PV, Sofort, Aus und Geplant): Steckt dort ein Auto ab, setzt die app den Modus des Fahrzeugs der Session
+(bei einem Gast den Gast-Lademodus, nie „Geplant“) mit dem Urheber „Standard-Lademodus“ und der Quelle `system`; steht der Modus schon richtig,
+sendet sie nichts. War die app beim Abstecken aus, holt sie den Wechsel nach (auch nach mehr als `SESSION_GAP`); bei `CoreDown` oder Konflikt
+versucht sie es erneut, bis es klappt oder das Auto wieder steckt; eine Bedienung von Hand geht vor. Neu: Einstellung `wallbox_default_modes`,
+`Unplugged` im `ChargingTracker`, `app/charging/default_mode.py`, die Auswahl im `SettingsEditor`. **Nur app und UI, nur `ems-app` neu**, jederzeit
+ausrollbar (kein core, keine Migration, keine ACL-Zeile, kein Element in Home Assistant); **wirkt erst, wenn ein Ladepunkt einen Modus hat**. Der Rückweg zu einer
+app vor dem Plan braucht einen Schritt an den Einstellungen (Betrieb: `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor dem
+Standard-Lademodus“: Einstellungen als YAML exportieren, den Schlüssel `wallbox_default_modes` löschen, nach dem Rollback importieren). Wer ein
+Auto mit der Automatik für Ziel und Abfahrt (5b) hat, stellt dessen Ladepunkt auf „Geplant“ oder „Unverändert“. Betrieb: `docs/betrieb.md`, „Laden“,
+„Standard-Lademodus je Ladestation“. Die Liste „Deferred minors Standard-Lademodus“ steht unter „Bewusst offen gelassen“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -1824,6 +1839,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          (14 Heiztage, Daten seit dem 26.10.2026).
       6. **Abnahme Teil B:** nach Teil A, nach der Abnahme 6a (Aktor live) und nur auf Entscheidung des
          Betreibers: Schalter an, 14 Tage live.
+  15. **Standard-Lademodus (Plan Standard-Lademodus) ausrollen und die Standards wählen:** nur `ems-app` (kein core, **keine Migration,
+      keine ACL-Zeile, kein Element in Home Assistant**), jederzeit; noch nicht auf `main`, wann integriert und ausgerollt wird,
+      entscheidet der Betreiber. Vorschlag: mit dem nächsten Pull von `ems-app`
+      (`cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`; der Regelbetrieb braucht dafür nicht aus).
+      Der Plan wirkt erst, wenn du einem Ladepunkt einen Modus gibst. **Die Standards wählt der Betreiber** (Einstellungen →
+      „Ladestationen“ → „Nach dem Abstecken“); für ein Auto mit der Automatik für Ziel und Abfahrt (5b) gehört
+      sein Ladepunkt auf „Geplant“ oder „Unverändert“, sonst ruht die Automatik nach jedem Abstecken.
+      Danach prüfen: Auto an einem Ladepunkt mit einem Standard abstecken, im Änderungsprotokoll steht ein Eintrag mit dem Urheber
+      „Standard-Lademodus“ und der Quelle `system`, und auf „Laden“ steht der neue Modus. Der Rückweg steht in `docs/betrieb.md`,
+      Abschnitt 4, „Rollback auf einen Stand vor dem Standard-Lademodus“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -2015,6 +2040,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    Fix-Welle umgesetzt; seit dem 28.10.2026 auf `main` (Fast-Forward mit Zustimmung des Betreibers), nicht ausgerollt
    (Kurzfassung oben, „Plan Sofort-Limit“). Es folgt das gemeinsame Ausrollen von core und app (Punkt 13 unter „Offen an der
    Anlage“); wann, entscheidet der Betreiber.
+10. **Plan Standard-Lademodus je Ladepunkt** (Standardmodus beim Abstecken): umgesetzt und je Task geprüft, auf dem Branch
+   `claude/project-thread-7dml9y`, noch nicht auf `main` (Integration nur mit Zustimmung des Betreibers), nicht ausgerollt (Kurzfassung oben,
+   „Plan Standard-Lademodus“). Es folgt das Ausrollen von `ems-app` und die Wahl der Standards (Punkt 15 unter „Offen an der Anlage“);
+   wann, entscheidet der Betreiber.
 
 ### Nächster Schritt: die Anlage
 
@@ -3798,3 +3827,25 @@ Kühlsaison 2027.
   Ende; im System-Abschnitt stehen „−“ (U+2212) und „-“ nebeneinander, dazu „0,0 K bis“; der 404-Test hängt am
   Timing.~~ (erledigt 28.10.2026, Kleinigkeiten 5c)
 - **Doku:** Die Toleranz in Abnahme B1 (±0,5 K um das Band) lässt sich unterschiedlich lesen; einige lange Zeilen.
+
+Aufgeschobene Kleinigkeiten aus Plan Standard-Lademodus (Deferred minors Standard-Lademodus), aus den Reviews der Tasks 1 bis 4. Keine davon
+gefährdet die Anlage: Der Wechsel ändert nur den Lademodus der Absicht, ist ab Werk aus (jeder Ladepunkt „Unverändert“) und lässt eine
+Bedienung von Hand gewinnen. Die Liste kann sich mit dem Gesamtreview noch ändern.
+
+- **Tests:** `test_default_modes_reject_unknown_mode` war schon vor dem neuen Feld grün (`extra="forbid"`) und könnte die Fehlerstelle
+  prüfen; kein Test für einen ungültigen Ladepunkt-Schlüssel oder den Hin-und-zurück-Weg von `wallbox_default_modes` über die API (der
+  Editor-Test könnte ihn abdecken); der Lauf-Test des Trackers wartet mit echten `sleep`, ein `Event` wäre deterministisch; kein Test für
+  einen Gast-Wunsch, der beim erneuten Anstecken entfällt, und keiner für „Meldung ohne Standard behält den bestehenden Wunsch“; der
+  Integrationstest prüft nicht, ob in einem späteren Takt ein zweites PUT hinausgeht; im Editor kein Test für den 422-Fehler bei
+  `wallbox_default_modes.<Schlüssel>`.
+- **Tracker (`_load`):** verwirft das Fahrzeug, das `_finish` zurückgibt (beim Aufräumen mehrerer offener Sessions meldet es nichts);
+  ein Kommentar dazu fehlt.
+- **Wunsch und Vorbedingung (`default_mode.py`):** Ein veralteter Stand `before` kann einen erneut versuchten Wunsch verwerfen (Cache
+  zeigt „Sofort“, der core steht auf „Aus“, der erste Versuch scheitert, der zweite liest „Aus“ ≠ „Sofort“). Abhilfe: `wish.before` nach einem
+  gescheiterten Versuch, dessen `current()` gelang, auf den gelesenen Stand setzen (Kandidat für die Fix-Welle). Die Vorbedingung
+  vergleicht gegen den Cache: Ein Befehl per curl direkt am core im Fenster wird überschrieben (unvermeidlich, wie bei `driving_auto`).
+  Eine unerwartete Ausnahme aus `apply` bricht die Schleife für die späteren Wünsche ab und wird alle 10 s neu geloggt (optional: einmal
+  loggen und den Wunsch verwerfen).
+- **Kosmetik:** Zeilenumbruch der Kommentare in `test_default_mode.py` (495–497, 606–608); dem Unit-Test-Modul fehlt der Docstring.
+- **UI:** Die Auswahl heißt bei jeder Ladestation „Nach dem Abstecken“; der Name der Station sollte über `aria-label` oder `aria-describedby`
+  hinein. Die Stellung von `{@const modeField}` ist eine Stilfrage.

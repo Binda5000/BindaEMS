@@ -263,6 +263,29 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   Absicht danach neu (Bedienung oder `PUT /v1/intent`). Die Datenbank der app ist nicht betroffen
   (keine Migration). In Home Assistant bleiben die Zahlen „Sofort-Höchststrom“ und
   „Gast-Sofort-Höchststrom“ als nicht mehr gepflegte Entitäten stehen, bis du sie dort entfernst.
+- **Update mit dem Standard-Lademodus:** Der Plan Standard-Lademodus ändert nur die app. Du ziehst und
+  startest nur `ems-app` (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`), jederzeit; der
+  core läuft weiter, und der Regelbetrieb bleibt an. Es gibt keine Migration, keine ACL-Zeile und
+  kein Element in Home Assistant. Der Standard-Lademodus wirkt erst, wenn du einem Ladepunkt einen
+  Modus gibst (Abschnitt 12, „Laden“, „Standard-Lademodus je Ladestation“); bis dahin lädt alles wie
+  vorher.
+- **Rollback auf einen Stand vor dem Standard-Lademodus:** Die Einstellungen der app haben das neue
+  Feld `wallbox_default_modes`, und eine ältere app kennt es nicht. Steht es in den gespeicherten
+  Einstellungen (sobald du die Einstellungen nach dem Update gespeichert hast), liest die ältere app
+  die Einstellungen nicht mehr und fällt auf die Standardwerte zurück: Dann gilt auch ein leerer
+  **Tarif**, bis du die Einstellungen wiederherstellst. Gehe so vor:
+  1. **Vor dem Rollback**, noch mit dem neuen Image: **Einstellungen** → „Export und Import“ →
+     „Exportieren (YAML)“ (oder `GET /api/settings/export`, Abschnitt 8, „Alternative für Skripte
+     (curl)“) und die Datei sichern.
+  2. In der Datei die Zeile `wallbox_default_modes:` samt allen eingerückten Zeilen darunter löschen
+     (bei „Unverändert“ für alle Ladepunkte steht dort `wallbox_default_modes: {}`).
+  3. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d --no-deps ems-app`.
+  4. **Nach dem Rollback** die geänderte Datei importieren: **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“ (oder `POST /api/settings/import`). Das legt eine neue
+     Version ohne den Schlüssel an; Tarif und übrige Einstellungen sind danach wieder da.
+
+  Die Datenbank ist nicht betroffen (keine Migration), der core auch nicht. Bis zum Import zeigt die
+  ältere app Standardwerte.
 - **Update mit Plan 5c (Vorheizen und Vorkühlen):** Plan 5c ändert core und app; beide rollen
   gemeinsam aus, mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Migration `0015` legt die
   Tabelle `thermal_model` an; **sichere die Datenbank vorher** (`/backup/vor-plan-5c.sqlite3`). Der
@@ -1555,6 +1578,44 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
 
 Ein Befehl, den der core ablehnt (422), erscheint mit den Sätzen des core an der Karte; ist der core
 nicht erreichbar, steht dort „core nicht erreichbar.“.
+
+### Standard-Lademodus je Ladestation
+
+Der Lademodus gehört dem Fahrzeug und bleibt stehen, bis du ihn änderst: Wer abends „Sofort“ wählt,
+lädt beim nächsten Anstecken wieder „Sofort“. Mit dem Standard-Lademodus (Plan Standard-Lademodus)
+legst du je Ladepunkt einen Modus fest, auf den ein Auto **beim Abstecken** wechselt, etwa
+„PV-Überschuss“.
+
+- **Wo:** Einstellungen → „Bearbeiten“ → „Ladestationen“ (nur Admin). Unter dem Namen jeder
+  Ladestation steht die Auswahl **„Nach dem Abstecken“** mit „Unverändert“ (Standard, so wie bisher),
+  „PV-Überschuss“, „Min+PV“, „Sofort“, „Aus“ und „Geplant“. Der Wert gilt für die Ladestation, nicht
+  für ein Auto, und steht in den Einstellungen (er wandert mit Export und Import).
+- **Wer wechselt:** das Fahrzeug, das dort zuletzt geladen hat (das Fahrzeug der Session, wie in der
+  Ladeübersicht). War es ein Gast, wechselt der Gast-Lademodus; auf „Geplant“ kann ein Gast nicht
+  wechseln, dann bleibt sein Modus unverändert. Ein unbekanntes Auto bleibt unberührt. Wechselt ein
+  Auto zwischen den Ladepunkten, gilt der Standard der Ladestation, an der es zuletzt abgesteckt
+  wurde.
+- **Was bleibt:** Ziel-SOC, Abfahrt und Sofort-Höchststrom bleiben stehen; Boost und die
+  Übersteuerung der Zuordnung enden beim Abstecken wie bisher im core. Der Wechsel ändert nur den
+  Modus, also auch im Dry-Run und bei ausgeschaltetem Regelbetrieb.
+- **Änderungsprotokoll:** Der Wechsel steht mit dem Urheber „Standard-Lademodus“ und der Quelle
+  `system` im Änderungsprotokoll (Seite „Protokoll“, nur Admin). Steht das Auto schon auf dem Standard, passiert
+  nichts und es gibt keinen Eintrag.
+- **Bei Ausfällen:** War die app beim Abstecken aus, holt sie den Wechsel nach, sobald sie den
+  Ladepunkt wieder leer sieht, auch nach mehr als 30 Minuten. Ist der core gerade nicht erreichbar
+  oder kommt ein Konflikt, versucht die app es etwa alle 10 Sekunden erneut, bis es klappt oder das
+  Auto wieder angesteckt ist. Lehnt der core den Wechsel ab, steht das im Log der app, ohne neuen
+  Versuch. Wählst du den Modus von Hand, bevor der Wechsel durch ist, gilt deine Wahl.
+- **Zusammenspiel mit der Automatik (Fahrverhalten, 5b):** Die Automatik setzt Ziel und Abfahrt nur im
+  Modus „Geplant“. Nutzt du sie für ein Auto, stell den Ladepunkt, an dem es meist steht, auf
+  **„Geplant“** oder **„Unverändert“**; mit „PV-Überschuss“ und den anderen Modi ruht die Automatik
+  nach jedem Abstecken. Der Wechsel zählt nicht als Bedienung von Ziel oder Abfahrt (die Automatik
+  pausiert deswegen nicht).
+- **Nicht dabei:** ein Wechsel beim Anstecken; kein Element in Home Assistant; keine Anzeige auf der
+  Seite „Laden“ (der Grund steht im Änderungsprotokoll).
+- **Ausrollen und zurück:** nur `ems-app`, jederzeit (Abschnitt 4, „Update mit dem
+  Standard-Lademodus“); der Rückweg steht in Abschnitt 4, „Rollback auf einen Stand vor dem
+  Standard-Lademodus“.
 
 ### Zeitplan
 
