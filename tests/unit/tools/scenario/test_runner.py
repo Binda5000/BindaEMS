@@ -611,9 +611,13 @@ def test_plan_check_resimulates_with_the_car(monkeypatch: pytest.MonkeyPatch) ->
     calls: list[tuple[PlanInputs, list[Mapping[str, float]]]] = []
     original = runner.sim_slots
 
-    def recording(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()) -> list[SimSlot]:
+    def recording(
+        inputs: PlanInputs,
+        ev_w: Sequence[Mapping[str, float]] = (),
+        ev_battery_w: Sequence[Mapping[str, float]] = (),
+    ) -> list[SimSlot]:
         calls.append((inputs, list(ev_w)))
-        return original(inputs, ev_w)
+        return original(inputs, ev_w, ev_battery_w)
 
     monkeypatch.setattr(runner, "sim_slots", recording)
     run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=8)
@@ -692,3 +696,116 @@ def test_without_plan_the_car_starts_at_latest_start(monkeypatch: pytest.MonkeyP
     assert [slot.ev_w for slot in charging[:9]] == [11000.0] * 9
     assert sum(slot.ev_w for slot in charging) * 0.25 / 1000 == pytest.approx(CAR_NEED_KWH)
     assert (result.plans, result.targets, result.targets_missed) == (0, 1, 0)
+
+
+# --- Akku ins Auto (Plan Akku ins Auto, Task 6) ----------------------------------------------
+
+
+def test_synthetic_days_switch_car_battery() -> None:
+    assert not synthetic("winter-spread", date(2027, 1, 11), 1).planning.car_battery_allowed
+    data = synthetic("winter-spread", date(2027, 1, 11), 1, car_battery=True)
+    assert data.planning.car_battery_allowed and data.planning.grid_charge_allowed
+
+
+def _battery_plans(monkeypatch: pytest.MonkeyPatch, battery_w: float) -> None:
+    """Jeder Plan gibt dem Auto in jedem Slot mit Ladeleistung ``battery_w`` aus dem Akku und
+    läuft dort auf Eigenverbrauch."""
+    original = runner.plan_once
+
+    def from_battery(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        slots = [
+            s.model_copy(update={"ev_battery_w": {"auto": battery_w}, "intent": BatteryIntent()})
+            if s.ev_w.get("auto", 0.0) > 0
+            else s
+            for s in plan.slots
+        ]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", from_battery)
+
+
+def test_car_takes_the_planned_battery_share_up_to_its_power(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Der Akkuanteil im angewandten Slot ist min(Akkuanteil des Plans, Ladeleistung); er geht als
+    # ``SimSlot.ev_battery_w`` in den Slot, ``car_battery_kwh`` zählt, was der Akku gab.
+    seen = _record_steps(monkeypatch)
+    _battery_plans(monkeypatch, 3000.0)
+    result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
+    assert any(slot.ev_w > 3000.0 for slot, _, _ in seen)
+    for slot, _, step in seen:
+        assert slot.ev_battery_w == pytest.approx(min(3000.0, slot.ev_w))
+        assert step.ev_battery_w <= slot.ev_battery_w + 1e-9
+    per_day = [
+        sum(step.ev_battery_w for _, _, step in seen[i * 96 : (i + 1) * 96]) * 0.25 / 1000
+        for i in range(2)
+    ]
+    assert [d.car_battery_kwh for d in result.days] == pytest.approx(per_day)
+    assert sum(per_day) > 1.0
+    assert result.targets_missed == 0
+
+
+def test_battery_share_costs_wear(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Entscheidung 10: Für Akku → Auto zählt der Verschleiß (``wear_ct`` je kWh) als Kosten.
+    seen = _record_steps(monkeypatch)
+    _battery_plans(monkeypatch, 3000.0)
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    result = run_scenario(data, step_slots=4)
+    wear = data.planning.wear_ct
+    for i, day in enumerate(result.days):
+        energy = sum(step.cost_ct for _, _, step in seen[i * 96 : (i + 1) * 96])
+        assert day.optimizer_ct == pytest.approx(energy + wear * day.car_battery_kwh)
+    total = sum(step.cost_ct for _, _, step in seen) + result.optimizer_power_ct
+    battery_kwh = sum(d.car_battery_kwh for d in result.days)
+    assert battery_kwh > 0
+    assert result.optimizer_ct == pytest.approx(total + wear * battery_kwh)
+
+
+def test_without_battery_share_the_car_gets_nothing_from_the_battery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _record_steps(monkeypatch)
+    result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
+    assert all(slot.ev_battery_w == 0 for slot, _, _ in seen)
+    assert [d.car_battery_kwh for d in result.days] == [0.0, 0.0]
+
+
+def test_plan_check_resimulates_with_the_battery_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[Mapping[str, float]]] = []
+    original = runner.sim_slots
+
+    def recording(
+        inputs: PlanInputs,
+        ev_w: Sequence[Mapping[str, float]] = (),
+        ev_battery_w: Sequence[Mapping[str, float]] = (),
+    ) -> list[SimSlot]:
+        calls.append(list(ev_battery_w))
+        return original(inputs, ev_w, ev_battery_w)
+
+    monkeypatch.setattr(runner, "sim_slots", recording)
+    _battery_plans(monkeypatch, 3000.0)
+    run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=8)
+    assert any(powers.get("auto", 0.0) == 3000.0 for item in calls for powers in item)
+
+
+def test_battery_share_does_not_count_for_rule_r2(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Wie oben ein Plan mit voller Leistung bis zur Abfahrt, aber ganz aus dem Akku: Regel R2
+    # zählt nur Netzenergie, kein Plan verletzt sie.
+    original = runner.plan_once
+
+    def greedy(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        if not inputs.vehicles:
+            return plan
+        depart = inputs.vehicles[0].departure_at
+        full = {"auto": 11000.0}
+        slots = [
+            s.model_copy(update={"ev_w": full, "ev_battery_w": full}) if s.start < depart else s
+            for s in plan.slots
+        ]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", greedy)
+    result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
+    assert result.r2_violations == 0

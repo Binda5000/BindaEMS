@@ -29,6 +29,7 @@ gleichverteilten Prognosefehlers.
 
 Preise mit einem erfundenen Beispieltarif: Börsenpreis + 10 ct netto, USt. 20 %, OeMAG 6 ct.
 Netzladen ist erlaubt; der Akku ist der aus ``deploy/config.example.yaml`` mit Start-SOC 50 %.
+„Akku ins Auto, wenn übrig“ (``car_battery_allowed``) ist aus, mit ``car_battery`` an.
 
 Jede Art hat ein geplantes Auto (Plan 4b, Task 13; Version 2 der Datei): angesteckt um 18:00 mit
 40 %, Abfahrt um 07:00 mit Ziel 80 %, 60 kWh nutzbar, 11 kW voll, 6 A dreiphasig (4140 W)
@@ -204,8 +205,11 @@ def _base_load_w(clock: time) -> float:
     )
 
 
-def synthetic(kind: str, first: date, days: int, *, seed: int = 1) -> ScenarioFile:
-    """``days`` erzeugte Tage der Art ``kind`` ab dem lokalen Tag ``first``."""
+def synthetic(
+    kind: str, first: date, days: int, *, seed: int = 1, car_battery: bool = False
+) -> ScenarioFile:
+    """``days`` erzeugte Tage der Art ``kind`` ab dem lokalen Tag ``first``; ``car_battery``
+    schaltet „Akku ins Auto, wenn übrig“ ein."""
     spec = KINDS.get(kind)
     if spec is None:
         raise ValueError(f"Unbekannte Art: {kind} (bekannt: {', '.join(DAY_TYPES)})")
@@ -259,7 +263,7 @@ def synthetic(kind: str, first: date, days: int, *, seed: int = 1) -> ScenarioFi
         source="synthetic",
         name=f"{kind} ab {first.isoformat()}, {days} Tag{'e' if days > 1 else ''}",
         battery=BATTERY,
-        planning=PlanningSettings(grid_charge_allowed=True),
+        planning=PlanningSettings(grid_charge_allowed=True, car_battery_allowed=car_battery),
         tariff=tariff,
         month_peak_kw=None,
         slots=slots,

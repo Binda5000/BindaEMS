@@ -8,6 +8,9 @@ die beim Export übersprungenen Tage und der Takt.
 gegen Regel R (Präzisierung 19); mit Autos (Plan 4b, Task 13) zusätzlich jedes Ziel erreicht und
 kein Plan über der Netzenergie nach Regel R2. Mit Autos hat die Tabelle die Spalten „Ziele
 erreicht“ („a von b“ je Tag der Abfahrt) und „Regel R2“; eine Datei ohne Autos zeigt sie nicht.
+Mit Autos und „Akku ins Auto, wenn übrig“ (``car_battery_allowed``) zeigt die Spalte
+„Akku → Auto (kWh)“, was der Akku den Autos gab; die Kosten des Optimierers enthalten dafür den
+Verschleiß (Entscheidung 10).
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ _COLUMNS: Final = (
     "Ersatzpläne",
 )
 _CAR_COLUMNS: Final = ("Ziele erreicht", "Regel R2")
+_BATTERY_COLUMN: Final = "Akku → Auto (kWh)"
 
 
 def passed(result: ScenarioResult) -> bool:
@@ -81,11 +85,15 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
     """Der Bericht; ``data`` liefert Herkunft, Zeitraum und ob es Autos gibt."""
     days = result.days
     cars = bool(data.cars)
+    battery = cars and data.planning.car_battery_allowed
     columns = (*_COLUMNS, *_CAR_COLUMNS) if cars else _COLUMNS
+    if battery:
+        columns = (*columns, _BATTERY_COLUMN)
     pad = len(columns) - len(_COLUMNS)
 
-    def car_cells(reached: int, total: int, r2: int) -> list[str]:
-        return [_targets(reached, total), str(r2)] if cars else []
+    def car_cells(reached: int, total: int, r2: int, battery_kwh: float) -> list[str]:
+        cells = [_targets(reached, total), str(r2)] if cars else []
+        return [*cells, _number(battery_kwh, 1)] if battery else cells
 
     rows = [
         _row(
@@ -94,7 +102,7 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             str(day.hold_slots),
             str(day.r1_violations),
             str(day.fallbacks),
-            *car_cells(day.targets_reached, day.targets, day.r2_violations),
+            *car_cells(day.targets_reached, day.targets, day.r2_violations, day.car_battery_kwh),
         )
         for day in days
     ]
@@ -106,7 +114,10 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             str(result.r1_violations),
             str(result.fallbacks),
             *car_cells(
-                result.targets - result.targets_missed, result.targets, result.r2_violations
+                result.targets - result.targets_missed,
+                result.targets,
+                result.r2_violations,
+                sum(day.car_battery_kwh for day in days),
             ),
         )
     )
@@ -147,7 +158,8 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
         *_skipped_lines(data),
         "",
         "Differenz = Optimierer − Victron allein, negativ heißt günstiger. Die Tageswerte enthalten"
-        " nur Energiekosten, „Gesamt“ auch den Leistungspreis.",
+        " nur Energiekosten, „Gesamt“ auch den Leistungspreis."
+        + (" Akku → Auto kostet beim Optimierer den Verschleiß." if battery else ""),
         "",
         f"Takt: {result.step_slots * SLOT_MINUTES} min",
     ]

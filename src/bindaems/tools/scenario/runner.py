@@ -37,6 +37,14 @@ mehr als ``R1_TOL_KWH`` Einspeisung erwartet.
   (wie die Abnahme, Entscheidung 15).
 - **Regel R2:** Ein Verstoß ist ein Plan, in dem die Netzenergie eines Autos ``grid_allowed_kwh``
   um mehr als ``R2_TOL_KWH`` übersteigt (``car_grid_kwh``).
+
+**Akku ins Auto** (Plan Akku ins Auto, Entscheidung 10): Nennt der gültige Plan für ein Auto einen
+Akkuanteil (``PlanSlot.ev_battery_w``), darf der Akku ihm im Slot ``min(Akkuanteil, Ladeleistung)``
+geben; die Summe geht als ``SimSlot.ev_battery_w`` in das Akkumodell, das sie nur bei
+``EIGENVERBRAUCH`` und nach dem Haus gibt. Was der Akku gab, steht je Tag in ``car_battery_kwh``;
+die Kosten des Optimierers zählen dafür den Verschleiß ``wear_ct`` je kWh, damit der Vergleich mit
+„Victron allein“ (Autos aus PV und Netz) ihn nicht beschönigt. Die Nachrechnung je Plan rechnet
+den Akkuanteil mit, Regel R2 zählt ihn nicht.
 """
 
 from __future__ import annotations
@@ -143,6 +151,7 @@ class DayResult:
     targets: int = 0  # Abfahrten an diesem Tag
     targets_reached: int = 0  # davon mit erreichtem Ziel
     r2_violations: int = 0  # Pläne dieses Tages über der Netzenergie nach Regel R2
+    car_battery_kwh: float = 0.0  # Akku → Auto (in ``optimizer_ct`` mit dem Verschleiß)
 
 
 @dataclass(frozen=True)
@@ -362,20 +371,28 @@ def _vehicle_inputs(
     return [car.model_copy(update={"grid_allowed_kwh": allowed[car.key]}) for car in result]
 
 
-def car_grid_kwh(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]]) -> dict[str, float]:
-    """Netzenergie je geplantem Auto in kWh, die ein Plan mit der Ladeleistung ``ev_w`` vorsieht.
+def car_grid_kwh(
+    inputs: PlanInputs,
+    ev_w: Sequence[Mapping[str, float]],
+    ev_battery_w: Sequence[Mapping[str, float]] = (),
+) -> dict[str, float]:
+    """Netzenergie je geplantem Auto in kWh, die ein Plan mit der Ladeleistung ``ev_w`` und dem
+    Akkuanteil ``ev_battery_w`` (leer: keiner) vorsieht.
 
     Der erwartete PV-Überschuss (``pv_w − load_w``) deckt je Slot zuerst die Autos in der
-    Reihenfolge der Priorität (wie die Nachrechnung), der Rest kommt aus dem Netz.
+    Reihenfolge der Priorität (wie die Nachrechnung), dann der Akkuanteil, der Rest kommt aus dem
+    Netz.
     """
     grid = {car.key: 0.0 for car in inputs.vehicles}
-    for slot, powers in zip(inputs.slots, ev_w, strict=True):
+    battery = ev_battery_w or [{}] * len(ev_w)
+    for slot, powers, shares in zip(inputs.slots, ev_w, battery, strict=True):
         surplus_w = max(0.0, slot.pv_w - slot.load_w)
         for car in inputs.vehicles:
             power_w = powers.get(car.key, 0.0)
             from_pv_w = min(surplus_w, power_w)
             surplus_w -= from_pv_w
-            grid[car.key] += (power_w - from_pv_w) * SLOT_H / 1000
+            from_battery_w = min(shares.get(car.key, 0.0), power_w - from_pv_w)
+            grid[car.key] += (power_w - from_pv_w - from_battery_w) * SLOT_H / 1000
     return grid
 
 
@@ -426,8 +443,14 @@ def _plan_at(
     params = params_of(inputs)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     ev_w = [dict(s.ev_w) for s in plan.slots] if inputs.vehicles else []
-    steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), [s.intent for s in plan.slots], params)
-    grid = car_grid_kwh(inputs, ev_w) if ev_w else {}
+    ev_battery_w = [dict(s.ev_battery_w) for s in plan.slots] if inputs.vehicles else []
+    steps = simulate(
+        soc0_kwh,
+        sim_slots(inputs, ev_w, ev_battery_w),
+        [s.intent for s in plan.slots],
+        params,
+    )
+    grid = car_grid_kwh(inputs, ev_w, ev_battery_w) if ev_w else {}
     r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
     positions = {s.start: i for i, s in enumerate(plan.slots)}
     return _Planned(plan, steps, positions, params.lo_kwh, r2_broken)
@@ -448,22 +471,23 @@ def _wanted_w(
     active: tuple[Plan, PlanSlot] | None,
     *,
     due: bool,
-) -> tuple[float, bool]:
-    """Ladeleistung, die das Auto im Slot ab ``start`` will, und ob es ab der spätesten
-    Startzeit lädt (``due``, hält bis zum Ende des Ansteckvorgangs).
+) -> tuple[float, float, bool]:
+    """Ladeleistung, die das Auto im Slot ab ``start`` will, der Akkuanteil, den der Plan ihm
+    dafür gibt, und ob es ab der spätesten Startzeit lädt (``due``, hält bis zum Ende des
+    Ansteckvorgangs).
 
-    Nennt der gültige Plan (``active``: Plan und Slot) diesen Ansteckvorgang, gilt seine
-    Ladeleistung; sonst ab der spätesten Startzeit die volle, davor keine (wie der core ohne
-    gültigen Slot, ohne PV-Überschuss)."""
+    Nennt der gültige Plan (``active``: Plan und Slot) diesen Ansteckvorgang, gelten seine
+    Ladeleistung und sein Akkuanteil; sonst ab der spätesten Startzeit die volle Leistung, davor
+    keine, und nichts aus dem Akku (wie der core ohne gültigen Slot, ohne PV-Überschuss)."""
     car = session.car
     if active is not None:
         plan, slot = active
         if any(v.key == car.key and v.departure_at == session.depart for v in plan.vehicles):
-            return slot.ev_w.get(car.key, 0.0), due
+            return slot.ev_w.get(car.key, 0.0), slot.ev_battery_w.get(car.key, 0.0), due
     need = need_kwh(soc_pct, car.target_pct, car.usable_kwh, car.efficiency)
     start_at = latest_start(session.depart, need, car.max_w)
     due = due or (start_at is not None and start_at < start + SLOT)
-    return (car.max_w if due else 0.0), due
+    return (car.max_w if due else 0.0), 0.0, due
 
 
 def _plugged(sessions: Sequence[CarSession], start: datetime) -> list[int]:
@@ -608,11 +632,15 @@ def run_scenario(
                     > R1_TOL_KWH
                 )
         ev_w = 0.0
+        ev_battery_w = 0.0
         for i in plugged:
-            wanted_w, due[i] = _wanted_w(sessions[i], car_soc[i], slot.start, active, due=due[i])
+            wanted_w, battery_w, due[i] = _wanted_w(
+                sessions[i], car_soc[i], slot.start, active, due=due[i]
+            )
             power_w, car_soc[i] = _charge(sessions[i].car, car_soc[i], wanted_w)
             ev_w += power_w
-        result = step(soc, replace(slot, ev_w=ev_w), intent, params)
+            ev_battery_w += min(battery_w, power_w)
+        result = step(soc, replace(slot, ev_w=ev_w, ev_battery_w=ev_battery_w), intent, params)
         steps.append(result)
         applied.append(intent)
         violation.append(broken)
@@ -624,11 +652,16 @@ def run_scenario(
         soc_pct >= item.car.target_pct - TARGET_TOL_PP
         for item, soc_pct in zip(sessions, car_soc, strict=True)
     ]
-    days = _days(data, baseline, steps, applied, violation, plans, sessions, reached)
+    days = _days(
+        data, baseline, steps, applied, violation, plans, sessions, reached, planning.wear_ct
+    )
     baseline_power = _power_ct(data, _peaks_kw(data, baseline))
     optimizer_power = _power_ct(data, peaks)
     baseline_ct = sum(item.cost_ct for item in baseline) + baseline_power
-    optimizer_ct = sum(item.cost_ct for item in steps) + optimizer_power
+    car_battery_kwh = sum(item.ev_battery_w for item in steps) * SLOT_H / 1000
+    optimizer_ct = (
+        sum(item.cost_ct for item in steps) + optimizer_power + planning.wear_ct * car_battery_kwh
+    )
     end_delta = steps[-1].soc_end_kwh - baseline[-1].soc_end_kwh
     return ScenarioResult(
         name=data.name,
@@ -667,7 +700,10 @@ def _days(
     plans: Sequence[_Planned],
     sessions: Sequence[CarSession],
     reached: Sequence[bool],
+    wear_ct: float,
 ) -> list[DayResult]:
+    """Die Tage des Laufs; ``optimizer_ct`` zählt den Verschleiß ``wear_ct`` je kWh Akku → Auto
+    dazu (Entscheidung 10)."""
     result: list[DayResult] = []
     for day, indices in _day_groups(data).items():
         departing = [
@@ -676,11 +712,12 @@ def _days(
             if _local(item.depart).date() == day
         ]
         made = [item for item in plans if _local(item.plan.created_at).date() == day]
+        car_battery_kwh = sum(steps[i].ev_battery_w for i in indices) * SLOT_H / 1000
         result.append(
             DayResult(
                 day=day,
                 baseline_ct=sum(baseline[i].cost_ct for i in indices),
-                optimizer_ct=sum(steps[i].cost_ct for i in indices),
+                optimizer_ct=sum(steps[i].cost_ct for i in indices) + wear_ct * car_battery_kwh,
                 grid_charge_kwh=sum(steps[i].charge_grid_w for i in indices) * SLOT_H / 1000,
                 hold_slots=sum(1 for i in indices if applied[i].kind is BatteryIntentKind.HALTEN),
                 r1_violations=sum(1 for i in indices if violation[i]),
@@ -688,6 +725,7 @@ def _days(
                 targets=len(departing),
                 targets_reached=sum(departing),
                 r2_violations=sum(1 for item in made if item.r2_broken),
+                car_battery_kwh=car_battery_kwh,
             )
         )
     return result

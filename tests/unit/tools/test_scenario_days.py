@@ -211,6 +211,26 @@ def test_report_with_cars_shows_targets_and_rule_r2() -> None:
     assert text.rstrip().endswith("Ergebnis: Bestanden")
 
 
+def test_report_with_car_battery_shows_battery_to_car() -> None:
+    # Mit dem Schalter „Akku ins Auto, wenn übrig“ kommt die Spalte „Akku → Auto (kWh)“ dazu.
+    data = synthetic("winter-spread", date(2027, 1, 11), 2, car_battery=True)
+    day = result_of().days[0]
+    days = [
+        replace(day, car_battery_kwh=1.26),
+        replace(day, day=date(2027, 1, 12), targets=1, targets_reached=1, car_battery_kwh=2.0),
+    ]
+    text = render_report(result_of(days=days, targets=1), data)
+    assert (
+        "| Tag | Victron allein (€) | Optimierer (€) | Differenz (€) | Netzladen (kWh) "
+        "| Halten (Slots) | Regel R | Ersatzpläne | Ziele erreicht | Regel R2 "
+        "| Akku → Auto (kWh) |"
+    ) in text
+    assert "| 2027-01-11 | 2,50 | 2,10 | -0,40 | 4,3 | 3 | 0 | 1 | – | 0 | 1,3 |" in text
+    assert "| Gesamt | 2,50 | 2,10 | -0,40 | 8,5 | 6 | 0 | 1 | 1 von 1 | 0 | 3,3 |" in text
+    assert "| Leistungspreis | 0,00 | 0,00 | 0,00 | – | – | – | – | – | – | – |" in text
+    assert "Verschleiß" in text
+
+
 def test_report_not_passed_names_missed_targets_and_rule_r2() -> None:
     data = synthetic("winter-spread", date(2027, 1, 11), 2)
     text = render_report(result_of(targets=2, targets_missed=1, r2_violations=3), data)
