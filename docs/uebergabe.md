@@ -200,7 +200,7 @@ freigegeben vom Betreiber am 28.10.2026 mit allen 8 Entscheidungen: „Rest pass
 Je Ladepunkt gibt es unter Einstellungen → „Ladestationen“ die Auswahl „Nach dem Abstecken“ („Unverändert“ ist der Standard, dazu PV-Überschuss,
 Min+PV, Sofort, Aus und Geplant): Steckt dort ein Auto ab, setzt die app den Modus des Fahrzeugs der Session
 (bei einem Gast den Gast-Lademodus, nie „Geplant“) mit dem Urheber „Standard-Lademodus“ und der Quelle `system`; steht der Modus schon richtig,
-sendet sie nichts. War die app beim Abstecken aus, holt sie den Wechsel nach (auch nach mehr als `SESSION_GAP`); bei `CoreDown` oder Konflikt
+sendet sie nichts. War die app beim Abstecken aus, holt sie den Wechsel nach (auch nach mehr als `SESSION_GAP` und wenn der Steckzustand danach zuerst unbekannt ist); bei `CoreDown` oder Konflikt
 versucht sie es erneut, bis es klappt oder das Auto wieder steckt; eine Bedienung von Hand geht vor. Neu: Einstellung `wallbox_default_modes`,
 `Unplugged` im `ChargingTracker`, `app/charging/default_mode.py`, die Auswahl im `SettingsEditor`. **Nur app und UI, nur `ems-app` neu**, jederzeit
 ausrollbar (kein core, keine Migration, keine ACL-Zeile, kein Element in Home Assistant); **wirkt erst, wenn ein Ladepunkt einen Modus hat**. Der Rückweg zu einer
@@ -3830,22 +3830,17 @@ Kühlsaison 2027.
 
 Aufgeschobene Kleinigkeiten aus Plan Standard-Lademodus (Deferred minors Standard-Lademodus), aus den Reviews der Tasks 1 bis 4. Keine davon
 gefährdet die Anlage: Der Wechsel ändert nur den Lademodus der Absicht, ist ab Werk aus (jeder Ladepunkt „Unverändert“) und lässt eine
-Bedienung von Hand gewinnen. Die Liste kann sich mit dem Gesamtreview noch ändern.
+Bedienung von Hand gewinnen. Gesamtreview und Fix-Welle sind durch; was die Fix-Welle erledigt hat, steht nicht mehr hier.
 
 - **Tests:** `test_default_modes_reject_unknown_mode` war schon vor dem neuen Feld grün (`extra="forbid"`) und könnte die Fehlerstelle
   prüfen; kein Test für einen ungültigen Ladepunkt-Schlüssel oder den Hin-und-zurück-Weg von `wallbox_default_modes` über die API (der
   Editor-Test könnte ihn abdecken); der Lauf-Test des Trackers wartet mit echten `sleep`, ein `Event` wäre deterministisch; kein Test für
-  einen Gast-Wunsch, der beim erneuten Anstecken entfällt, und keiner für „Meldung ohne Standard behält den bestehenden Wunsch“; der
-  Integrationstest prüft nicht, ob in einem späteren Takt ein zweites PUT hinausgeht; im Editor kein Test für den 422-Fehler bei
-  `wallbox_default_modes.<Schlüssel>`.
+  „Meldung ohne Standard behält den bestehenden Wunsch“; der Integrationstest prüft nicht, ob in einem späteren Takt ein zweites PUT
+  hinausgeht.
 - **Tracker (`_load`):** verwirft das Fahrzeug, das `_finish` zurückgibt (beim Aufräumen mehrerer offener Sessions meldet es nichts);
   ein Kommentar dazu fehlt.
-- **Wunsch und Vorbedingung (`default_mode.py`):** Ein veralteter Stand `before` kann einen erneut versuchten Wunsch verwerfen (Cache
-  zeigt „Sofort“, der core steht auf „Aus“, der erste Versuch scheitert, der zweite liest „Aus“ ≠ „Sofort“). Abhilfe: `wish.before` nach einem
-  gescheiterten Versuch, dessen `current()` gelang, auf den gelesenen Stand setzen (Kandidat für die Fix-Welle). Die Vorbedingung
-  vergleicht gegen den Cache: Ein Befehl per curl direkt am core im Fenster wird überschrieben (unvermeidlich, wie bei `driving_auto`).
-  Eine unerwartete Ausnahme aus `apply` bricht die Schleife für die späteren Wünsche ab und wird alle 10 s neu geloggt (optional: einmal
-  loggen und den Wunsch verwerfen).
-- **Kosmetik:** Zeilenumbruch der Kommentare in `test_default_mode.py` (495–497, 606–608); dem Unit-Test-Modul fehlt der Docstring.
-- **UI:** Die Auswahl heißt bei jeder Ladestation „Nach dem Abstecken“; der Name der Station sollte über `aria-label` oder `aria-describedby`
-  hinein. Die Stellung von `{@const modeField}` ist eine Stilfrage.
+- **Vorbedingung (`default_mode.py`):** Sie vergleicht gegen den Cache: Ein Befehl per curl direkt am core im Fenster wird
+  überschrieben (unvermeidlich, wie bei `driving_auto`).
+- **Tracker (Lücke bei unbekanntem Steckzustand):** Das gemerkte Abstecken nach einer Lücke lebt nur im Speicher; startet die app
+  erneut, bevor sie den Ladepunkt wieder bekannt sieht, entfällt der Wechsel (in `docs/betrieb.md` beschrieben).
+- **UI:** Die Stellung von `{@const modeField}` im `SettingsEditor` ist eine Stilfrage.

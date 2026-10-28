@@ -270,10 +270,11 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   Modus gibst (Abschnitt 12, „Laden“, „Standard-Lademodus je Ladestation“); bis dahin lädt alles wie
   vorher.
 - **Rollback auf einen Stand vor dem Standard-Lademodus:** Die Einstellungen der app haben das neue
-  Feld `wallbox_default_modes`, und eine ältere app kennt es nicht. Steht es in den gespeicherten
-  Einstellungen (sobald du die Einstellungen nach dem Update gespeichert hast), liest die ältere app
-  die Einstellungen nicht mehr und fällt auf die Standardwerte zurück: Dann gilt auch ein leerer
-  **Tarif**, bis du die Einstellungen wiederherstellst. Gehe so vor:
+  Feld `wallbox_default_modes`, und eine ältere app kennt es nicht. Es steht in jeder Version der
+  Einstellungen, die die neue app speichert (auch bei „Unverändert“ für alle Ladepunkte, dann als
+  `{}`), also nach jedem Speichern, Import oder sonstigen Ändern der Einstellungen seit dem Update.
+  Eine solche Version liest die ältere app nicht mehr und fällt auf die Standardwerte zurück: Dann
+  gilt auch ein leerer **Tarif**, bis du die Einstellungen wiederherstellst. Gehe so vor:
   1. **Vor dem Rollback**, noch mit dem neuen Image: **Einstellungen** → „Export und Import“ →
      „Exportieren (YAML)“ (oder `GET /api/settings/export`, Abschnitt 8, „Alternative für Skripte
      (curl)“) und die Datei sichern.
@@ -1602,10 +1603,14 @@ legst du je Ladepunkt einen Modus fest, auf den ein Auto **beim Abstecken** wech
   `system` im Änderungsprotokoll (Seite „Protokoll“, nur Admin). Steht das Auto schon auf dem Standard, passiert
   nichts und es gibt keinen Eintrag.
 - **Bei Ausfällen:** War die app beim Abstecken aus, holt sie den Wechsel nach, sobald sie den
-  Ladepunkt wieder leer sieht, auch nach mehr als 30 Minuten. Ist der core gerade nicht erreichbar
-  oder kommt ein Konflikt, versucht die app es etwa alle 10 Sekunden erneut, bis es klappt oder das
-  Auto wieder angesteckt ist. Lehnt der core den Wechsel ab, steht das im Log der app, ohne neuen
-  Versuch. Wählst du den Modus von Hand, bevor der Wechsel durch ist, gilt deine Wahl.
+  Ladepunkt wieder leer sieht, auch nach mehr als 30 Minuten. Ist der Steckzustand nach dem Start
+  (oder wenn der core wieder erreichbar ist) zuerst unbekannt, wartet sie, bis er wieder bekannt
+  ist; steckt dann wieder ein Auto, bleibt der Modus. Startet die app in dieser Wartezeit noch einmal
+  neu, entfällt der Wechsel. Ist der core gerade nicht erreichbar oder kommt ein Konflikt, versucht
+  die app es etwa alle 10 Sekunden erneut, bis es klappt oder das Auto wieder angesteckt ist. Der
+  Gast-Lademodus gilt für alle Gäste gemeinsam: Steckt bis dahin irgendwo ein Gast, entfällt der
+  Wechsel für den Gast. Lehnt der core den Wechsel ab, steht das im Log der app, ohne neuen Versuch.
+  Wählst du den Modus von Hand, bevor der Wechsel durch ist, gilt deine Wahl.
 - **Zusammenspiel mit der Automatik (Fahrverhalten, 5b):** Die Automatik setzt Ziel und Abfahrt nur im
   Modus „Geplant“. Nutzt du sie für ein Auto, stell den Ladepunkt, an dem es meist steht, auf
   **„Geplant“** oder **„Unverändert“**; mit „PV-Überschuss“ und den anderen Modi ruht die Automatik
