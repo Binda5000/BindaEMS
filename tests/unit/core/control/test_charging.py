@@ -2736,6 +2736,39 @@ def test_unmet_surplus_leaves_out_a_held_car_that_could_never_start(cfg) -> None
     assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_8_a) == 3680.0
 
 
+def test_unmet_surplus_counts_a_climatising_tesla_as_held_off(cfg) -> None:  # Gesamtreview M2
+    # Der Tesla wird bei 10 in PV ohne Überschuss angesteckt, klimatisiert und lädt dabei selbst mit
+    # 5 A (3450 W): Die Regel K1 hält ihn ohne „Laden aus“, mit dem Mindeststrom. Er folgt damit
+    # keinem Wunsch nach Überschuss; er zählt wie ein Auto bei „Laden aus“ erst, wenn ``spare_w``
+    # seine Startleistung (3450 W) erreicht, nicht mit den 7590 W bis zu seinem Höchststrom.
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+    at_5_a = twc(connected=True, charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 5.0))
+    climatising = tesla(plugged=True, charging=True, actual_current_a=5.0, climate_on=True)
+
+    def make(cfg, *, s: int):
+        if s < 10:
+            return inputs(
+                cfg, s=s, intent=intent, controllable=BOTH, evcs_obs=evcs(connected=False)
+            )
+        return inputs(
+            cfg,
+            s=s,
+            intent=intent,
+            controllable=BOTH,
+            evcs_obs=evcs(connected=False),
+            twc_obs=replace(at_5_a, power_w=3450.0),
+            tesla_obs=climatising,
+            present={("vehicle.tesla", CURRENT): 5.0, ("vehicle.tesla", CHARGING): True},
+            grid_obs=grid(grid_w=3450.0),
+        )
+
+    c = controller(cfg)
+    found = run(c, cfg, 12, make=make)
+    assert [x.command.reasons[-1] for s, x in found if s >= 10] == ["climate"]
+    assert c.unmet_surplus_w(0.0) == 0.0
+    assert c.unmet_surplus_w(3450.0) == 11040.0 - 3450.0
+
+
 def test_unmet_surplus_start_power_has_a_hysteresis(cfg) -> None:  # Ruling R28 (T12b #6)
     # Der e-Golf bei „Laden aus“ zählt ab seiner Startleistung (2760 W) und bleibt dabei, bis
     # ``spare_w`` eine Stufe von 1 A auf seinen Phasen (460 W) darunter fällt; erst dann zählt er

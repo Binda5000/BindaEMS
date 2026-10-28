@@ -93,7 +93,8 @@ Dazu legt die Regelung fest:
   ebenso. Das Fahrzeug stoppt dann wie ohne die Regel (Selbststart). Während der Regel und einmal
   an ihrem Ende beginnen die Zeiten des Selbststarts neu: Lädt das Fahrzeug danach weiter, stoppt
   es ``control.tesla_against_s`` nach dem Ende, nicht erst ``tesla_against_retry_s`` nach einem
-  Neuversuch davor.
+  Neuversuch davor. Für ``unmet_surplus_w`` zählt ein Fahrzeug, das die Regel hält, wie eines bei
+  „Laden aus“.
 - Geladen, bleibt an (Regel K2; Plan Vorklimatisieren, Entscheidungen 4 bis 8): War ein Fahrzeug
   an einer EVCS im Ansteckvorgang „geladen“ (``keep_on_complete``), gilt das Urteil seiner
   ``ModeMachine`` als „laden“, bis zum Abstecken: Die EVCS bleibt mit dem Mindeststrom des
@@ -890,7 +891,8 @@ class ChargeController:
           könnten (Ruling R28, ``Regulation.thermal_step``). Mit Hysterese (Ruling R28): Ein Auto,
           das beim letzten Aufruf zählte, zählt weiter, bis ``spare_w`` eine Stufe von 1 A auf
           seinen Phasen unter seine Startleistung fällt; danach wieder erst ab ihr. Die Regelung
-          ruft das deshalb einmal je Zyklus.
+          ruft das deshalb einmal je Zyklus. Ebenso zählt ein Fahrzeug, das die Regel K1 hält
+          (Vorklimatisieren): Sein Mindeststrom folgt keinem Wunsch nach Überschuss.
 
         Anders als ein Wunsch aus dem Überschuss hängt das nicht davon ab, was die Klimaanlage
         gerade aufnimmt. Vor dem ersten ``step`` und nach ``idle`` ist es 0.
@@ -1027,7 +1029,10 @@ class ChargeController:
             judgment = self._follow.get(car.vehicle)
             if judgment is not None:
                 follow[car.vehicle] = judgment
-            commanded_a = self._commanded_a(point.actuator, present)
+            # Ein Auto, das die Regel K1 hält, folgt keinem Wunsch: Es zählt wie bei „Laden aus“.
+            commanded_a = (
+                0.0 if car.vehicle in self._climate else self._commanded_a(point.actuator, present)
+            )
             ramp = self._ramp.get(point.actuator)
             ramping = (
                 commanded_a != 0.0 and ramp is not None and (now - ramp).total_seconds() < RAMP_UP_S
