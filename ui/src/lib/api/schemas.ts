@@ -640,7 +640,9 @@ export const RuntimeSettingsSchema = v.looseObject({
 	planning: PlanningSettingsSchema,
 	learning: LearningSettingsSchema,
 	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
-	wallbox_names: v.optional(v.record(v.string(), v.string()), {})
+	wallbox_names: v.optional(v.record(v.string(), v.string()), {}),
+	/** Modus, den die App nach dem Abstecken setzt; ohne Eintrag bleibt der Modus unverändert */
+	wallbox_default_modes: v.optional(v.record(v.string(), ChargeModeSchema), {})
 });
 export type RuntimeSettings = v.InferOutput<typeof RuntimeSettingsSchema>;
 

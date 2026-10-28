@@ -28,6 +28,7 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.backup import backup_database
+from bindaems.app.charging.default_mode import DefaultModes
 from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.routes import charging_router
 from bindaems.app.charging.sessions import ChargingSession, SessionService
@@ -361,8 +362,12 @@ class AppRuntime:
         )
         self.live_feed.connect_handlers.append(self._core_connected)
         self.live_feed.health_handlers.append(self.plan_sender.wake)
+        # nach dem Abstecken der Standard-Lademodus des Ladepunkts (Plan Standard-Lademodus)
+        self.default_modes = DefaultModes(self.intents, self.settings, cfg)
         # Steckzustand und Belegung nach jeder Abfrage von Health (Plan 4a, Task 3)
-        self.charging = ChargingTracker(self.engine, self._clock, cfg, self.live)
+        self.charging = ChargingTracker(
+            self.engine, self._clock, cfg, self.live, on_observed=self.default_modes.observed
+        )
         self.live_feed.health_handlers.append(self.charging.wake)
         self.charging_sessions = SessionService(
             self.charging, self.ledger, self.costing, self._clock

@@ -173,7 +173,8 @@
     },
     "wallbox_names": {
       "twc": "Garage"
-    }
+    },
+    "wallbox_default_modes": {}
   },
   "warnings": [
     "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",

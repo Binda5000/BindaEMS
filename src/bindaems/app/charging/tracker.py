@@ -17,6 +17,15 @@ wer dort steht (``wallboxes[].occupant`` und ``assignment``).
   ``last_seen`` und beim Ende neu bestimmt. Hat während der Session kein Fahrzeug Zeit (z. B. bei
   einer sehr kurzen Session, deren Insasse erst in der schließenden Beobachtung steht), zählt die
   letzte nicht leere Belegung der Wallbox zwischen Beginn und Ende.
+- Abstecken melden: Endet eine Session, weil das Auto abgezogen ist, liefert ``record`` ein
+  ``Unplugged`` mit dem Fahrzeug der Session. Bei einer Pause über ``SESSION_GAP`` gilt der
+  Zeitpunkt von ``last_seen``: Zeigt dieselbe Beobachtung den Ladepunkt als nicht verbunden, kommt
+  die Meldung sofort. Ist er unbekannt oder fehlt er (nach dem Start oder dem Wiederverbinden zum
+  core fast immer), merkt sich der Tracker Fahrzeug und ``last_seen`` im Speicher und meldet bei
+  der ersten Beobachtung, die den Ladepunkt leer zeigt; steckt dort wieder ein Auto, entfällt die
+  Meldung. Ein unbekannter Steckzustand allein meldet nichts. Scheitert die Transaktion, gibt es
+  keine Meldung und der Speicher bleibt beim Stand vor dem Lauf; der nächste Lauf liest die offenen
+  Sessions neu und meldet dann.
 
 Das Schreiben läuft in einem Thread, ``wake`` setzt nur ein Ereignis.
 """
@@ -24,7 +33,7 @@ Das Schreiben läuft in einem Thread, ``wake`` setzt nur ein Ereignis.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
@@ -52,6 +61,16 @@ class WallboxSeen:
     connected: bool | None
     occupant: str | None  # Schlüssel des Fahrzeugs oder ``guest``
     kind: str | None  # Wert von ``AssignmentKind``
+
+
+@dataclass(frozen=True)
+class Unplugged:
+    """Ein Auto wurde abgesteckt; ``vehicle`` ist das Fahrzeug der Session (``guest`` oder
+    ``None``, wenn unbekannt), ``at`` der Zeitpunkt des Endes."""
+
+    wallbox: str
+    vehicle: str | None
+    at: datetime
 
 
 @dataclass(frozen=True)
@@ -127,15 +146,26 @@ def session_vehicle(
 class ChargingTracker:
     """Zeichnet Belegung und Ladesessions der Wallboxen auf."""
 
-    def __init__(self, engine: Engine, clock: Clock, cfg: Config, live: LiveState) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        clock: Clock,
+        cfg: Config,
+        live: LiveState,
+        on_observed: Callable[[list[Unplugged], list[WallboxSeen]], Awaitable[None]] | None = None,
+    ) -> None:
         self._engine = engine
         self._clock = clock
         self._cfg = cfg
         self._live = live
+        self._on_observed = on_observed
         self._wake = asyncio.Event()
         # zuletzt geschriebene Belegung je Wallbox; nach dem Start leer, die erste schreibt immer
         self._assigned: dict[str, tuple[str, str]] = {}
         self._open: dict[str, _Open] = {}
+        # per Lücke geschlossen bei unbekanntem Steckzustand: (Fahrzeug, last_seen) je Wallbox,
+        # gemeldet, sobald der Ladepunkt leer ist
+        self._gap_closed: dict[str, tuple[str | None, datetime]] = {}
         self._loaded = False
 
     def wake(self) -> None:
@@ -143,28 +173,48 @@ class ChargingTracker:
         self._wake.set()
 
     async def run(self) -> None:
-        """Beobachtet nach jeder Antwort von Health; ein Fehler kommt ins Log."""
+        """Beobachtet nach jeder Antwort von Health; ein Fehler kommt ins Log. Nach jeder
+        gespeicherten Beobachtung (auch ohne Meldung) ruft es ``on_observed`` mit den Meldungen
+        und der Beobachtung; ein Fehler darin kommt ebenfalls ins Log."""
         while True:
             await self._wake.wait()
             self._wake.clear()
             try:
                 now, seen = self._clock.now(), observe(self._cfg, self._live)
-                await asyncio.to_thread(self.record, now, seen)
+                unplugged = await asyncio.to_thread(self.record, now, seen)
             except Exception:
                 log.exception("Beobachtung der Wallboxen fehlgeschlagen")
+                continue
+            if self._on_observed is not None:
+                try:
+                    await self._on_observed(unplugged, list(seen))
+                except Exception:
+                    log.exception("Auswertung der Wallbox-Beobachtung fehlgeschlagen")
 
-    def record(self, now: datetime, seen: Sequence[WallboxSeen]) -> None:
-        """Verarbeitet eine Beobachtung (synchron; ``run`` ruft es in einem Thread)."""
+    def record(self, now: datetime, seen: Sequence[WallboxSeen]) -> list[Unplugged]:
+        """Verarbeitet eine Beobachtung (synchron; ``run`` ruft es in einem Thread) und liefert
+        die Meldungen über abgesteckte Autos."""
+        unplugged: list[Unplugged] = []
+        # erst nach der Transaktion übernommen: ein Fehler lässt den Stand vor dem Lauf stehen
+        gap_closed = dict(self._gap_closed)
         try:
             with self._engine.begin() as conn:
                 if not self._loaded:
                     self._load(conn)
                 for wallbox, current in list(self._open.items()):
                     if now - current.last_seen > SESSION_GAP:  # Pause: Ende bei der letzten Sicht
-                        self._close(conn, wallbox, current.last_seen)
+                        vehicle = self._close(conn, wallbox, current.last_seen)
+                        gap_closed[wallbox] = (vehicle, current.last_seen)
                 for item in seen:
+                    pending = gap_closed.get(item.wallbox)
+                    if pending is not None and item.connected is not None:
+                        del gap_closed[item.wallbox]  # wieder bekannt: leer meldet, belegt nicht
+                        if item.connected is False:
+                            unplugged.append(Unplugged(item.wallbox, *pending))
                     changed = self._log_assignment(conn, now, item)
-                    self._track(conn, now, item, changed)
+                    report = self._track(conn, now, item, changed)
+                    if report is not None:
+                        unplugged.append(report)
         except Exception:
             # Die Transaktion ist zurückgerollt, der Speicher darf nicht davon abweichen: der
             # nächste Lauf liest die offenen Sessions neu und schreibt jede Belegung wieder.
@@ -172,6 +222,8 @@ class ChargingTracker:
             self._open.clear()
             self._assigned.clear()
             raise
+        self._gap_closed = gap_closed
+        return unplugged
 
     def sessions(
         self, start: datetime, end: datetime, vehicle: str | None = None
@@ -235,20 +287,24 @@ class ChargingTracker:
             self._open[row.wallbox] = _Open(row.id, start, last_seen, last_seen)
         self._loaded = True
 
-    def _track(self, conn: Connection, now: datetime, item: WallboxSeen, changed: bool) -> None:
+    def _track(
+        self, conn: Connection, now: datetime, item: WallboxSeen, changed: bool
+    ) -> Unplugged | None:
+        """Verfolgt die Session einer Wallbox; beim Abziehen liefert es die Meldung."""
         current = self._open.get(item.wallbox)
         if item.connected is False:
-            if current is not None:
-                self._close(conn, item.wallbox, now)
-            return
+            if current is None:
+                return None
+            return Unplugged(item.wallbox, self._close(conn, item.wallbox, now), now)
         if current is None:
             if item.connected:
                 self._begin(conn, now, item)
-            return
+            return None
         if item.connected:
             current.last_seen = now
         if changed or (item.connected and now - current.saved >= LAST_SEEN_EVERY):
             self._save(conn, item.wallbox, current, now)
+        return None
 
     def _begin(self, conn: Connection, now: datetime, item: WallboxSeen) -> None:
         session_id = conn.execute(
@@ -274,17 +330,19 @@ class ChargingTracker:
         )
         current.saved = current.last_seen
 
-    def _close(self, conn: Connection, wallbox: str, end: datetime) -> None:
+    def _close(self, conn: Connection, wallbox: str, end: datetime) -> str | None:
+        """Beendet die offene Session; liefert ihr Fahrzeug."""
         current = self._open.pop(wallbox)
-        self._finish(conn, wallbox, current, end)
+        return self._finish(conn, wallbox, current, end)
 
-    def _finish(self, conn: Connection, wallbox: str, current: _Open, end: datetime) -> None:
+    def _finish(self, conn: Connection, wallbox: str, current: _Open, end: datetime) -> str | None:
         vehicle = self._vehicle(conn, wallbox, current.start, end)
         conn.execute(
             update(charging_session)
             .where(charging_session.c.id == current.id)
             .values(vehicle=vehicle or "", end=end, last_seen=max(current.last_seen, end))
         )
+        return vehicle
 
     def _vehicle(
         self, conn: Connection, wallbox: str, start: datetime, end: datetime

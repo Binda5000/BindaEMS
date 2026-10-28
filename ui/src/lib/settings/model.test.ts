@@ -123,6 +123,30 @@ it('übernimmt eigene Namen der Ladestationen, leere entfallen, zu lange sind ei
 	).toEqual({ 'wallboxNames.evcs': 'zu lang' });
 });
 
+it('Standard-Lademodus je Ladestation: ohne Eintrag leer, leer wird nicht gespeichert', () => {
+	const current = settings();
+	const draft = draftFrom(current, ['evcs', 'twc']);
+	expect(draft.wallboxDefaultModes).toEqual({ evcs: '', twc: '' });
+	const unchanged = applyDraft(current, draft);
+	if (!('settings' in unchanged)) throw new Error(JSON.stringify(unchanged.errors));
+	expect(unchanged.settings.wallbox_default_modes).toEqual({});
+	draft.wallboxDefaultModes.evcs = 'pv';
+	const result = applyDraft(current, draft);
+	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+	expect(result.settings.wallbox_default_modes).toEqual({ evcs: 'pv' });
+	const stored = { ...current, wallbox_default_modes: { twc: 'off' as const } };
+	expect(draftFrom(stored, ['evcs', 'twc']).wallboxDefaultModes).toEqual({ evcs: '', twc: 'off' });
+});
+
+it('ordnet Fehler zum Standard-Lademodus dem Feld der Ladestation zu', () => {
+	expect(
+		editorFieldErrors(
+			[{ loc: ['body', 'settings', 'wallbox_default_modes', 'evcs'], msg: 'ungültig', type: 'x' }],
+			settings()
+		)
+	).toEqual({ 'wallboxDefaultModes.evcs': 'ungültig' });
+});
+
 it('builds ids from names, unique and fixed', () => {
 	expect(componentId('Grundgebühr Lieferant', ['spot'])).toBe('grundgebuehr_lieferant');
 	expect(componentId('Netz', ['netz'])).toBe('netz_2');

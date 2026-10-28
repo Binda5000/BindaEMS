@@ -7,6 +7,7 @@
 		SensorCandidates,
 		SettingsCurrent
 	} from '$lib/api/schemas';
+	import { CHARGE_MODES, modeLabel } from '$lib/charging/view';
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
@@ -54,7 +55,10 @@
 	$effect(() => {
 		const keys = Object.keys(wallboxes);
 		untrack(() => {
-			for (const key of keys) draft.wallboxNames[key] ??= '';
+			for (const key of keys) {
+				draft.wallboxNames[key] ??= '';
+				draft.wallboxDefaultModes[key] ??= '';
+			}
 		});
 	});
 	// ebenso Fahrzeuge für die Anwesenheit aus Home Assistant
@@ -74,7 +78,7 @@
 		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
 	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
 	const SHOWN_KEYS = [
-		/^(feedIn|prices|planning|learning|wallboxNames)\./,
+		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes)\./,
 		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
 		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
 		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
@@ -252,12 +256,15 @@
 	{#if Object.keys(draft.wallboxNames).length > 0}
 		<fieldset>
 			<legend>Ladestationen</legend>
-			<p class="hint">Eigener Name für Übersicht und Verlauf; leer = Typname.</p>
+			<p class="hint">
+				Eigener Name für Übersicht und Verlauf; leer = Typname. „Nach dem Abstecken“ ist der Modus,
+				den die App setzt, sobald das Auto abgesteckt wird; „Unverändert“ lässt ihn stehen.
+			</p>
 			{#each Object.keys(draft.wallboxNames) as key (key)}
 				{@const field = `wallboxNames.${key}`}
 				{@const wallbox = wallboxes[key]}
 				<div class="field">
-					<label for="{uid}-wallbox-{key}">
+					<label for="{uid}-wallbox-{key}" id="{uid}-wallbox-{key}-label">
 						{wallbox ? `${key} (${WALLBOX_TYPES[wallbox.type]})` : key}
 					</label>
 					<input
@@ -269,6 +276,25 @@
 						aria-describedby={describedBy(field)}
 					/>
 					{@render fieldError(field)}
+				</div>
+				{@const modeField = `wallboxDefaultModes.${key}`}
+				<!-- die Ladestation als Beschreibung: sonst heißen alle Auswahlen gleich -->
+				<div class="field">
+					<label for="{uid}-wallbox-mode-{key}">Nach dem Abstecken</label>
+					<select
+						id="{uid}-wallbox-mode-{key}"
+						bind:value={draft.wallboxDefaultModes[key]}
+						aria-invalid={errors[modeField] ? 'true' : undefined}
+						aria-describedby={[`${uid}-wallbox-${key}-label`, describedBy(modeField)]
+							.filter(Boolean)
+							.join(' ')}
+					>
+						<option value="">Unverändert</option>
+						{#each CHARGE_MODES as mode (mode)}
+							<option value={mode}>{modeLabel(mode)}</option>
+						{/each}
+					</select>
+					{@render fieldError(modeField)}
 				</div>
 			{/each}
 		</fieldset>
