@@ -196,7 +196,7 @@ geht, rebased. Betrieb: `docs/betrieb.md`, „Laden“ und „Lademodi“.
 
 **Plan Standard-Lademodus je Ladepunkt ist umgesetzt** (`docs/superpowers/plans/2026-10-28-standard-lademodus-je-ladepunkt.md`, 5 Tasks,
 freigegeben vom Betreiber am 28.10.2026 mit allen 8 Entscheidungen: „Rest passt so“; das Vorklimatisieren über die Wallbox ist ein eigener Plan): Branch
-`claude/project-thread-7dml9y`, **noch nicht auf `main`** (die Integration braucht die Zustimmung des Betreibers), **nicht ausgerollt**.
+`claude/project-thread-7dml9y`, **seit dem 28.10.2026 per Fast-Forward auf `main`** (Zustimmung des Betreibers, Branch-CI grün), **nicht ausgerollt**; `latest` enthält damit den Standard-Lademodus.
 Je Ladepunkt gibt es unter Einstellungen → „Ladestationen“ die Auswahl „Nach dem Abstecken“ („Unverändert“ ist der Standard, dazu PV-Überschuss,
 Min+PV, Sofort, Aus und Geplant): Steckt dort ein Auto ab, setzt die app den Modus des Fahrzeugs der Session
 (bei einem Gast den Gast-Lademodus, nie „Geplant“) mit dem Urheber „Standard-Lademodus“ und der Quelle `system`; steht der Modus schon richtig,
@@ -2041,7 +2041,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    (Kurzfassung oben, „Plan Sofort-Limit“). Es folgt das gemeinsame Ausrollen von core und app (Punkt 13 unter „Offen an der
    Anlage“); wann, entscheidet der Betreiber.
 10. **Plan Standard-Lademodus je Ladepunkt** (Standardmodus beim Abstecken): umgesetzt und je Task geprüft, auf dem Branch
-   `claude/project-thread-7dml9y`, noch nicht auf `main` (Integration nur mit Zustimmung des Betreibers), nicht ausgerollt (Kurzfassung oben,
+   `claude/project-thread-7dml9y`, seit dem 28.10.2026 auf `main` (Fast-Forward mit Zustimmung des Betreibers), nicht ausgerollt (Kurzfassung oben,
    „Plan Standard-Lademodus“). Es folgt das Ausrollen von `ems-app` und die Wahl der Standards (Punkt 15 unter „Offen an der Anlage“);
    wann, entscheidet der Betreiber.
 
