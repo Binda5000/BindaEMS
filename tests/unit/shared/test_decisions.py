@@ -432,6 +432,7 @@ def test_battery_reasons_have_texts() -> None:  # Plan 2c-2a, „Texte“
     [
         ("battery_comp", "Akku nicht ins Auto"),
         ("battery_support", "Akku-Unterstützung"),
+        ("battery_spare", "Akku übrig fürs Auto"),  # Plan Akku ins Auto, Entscheidung 9
         ("peak_guard", "15-min-Wächter"),
         ("plan_hold", "Plan: Halten"),
         ("plan_grid_charge", "Plan: Netzladen"),

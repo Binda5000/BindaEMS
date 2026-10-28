@@ -6,6 +6,7 @@ from tests.helpers import T0
 
 from bindaems.core.control.battery import (
     BATTERY_COMP,
+    BATTERY_SPARE,
     BATTERY_SUPPORT,
     PLAN_GRID_CHARGE,
     PLAN_HOLD,
@@ -43,6 +44,8 @@ IDLE = {
     "refresh_age_s": None,
     "support_soc_pct": None,
     "support_source": None,
+    "spare": None,
+    "spare_w": None,
 }
 
 
@@ -83,6 +86,7 @@ def with_control(cfg: Config, **update: float) -> Config:
 
 def test_reason_codes() -> None:
     assert (BATTERY_COMP, BATTERY_SUPPORT) == ("battery_comp", "battery_support")
+    assert BATTERY_SPARE == "battery_spare"
     assert (PLAN_HOLD, PLAN_GRID_CHARGE) == ("plan_hold", "plan_grid_charge")
     assert GuardCause.PEAK_GUARD.value == "peak_guard"
 
@@ -411,6 +415,8 @@ def test_locked_victron_gets_nothing_and_forgets(cfg, held) -> None:  # Review F
         "refresh_age_s": None,
         "support_soc_pct": None,
         "support_source": None,
+        "spare": None,
+        "spare_w": None,
     }
     foreign = {**FREE, **held, "present": {SETPOINT: 2000.0}}
     assert battery.decide(at(2), need(0.0), **foreign) == []  # auch kein „kein Override“
@@ -446,6 +452,8 @@ def test_unknown_need_keeps_the_override_without_refresh(cfg, unknown) -> None: 
         "refresh_age_s": 240.0,
         "support_soc_pct": None,
         "support_source": None,
+        "spare": None,
+        "spare_w": None,
     }
     [found] = battery.decide(at(241), need(2050.0), **FREE)
     assert found.command == setpoint(2000.0, "battery_comp", refresh=True)
@@ -572,6 +580,8 @@ def test_health_of_the_battery(cfg) -> None:
         "refresh_age_s": 10.0,
         "support_soc_pct": None,
         "support_source": None,
+        "spare": None,
+        "spare_w": None,
     }
     bridging = BatteryNeed(0.0, 0.0, 2100.0, {"evcs": 2100.0}, {"evcs": 0.0}, "time", 950.0)
     assert battery.decide(at(11), bridging, **FREE) == []
@@ -804,3 +814,210 @@ def test_health_shows_the_effective_threshold_and_source(cfg) -> None:
     assert shown() == (70.0, "config")
     battery.idle()
     assert battery.health() == IDLE
+
+
+# --- Akku ins Auto: Geplant und Sofort (Plan Akku ins Auto, Entscheidungen 4 und 6) ---------------
+
+
+def plan_slot(
+    kind: BatteryIntentKind = BatteryIntentKind.EIGENVERBRAUCH,
+    *,
+    support_soc_pct: float | None = None,
+    soc_end_pct: float | None = None,
+    vehicles: dict[str, int] | None = None,
+    vehicles_battery: dict[str, int] | None = None,
+    now_battery: bool = False,
+) -> ActiveSlot:
+    """Ein gültiger Slot ab ``T0`` mit den Feldern für Akku ins Auto."""
+    return ActiveSlot(
+        1,
+        T0,
+        BatteryIntent(
+            kind=kind, grid_charge_w=2000.0 if kind is BatteryIntentKind.NETZLADEN else 0.0
+        ),
+        None,
+        None,
+        support_soc_pct,
+        vehicles=vehicles or {},
+        soc_end_pct=soc_end_pct,
+        vehicles_battery=vehicles_battery or {},
+        now_battery=now_battery,
+    )
+
+
+def planned(vehicle: str, power_w: float, wallbox: str = "evcs") -> BatteryCar:
+    return BatteryCar(wallbox, Effective.PLANNED, power_w, True, vehicle=vehicle)
+
+
+def now_car(vehicle: str, power_w: float, wallbox: str = "evcs") -> BatteryCar:
+    return BatteryCar(wallbox, Effective.NOW, power_w, True, vehicle=vehicle)
+
+
+def spare_need(
+    cfg: Config,
+    *,
+    soc: float | None,
+    active: ActiveSlot | None,
+    cars: list[BatteryCar],
+    pv: float = 0.0,
+    house: float = 500.0,
+) -> BatteryNeed:
+    found = BatteryController(cfg).assess(T0, soc, pv, house, cars, active=active)
+    assert found is not None
+    return found
+
+
+def test_planned_car_takes_its_share_while_the_soc_is_above_the_slot_end(cfg) -> None:
+    active = plan_slot(vehicles={"tesla": 7000}, vehicles_battery={"tesla": 2500}, soc_end_pct=61.0)
+    found = spare_need(cfg, soc=61.5, active=active, cars=[planned("tesla", 7000.0)])
+    assert found.allowed_w == {"evcs": 2500.0}
+    assert (found.wanted_w, found.spare_w, found.spare) == (4500.0, 2500.0, "off")
+
+
+def test_planned_share_off_at_the_planned_slot_end_soc(cfg) -> None:
+    active = plan_slot(vehicles={"tesla": 7000}, vehicles_battery={"tesla": 2500}, soc_end_pct=61.0)
+    found = spare_need(cfg, soc=61.0, active=active, cars=[planned("tesla", 7000.0)])
+    assert found.allowed_w["evcs"] == 0.0
+    assert found.wanted_w == pytest.approx(7000.0)
+    assert found.spare_w == 0.0
+
+
+def test_planned_share_off_without_soc_or_slot_end(cfg) -> None:
+    share = {"tesla": 2500}
+    cars = [planned("tesla", 7000.0)]
+    unknown = spare_need(
+        cfg, soc=None, active=plan_slot(vehicles_battery=share, soc_end_pct=40.0), cars=cars
+    )
+    no_end = spare_need(cfg, soc=90.0, active=plan_slot(vehicles_battery=share), cars=cars)
+    assert unknown.allowed_w == no_end.allowed_w == {"evcs": 0.0}
+
+
+def test_now_car_takes_spare_above_the_plan_threshold(cfg) -> None:
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    found = spare_need(cfg, soc=72.0, active=active, cars=[now_car("tesla", 11000.0)])
+    assert found.allowed_w["evcs"] == pytest.approx(11000.0)
+    assert found.wanted_w == 0.0 and found.spare == "on"
+    assert found.spare_w == 11000.0
+    assert found.support == "mode"  # die Unterstützung bleibt davon unberührt
+
+
+def test_now_spare_hysteresis_in_the_controller(cfg) -> None:
+    battery = BatteryController(cfg)
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    cars = [now_car("tesla", 11000.0)]
+
+    def spare(seconds: float, soc: float | None) -> str:
+        found = battery.assess(at(seconds), soc, 0.0, 500.0, cars, active=active)
+        assert found is not None
+        return found.spare
+
+    assert spare(0, 70.0) == "soc"  # erreicht: gesperrt
+    assert spare(1, 74.0) == "soc"  # unter 70 + 5
+    assert spare(2, 75.0) == "on"
+    assert spare(3, None) == "soc"  # unbekannt sperrt, der Stand bleibt
+    assert spare(4, 72.0) == "on"
+
+
+@pytest.mark.parametrize("kind", [BatteryIntentKind.HALTEN, BatteryIntentKind.NETZLADEN])
+def test_hold_blocks_planned_and_now_battery(cfg, kind) -> None:
+    held = plan_slot(
+        kind,
+        now_battery=True,
+        vehicles_battery={"tesla": 3000},
+        support_soc_pct=50.0,
+        soc_end_pct=50.0,
+    )
+    cars = [planned("tesla", 7000.0), now_car("egolf", 4000.0, wallbox="twc")]
+    found = spare_need(cfg, soc=90.0, active=held, cars=cars)
+    assert found.allowed_w == {"evcs": 0.0, "twc": 0.0} and found.spare == "plan"
+    assert found.spare_w == 0.0
+
+
+def test_no_plan_keeps_todays_rule(cfg) -> None:
+    cars = [now_car("tesla", 11000.0), planned("egolf", 4000.0, wallbox="twc")]
+    found = spare_need(cfg, soc=95.0, active=None, cars=cars)
+    assert found.allowed_w == {"evcs": 0.0, "twc": 0.0} and found.spare == "off"
+    # Ein Slot ohne die neuen Felder (alte Absicht) regelt genauso.
+    old = spare_need(cfg, soc=95.0, active=plan_slot(support_soc_pct=50.0), cars=cars)
+    assert old.allowed_w == {"evcs": 0.0, "twc": 0.0} and old.spare == "off"
+
+
+def test_spare_does_not_count_against_the_support_budget(cfg) -> None:
+    active = plan_slot(
+        now_battery=True,
+        support_soc_pct=70.0,
+        soc_end_pct=60.0,
+        vehicles_battery={"egolf": 2000},
+    )
+    cars = [
+        BatteryCar("twc", Effective.PV, 4000.0, True, vehicle="tesla"),
+        now_car("guest", 3000.0, wallbox="evcs"),
+        BatteryCar("evcs2", Effective.PLANNED, 2500.0, True, vehicle="egolf"),
+    ]
+    found = spare_need(cfg, soc=80.0, active=active, cars=cars)
+    assert found.allowed_w == {"twc": 3000.0, "evcs": 3000.0, "evcs2": 2000.0}
+    assert found.spare_w == 5000.0  # nur Geplant und Sofort
+    assert found.wanted_w == 1500.0
+
+
+def test_a_wallbox_without_vehicle_in_now_gets_spare(cfg) -> None:  # ein Gast ohne Ladepunkt
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    cars = [BatteryCar("twc", Effective.NOW, 2300.0, True)]
+    found = spare_need(cfg, soc=80.0, active=active, cars=cars)
+    assert found.allowed_w == {"twc": 2300.0}
+
+
+def spare_need_of(spare_w: float, allowed_w: dict[str, float], wanted: float) -> BatteryNeed:
+    """Ein Bedarf mit Fehlbetrag ``wanted`` an der EVCS und dem Akkuanteil ``spare_w``."""
+    return BatteryNeed(0.0, 500.0, wanted, {"evcs": wanted}, allowed_w, "mode", None, spare_w, "on")
+
+
+def test_reason_battery_spare_first(cfg) -> None:
+    found_need = spare_need_of(2500.0, {"evcs": 2500.0}, 4000.0)
+    [found] = BatteryController(cfg).decide(T0, found_need, **FREE)
+    assert found.command == setpoint(1500.0, "battery_spare")
+    [found] = BatteryController(cfg).decide(T0, found_need, **FREE, active=EV_SLOT)
+    assert found.command.reasons[0] == "battery_spare"
+    budget = {**FREE, "budget_w": 1000.0}
+    [found] = BatteryController(cfg).decide(T0, found_need, **budget)
+    assert found.command == setpoint(1000.0, "battery_spare", "peak_guard")
+
+
+def test_reason_without_spare_stays_as_today(cfg) -> None:
+    support = spare_need_of(0.0, {"evcs": 1000.0}, 4000.0)
+    [found] = BatteryController(cfg).decide(T0, support, **FREE)
+    assert found.command == setpoint(3000.0, "battery_support")
+    [found] = BatteryController(cfg).decide(T0, support, **FREE, active=HOLD_SLOT)
+    assert found.command.reasons == ("plan_hold",)
+
+
+def test_health_shows_the_spare_state_and_share(cfg) -> None:
+    battery = BatteryController(cfg)
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    cars = [now_car("tesla", 11000.0)]
+
+    def shown() -> tuple[object, object]:
+        health = battery.health()
+        return health["spare"], health["spare_w"]
+
+    assert shown() == (None, None)  # vor dem ersten ``assess``
+    battery.assess(T0, 80.0, 0.0, 500.0, cars, active=active)
+    assert shown() == ("on", 11000.0)
+    battery.assess(at(1), 80.0, 0.0, 500.0, cars)
+    assert shown() == ("off", 0.0)
+    # Der Stand hängt an keiner Messung: Ohne PV ist er bekannt, der Anteil nicht.
+    assert battery.assess(at(2), 69.0, None, 500.0, cars, active=active) is None
+    assert shown() == ("soc", None)
+    battery.idle()
+    assert battery.health() == IDLE
+
+
+def test_idle_starts_the_spare_over(cfg) -> None:
+    battery = BatteryController(cfg)
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    cars = [now_car("tesla", 11000.0)]
+    locked = battery.assess(T0, 70.0, 0.0, 500.0, cars, active=active)
+    assert locked is not None and locked.spare == "soc"
+    battery.idle()
+    found = battery.assess(at(10), 72.0, 0.0, 500.0, cars, active=active)
+    assert found is not None and found.spare == "on"

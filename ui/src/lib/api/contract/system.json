@@ -239,7 +239,9 @@
         "bridging_s": null,
         "refresh_age_s": null,
         "support_soc_pct": 70.0,
-        "support_source": "config"
+        "support_source": "config",
+        "spare": "off",
+        "spare_w": 0.0
       },
       "peak": {
         "state": "off",

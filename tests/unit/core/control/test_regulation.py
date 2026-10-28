@@ -274,9 +274,11 @@ def test_wallbox_without_vehicle_counts_with_the_guest_mode(cfg) -> None:  # Pr�
     charger = ChargeController(cfg, HardLimits.from_config(cfg), started=T0)
     charger.step(charge)
     found = battery_cars(cfg, charger.cars(), charge.wallboxes, ChargeMode.NOW)
+    # Jedes Auto eines Ladepunkts nennt sein Fahrzeug, ein Gast seinen Schl체ssel (Plan Akku ins
+    # Auto); eine Wallbox ohne Ladepunkt hat keins.
     assert found == [
-        BatteryCar("evcs", Effective.PV, 0.0, False),
-        BatteryCar("twc", Effective.NOW, 2300.0, True),
+        BatteryCar("evcs", Effective.PV, 0.0, False, vehicle="tesla"),
+        BatteryCar("twc", Effective.NOW, 2300.0, True, vehicle="guest@twc"),
     ]
     # Ohne Ladepunkte z채hlt jede Wallbox in der Reihenfolge von config.yaml mit dem Modus des
     # Gastes; eine, die die Beobachtungen nicht nennen, ist unbekannt.
@@ -1060,6 +1062,75 @@ def test_regulation_hands_the_support_and_the_slot_to_the_battery(cfg) -> None:
     assert cycle(20 * 60, intent)["support"] == "plan"
     off = intent.model_copy(update={"support": SupportIntent(allowed=False)})
     assert cycle(21 * 60, off)["support"] == "off"
+
+
+def spare_plan(**fields: Any) -> IntentPlan:
+    """Ein Plan ab ``T0`` mit einem Slot im Eigenverbrauch und diesen Feldern."""
+    return IntentPlan(
+        id=1003,
+        created_at=T0,
+        valid_until=T0 + timedelta(minutes=15),
+        grid_charge_allowed=True,
+        slots=[IntentPlanSlot(start=T0, intent=BatteryIntent(), **fields)],
+    )
+
+
+def test_a_now_car_charges_from_the_spare_battery(cfg) -> None:  # Plan Akku ins Auto, Ent. 6
+    # Der Tesla l채dt in Sofort mit 11040 W, das Haus braucht 960 W, keine PV, SOC 60 %: Mit
+    # 체brigem Akku 체ber der Plan-Schwelle (50 %) kommt alles aus dem Akku, ohne Override.
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+
+    def cycle(s: int, plan: IntentPlan) -> list[ControlCommand]:
+        intent = TESLA_NOW.model_copy(update={"plan": plan})
+        charge = inputs(
+            cfg,
+            s=s,
+            intent=intent,
+            twc_obs=TESLA_16_A,
+            tesla_obs=tesla(plugged=True, charging=True),
+            controllable={**CONTROLLABLE, VICTRON: True},
+        )
+        return regulation.step(
+            RegulationInputs(charge, pv_w=0.0, house_w=960.0, base_setpoint_w=0.0)
+        )
+
+    found = cycle(10, spare_plan(now_battery=True, support_soc_pct=50.0))
+    assert not [x for x in found if x.command.actuator == VICTRON]
+    health = regulation.health(T0)["battery"]
+    assert (health["spare"], health["spare_w"], health["target_w"]) == ("on", 11040.0, 0.0)
+    # Ohne 체brigen Akku (alte Absicht) kommt der Fehlbetrag wie heute aus dem Netz.
+    [override] = [
+        x for x in cycle(20, spare_plan(support_soc_pct=50.0)) if x.command.actuator == VICTRON
+    ]
+    assert override.command == Command(
+        VICTRON, CommandKind.GRID_SETPOINT, 11040.0, reasons=("battery_comp",)
+    )
+
+
+def test_a_planned_car_charges_its_plan_share_from_the_battery(cfg) -> None:  # Ent. 4
+    # Der e-Golf in Geplant an der EVCS mit 2760 W; der Slot nennt 2000 W aus dem Akku und den SOC
+    # 40 % am Ende: Bei SOC 60 % kommen 760 W aus dem Netz, mit dem Grund ``battery_spare``.
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    plan = spare_plan(vehicles={"egolf": 2760}, ev_battery_w={"egolf": 2000}, soc_end_pct=40.0)
+    intent = Intent(
+        version=1,
+        control=True,
+        vehicles={"egolf": VehicleIntent(mode=ChargeMode.PLANNED)},
+        plan=plan,
+    )
+    charge = inputs(
+        cfg,
+        s=10,
+        intent=intent,
+        evcs_obs=evcs(charging=True, power_w=2760.0),
+        controllable={**CONTROLLABLE, VICTRON: True},
+    )
+    found = regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0))
+    [override] = [x for x in found if x.command.actuator == VICTRON]
+    assert override.command == Command(
+        VICTRON, CommandKind.GRID_SETPOINT, 760.0, reasons=("battery_spare",)
+    )
+    assert regulation.health(T0)["battery"]["spare_w"] == 2000.0
 
 
 # --- Klimaanlage (Plan 6a, Task 8) ----------------------------------------------------------------

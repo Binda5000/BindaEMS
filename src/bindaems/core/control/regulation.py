@@ -304,7 +304,8 @@ class Regulation:
         Präzisierung 7). Wächter und Override bekommen ihn: Bei ``HALTEN`` und ``NETZLADEN`` ändert
         er den gewollten Netzbezug (``plan_wanted_w``, Präzisierung 7). Der Bedarf (``assess``)
         bekommt ihn mit der Akku-Unterstützung der Absicht (Präzisierung 8): Plan-Schwelle, Schalter
-        und die Sperre bei ``HALTEN`` und ``NETZLADEN``.
+        und die Sperre bei ``HALTEN`` und ``NETZLADEN``; dazu den Akkuanteil für „Geplant“ und den
+        übrigen Akku für „Sofort“ (Plan Akku ins Auto).
         """
         charge = inputs.charge
         plan = None if charge.intent is None else charge.intent.plan
@@ -717,11 +718,16 @@ def battery_cars(
     """Die Autos für den Akku-Sollwert in der Reihenfolge von Präzisierung 4.
 
     Erst je Ladepunkt sein Auto (``cars``, aus ``ChargeController.cars`` in der Reihenfolge der
-    Priorität; ein Gast dort mit dem Modus des Gastes), dann jede Wallbox ohne Ladepunkt in der
-    Reihenfolge von ``config.yaml``: mit dem Modus des Gastes (``guest``), der Leistung der Wallbox
-    und ob sie lädt. Eine Wallbox, die ``wallboxes`` nicht nennt, ist ganz unbekannt.
+    Priorität; ein Gast dort mit dem Modus des Gastes) mit seinem Fahrzeug-Schlüssel, auch dem
+    eines Gastes, für den Akkuanteil des Plans (Plan Akku ins Auto, Entscheidung 4). Dann jede
+    Wallbox ohne Ladepunkt in der Reihenfolge von ``config.yaml``: ohne Fahrzeug, mit dem Modus des
+    Gastes (``guest``), der Leistung der Wallbox und ob sie lädt. Eine Wallbox, die ``wallboxes``
+    nicht nennt, ist ganz unbekannt.
     """
-    found = [BatteryCar(car.wallbox, car.mode, car.power_w, car.charging) for car in cars]
+    found = [
+        BatteryCar(car.wallbox, car.mode, car.power_w, car.charging, vehicle=car.vehicle)
+        for car in cars
+    ]
     taken = {car.wallbox for car in cars}
     mode = effective_of(guest)
     for key in cfg.wallboxes:

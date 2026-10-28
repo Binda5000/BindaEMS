@@ -159,3 +159,19 @@ def test_active_slot_defaults_to_neutral_without_threshold() -> None:
     assert found is not None and (found.thermal, found.soc_end_pct) == ("neutral", None)
     bare = ActiveSlot(1, at("10:00"), BatteryIntent(), None, None, None)
     assert (bare.thermal, bare.soc_end_pct) == ("neutral", None)
+
+
+def test_active_slot_carries_battery_fields() -> None:  # Plan Akku ins Auto, Entscheidungen 4, 6
+    slots = [
+        slot.model_copy(update={"ev_battery_w": {"tesla": 2500}, "now_battery": True})
+        for slot in PLAN_1001.slots
+    ]
+    plan = PLAN_1001.model_copy(update={"slots": slots})
+    found = active_slot(plan, at("10:20"))
+    assert found is not None
+    assert found.vehicles_battery == {"tesla": 2500} and found.now_battery is True
+    # Alte Absichten ohne die Felder: kein Akkuanteil, kein übriger Akku für Sofort
+    old = active_slot(PLAN_1001, at("10:20"))
+    assert old is not None and (old.vehicles_battery, old.now_battery) == ({}, False)
+    bare = ActiveSlot(1, at("10:00"), BatteryIntent(), None, None, None)
+    assert (bare.vehicles_battery, bare.now_battery) == ({}, False)

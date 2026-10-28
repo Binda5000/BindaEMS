@@ -7,9 +7,11 @@ from tests.helpers import T0
 
 from bindaems.core.control.battery import (
     BRIDGE_END_S,
+    SPARE_MODES,
     SUPPORT_MODES,
     BatteryCar,
     BatteryNeed,
+    Spare,
     Support,
     allowed,
     deficits,
@@ -19,7 +21,7 @@ from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.shared.config import ControlConfig
 from bindaems.shared.control import SupportIntent
-from bindaems.shared.plan import BatteryIntent
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 
 def car(
@@ -53,6 +55,7 @@ AT_70 = Cycle(
 def test_constants() -> None:
     assert BRIDGE_END_S == 60.0
     assert SUPPORT_MODES == {Effective.PV, Effective.MIN_PV}
+    assert SPARE_MODES == {Effective.NOW}
 
 
 # --- Fehlbetrag -----------------------------------------------------------------------------------
@@ -427,6 +430,152 @@ def test_without_a_limit_only_boost_gets_something() -> None:
 def test_a_car_without_an_entry_gets_nothing() -> None:
     cars = [car("a", Effective.PV), car("b", Effective.BOOST)]
     assert allowed(cars, {}, support_on=True, support_max_w=3000.0) == {"a": 0.0, "b": 0.0}
+
+
+# --- Akku ins Auto: Geplant und Sofort (Plan Akku ins Auto, Entscheidungen 4 und 6) ---------------
+
+
+def test_planned_car_gets_its_plan_battery_share() -> None:
+    cars = [BatteryCar("evcs", Effective.PLANNED, 7000.0, True, vehicle="tesla")]
+    shares = allowed(
+        cars,
+        {"evcs": 7000.0},
+        support_on=False,
+        support_max_w=3000,
+        planned_w={"tesla": 2500},
+        planned_on=True,
+    )
+    assert shares == {"evcs": 2500.0}
+
+
+def test_planned_share_needs_the_switch_the_vehicle_and_its_entry() -> None:
+    deficit = {"evcs": 7000.0}
+    tesla = [BatteryCar("evcs", Effective.PLANNED, 7000.0, True, vehicle="tesla")]
+    no_vehicle = [BatteryCar("evcs", Effective.PLANNED, 7000.0, True)]
+    plan = {"tesla": 2500}
+    off = allowed(tesla, deficit, support_on=True, support_max_w=3000, planned_w=plan)
+    assert off == {"evcs": 0.0}  # ohne ``planned_on`` nichts
+    assert allowed(
+        no_vehicle, deficit, support_on=True, support_max_w=3000, planned_w=plan, planned_on=True
+    ) == {"evcs": 0.0}
+    assert allowed(
+        tesla,
+        deficit,
+        support_on=True,
+        support_max_w=3000,
+        planned_w={"egolf": 2500},
+        planned_on=True,
+    ) == {"evcs": 0.0}
+
+
+def test_planned_share_never_exceeds_the_deficit() -> None:
+    cars = [BatteryCar("evcs", Effective.PLANNED, 1800.0, True, vehicle="tesla")]
+    shares = allowed(
+        cars,
+        {"evcs": 1200.0},  # die PV deckt einen Teil
+        support_on=False,
+        support_max_w=3000,
+        planned_w={"tesla": 2500},
+        planned_on=True,
+    )
+    assert shares == {"evcs": 1200.0}
+
+
+def test_now_car_gets_its_whole_deficit_only_with_spare() -> None:
+    cars = [car("evcs", Effective.NOW, 11000.0), car("twc", Effective.PV, 2000.0)]
+    deficit = {"evcs": 11000.0, "twc": 2000.0}
+    on = allowed(cars, deficit, support_on=True, support_max_w=3000.0, spare_on=True)
+    assert on == {"evcs": 11000.0, "twc": 2000.0}  # zählt nicht gegen die 3 kW
+    off = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
+    assert off == {"evcs": 0.0, "twc": 2000.0}
+
+
+def test_allowed_mixes_support_planned_and_spare() -> None:
+    cars = [
+        BatteryCar("evcs", Effective.PV, 4000.0, True, vehicle="tesla"),
+        BatteryCar("twc", Effective.NOW, 7000.0, True, vehicle="egolf"),
+        BatteryCar("evcs2", Effective.PLANNED, 3000.0, True, vehicle="gast"),
+    ]
+    shares = allowed(
+        cars,
+        {"evcs": 4000.0, "twc": 7000.0, "evcs2": 3000.0},
+        support_on=True,
+        support_max_w=3000,
+        planned_w={"gast": 1000},
+        planned_on=True,
+        spare_on=True,
+    )
+    assert shares == {"evcs": 3000.0, "twc": 7000.0, "evcs2": 1000.0}
+
+
+def spare_slot(
+    support_soc_pct: float | None = 70.0,
+    *,
+    now_battery: bool = True,
+    kind: BatteryIntentKind = BatteryIntentKind.EIGENVERBRAUCH,
+) -> ActiveSlot:
+    """Ein gültiger Slot mit dieser Plan-Schwelle, der übrigen Akku für Sofort erlaubt."""
+    grid_charge_w = 2000.0 if kind is BatteryIntentKind.NETZLADEN else 0.0
+    intent = BatteryIntent(kind=kind, grid_charge_w=grid_charge_w)
+    return ActiveSlot(1, T0, intent, None, None, support_soc_pct, now_battery=now_battery)
+
+
+def test_now_spare_hysteresis() -> None:
+    spare = Spare(ControlConfig())
+    active = spare_slot()
+    assert spare.update(72.0, active) == "on"
+    assert spare.update(70.0, active) == "soc"  # erreicht: gesperrt
+    assert spare.update(74.0, active) == "soc"  # unter 70 + 5
+    assert spare.update(75.0, active) == "on"
+
+
+def test_spare_hysteresis_follows_the_config() -> None:
+    spare = Spare(ControlConfig(support_hysteresis_pct=2.0))
+    active = spare_slot()
+    assert spare.update(69.0, active) == "soc"
+    assert spare.update(71.9, active) == "soc"
+    assert spare.update(72.0, active) == "on"
+
+
+def test_spare_unknown_soc_blocks_without_changing_state() -> None:
+    spare = Spare(ControlConfig())
+    active = spare_slot()
+    assert spare.update(80.0, active) == "on"
+    assert spare.update(None, active) == "soc"
+    assert spare.update(math.nan, active) == "soc"
+    assert spare.update(72.0, active) == "on"
+    assert spare.update(70.0, active) == "soc"
+    assert spare.update(None, active) == "soc"
+    assert spare.update(72.0, active) == "soc"  # gesperrt bleibt gesperrt
+
+
+def test_spare_is_off_without_a_slot_or_now_battery() -> None:
+    spare = Spare(ControlConfig())
+    assert spare.update(95.0, None) == "off"
+    assert spare.update(95.0, spare_slot(now_battery=False)) == "off"
+
+
+@pytest.mark.parametrize("kind", [BatteryIntentKind.HALTEN, BatteryIntentKind.NETZLADEN])
+def test_spare_is_blocked_by_the_plan(kind: BatteryIntentKind) -> None:
+    assert Spare(ControlConfig()).update(95.0, spare_slot(kind=kind)) == "plan"
+
+
+def test_spare_without_a_plan_threshold_is_blocked() -> None:
+    assert Spare(ControlConfig()).update(95.0, spare_slot(None)) == "soc"
+
+
+def test_spare_soc_state_follows_every_slot_with_a_threshold() -> None:
+    spare = Spare(ControlConfig())
+    assert spare.update(68.0, spare_slot(now_battery=False)) == "off"  # fällt auf die Schwelle
+    assert spare.update(72.0, spare_slot()) == "soc"  # erst ab 75 % wieder
+
+
+def test_spare_reset_unlocks() -> None:
+    spare = Spare(ControlConfig())
+    active = spare_slot()
+    assert spare.update(70.0, active) == "soc"
+    spare.reset()
+    assert spare.update(72.0, active) == "on"
 
 
 # --- Wirksame Schwelle (Plan 3c, Präzisierung 8) --------------------------------------------------

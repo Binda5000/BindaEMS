@@ -66,6 +66,7 @@ _REASON_TEXT: Final = {
     "resume_after_outage": "Wiederaufnahme nach Ausfall",
     "battery_comp": "Akku nicht ins Auto",
     "battery_support": "Akku-Unterstützung",
+    "battery_spare": "Akku übrig fürs Auto",  # Plan Akku ins Auto, Entscheidung 9
     "peak_guard": "15-min-Wächter",
     "plan_hold": "Plan: Halten",
     "plan_grid_charge": "Plan: Netzladen",

@@ -725,8 +725,15 @@ def test_the_detected_reason_example_matches_the_decision_log() -> None:
 
 
 # die Gründe des Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“), dazu die der
-# Planausführung (Plan 3c, „Texte“)
-BATTERY_REASONS = {"battery_comp", "battery_support", "peak_guard", "plan_hold", "plan_grid_charge"}
+# Planausführung (Plan 3c, „Texte“) und von Akku ins Auto
+BATTERY_REASONS = {
+    "battery_comp",
+    "battery_support",
+    "battery_spare",
+    "peak_guard",
+    "plan_hold",
+    "plan_grid_charge",
+}
 
 # die Einstellungen unter ``control`` für Akku-Sollwert, 15-min-Wächter (Plan 2c-2a, Design 3.2)
 # und die Tesla-Punkte vor der Live-Schaltung (Plan 2d)
@@ -815,6 +822,7 @@ def test_json_examples_of_the_battery_section_are_valid() -> None:
             assert item["battery"]["state"] in {"ok", "unknown", "locked", "idle"}
             assert item["battery"]["support"] in {"on", "soc", "time", "mode", "off", "plan", None}
             assert item["battery"]["support_source"] in {"config", "intent", "plan", None}
+            assert item["battery"]["spare"] in {"on", "off", "plan", "soc", None}
             assert item["peak"]["state"] in {"off", "gap", "active", "exceeded"}
         else:
             found.add("decision")

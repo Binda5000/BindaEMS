@@ -7,6 +7,8 @@ Plan 2c-2a, Design 5.2 bis 5.6, Präzisierungen 4 bis 8 und 12. Rechnungen mit L
 - ``effective_threshold``: die wirksame Schwelle der Unterstützung aus Konfiguration, Absicht und
   Plan (Plan 3c, Präzisierung 8)
 - ``Support``: der Stand der Unterstützung mit SOC-Hysterese und Dauer der Überbrückung
+- ``Spare``: der Stand des übrigen Akkus für Autos in Sofort mit SOC-Hysterese an der Plan-Schwelle
+  (Plan Akku ins Auto, Entscheidung 6)
 - ``allowed``: der Anteil, den der Akku je Auto liefern darf
 - ``BatteryNeed``: der Bedarf eines Zyklus und daraus der gewollte Netzbezug ``W``
 - ``plan_wanted_w``: der gewollte Netzbezug ``W`` mit dem gültigen Slot des Plans (Plan 3c,
@@ -19,6 +21,12 @@ davon den erlaubten Anteil; was darüber hinausgeht, ``max(0, Fehlbetrag − erl
 Netz. Die Hauslast deckt der Akku immer, außer ein Slot des Plans will ``HALTEN`` oder
 ``NETZLADEN``: Dann kommen Haus und Autos aus dem Netz, soweit die PV sie nicht deckt
 (``plan_wanted_w``), und der erlaubte Anteil ist für jedes Auto 0, auch in Boost.
+
+Akku ins Auto (Plan Akku ins Auto, Entscheidungen 4 und 6): Im Eigenverbrauch bekommt ein Auto in
+„Geplant“ höchstens den Akkuanteil, den der gültige Slot für sein Fahrzeug nennt, solange der SOC
+über dem geplanten SOC am Ende des Slots liegt; ein Auto in „Sofort“ seinen ganzen Fehlbetrag,
+solange der Slot übrigen Akku erlaubt und der SOC über der Plan-Schwelle liegt (``Spare``). Beides
+geht nicht von ``support_max_w`` ab. Ohne gültigen Slot regelt der core wie ohne Plan.
 
 Ein fehlender Wert ist ``None`` (unbekannt), ebenso ein Wert, der keine endliche Zahl ist
 (``finite_number``). Die Schicht ist rein: Die Zeit kommt als Argument, auf der Uhr der
@@ -50,22 +58,31 @@ BRIDGE_END_S: Final = 60.0  # so lange ohne Fehlbetrag, dann ist die Überbrück
 # Gründe des Overrides (Design 9); hinter ihnen ``peak_guard``, wenn das Budget des Wächters senkt
 BATTERY_COMP: Final = "battery_comp"  # der Fehlbetrag der Autos geht aufs Netz statt aus dem Akku
 BATTERY_SUPPORT: Final = "battery_support"  # nur der Teil über dem erlaubten Anteil geht aufs Netz
+BATTERY_SPARE: Final = "battery_spare"  # Geplant oder Sofort laden aus übrigem Akku
 PLAN_HOLD: Final = "plan_hold"  # der Plan will HALTEN: Der Akku gibt nichts ab
 PLAN_GRID_CHARGE: Final = "plan_grid_charge"  # der Plan will NETZLADEN: dazu P aus dem Netz
 
 # der Stand der Unterstützung (Health)
 SupportReason = Literal["on", "soc", "time", "mode", "off", "plan"]
+# der Stand des übrigen Akkus für Sofort (Health, Plan Akku ins Auto)
+SpareReason = Literal["on", "off", "plan", "soc"]
 # woher die wirksame Schwelle der Unterstützung kommt (Health, Plan 3c)
 SupportSource = Literal["config", "intent", "plan"]
 
 # Diese Modi bekommen Akkuleistung, wenn die Unterstützung gilt (Design 5.2).
 SUPPORT_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})
+# Diese Modi bekommen ihren ganzen Fehlbetrag, wenn der Slot übrigen Akku erlaubt (Plan Akku ins
+# Auto, Entscheidung 6).
+SPARE_MODES: Final = frozenset({Effective.NOW})
 
 _SETPOINT: Final[Key] = (VICTRON, CommandKind.GRID_SETPOINT)  # der Override
 
 _State = Literal["ok", "unknown", "locked"]  # der Stand eines Zyklus mit ``decide`` (Health)
 
 _ALLOWED: Final = SupportIntent()  # ohne Angabe: erlaubt, Schwelle aus der Konfiguration
+
+# Diese Modi bekommen ihren Akkuanteil aus dem Plan (``BatteryNeed.spare_w``, Plan Akku ins Auto).
+_PLAN_SHARE_MODES: Final = SPARE_MODES | {Effective.PLANNED}
 
 
 @dataclass(frozen=True)
@@ -77,12 +94,15 @@ class BatteryCar:
     - ``mode``: der geltende Modus des Fahrzeugs, ohne Fahrzeug der des Gastes
     - ``power_w``: die Ladeleistung des Autos in W
     - ``charging``: ob das Auto lädt; ohne Leistung entscheidet das, ob der Bedarf unbekannt ist
+    - ``vehicle``: der Fahrzeug-Schlüssel des Ladepunkts, auch der eines Gastes; ``None`` für eine
+      Wallbox ohne Ladepunkt. Er wählt den Akkuanteil des Plans für „Geplant“ (Plan Akku ins Auto).
     """
 
     wallbox: str
     mode: Effective
     power_w: float | None
     charging: bool | None
+    vehicle: str | None = None
 
 
 def deficits(
@@ -150,7 +170,9 @@ class Support:
     """Der Stand der Unterstützung: SOC-Hysterese und Überbrückung (Präzisierung 5).
 
     Die Unterstützung ist die Akkuleistung für Autos in PV-Überschuss und Min+PV
-    (``SUPPORT_MODES``). Sie gilt, wenn ein Auto in einem dieser Modi ist,
+    (``SUPPORT_MODES``). Was „Geplant“ und „Sofort“ aus dem Akku bekommen (Plan Akku ins Auto),
+    gehört nicht dazu: Es folgt dem Plan (``allowed``, ``Spare``), nicht dieser Schwelle. Sie gilt,
+    wenn ein Auto in einem dieser Modi ist,
 
     - sie erlaubt ist (Schalter „Akku-Unterstützung erlaubt“ der Absicht, Plan 3c) und kein Slot
       des Plans ``HALTEN`` oder ``NETZLADEN`` will: Dann gibt der Akku ohnehin nichts ab,
@@ -168,8 +190,8 @@ class Support:
     Der Stand für Health ist ``"on"`` oder der Grund der Sperre in dieser Reihenfolge: ``"mode"``
     (kein Auto in PV-Überschuss oder Min+PV), ``"off"`` (nicht erlaubt), ``"plan"`` (``HALTEN``
     oder ``NETZLADEN``), ``"soc"``, ``"time"``. SOC-Stand und Überbrückung laufen in jedem Zyklus
-    mit, was auch immer der Grund ist. Nach einer Pause beginnt der Stand mit ``reset`` neu. Der
-    Zustand lebt nur im Speicher. Nicht für mehrere Threads gedacht.
+    mit, was auch immer der Grund ist. Nach einer Pause beginnt der Stand mit ``reset`` neu, wie
+    der von ``Spare``. Der Zustand lebt nur im Speicher. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, control: ControlConfig) -> None:
@@ -244,12 +266,59 @@ class Support:
             self._bridging_since = now
 
 
+class Spare:
+    """Der Stand des übrigen Akkus für Autos in Sofort (Plan Akku ins Auto, Entscheidung 6).
+
+    Ein Slot mit ``now_battery`` erlaubt jedem Auto in Sofort (``SPARE_MODES``, auch einem Gast)
+    seinen ganzen Fehlbetrag aus dem Akku, solange der SOC über der Plan-Schwelle des Slots liegt
+    (``support_soc_pct``, der SOC, den der Plan für seine späteren Entladungen braucht). Erreicht
+    er sie, ist der übrige Akku gesperrt, bis der SOC wieder ``support_hysteresis_pct`` darüber
+    liegt; dazwischen bleibt der Stand. Der Stand folgt dem SOC in jedem Slot mit Plan-Schwelle,
+    was auch immer der Grund ist; ein unbekannter SOC sperrt im Zyklus, ändert ihn aber nicht.
+
+    Der Stand ist ``"on"`` oder der Grund der Sperre in dieser Reihenfolge: ``"off"`` (kein Slot
+    oder einer ohne ``now_battery``), ``"plan"`` (``HALTEN`` oder ``NETZLADEN``), ``"soc"`` (SOC
+    unbekannt, gesperrt oder der Slot ohne Plan-Schwelle). Nach einer Pause beginnt der Stand mit
+    ``reset`` neu, wie der von ``Support``. Der Zustand lebt nur im Speicher. Nicht für mehrere
+    Threads gedacht.
+    """
+
+    def __init__(self, control: ControlConfig) -> None:
+        self._hysteresis_pct = control.support_hysteresis_pct
+        self.reset()
+
+    def reset(self) -> None:
+        """Beginnt neu, etwa nach einer Pause: Ein SOC über der Plan-Schwelle gibt wieder frei."""
+        # der SOC hat die Plan-Schwelle erreicht und die Hysterese nicht verlassen
+        self._locked = False
+
+    def update(self, soc_pct: float | None, active: ActiveSlot | None) -> SpareReason:
+        """Der Stand dieses Zyklus mit dem SOC ``soc_pct`` und dem gültigen Slot ``active``."""
+        soc = finite_number(soc_pct)
+        threshold = None if active is None else finite_number(active.support_soc_pct)
+        if soc is not None and threshold is not None:
+            if soc <= threshold:
+                self._locked = True
+            elif soc >= threshold + self._hysteresis_pct:
+                self._locked = False
+        if active is None or not active.now_battery:
+            return "off"
+        if _kind(active) is not BatteryIntentKind.EIGENVERBRAUCH:
+            return "plan"
+        if soc is None or threshold is None or self._locked:
+            return "soc"
+        return "on"
+
+
 def allowed(
     cars: Sequence[BatteryCar],
     deficit: Mapping[str, float],
     *,
     support_on: bool,
     support_max_w: float,
+    planned_w: Mapping[str, int] = {},
+    planned_on: bool = False,
+    spare_on: bool = False,
 ) -> dict[str, float]:
     """Der Anteil des Fehlbetrags, den der Akku je Wallbox liefern darf (Präzisierung 5).
 
@@ -259,10 +328,16 @@ def allowed(
       Rest ``support_max_w`` ist, vermindert um das, was die Autos davor in diesen Modi bekamen;
       ohne ``support_on`` nichts,
     - ein Auto in Boost seinen ganzen Fehlbetrag; er geht nicht vom Rest ab,
-    - ein Auto in Sofort, Geplant (Plan 4b, Entscheidung 4) oder Aus nichts.
+    - ein Auto in Geplant mit Fahrzeug bei ``planned_on`` ``min(Fehlbetrag, Akkuanteil)``, wobei
+      ``planned_w`` den Akkuanteil des Slots je Fahrzeug nennt (ohne Eintrag 0); ohne
+      ``planned_on`` nichts (Plan 4b, Entscheidung 4; Plan Akku ins Auto, Entscheidung 4),
+    - ein Auto in Sofort bei ``spare_on`` seinen ganzen Fehlbetrag (Plan Akku ins Auto,
+      Entscheidung 6), sonst nichts,
+    - ein Auto in Aus nichts.
 
-    Das Ergebnis nennt jede Wallbox von ``cars``; ein Auto ohne Eintrag in ``deficit`` hat keinen
-    Fehlbetrag. Fehlbeträge und ``support_max_w`` sind nicht negativ.
+    Was Geplant und Sofort bekommen, geht nicht vom Rest ab. Das Ergebnis nennt jede Wallbox von
+    ``cars``; ein Auto ohne Eintrag in ``deficit`` hat keinen Fehlbetrag. Fehlbeträge,
+    ``support_max_w`` und Akkuanteile sind nicht negativ.
     """
     rest_w = support_max_w
     shares: dict[str, float] = {}
@@ -273,10 +348,24 @@ def allowed(
         elif car.mode in SUPPORT_MODES and support_on:
             share_w = min(wanted_w, rest_w)
             rest_w -= share_w
+        elif car.mode is Effective.PLANNED and planned_on and car.vehicle is not None:
+            share_w = min(wanted_w, float(planned_w.get(car.vehicle, 0)))
+        elif car.mode in SPARE_MODES and spare_on:
+            share_w = wanted_w
         else:
             share_w = 0.0
         shares[car.wallbox] = share_w
     return shares
+
+
+def _planned_on(soc_pct: float | None, active: ActiveSlot | None) -> bool:
+    """Ob ein Auto in Geplant seinen Akkuanteil bekommt: im Eigenverbrauch, solange der SOC über
+    dem geplanten SOC am Ende des Slots liegt; ohne SOC, Slot oder SOC am Ende nicht."""
+    soc = finite_number(soc_pct)
+    end = None if active is None else finite_number(active.soc_end_pct)
+    if soc is None or end is None or _kind(active) is not BatteryIntentKind.EIGENVERBRAUCH:
+        return False
+    return soc > end
 
 
 @dataclass(frozen=True)
@@ -291,6 +380,8 @@ class BatteryNeed:
       Boost (Plan 3c, Entscheidung 3): ``grid_w`` ist dann der ganze Fehlbetrag.
     - ``support``: der Stand der Unterstützung, ``bridging_s`` die Sekunden der laufenden
       Überbrückung (``Support``)
+    - ``spare_w``: der erlaubte Anteil der Autos in Geplant und Sofort zusammen (Plan Akku ins
+      Auto); ``spare``: der Stand des übrigen Akkus für Sofort (``Spare``)
     """
 
     pv_w: float
@@ -300,6 +391,8 @@ class BatteryNeed:
     allowed_w: Mapping[str, float]
     support: SupportReason
     bridging_s: float | None
+    spare_w: float = 0.0
+    spare: SpareReason = "off"
 
     @property
     def grid_w(self) -> dict[str, float]:
@@ -408,12 +501,14 @@ class BatteryController:
       Werte; Bedarf, Unterstützung und Ziel rechnet er für Health weiter. Ein offener
       Schreibvorgang oder eine Übergabe (``blocked``) hält nur den Befehl dieses Zyklus zurück.
     - **Gründe:** ``plan_hold`` bei ``HALTEN``, ``plan_grid_charge`` bei ``NETZLADEN``; sonst
-      ``battery_support``, wenn der erlaubte Anteil zusammen über 0 liegt, und ``battery_comp``;
-      dahinter ``peak_guard``, wenn das Budget ``W`` gesenkt hat.
+      ``battery_spare``, wenn Autos in Geplant und Sofort etwas aus dem Akku bekommen
+      (``BatteryNeed.spare_w`` über 0, Plan Akku ins Auto), ``battery_support``, wenn der erlaubte
+      Anteil zusammen über 0 liegt, und ``battery_comp``; dahinter ``peak_guard``, wenn das Budget
+      ``W`` gesenkt hat.
 
     Kein Befehl ist dringend. Der Zustand lebt nur im Speicher: die letzten eigenen Werte, die
-    Unterstützung, die Zeit des letzten Urteils mit Wert über einen eigenen Override und der Stand
-    des letzten ``decide``. Nicht für mehrere Threads gedacht.
+    Unterstützung, der übrige Akku für Sofort, die Zeit des letzten Urteils mit Wert über einen
+    eigenen Override und der Stand des letzten ``decide``. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -423,12 +518,17 @@ class BatteryController:
         self._refresh_s = control.override_refresh_s
         self._support_max_w = control.support_max_w
         self._support = Support(control)
+        self._spare = Spare(control)
         self._last = LastValues()
         # das letzte Urteil mit Wert über den eigenen Override; ``None`` ohne einen oder ohne Urteil
         self._refreshed: datetime | None = None
         self._cycle: _Cycle | None = None  # ``None`` vor dem ersten ``decide`` und nach ``idle``
         # die wirksame Schwelle des letzten ``assess``; ``None`` davor und nach ``idle``
         self._threshold: tuple[float, SupportSource] | None = None
+        # Stand des übrigen Akkus und Anteil von Geplant und Sofort des letzten ``assess``; ``None``
+        # davor und nach ``idle``, der Anteil auch, wenn der Bedarf unbekannt ist
+        self._spare_state: SpareReason | None = None
+        self._spare_w: float | None = None
 
     def assess(
         self,
@@ -452,9 +552,16 @@ class BatteryController:
         die Health auch ohne Bedarf zeigt. Bei ``HALTEN`` und ``NETZLADEN`` ist die Unterstützung
         gesperrt (``plan``), und der Akku liefert keinem Auto etwas, auch nicht in Boost
         (Entscheidung 3).
+
+        Der Slot bestimmt auch, was Geplant und Sofort aus dem Akku bekommen (Plan Akku ins Auto):
+        Geplant den Akkuanteil seines Fahrzeugs (``vehicles_battery``), solange der SOC über
+        ``soc_end_pct`` liegt; Sofort seinen ganzen Fehlbetrag, solange ``Spare`` ``"on"`` ist.
+        Den Stand von ``Spare`` rechnet jeder Aufruf, auch ohne Bedarf.
         """
         threshold_pct, source = effective_threshold(self._control, support, active)
         self._threshold = threshold_pct, source
+        spare = self._spare.update(soc_pct, active)
+        self._spare_state, self._spare_w = spare, None
         pv, house = finite_number(pv_w), finite_number(house_w)
         if pv is None or house is None:
             return None
@@ -475,11 +582,19 @@ class BatteryController:
             shares = dict.fromkeys((car.wallbox for car in cars), 0.0)
         else:
             shares = allowed(
-                cars, deficit, support_on=reason == "on", support_max_w=self._support_max_w
+                cars,
+                deficit,
+                support_on=reason == "on",
+                support_max_w=self._support_max_w,
+                planned_w={} if active is None else active.vehicles_battery,
+                planned_on=_planned_on(soc_pct, active),
+                spare_on=spare == "on",
             )
+        spare_w = sum((shares[car.wallbox] for car in cars if car.mode in _PLAN_SHARE_MODES), 0.0)
+        self._spare_w = spare_w
         # Jede Leistung ist bekannt oder, weil das Auto sicher nicht lädt, 0 W (``deficits``).
         cars_w = sum((_power_w(car) or 0.0 for car in cars), 0.0)
-        return BatteryNeed(pv, house, cars_w, deficit, shares, reason, bridging_s)
+        return BatteryNeed(pv, house, cars_w, deficit, shares, reason, bridging_s, spare_w, spare)
 
     def decide(
         self,
@@ -576,14 +691,18 @@ class BatteryController:
         """Ein Zyklus ohne Regelung: Der Akku-Sollwert vergisst seine Werte und beginnt neu.
 
         Die Unterstützung beginnt neu (``Support.reset``): Der SOC muss die wirksame Schwelle
-        wieder erreichen. Health ist bis zum nächsten ``decide`` ``idle``, die Schwelle bis zum
-        nächsten ``assess`` unbekannt.
+        wieder erreichen. Ebenso der übrige Akku für Sofort (``Spare.reset``). Health ist bis zum
+        nächsten ``decide`` ``idle``, Schwelle und übriger Akku bis zum nächsten ``assess``
+        unbekannt.
         """
         self._last.forget()
         self._refreshed = None
         self._support.reset()
+        self._spare.reset()
         self._cycle = None
         self._threshold = None
+        self._spare_state = None
+        self._spare_w = None
 
     def health(self) -> dict[str, Any]:
         """Der Stand des letzten ``decide`` (Design 9); was unbekannt ist, ist ``None``.
@@ -604,6 +723,10 @@ class BatteryController:
         - ``support_soc_pct`` und ``support_source``: die wirksame Schwelle des letzten ``assess``
           und ihre Quelle (``config``, ``intent``, ``plan``; Plan 3c, Präzisierung 8), auch ohne
           Bedarf; vor dem ersten ``assess`` und nach ``idle`` ``None``
+        - ``spare`` und ``spare_w``: der Stand des übrigen Akkus für Sofort (``Spare``) und der
+          erlaubte Anteil von Geplant und Sofort zusammen in W aus dem letzten ``assess`` (Plan Akku
+          ins Auto); vor dem ersten ``assess`` und nach ``idle`` ``None``, ``spare_w`` auch ohne
+          Bedarf
         """
         cycle, refreshed, threshold = self._cycle, self._refreshed, self._threshold
         need = None if cycle is None else cycle.need
@@ -620,6 +743,8 @@ class BatteryController:
             ),
             "support_soc_pct": None if threshold is None else threshold[0],
             "support_source": None if threshold is None else threshold[1],
+            "spare": self._spare_state,
+            "spare_w": self._spare_w,
         }
 
     def _command(
@@ -714,14 +839,17 @@ def _reasons(need: BatteryNeed, lowered: bool, active: ActiveSlot | None) -> tup
     """Die Gründe des Overrides; ``lowered`` heißt: Das Budget des Wächters hat ``W`` gesenkt.
 
     ``plan_hold`` bei ``HALTEN``, ``plan_grid_charge`` bei ``NETZLADEN``; sonst
-    ``battery_support``, wenn der Akku etwas liefern darf, und ``battery_comp``; dahinter
-    ``peak_guard``, wenn ``lowered``.
+    ``battery_spare``, wenn Geplant und Sofort etwas aus dem Akku bekommen, ``battery_support``,
+    wenn der Akku etwas liefern darf, und ``battery_comp``; dahinter ``peak_guard``, wenn
+    ``lowered``.
     """
     kind = _kind(active)
     if kind is BatteryIntentKind.HALTEN:
         first = PLAN_HOLD
     elif kind is BatteryIntentKind.NETZLADEN:
         first = PLAN_GRID_CHARGE
+    elif need.spare_w > 0.0:
+        first = BATTERY_SPARE
     elif sum(need.allowed_w.values()) > 0.0:
         first = BATTERY_SUPPORT
     else:

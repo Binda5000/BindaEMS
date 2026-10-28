@@ -3963,7 +3963,9 @@ bei der festen Grenze von 8 kW):
     "bridging_s": 906.0,
     "refresh_age_s": 10.0,
     "support_soc_pct": 70.0,
-    "support_source": "config"
+    "support_source": "config",
+    "spare": "off",
+    "spare_w": 0.0
   },
   "peak": {
     "state": "active",
@@ -3988,6 +3990,8 @@ Was fehlt, ist `null`. Das UI zeigt diese Werte nicht.
 | `battery.bridging_s` | Sekunden der laufenden Überbrückung; `null` ohne |
 | `battery.support_soc_pct` | die wirksame Schwelle der Unterstützung in % (oben, „Wirksame Schwelle“); `null` ohne Zyklus |
 | `battery.support_source` | woher sie kommt: `config` (`support_soc_pct`), `intent` (Unterstützungsschwelle der Absicht), `plan` (Plan-Schwelle des gültigen Slots, höher als die eigene); `null` ohne Zyklus |
+| `battery.spare` | Stand des übrigen Akkus für Autos in Sofort („Akku ins Auto, wenn übrig“): `on` (gilt), `off` (kein gültiger Slot oder einer ohne übrigen Akku), `plan` (der Plan will `HALTEN` oder `NETZLADEN`), `soc` (SOC auf der Plan-Schwelle des Slots oder darunter und noch nicht 5 Punkte, `support_hysteresis_pct`, darüber; SOC unbekannt; Slot ohne Plan-Schwelle). `null` ohne Zyklus |
+| `battery.spare_w` | was Autos in Geplant und Sofort zusammen aus dem Akku bekommen dürfen, in W; `null` ohne Zyklus oder ohne Bedarf |
 | `battery.refresh_age_s` | Sekunden vom letzten Urteil mit Wert über den eigenen Override bis zum letzten Zyklus; er steigt bis zum Auffrischen und beginnt dann neu. `null` ohne Override. |
 | `peak.state` | `off`: kein Ziel. `gap`: Die Viertelstunde ist lückenhaft, oder die Regelung ruht; auch vor dem ersten Zyklus. `active`: Der Wächter rechnet. `exceeded`: Die Viertelstunde ist überschritten (auch während einer Lücke). |
 | `peak.target_kw` | das Ziel in kW; `null` ohne |
@@ -4059,13 +4063,15 @@ Gründe in `codes`, vor den Befunden der Safety-Schicht:
 |---|---|---|
 | `battery_comp` | Akku nicht ins Auto | Der Override verschiebt den Fehlbetrag der Autos aufs Netz. |
 | `battery_support` | Akku-Unterstützung | Nur der Teil über dem erlaubten Akku-Anteil geht aufs Netz. |
+| `battery_spare` | Akku übrig fürs Auto | Autos in Geplant oder Sofort laden aus übrigem Akku, wie der Plan es erlaubt; nur der Rest geht aufs Netz. |
 | `peak_guard` | 15-min-Wächter | Der Befehl folgt aus dem 15-min-Wächter: Beim Override hat sein Budget den gewollten Netzbezug gesenkt, bei einer Wallbox gilt seine Leistungsgrenze an Stelle der des Phasenwächters. |
 | `plan_hold` | Plan: Halten | Der Slot des Plans will `HALTEN`: Haus und Autos kommen aus dem Netz, soweit die PV sie nicht deckt. |
 | `plan_grid_charge` | Plan: Netzladen | Der Slot des Plans will `NETZLADEN`: dazu die Netzladeleistung des Slots aus dem Netz. |
 
-- `plan_hold` steht bei `HALTEN`, `plan_grid_charge` bei `NETZLADEN`. Sonst steht
-  `battery_support`, wenn der Akku zusammen etwas liefern darf, und `battery_comp`. Dahinter folgt
-  `peak_guard`, wenn das Budget des Wächters den gewollten Netzbezug gesenkt hat.
+- `plan_hold` steht bei `HALTEN`, `plan_grid_charge` bei `NETZLADEN`. Sonst steht `battery_spare`,
+  wenn Autos in Geplant oder Sofort etwas aus dem Akku bekommen, dann `battery_support`, wenn der
+  Akku zusammen etwas liefern darf, und `battery_comp`. Dahinter folgt `peak_guard`, wenn das
+  Budget des Wächters den gewollten Netzbezug gesenkt hat.
 - Ein Beispiel: `Victron (ESS) (Akku nicht ins Auto): Netz-Sollwert 2340 W – Dry-Run, nicht
   gesendet.` Hebt der Akku-Sollwert den Override auf, steht dort „Netz-Sollwert-Override aufheben“.
 - Zu den Eingaben einer Entscheidung des Overrides gehören die der Laderegelung (`soc_pct`,

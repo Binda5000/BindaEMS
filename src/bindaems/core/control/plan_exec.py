@@ -29,6 +29,11 @@ class ActiveSlot:
     Entscheidung 9); ein Fahrzeug, das der Slot nicht nennt, kennt der Plan nicht, und für es gilt
     kein Slot (Ruling R22). ``thermal`` ist der Hinweis des Plans für die Klimaanlage (Plan 6a,
     Entscheidung 7), ``soc_end_pct`` der geplante SOC am Ende des Slots (``None``: nicht genannt).
+
+    Für Akku ins Auto (Plan Akku ins Auto, Entscheidungen 4 und 6): ``vehicles_battery`` ist je
+    Fahrzeug-Schlüssel die Leistung in W, die das Auto in „Geplant“ höchstens aus dem Akku bekommt
+    (``IntentPlanSlot.ev_battery_w``); ``now_battery`` erlaubt Autos in „Sofort“ übrigen Akku über
+    der Plan-Schwelle. Alte Absichten kennen beides nicht: ``{}`` und ``False``.
     """
 
     plan_id: int
@@ -40,6 +45,8 @@ class ActiveSlot:
     vehicles: Mapping[str, int] = field(default_factory=dict)
     thermal: ThermalHint = "neutral"
     soc_end_pct: float | None = None
+    vehicles_battery: Mapping[str, int] = field(default_factory=dict)
+    now_battery: bool = False
 
 
 def active_slot(plan: IntentPlan | None, wall_now: datetime) -> ActiveSlot | None:
@@ -64,6 +71,8 @@ def active_slot(plan: IntentPlan | None, wall_now: datetime) -> ActiveSlot | Non
         vehicles=dict(slot.vehicles),
         thermal=slot.thermal,
         soc_end_pct=slot.soc_end_pct,
+        vehicles_battery=dict(slot.ev_battery_w),
+        now_battery=slot.now_battery,
     )
 
 

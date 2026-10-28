@@ -59,8 +59,10 @@ class HealthReport(BaseModel):
       nach dem 15-min-Wächter), ``override_w`` (der letzte eigene Override), ``support`` (``on``,
       ``soc``, ``time``, ``mode``, ``off``, ``plan``), ``bridging_s`` (Sekunden der laufenden
       Überbrückung), ``refresh_age_s`` (Sekunden seit dem letzten Urteil mit Wert über den
-      Override), ``support_soc_pct`` (die wirksame Schwelle der Unterstützung) und
-      ``support_source`` (``config``, ``intent``, ``plan``; Plan 3c); was fehlt, ist ``null``
+      Override), ``support_soc_pct`` (die wirksame Schwelle der Unterstützung),
+      ``support_source`` (``config``, ``intent``, ``plan``; Plan 3c), ``spare`` (``on``, ``off``,
+      ``plan``, ``soc``: übriger Akku für Sofort) und ``spare_w`` (was Geplant und Sofort aus dem
+      Akku bekommen dürfen; Plan Akku ins Auto); was fehlt, ist ``null``
     - ``peak``: der Stand des 15-min-Wächters (``PeakGuard.health``, Plan 2c-2a): ``state``
       (``off``, ``gap``, ``active``, ``exceeded``), ``target_kw`` (das Ziel), ``energy_kwh`` (der
       Netzbezug der Viertelstunde bisher, ohne Boost), ``projected_kw`` (die Hochrechnung),
