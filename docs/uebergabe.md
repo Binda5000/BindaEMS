@@ -209,7 +209,7 @@ Standard-Lademodus“: Einstellungen als YAML exportieren, den Schlüssel `wallb
 Auto mit der Automatik für Ziel und Abfahrt (5b) hat, stellt dessen Ladepunkt auf „Geplant“ oder „Unverändert“. Betrieb: `docs/betrieb.md`, „Laden“,
 „Standard-Lademodus je Ladestation“. Die Liste „Deferred minors Standard-Lademodus“ steht unter „Bewusst offen gelassen“.
 
-**Plan „Akku ins Auto, wenn er übrig ist“ ist umgesetzt und je Task geprüft** (Gesamtreview und Fix-Welle folgen)
+**Plan „Akku ins Auto, wenn er übrig ist“ ist umgesetzt und je Task geprüft** (Gesamtreview und Fix-Welle erledigt)
 (`docs/superpowers/plans/2026-10-28-akku-ins-auto-wenn-uebrig.md`, 10 Tasks, freigegeben vom Betreiber am 28.10.2026 mit allen
 11 Entscheidungen: „Freigegeben“; Anlass war seine Frage vom selben Tag, ob „Sofort“ und „Geplant“ Strom aus dem Akku nehmen
 sollen, wenn das billiger ist): Branch `claude/project-thread-c3k9h7` (auf den Stand von `main` `779dd47` mit dem Standard-Lademodus
@@ -906,7 +906,7 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
     des Betreibers, nichts geht dabei von selbst live.
 - **Plan „Akku ins Auto, wenn er übrig ist“ ist umgesetzt und je Task geprüft**
   (Plan: `docs/superpowers/plans/2026-10-28-akku-ins-auto-wenn-uebrig.md`, 10 Tasks; Ausführung subagent-driven; Branch
-  `claude/project-thread-c3k9h7`, **nicht auf `main`, nicht ausgerollt**; Gesamtreview und Fix-Welle folgen). Autos in
+  `claude/project-thread-c3k9h7`, **nicht auf `main`, nicht ausgerollt**; Gesamtreview und Fix-Welle erledigt). Autos in
   „Geplant“ und „Sofort“ laden aus dem Hausakku, wenn das Haus die Energie bis zur nächsten PV-Füllung nicht braucht und
   Akkustrom im Slot billiger ist als Netzstrom; Schalter `planning.car_battery_allowed` („Akku ins Auto, wenn übrig“), ab
   Werk aus:
@@ -940,10 +940,9 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
        Netz; sonst Akku über das Auto ins Netz), und die Trägheit zählt `bt_ev` wie die Nachrechnung. Kosten: ein etwas
        engeres Modell.
     3. Akkuanteile unter `HOLD_MIN_W` (100 W) in Slots, die `HALTEN` oder `NETZLADEN` werden, fallen vor Nachrechnung,
-       Prüfung und Plan weg; das Auto lädt den Teil aus dem Netz. **Kommt mit der Fix-Welle:** Bis dahin macht
-       `derive_intents` einen Slot erst ab 100 W Akkuanteil zu `EIGENVERBRAUCH`, und `check_plan` verwirft jeden Anteil
-       über 1 W bei `HALTEN` (Ersatzplan); in 400 zufälligen Horizonten (64 mit Akku ins Auto) kam das nicht vor, denn
-       `bt_ev` kostet mehr als `bt_h`. Kosten: in seltenen Slots ein paar W mehr aus dem Netz.
+       Prüfung und Plan weg; das Auto lädt den Teil aus dem Netz. **Mit der Fix-Welle gebaut** (`drop_held_battery` in
+       `app/planning/intents.py`, aufgerufen in `plan_once`): Vorher verwarf `check_plan` jeden Anteil über 1 W bei
+       `HALTEN` (Ersatzplan). Kosten: in seltenen Slots ein paar W mehr aus dem Netz.
     4. Der übrige Akku für Sofort (`Spare`) beginnt frei, und `reset` nach einer Pause gibt frei (anders als `Support`);
        er sperrt erst, wenn der SOC die Plan-Schwelle erreicht, und gibt bei Schwelle + 5 Punkte frei. Kosten: Nach einem
        Neustart im Band darüber lädt ein Auto in Sofort bis zur Schwelle aus dem Akku, nie darunter.
@@ -960,14 +959,42 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
     8. Das Szenario-Werkzeug gibt den geplanten Akkuanteil ohne die Grenze des core „SOC über `soc_end_pct`“; je nach
        Abweichung kann es optimistischer oder vorsichtiger rechnen als die Anlage. Regel R2 im Werkzeug zieht den
        Akkuanteil ab wie der Optimierer, die Kosten des Optimierers enthalten den Verschleiß (Entscheidung 10).
-    9. Weitere Festlegungen ohne eigene Kosten: `check_plan` liest den Akkuanteil aus dem Ergebnis des Optimierers und
-       zählt ihn in den Grenzen je Auto und der Entladegrenze mit; das Budget ohne erwartete Autos behält den Akkuanteil
+    9. Weitere Festlegungen ohne eigene Kosten: `check_plan` zählt den Akkuanteil des Optimierers in den Grenzen je Auto
+       und der Entladegrenze mit, die Befunde „Akku ins Auto“ prüfen den Anteil, den der Plan behält (Ruling 3); das Budget ohne erwartete Autos behält den Akkuanteil
        der angesteckten Autos; `baseline_cost_ct` bleibt ohne Akkuanteil; `GET /api/plan` nennt `ev_battery_w` und
        `now_battery` je Slot (für das UI). Zwischen den Tasks waren einzelne Tests rot (Erklärungen bis Task 5,
        UI-Vertrag bis Task 9, Doku bis Task 10); der Branch geht erst nach der ganzen Prüfkette nach `main`.
+  - **Rulings der Fix-Welle nach dem Gesamtreview** (je mit Kosten, falls falsch):
+    10. Ruling 3 gebaut wie vom Review vorgeschlagen (Helfer neben `HOLD_MIN_W`, in `plan_once` vor Nachrechnung,
+        Prüfung und Plan). Das Betriebshandbuch („Kleine Akkuanteile“) und Spec 9.3 („Absichten“) beschrieben es schon.
+        Kosten: keine.
+    11. Entscheidung 2 über Pläne hinweg: `PlanInputs.grid_in_battery_at_start` (alte Eingangsdaten: nein) sagt, ob zu
+        Beginn Netzenergie im Akku sein kann. Der Planungsdienst und das Szenario-Werkzeug leiten es aus dem vorigen
+        Plan ab (sein eigenes Feld oder ein `NETZLADEN`-Slot, der begonnen hat, solange der Plan galt) und setzen es
+        zurück, sobald ein Lauf den SOC höchstens bei Reserve + 0,1 kWh misst. Der Optimierer sperrt damit Akku ins Auto
+        ab Slot 0 hart, bis der Akku leer ist, `grid_in_battery` ebenso an der Nachrechnung. Das schließt dieselbe Lücke
+        für die Einspeisung nach Regel R1. Kosten: Nach einem Netzladen in der Nacht bleiben Einspeisung und Akku ins
+        Auto länger gesperrt als nötig.
+    12. Die Einspeisung ist bei Netzenergie von vor dem Horizont nicht verboten, sondern kostet 200 ct je kWh
+        (`CARRIED_EXPORT_CT`), bis der Akku leer ist: Hart gesperrt wäre das Modell unlösbar, wenn die PV den Akku
+        vorher füllt (Test `test_grid_energy_at_start_never_makes_the_model_infeasible`), denn das Laden ist schon
+        geschehen. Regel R1 für Netzladen im Horizont bleibt hart. Kosten: In diesem Fall plant der Optimierer
+        Einspeisung, statt den Plan zu verwerfen; die Prüfung meldet sie nicht.
+    13. Geplant und Sofort bekommen zusammen höchstens die freie Entladeleistung: `battery.max_discharge_w` minus dem
+        Teil der Hauslast, den die PV nicht deckt, minus den Anteilen von Unterstützung und Boost, zuerst Geplant, dann
+        Sofort, je nach Priorität. Der Rest bleibt Netzanteil, den Override und 15-min-Wächter sehen. Eine physikalische
+        Grenze, keine eigene Leistungsgrenze: Entscheidung 6 bleibt. Boost zählt mit, weil er dieselbe Entladeleistung
+        braucht. Eine Grenze der BMS kennt der Akku-Sollwert nicht; es gilt die Konfiguration. Kosten: Ein Auto nimmt
+        etwas mehr aus dem Netz, als der Akku hätte geben können.
+    14. Die Stromstufe aus dem Netz bei Geplant (Ruling 6) ist eine Produktfrage an den Betreiber (Vorschlag: eine
+        Stufe mehr aus dem Akku, begrenzt durch `soc_end_pct`); nicht in der Fix-Welle.
+    15. Die Grenzen im Betriebshandbuch („Akku ins Auto, wenn übrig“, „Grenzen“) und der Validator von
+        `IntentPlanSlot` (jedes Fahrzeug in `ev_battery_w` steht in `vehicles`, mit höchstens seiner Leistung; ohne
+        Toleranz, denn `round` ist monoton) kamen in die Fix-Welle; die fehlende Hysterese von `_planned_on` bleibt
+        aufgeschoben.
   - **Aufgeschobene Kleinigkeiten:** unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan Akku ins Auto“.
-  - **Offen:** Gesamtreview und Fix-Welle (mit Ruling 3), Integration nach `main` mit Zustimmung des Betreibers, dann das
-    gemeinsame Ausrollen und die Abnahme an der Anlage (Punkt 16 unter
+  - **Offen:** Integration nach `main` mit Zustimmung des Betreibers, die Produktfrage zur Stromstufe (Ruling 14), dann
+    das gemeinsame Ausrollen und die Abnahme an der Anlage (Punkt 16 unter
     „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
@@ -1136,7 +1163,7 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
 | `docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md` | Plan 4c, 5 Tasks, umgesetzt, seit dem 25.10.2026 auf `main` (nicht ausgerollt): Verlauf je Auto in `GET /api/stats` (`vehicle_buckets`), Auswahl des Autos und Karte „Laden je Auto“ auf „Statistik“, Ladesessions bis 2000 mit Nachladen und CSV; die sieben Entscheidungen des Betreibers vom 23.10.2026 |
 | `docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md` | Plan Übersicht B, 6 Tasks, auf `main` seit 27.10.2026 (`8ae335e`), nicht ausgerollt: die Übersicht als Kennzahlen-Leiste mit Hausakku, Hinweis-Leiste, „Woher – Wohin“, Autos, Diagramm mit Akku-SOC und -Plan; nur UI und Doku; die zehn Entscheidungen des Betreibers vom 27.10.2026 |
 | `docs/superpowers/plans/2026-10-27-sofort-ladelimit.md` | Plan Sofort-Limit, 7 Tasks, umgesetzt auf dem Branch `claude/project-thread-wi9jx5`, Gesamtreview und Fix-Welle gemacht, auf `main` seit dem 28.10.2026, nicht ausgerollt: Höchststrom `now_max_a` für „Sofort" je Auto und für Gäste, Grund `now_limit`, Szenario `sofort-limit`, App-API, HA-Zahlen, Auswahl im UI; die 8 Entscheidungen des Betreibers vom 27.10.2026 |
-| `docs/superpowers/plans/2026-10-28-akku-ins-auto-wenn-uebrig.md` | Plan „Akku ins Auto, wenn er übrig ist“, 10 Tasks, umgesetzt auf dem Branch `claude/project-thread-c3k9h7` (nicht auf `main`, nicht ausgerollt; Gesamtreview und Fix-Welle folgen): Fluss Akku → Auto im Optimierer für „Geplant“, übriger Akku für „Sofort“ nach der Plan-Schwelle, Schalter „Akku ins Auto, wenn übrig“, Grund `battery_spare`, Health `battery.spare`, Szenarien; die 11 Entscheidungen des Betreibers vom 28.10.2026 |
+| `docs/superpowers/plans/2026-10-28-akku-ins-auto-wenn-uebrig.md` | Plan „Akku ins Auto, wenn er übrig ist“, 10 Tasks, umgesetzt auf dem Branch `claude/project-thread-c3k9h7` (nicht auf `main`, nicht ausgerollt; Gesamtreview und Fix-Welle erledigt): Fluss Akku → Auto im Optimierer für „Geplant“, übriger Akku für „Sofort“ nach der Plan-Schwelle, Schalter „Akku ins Auto, wenn übrig“, Grund `battery_spare`, Health `battery.spare`, Szenarien; die 11 Entscheidungen des Betreibers vom 28.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
@@ -1939,7 +1966,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   16. **Akku ins Auto, wenn übrig (Plan „Akku ins Auto, wenn er übrig ist“) ausrollen:** core **und** app gemeinsam (jeder
       Plan-Slot der Absicht hat die neuen Felder `ev_battery_w` und `now_battery`, ein alter core lehnt sie ab,
       `extra="forbid"`), **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**. Noch nicht auf `main`;
-      Gesamtreview und Fix-Welle folgen, wann integriert und ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem
+      Gesamtreview und Fix-Welle sind erledigt, wann integriert und ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem
       nächsten gemeinsamen Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`); der Schalter „Akku ins
       Auto, wenn übrig“ ist danach aus, und es ändert sich nichts.
       1. **Schalter erst einschalten, wenn Victron live ist** (Einstellungen → „Planung“, Admin). Im Dry-Run stehen die
@@ -2155,7 +2182,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    wann, entscheidet der Betreiber.
 11. **Plan „Akku ins Auto, wenn er übrig ist“** (Autos in „Geplant“ und „Sofort“ aus übrigem Akku): umgesetzt und je Task
     geprüft, auf dem Branch `claude/project-thread-c3k9h7`; nicht auf `main` (Zustimmung des Betreibers nötig), nicht
-    ausgerollt (Kurzfassung oben, „Plan Akku ins Auto“). Es folgen Gesamtreview und Fix-Welle, dann die Integration
+    ausgerollt (Kurzfassung oben, „Plan Akku ins Auto“). Gesamtreview und Fix-Welle sind erledigt; es folgen die Integration
     und das gemeinsame Ausrollen von core und app (Punkt 16 unter „Offen an
     der Anlage“); wann, entscheidet der Betreiber. Den Schalter schaltet er erst ein, wenn Victron live ist.
 
@@ -3966,8 +3993,8 @@ Bedienung von Hand gewinnen. Gesamtreview und Fix-Welle sind durch; was die Fix-
 
 Aufgeschobene Kleinigkeiten aus Plan „Akku ins Auto, wenn er übrig ist“ (Deferred minors Akku ins Auto), aus den Reviews der
 Tasks 1 bis 10. Keine davon gefährdet die Anlage: Der Schalter ist ab Werk aus, die Safety-Schicht ist unverändert, und der
-Akku gibt einem Auto nie mehr, als der Plan erlaubt. Gesamtreview und Fix-Welle folgen; die Punkte mit „Fix-Welle“ sind dort
-vorgesehen.
+Akku gibt einem Auto nie mehr, als der Plan erlaubt. Gesamtreview und Fix-Welle sind durch; die durchgestrichenen Punkte hat die
+Fix-Welle erledigt.
 
 - **Felder und Absicht (Task 1):** Die Rundungsgrenze des Akkuanteils in `intent_plan` (0,5 W und 0,6 W) ist ohne Test,
   und `round()` wird zweimal gerechnet; `test_intent_plan_skips_expected_cars_and_tiny_battery_shares` prüft beide
@@ -3976,15 +4003,17 @@ vorgesehen.
   ausdrückliche Prüfung, dass ein Slot ohne Angabe `ev_battery_w == 0` hat.
 - **Optimierer (Task 3):** die Lösezeit mit Netzladen und Schalter an (Ruling 1); der Test `_grid_then_car` braucht etwa 1 s je
   Lösung; der Test „lohnt sich nicht“ liegt weit von der Grenze, an der es sich lohnt.
-- **Plan und Plausibilität (Task 4):** kleine Akkuanteile bei `HALTEN` (Ruling 3, **Fix-Welle**); der Helfer
+- **Plan und Plausibilität (Task 4):** ~~kleine Akkuanteile bei `HALTEN` (Ruling 3, **Fix-Welle**);~~ (erledigt 28.10.2026,
+  Fix-Welle, F1: `drop_held_battery`) der Helfer
   `_steps(hi_kwh)` in `test_spare` ist eigenwillig; `PlanSlot.ev_battery_w` ist der Anteil des Optimierers, nicht der, den
   die Nachrechnung gibt (Docstring); `now_battery_flags` sucht je Slot alle späteren ab (quadratisch, bei 144 Slots
   harmlos).
 - **Erklärungen (Task 5):** `SCENARIO_START_AT` steht in `test_explain` hinter dem Helfer, der es nutzt; keine Tests für die
   neuen Längenprüfungen (`ValueError`), den Rückfall ohne `thresholds` und die Weitergabe von `now_battery` in
   `build_plan`.
-- **Szenario-Werkzeug (Task 6):** Der Docstring des Runners nennt die fehlende Grenze `soc_end_pct` des core nicht, und die
-  Lernnotiz nennt die Rechnung „pessimistisch“, sie kann auch optimistisch sein (Ruling 8, **Fix-Welle**: Wortlaut); die
+- **Szenario-Werkzeug (Task 6):** ~~Der Docstring des Runners nennt die fehlende Grenze `soc_end_pct` des core nicht, und die
+  Lernnotiz nennt die Rechnung „pessimistisch“, sie kann auch optimistisch sein (Ruling 8, **Fix-Welle**: Wortlaut);~~
+  (erledigt 28.10.2026, Fix-Welle, F6: Docstring ergänzt, Lernnotiz ersetzt) die
   Aufteilung PV/Akku/Netz je Auto steht doppelt in `runner.py` und `explain.py`; `_days` hat 9 Parameter nach Position;
   der Wintertest könnte `car_battery_kwh == 0` prüfen; `test_car_takes_planned_battery_share` setzt voraus, dass ein Plan
   den Slot deckt.
@@ -3993,15 +4022,22 @@ vorgesehen.
     (Entladegrenze), kann der Wächter es nicht drosseln, wie heute bei Boost (Entscheidung 6). Im Gesamtreview ansehen.~~
     (erledigt 28.10.2026, Fix-Welle, F3: Geplant und Sofort bekommen höchstens die freie Entladeleistung, der Rest ist
     Netzanteil, den der Wächter sieht)
-  - `_planned_on` hat keine Hysterese um `soc_end_pct` (so verlangt); der SOC kann im Slot um den Wert pendeln.
+  - `_planned_on` hat keine Hysterese um `soc_end_pct` (so verlangt); der SOC kann im Slot um den Wert pendeln (im
+    Gesamtreview gesehen, bleibt aufgeschoben).
   - `planned_w` hat den veränderlichen Standardwert `{}`; Health `spare`/`spare_w` kommen aus `assess`, `support` aus
     `decide`; ein Testauto heißt „guest“, ist aber kein Gast-Schlüssel.
-- **Simulator (Task 8):** Der Docstring von `_akku_uebrig_geplant` nennt noch 2800 W (**Fix-Welle**); der Testfall der
+- **Simulator (Task 8):** ~~Der Docstring von `_akku_uebrig_geplant` nennt noch 2800 W (**Fix-Welle**);~~ (erledigt
+  28.10.2026, Fix-Welle, F6) der Testfall der
   Gesundheitsprüfung prüft nur, dass sie nicht leer ist; `DISCHARGE_W` 12000 ist aus der Konfiguration abgeschrieben;
   `test_spare_scenarios_are_registered` verlässt sich auf `events[-1]`; die Stromstufe aus dem Netz (Ruling 6) ist eine
   Produktfrage an den Betreiber.
 - **UI (Task 9):** Die Vertragsdatei `plan.json` hat nur leere `ev_battery_w` und `now_battery` `false` (keine Ausgabe der
   app mit Werten geprüft); der Kommentar oben in `PlanningEditor.svelte` ist länger als 100 Zeichen.
+- **Fix-Welle:** Netzenergie von vor dem Horizont gilt als weg, sobald ein Planungslauf den SOC höchstens bei Reserve
+  + 0,1 kWh misst; bleibt der gemessene SOC am Ende der Entladung knapp darüber (bei 30 kWh 0,4 Punkte), hält die Sperre
+  bis zum nächsten leeren Akku. Der Akku-Sollwert rechnet die freie Entladeleistung mit `battery.max_discharge_w` der
+  Konfiguration, nicht mit der Grenze der BMS (`battery.dcl_a`). Ein Lauf, der die Eingangsdaten des vorigen Plans nicht
+  lesen kann, nimmt Netzenergie im Akku an.
 - **Doku (Task 10):** Der Rückweg braucht zwei Handgriffe ohne Migration (`intent.json` per Skript, die Einstellungen wie
   beim Standard-Lademodus über Export, Löschen des Schlüssels und Import; Betriebshandbuch Abschnitt 4), denn der Plan sieht
   bewusst keine Migration vor; eine Migration mit Downgrade wie `0013` könnte den Schalter beim Zurückführen aus den
