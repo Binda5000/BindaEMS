@@ -20,7 +20,7 @@
 - **Ausrollen:** core und app zusammen mit dem nächsten gemeinsamen Pull (der core sendet neue Grund-Codes, die app kennt ihren Text; ein alter UI-Stand zeigt sonst nur den Code). Kein Schritt an `config.yaml` nötig: der Schalter ist ab Werk an. **Rückweg:** Hast du `climate_via_wallbox` in `config.yaml` eingetragen, vor einem Rollback des core entfernen (`extra="forbid"`).
 - **Parallel:** Der Plan „Standard-Lademodus je Ladepunkt“ (Branch `claude/project-thread-7dml9y`) ändert nur app und UI; Überschneidung höchstens in `ui/src/lib/charging/view.ts` und `docs/betrieb.md`. Wer zuletzt nach `main` geht, rebased.
 
-## Entscheidungen (vorgeschlagen, zur Freigabe)
+## Entscheidungen (freigegeben vom Betreiber am 28.10.2026: „Freigegeben“)
 
 1. **Tesla: dulden, nicht selbst starten.** BindaEMS sendet während der Klimatisierung kein „Laden aus“ (weder nach dem Modus noch als Selbststart) und kein eigenes „Laden an“. Lädt der Tesla bei Klimatisierung nicht von selbst (etwa „Complete“), ändert sich nichts. (evcc startet in diesem Fall selbst mit Mindeststrom; das ist hier nicht nötig, weil der Tesla nach deiner Beobachtung selbst lädt, und es spart Start/Stopp-Befehle bei Tessie.)
 2. **Klimatisierung an** heißt laut Tessie `climate_state.is_climate_on` oder `climate_state.is_preconditioning` wahr; Tessie erreichbar, Auto angesteckt, Zuordnung klar, Ladepunkt geregelt.
