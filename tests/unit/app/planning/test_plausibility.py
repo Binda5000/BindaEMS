@@ -717,3 +717,12 @@ def test_car_limits_and_discharge_limit_count_the_battery_share() -> None:
         *_battery_case("2026-10-16T20:00:00+00:00", [over], [EIGEN], battery=small_battery())
     )
     assert findings == ["Leistung über der Grenze um 22:00"]
+
+
+def test_check_plan_checks_the_car_battery_it_is_given() -> None:
+    # Fix-Welle F1: Die Prüfungen „Akku ins Auto“ lesen den Akkuanteil, den der Plan behält; die
+    # Leistungsprüfungen bleiben bei den Flüssen.
+    inputs, result, intents, steps = _case("hold")
+    assert check_plan(inputs, result, intents, steps, ev_battery_w=[{}]) == []
+    found = check_plan(inputs, result, intents, steps, ev_battery_w=[{"tesla": 3000.0}])
+    assert found == ["Akku ins Auto um 22:00 bei Halten oder Netzladen"]

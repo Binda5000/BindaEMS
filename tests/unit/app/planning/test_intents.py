@@ -20,7 +20,13 @@ from tests.plan_helpers import (
 
 from bindaems.app.planning.battery_model import SLOT_H, eta, params_of
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.intents import GRID_CHARGE_MIN_W, _drop_unprofitable, derive_intents
+from bindaems.app.planning.intents import (
+    GRID_CHARGE_MIN_W,
+    HOLD_MIN_W,
+    _drop_unprofitable,
+    derive_intents,
+    drop_held_battery,
+)
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
 from bindaems.app.planning.service import plan_once
@@ -577,3 +583,35 @@ def test_resimulation_of_the_intents_counts_the_car_battery() -> None:
     intents = derive_intents(inputs, result)
     assert intents[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000)
     assert intents[1].kind is BatteryIntentKind.EIGENVERBRAUCH
+
+
+def test_drop_held_battery_drops_small_shares_in_hold_and_grid_charge_slots() -> None:
+    intents = [
+        BatteryIntent(),
+        BatteryIntent(kind=BatteryIntentKind.HALTEN),
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000),
+        BatteryIntent(kind=BatteryIntentKind.HALTEN),
+        BatteryIntent(),
+    ]
+    shares = [
+        {"tesla": 50.0},
+        {"tesla": 50.0, "egolf": 40.0},
+        {"tesla": 99.0},
+        {"tesla": 60.0, "egolf": 40.0},  # zusammen 100 W: bleibt
+        {},
+    ]
+    assert drop_held_battery(intents, shares) == [{"tesla": 50.0}, {}, {}, shares[3], {}]
+    assert HOLD_MIN_W == 100.0
+
+
+def test_plan_once_drops_a_small_car_battery_share_in_a_hold_slot(
+    result_with_small_house_discharge_and_car_battery: OptimizerResult,
+) -> None:
+    # Ruling 3 (Fix-Welle): 50 W aus dem Akku in einem Slot, der ``HALTEN`` wird, fallen weg; das
+    # Auto nimmt sie aus dem Netz, und der Plan bleibt der des Optimierers.
+    plan = plan_once(_car_battery_inputs(), result_with_small_house_discharge_and_car_battery)
+    assert plan.source == "optimizer", plan.fallback_reason
+    assert plan.slots[1].intent.kind is BatteryIntentKind.HALTEN
+    assert plan.slots[1].ev_battery_w == {}
+    assert plan.slots[1].ev_w == {"tesla": pytest.approx(4000.0)}
+    assert plan.slots[0].ev_battery_w == {"tesla": pytest.approx(3000.0)}

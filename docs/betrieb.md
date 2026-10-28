@@ -5573,9 +5573,9 @@ bleiben, wie sie sind.
   „Statistik“), Health `battery.spare` und das Entscheidungslog den Grund `battery_spare` („Akku
   übrig fürs Auto“, Abschnitt „Akku und Spitzen“).
 - **Ersatzplan:** kein Akku ins Auto. **„Victron allein“** bleibt, wie er ist (Autos aus PV und Netz).
-- **Kleine Akkuanteile:** Gibt der Optimierer einem Auto in einem Slot, der `Halten` oder `Netzladen`
-  wird, weniger als 100 W aus dem Akku, fällt dieser Anteil weg, und das Auto lädt ihn aus dem Netz;
-  ein Slot mit mindestens 100 W Akkuanteil wird nie `Halten`.
+- **Kleine Akkuanteile:** Gibt der Optimierer den Autos in einem Slot, der `Halten` oder `Netzladen`
+  wird, zusammen weniger als 100 W aus dem Akku, fällt dieser Anteil weg, und sie laden ihn aus dem
+  Netz; ein Slot mit mindestens 100 W Akkuanteil wird nie `Halten`.
 - **Rechenzeit:** Mit „Netzladen erlaubt“ und diesem Schalter zugleich rechnet der Solver länger: In
   den Szenarien der CI stieg `winter-leistung` von 87 s auf 112 s, und einzelne Pläne mit stark
   wechselnden Preisen erreichen das Zeitlimit von 20 s, mit einer Lösung, die dann gilt. Nähert sich

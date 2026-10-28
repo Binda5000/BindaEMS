@@ -51,7 +51,7 @@ from bindaems.app.planning.inputs import (
     assemble_inputs,
     car_floor_kw,
 )
-from bindaems.app.planning.intents import derive_intents
+from bindaems.app.planning.intents import derive_intents, drop_held_battery
 from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w, ev_power_w
 from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
@@ -134,7 +134,8 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
     Mit einer Lösung: Absichten, Nachrechnung und Plausibilität; ist der Plan plausibel, gilt
     er. Sonst der Ersatzplan mit dem Grund aus „Texte“, bei einem unplausiblen Plan dem ersten
     Befund und allen Befunden als Auffälligkeiten. Die geplanten Autos laden im Plan des
-    Optimierers mit seiner Ladeleistung, ihrem Akkuanteil (Akku ins Auto) und seiner Fehlmenge,
+    Optimierers mit seiner Ladeleistung, ihrem Akkuanteil (Akku ins Auto; ohne kleine Anteile in
+    Slots mit ``HALTEN`` oder ``NETZLADEN``, ``drop_held_battery``) und seiner Fehlmenge,
     im Ersatzplan nach ``fallback_vehicles`` und nie aus dem Akku (Entscheidung 8).
     Der Ersatzplan bleibt ohne erwartete Autos (Plan 5b, Entscheidung 11): Er rechnet mit den
     Eingangsdaten ohne sie.
@@ -143,13 +144,13 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
     findings: list[str] = []
     if reason is None:
         ev_w = ev_power_w(result)
-        ev_battery_w = ev_battery_power_w(result)
         intents = derive_intents(inputs, result)
+        # Kleine Akkuanteile in Slots mit ``HALTEN`` oder ``NETZLADEN`` fallen weg (Ruling 3)
+        ev_battery_w = drop_held_battery(intents, ev_battery_power_w(result))
         params = params_of(inputs)
         soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
         steps = simulate(soc0_kwh, sim_slots(inputs, ev_w, ev_battery_w), intents, params)
-        # ``check_plan`` liest den Akkuanteil aus ``result``; ``steps`` rechnen ihn mit
-        findings = check_plan(inputs, result, intents, steps)
+        findings = check_plan(inputs, result, intents, steps, ev_battery_w=ev_battery_w)
         if not findings:
             return build_plan(
                 inputs,

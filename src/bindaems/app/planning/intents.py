@@ -38,6 +38,30 @@ HOLD_SHARE: Final = 0.5  # Halten, wenn weniger als dieser Anteil des Eigenverbr
 HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
 
 
+def drop_held_battery(
+    intents: Sequence[BatteryIntent], ev_battery_w: Sequence[Mapping[str, float]]
+) -> list[dict[str, float]]:
+    """Akkuanteil der Autos je Slot ohne kleine Anteile in Slots, die nicht ``EIGENVERBRAUCH`` sind.
+
+    ``derive_intents`` macht einen Slot erst ab ``HOLD_MIN_W`` Akkuanteil zusammen sicher zu
+    ``EIGENVERBRAUCH``; darunter kann er ``HALTEN`` oder ``NETZLADEN`` werden, und dort gibt der
+    Akku nichts ab. Ein solcher Slot verliert seine Anteile (Ruling 3 der Fix-Welle): Sie sind
+    Rundungsrauschen, das Auto nimmt das bisschen aus dem Netz (seine Ladeleistung ``ev_w`` bleibt).
+    Größere Anteile bleiben, damit ``check_plan`` einen Fehler dort weiter meldet. ``ev_battery_w``
+    ist der Akkuanteil je Auto und Slot (``ev_battery_power_w``); leer heißt: keiner.
+    """
+    if not ev_battery_w:
+        return []
+    if len(ev_battery_w) != len(intents):
+        raise ValueError("Akkuanteil der Autos muss zu den Absichten passen")
+    return [
+        {}
+        if intent.kind is not BatteryIntentKind.EIGENVERBRAUCH and sum(shares.values()) < HOLD_MIN_W
+        else dict(shares)
+        for intent, shares in zip(intents, ev_battery_w, strict=True)
+    ]
+
+
 def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryIntent]:
     """Absicht je Slot; ohne Flüsse (keine Lösung) eine leere Liste.
 

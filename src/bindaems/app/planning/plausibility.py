@@ -21,7 +21,7 @@ Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final, Literal
 
@@ -180,16 +180,23 @@ def check_plan(
     result: OptimizerResult,
     intents: Sequence[BatteryIntent],
     steps: Sequence[SimStep],
+    *,
+    ev_battery_w: Sequence[Mapping[str, float]] | None = None,
 ) -> list[str]:
     """Befunde in der Reihenfolge der Slots (je Art der erste); leer, wenn der Plan plausibel ist.
 
     ``steps`` ist die Nachrechnung der ``intents`` mit dem Akkumodell, mit der Ladeleistung der
-    Autos und ihrem Akkuanteil aus ``result``. Flüsse, Schritte und Slots müssen gleich viele sein,
+    Autos und ihrem Akkuanteil. ``ev_battery_w`` ist der Akkuanteil je Auto und Slot, den der Plan
+    behält (``drop_held_battery``); ihn prüfen die Befunde „Akku ins Auto“. Ohne Angabe gilt der
+    aus ``result`` (``ev_battery_power_w``). Bilanz, Leistungsgrenzen und Grenzen der Autos rechnen
+    immer mit den Flüssen von ``result``. Flüsse, Schritte und Slots müssen gleich viele sein,
     sonst ``ValueError``.
     """
     params = params_of(inputs)
     slots = sim_slots(inputs)
-    from_battery = ev_battery_power_w(result)
+    from_battery = ev_battery_power_w(result) if ev_battery_w is None else list(ev_battery_w)
+    if len(from_battery) != len(intents):
+        raise ValueError("Akkuanteil der Autos muss zu den Absichten passen")
     found: dict[str, tuple[int, str]] = {}
 
     def report(kind: str, index: int, text: str) -> None:
