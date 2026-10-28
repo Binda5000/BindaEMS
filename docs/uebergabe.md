@@ -3843,4 +3843,9 @@ Bedienung von Hand gewinnen. Gesamtreview und Fix-Welle sind durch; was die Fix-
   überschrieben (unvermeidlich, wie bei `driving_auto`).
 - **Tracker (Lücke bei unbekanntem Steckzustand):** Das gemerkte Abstecken nach einer Lücke lebt nur im Speicher; startet die app
   erneut, bevor sie den Ladepunkt wieder bekannt sieht, entfällt der Wechsel (in `docs/betrieb.md` beschrieben).
+- **Tracker (späte Meldung nach Lücke):** Ist Ladepunkt A länger als 30 min unbekannt, während das Auto dort steckt, und wird es
+  inzwischen an B abgesteckt, kommt die gemerkte Meldung für A erst, wenn A wieder „leer“ zeigt, und setzt dann den Standard von A
+  über den von B. Abhilfe: Wunsch verwerfen, wenn dasselbe Fahrzeug inzwischen anderswo eine Session hatte, oder `at` vergleichen.
+- **Tracker (entfernte Ladestation):** Ein Eintrag für eine aus `config.yaml` entfernte Ladestation bleibt bis zum Neustart im
+  Speicher (ohne Wirkung).
 - **UI:** Die Stellung von `{@const modeField}` im `SettingsEditor` ist eine Stilfrage.
