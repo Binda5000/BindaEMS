@@ -139,7 +139,7 @@ async def test_run_stores_one_row_per_mode(service, engine, read) -> None:
     expected = fit_mode(HOUSE, "heizen")
     assert heating.params == asdict(expected)
     assert (heating.usable, heating.reason) == (True, "ok")
-    assert (cooling.usable, cooling.reason) == (False, "few_days")
+    assert (cooling.usable, cooling.reason) == (False, "no_data")
     current = service.current("heizen")
     assert current is not None
     m, profile, computed_at = current
@@ -558,8 +558,8 @@ async def test_status_names_both_modes(service, read, clock) -> None:
     assert heating["model"] == asdict(fit_mode(HOUSE, "heizen"))
     assert (heating["usable"], heating["reason"], heating["text"]) == (True, "ok", "Modell taugt.")
     assert heating["computed_at"] == NOW.isoformat()
-    assert (cooling["usable"], cooling["reason"]) == (False, "few_days")
-    assert cooling["text"] == "Noch zu wenig Tage mit Kühlen: 0 von 14."
+    assert (cooling["usable"], cooling["reason"]) == (False, "no_data")
+    assert cooling["text"] == "Noch keine Daten der Klimaanlage."
     assert body["computed_at"] == NOW.isoformat()
     stamp = f"{NOW.astimezone(LOCAL_TZ):%d.%m. %H:%M}"
     assert body["status"] == {"ok": True, "text": f"Wärmemodell berechnet am {stamp}."}

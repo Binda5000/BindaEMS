@@ -376,16 +376,18 @@ def offset_events(slots: Sequence[ThermalSlot], mode: Mode, model: ModeModel) ->
 
 def _reason(
     slots: Sequence[ThermalSlot],
+    mode: Mode,
     days: int,
     episodes: int,
     fit: _Fit | None,
     tau_h: float | None,
 ) -> Reason:
-    """Der erste Grund, der fehlt (Entscheidung 4); ``ok``, wenn das Modell taugt.
+    """Der erste Grund, der fehlt (Entscheidung 4); ``ok``, wenn das Modell taugt. ``no_data``,
+    wenn kein einziger Slot in der Betriebsart ``mode`` liegt (auch bei Slots in anderen).
 
     Fällt die Leistung mit der Temperaturdifferenz (``u ≤ 0``), beschreibt die Anpassung kein
     Heizen oder Kühlen: ``poor_fit``."""
-    if not slots:
+    if not any(slot.mode == mode for slot in slots):
         return "no_data"
     if days < MIN_DAYS:
         return "few_days"
@@ -411,7 +413,7 @@ def fit_mode(slots: Sequence[ThermalSlot], mode: Mode) -> ModeModel:
     tau_h = tau_all if tau_all is not None and math.isfinite(tau_all) else None
     c_model = tau_h * fit.u / 1000 if fit is not None and fit.u > 0 and tau_h is not None else None
     powers = [s.power_w for s in ordered if s.mode == mode and s.power_w is not None]
-    reason = _reason(ordered, days, len(episodes), fit, tau_h)
+    reason = _reason(ordered, mode, days, len(episodes), fit, tau_h)
     model = ModeModel(
         mode=mode,
         days=days,

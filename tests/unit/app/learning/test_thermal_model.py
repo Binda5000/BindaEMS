@@ -217,6 +217,20 @@ def test_no_slots_is_no_data() -> None:
     assert m.u_w_per_k is None and m.tau_h is None and m.c_kwh_per_k is None and m.max_w is None
 
 
+def test_mode_without_a_slot_is_no_data_even_with_other_slots() -> None:
+    slots = synthetic(days=21, tau_h=40, u=120, mode="heizen")
+    m = fit_mode(slots, "kuehlen")
+    assert not m.usable and m.reason == "no_data" and m.days == 0
+
+
+def test_mode_with_a_few_slots_is_few_days() -> None:
+    slots = synthetic(days=21, tau_h=40, u=120, mode="heizen")
+    # ein Slot Kühlen genügt nicht für einen Tag, aber es gibt Daten
+    slots[0] = replace(slots[0], mode="kuehlen")
+    m = fit_mode(slots, "kuehlen")
+    assert m.reason == "few_days" and m.days == 0
+
+
 def test_few_days_is_not_usable() -> None:
     m = fit_mode(synthetic(days=13, tau_h=40, u=120), "heizen")
     assert not m.usable and m.reason == "few_days" and m.days == 13
@@ -345,7 +359,9 @@ def test_cooling_uses_outdoor_minus_setpoint() -> None:
     assert m.pv_w_per_kw == pytest.approx(SOLAR_W_PER_KW, rel=0.1)
     assert m.base_w == pytest.approx(FAN_W, rel=0.15)
     heating = fit_mode(slots, "heizen")
-    assert heating.reason == "few_days" and heating.days == 0 and heating.episodes == m.episodes
+    # kein Slot in der Betriebsart (nur die Auskühl-Phasen zählen): keine Daten, nicht few_days
+    assert (heating.reason, heating.days) == ("no_data", 0)
+    assert heating.episodes == m.episodes
 
 
 # --- Versatz-Ereignisse -----------------------------------------------------------------------

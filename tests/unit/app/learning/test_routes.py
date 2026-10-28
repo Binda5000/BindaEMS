@@ -502,8 +502,8 @@ async def test_thermal_status_for_readers(client_as, thermal, settings_service) 
     assert (heating["mode"], heating["usable"], heating["reason"]) == ("heizen", True, "ok")
     assert heating["text"] == "Modell taugt." and heating["model"]["mode"] == "heizen"
     assert heating["computed_at"] == THERMAL_NOW.isoformat()
-    assert (cooling["mode"], cooling["usable"], cooling["reason"]) == ("kuehlen", False, "few_days")
-    assert cooling["text"] == "Noch zu wenig Tage mit Kühlen: 0 von 14."
+    assert (cooling["mode"], cooling["usable"], cooling["reason"]) == ("kuehlen", False, "no_data")
+    assert cooling["text"] == "Noch keine Daten der Klimaanlage."
     assert {k: v for k, v in body.items() if k != "enabled"} == thermal.status()
     thermal_on(settings_service)
     assert client.get("/api/learning/thermal").json()["enabled"] is True
