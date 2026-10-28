@@ -248,7 +248,8 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     `planning.car_battery_allowed`, auch mit `false`. Eine ältere app lehnt eine solche Version ab und
     rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
     „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“, als Warnung „Gespeicherte
-    Einstellungen (Version …) passen nicht zum Schema – Standardwerte aktiv.“).
+    Einstellungen (Version …) passen nicht zum Schema – Standardwerte aktiv.“). Abhilfe wie beim
+    Standard-Lademodus: vorher als YAML exportieren, den Schlüssel löschen, danach importieren.
   - **Die Pläne seit dem Ausrollen** tragen je Slot `ev_battery_w` und `now_battery`. Eine ältere app
     überspringt sie als unlesbar (im Log „Plan-Zeile nicht lesbar“, `code=plan_row_unreadable`), bis
     sie nach 30 Tagen aus der Planablage fallen. Bis dahin fehlen sie im Verlauf und im Vergleich Plan
@@ -256,12 +257,16 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 
   So gehst du zurück:
 
-  1. **Schalter aus:** **Einstellungen** → „Planung“ → „Akku ins Auto, wenn übrig“ aus, speichern, und
-     warten, bis auf der Seite **Zeitplan** der neue Plan steht (ohne die Sätze „… aus dem Akku statt
-     aus dem Netz.“ und „Autos in Sofort dürfen aus dem Akku laden, …“) und die Zeile oben nicht mehr
-     „Der Plan ist noch nicht beim core.“ sagt. Bis zum Wechsel gibt der core dann keinem Auto mehr
-     etwas aus dem Akku.
-  2. **Regelbetrieb aus** (System → „Bedienung“).
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ (oder `GET /api/settings/export`, Abschnitt 8,
+     „Alternative für Skripte (curl)“) und die Datei sichern. In der Datei unter `planning:` die Zeile
+     `car_battery_allowed:` löschen (mit `true` oder `false`). Gehst du zugleich hinter den
+     Standard-Lademodus zurück, löschst du beide Schlüssel, `wallbox_default_modes` (samt den
+     eingerückten Zeilen darunter, siehe „Rollback auf einen Stand vor dem Standard-Lademodus“) und
+     `planning.car_battery_allowed`.
+  2. **Regelbetrieb aus** (System → „Bedienung“). Den Schalter „Akku ins Auto, wenn übrig“ vorher
+     auszuschalten ist nicht nötig: Ohne Regelbetrieb gibt der core keinem Auto etwas aus dem Akku,
+     und Schritt 3 nimmt die Felder aus der Absicht.
   3. **Felder aus `intent.json` entfernen:**
 
      ```bash
@@ -280,33 +285,37 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
      print("ev_battery_w und now_battery entfernt")'
      ```
 
-  4. **Schalter aus den Einstellungen entfernen** (alle Versionen, die ihn nennen; die übrigen Werte
-     bleiben):
-
-     ```bash
-     docker compose stop ems-app
-     docker compose run --rm --no-deps --entrypoint python ems-app -c '
-     import sqlite3
-     key = "$.planning.car_battery_allowed"
-     connection = sqlite3.connect("/data/bindaems.sqlite3")
-     with connection:
-         changed = connection.execute(
-             "UPDATE settings_version SET data = json_remove(data, ?) "
-             "WHERE json_type(data, ?) IS NOT NULL",
-             (key, key),
-         ).rowcount
-     connection.close()
-     print(f"car_battery_allowed aus {changed} Versionen entfernt")'
-     ```
-
-  5. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app), dann den
-     **Regelbetrieb wieder an**, sobald **System** beide mit demselben Stand zeigt.
+  4. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  5. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“ (oder `POST /api/settings/import`). Das legt eine neue
+     Version ohne den Schlüssel an; Tarif und übrige Einstellungen sind danach wieder da. Dann den
+     **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
 
   Lässt du Schritt 3 aus, setzt du die Absicht danach neu (Bedienung oder `PUT /v1/intent`); die erste
-  angenommene Absicht beendet den Alarm. Schritt 4 kannst du nachholen, auch mit dem älteren Image (der
-  Befehl braucht nur Python); bis dahin rechnet die ältere app mit den Standardwerten. Speichere die
-  Einstellungen in dieser Zeit nicht, sonst werden die Standardwerte zur neuen Version. Gehst du später
-  wieder auf den Stand mit Akku ins Auto, ist der Schalter aus.
+  angenommene Absicht beendet den Alarm. Bis zum Import in Schritt 5 rechnet die ältere app mit den
+  Standardwerten; speichere die Einstellungen in dieser Zeit nicht von Hand, sonst werden die
+  Standardwerte zur neuen Version. Die Datenbank ist nicht betroffen (keine Migration). Gehst du
+  später wieder auf den Stand mit Akku ins Auto, ist der Schalter aus.
+
+  **Nur als Notbehelf, wenn du vor dem Rollback nicht exportiert hast:** Die ältere app exportiert dann
+  nur die Standardwerte. Den Schlüssel nimmst du in dem Fall direkt aus allen gespeicherten Versionen
+  (die übrigen Werte bleiben), mit gestoppter app, danach `docker compose up -d ems-app`:
+
+  ```bash
+  docker compose stop ems-app
+  docker compose run --rm --no-deps --entrypoint python ems-app -c '
+  import sqlite3
+  key = "$.planning.car_battery_allowed"
+  connection = sqlite3.connect("/data/bindaems.sqlite3")
+  with connection:
+      changed = connection.execute(
+          "UPDATE settings_version SET data = json_remove(data, ?) "
+          "WHERE json_type(data, ?) IS NOT NULL",
+          (key, key),
+      ).rowcount
+  connection.close()
+  print(f"car_battery_allowed aus {changed} Versionen entfernt")'
+  ```
 - **Update mit dem Sofort-Limit:** Der Plan Sofort-Limit ändert core und app; beide rollen
   **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`).
   Die Absicht hat ein neues Feld, ein alter core lehnt es ab. Es gibt keine Migration, und die ACL des
@@ -368,6 +377,8 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 
   Die Datenbank ist nicht betroffen (keine Migration), der core auch nicht. Bis zum Import zeigt die
   ältere app Standardwerte.
+  Gehst du zugleich hinter Akku ins Auto zurück (Rollback weiter oben, dann mit core und app), löschst
+  du in Schritt 2 beide Schlüssel, `wallbox_default_modes` und `planning.car_battery_allowed`.
 - **Update mit Plan 5c (Vorheizen und Vorkühlen):** Plan 5c ändert core und app; beide rollen
   gemeinsam aus, mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Migration `0015` legt die
   Tabelle `thermal_model` an; **sichere die Datenbank vorher** (`/backup/vor-plan-5c.sqlite3`). Der
@@ -5994,7 +6005,7 @@ allein“ lädt die Autos weiter aus PV und Netz. Das Werkzeug gibt einem Auto d
 begrenzt durch Reserve und Entladegrenze, und bildet die Grenze des core „nur solange der SOC über
 dem geplanten SOC am Slotende liegt“ nicht nach; weicht der Verbrauch vom Plan ab, kann es damit
 etwas günstiger oder teurer rechnen als die Anlage. In der CI (`sommer-sonnig`, zwei Tage, stündlich
-neu geplant) gab der Akku dem Auto 16,0 kWh, und der Optimierer war bereinigt rund 5,06 € statt 2,64 €
+neu geplant) gab der Akku dem Auto 16,0 kWh, und der Optimierer war bereinigt rund 5,05 € statt 2,64 €
 günstiger als „Victron allein“; an `winter-spread` gab er nichts (der Abend braucht den Akku).
 
 Hat `export_days` Tage übersprungen (`skipped_days`), steht direkt unter der Tabelle die Zeile

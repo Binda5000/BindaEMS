@@ -222,7 +222,8 @@ Plan-Schwelle erreicht. Der Zeitplan nennt das mit `AUTO_AUS_AKKU` und `SOFORT_A
 `akku-uebrig-sofort` und `akku-uebrig-geplant` (jetzt 45). PV-Überschuss, Min+PV (Unterstützung ab 70 %) und Boost bleiben,
 wie sie sind. **Ausgerollt werden core und app gemeinsam** (jeder Plan-Slot der Absicht hat zwei neue Felder, ein alter core
 lehnt sie ab), mit dem nächsten gemeinsamen Pull; **keine Migration, keine ACL-Zeile**. **Den Schalter schaltest du erst ein,
-wenn Victron live ist.** Der Rückweg braucht Schritte an `intent.json` und an den gespeicherten Einstellungen (Betrieb:
+wenn Victron live ist.** Der Rückweg braucht Schritte an `intent.json` (Felder per Skript entfernen) und an den gespeicherten Einstellungen (wie beim
+Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` löschen, nach dem Rollback importieren; Betrieb:
 `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“). Betrieb: `docs/betrieb.md`, „Akku und Spitzen“,
 „Akku-Sollwert“, und „Planung“, „Akku ins Auto, wenn übrig“.
 
@@ -923,7 +924,7 @@ wenn Victron live ist.** Der Rückweg braucht Schritte an `intent.json` und an d
     gleich.
   - **UI, Werkzeuge, Simulator:** Schalter mit Hilfetext im Editor „Planung“ (Lesende sehen „ja“/„nein“), Schemas mit den
     neuen Feldern optional; Szenario-Werkzeug mit Akkuanteil, Verschleiß in den Kosten des Optimierers und der Spalte
-    „Akku → Auto (kWh)“; Planungsszenarien `sommer-sonnig` (16,0 kWh aus dem Akku ins Auto, rund 5,06 € statt 2,64 €
+    „Akku → Auto (kWh)“; Planungsszenarien `sommer-sonnig` (16,0 kWh aus dem Akku ins Auto, rund 5,05 € statt 2,64 €
     günstiger als „Victron allein“) und `winter-spread` (nichts aus dem Akku, Kosten gleich); Simulator-Szenarien
     `akku-uebrig-sofort` und `akku-uebrig-geplant`. Home Assistant bekommt nichts Neues (Entscheidung 11).
   - **Doku:** Spec „Stand Plan Akku ins Auto“ in 7.6, 7.7, 9.3, 9.5, 9.6, 12 und 13; Betriebshandbuch Abschnitt 4 (Update
@@ -1953,8 +1954,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          Entscheidungslog (Ruling 5 in der Kurzfassung).
       4. **Beobachten:** `solve_ms` im Log „Plan erstellt“; mit „Netzladen erlaubt“ und dem Schalter zugleich rechnet der
          Solver länger (Ruling 1), oft nahe 20 s ist ein Befund.
-      Der Rückweg braucht zwei Schritte mehr als sonst, an `intent.json` und an den gespeicherten Einstellungen
-      (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“).
+      Der Rückweg braucht zwei Schritte mehr als sonst: die Felder aus `intent.json` per Skript entfernen und die
+      Einstellungen vor dem Rollback als YAML exportieren, `planning.car_battery_allowed` löschen und danach importieren
+      (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“; zusammen mit dem Rollback vor dem
+      Standard-Lademodus beide Schlüssel löschen).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -3997,7 +4000,8 @@ vorgesehen.
   Produktfrage an den Betreiber.
 - **UI (Task 9):** Die Vertragsdatei `plan.json` hat nur leere `ev_battery_w` und `now_battery` `false` (keine Ausgabe der
   app mit Werten geprüft); der Kommentar oben in `PlanningEditor.svelte` ist länger als 100 Zeichen.
-- **Doku (Task 10):** Der Rückweg braucht zwei Handgriffe ohne Migration (`intent.json` und die Einstellungen in SQLite,
-  Betriebshandbuch Abschnitt 4), denn der Plan sieht bewusst keine Migration vor; eine Migration mit Downgrade wie `0013`
-  könnte den Schalter beim Zurückführen aus den Einstellungen nehmen. Im Betriebshandbuch stand bei `ZIEL_SOC_ABFAHRT`, „kW“ sei die Netzleistung; es ist die ganze
+- **Doku (Task 10):** Der Rückweg braucht zwei Handgriffe ohne Migration (`intent.json` per Skript, die Einstellungen wie
+  beim Standard-Lademodus über Export, Löschen des Schlüssels und Import; Betriebshandbuch Abschnitt 4), denn der Plan sieht
+  bewusst keine Migration vor; eine Migration mit Downgrade wie `0013` könnte den Schalter beim Zurückführen aus den
+  Einstellungen nehmen. Im Betriebshandbuch stand bei `ZIEL_SOC_ABFAHRT`, „kW“ sei die Netzleistung; es ist die ganze
   Ladeleistung des Autos (seit Plan 4b so), jetzt richtiggestellt.
