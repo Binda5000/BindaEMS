@@ -1,6 +1,7 @@
 // Einstellungen im UI: Entwurf als Text (deutsche Dezimalzahlen), Prüfung wie der Server,
 // Texte für Zeitfenster und Gültigkeit, Zuordnung von Serverfehlern zu den Feldern
 import type {
+	ChargeMode,
 	DrivingSettings,
 	EnergyComponent,
 	FeedInComponent,
@@ -132,6 +133,8 @@ export interface SettingsDraft {
 	learning: LearningDraft;
 	/** eigene Namen der Ladestationen nach Schlüssel; leer = Typname */
 	wallboxNames: Record<string, string>;
+	/** Standard-Lademodus nach dem Abstecken nach Schlüssel; leer = unverändert */
+	wallboxDefaultModes: Record<string, ChargeMode | ''>;
 	comment: string;
 }
 
@@ -395,6 +398,10 @@ export function draftFrom(
 		wallboxNames: {
 			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
 			...settings.wallbox_names
+		},
+		wallboxDefaultModes: {
+			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
+			...settings.wallbox_default_modes
 		},
 		comment: ''
 	};
@@ -851,6 +858,11 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		wallboxNames[key] = name;
 	}
 
+	const wallboxDefaultModes: Record<string, ChargeMode> = {};
+	for (const [key, mode] of Object.entries(draft.wallboxDefaultModes)) {
+		if (mode !== '') wallboxDefaultModes[key] = mode; // ohne Wahl bleibt der Modus unverändert
+	}
+
 	if (
 		Object.keys(errors).length > 0 ||
 		vatPct === null ||
@@ -873,7 +885,8 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 			feed_in: { ...settings.feed_in, monthly_ct: monthly },
 			planning: { ...settings.planning, ...planning },
 			learning: { ...settings.learning, ...learning },
-			wallbox_names: wallboxNames
+			wallbox_names: wallboxNames,
+			wallbox_default_modes: wallboxDefaultModes
 		},
 		tariffChanged: importPricesChanged(settings.tariff, tariff)
 	};
@@ -945,6 +958,8 @@ export function editorFieldErrors(
 			if (index >= 0) key = `feedIn.${index}.${parts.length > 3 ? 'month' : 'ct'}`;
 		} else if (parts[0] === 'wallbox_names' && parts.length >= 2) {
 			key = `wallboxNames.${parts[1]}`;
+		} else if (parts[0] === 'wallbox_default_modes' && parts.length >= 2) {
+			key = `wallboxDefaultModes.${parts[1]}`;
 		}
 		result[key] ??= message;
 	}

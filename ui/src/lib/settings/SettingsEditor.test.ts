@@ -175,6 +175,35 @@ it('vergibt eigene Namen für Ladestationen; leer heißt Typname', async () => {
 	expect(save.mock.calls[0][1].wallbox_names).toEqual({ evcs: 'Carport' });
 });
 
+it('wählt je Ladestation den Modus „Nach dem Abstecken“; „Unverändert“ ist vorgewählt', async () => {
+	const current = settingsCurrent();
+	const save = vi.fn().mockResolvedValueOnce(current);
+	render(SettingsEditor, {
+		current,
+		wallboxes: limits().wallboxes,
+		save,
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	const selects = screen.getAllByLabelText('Nach dem Abstecken') as HTMLSelectElement[];
+	expect(selects).toHaveLength(2);
+	expect(selects.map((select) => select.value)).toEqual(['', '']);
+	expect(
+		Array.from(selects[0].options).map((option) => [option.value, option.textContent?.trim()])
+	).toEqual([
+		['', 'Unverändert'],
+		['pv', 'PV-Überschuss'],
+		['min_pv', 'Min+PV'],
+		['now', 'Sofort'],
+		['off', 'Aus'],
+		['planned', 'Geplant']
+	]);
+	await fireEvent.change(selects[0], { target: { value: 'pv' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	await vi.waitFor(() => expect(save).toHaveBeenCalled());
+	expect(save.mock.calls[0][1].wallbox_default_modes).toEqual({ evcs: 'pv' });
+});
+
 it('zeigt Regelfehler des Servers am Zeitfenster, am Bestandteil und am Tarif', async () => {
 	const save = reject422(
 		{
