@@ -87,7 +87,7 @@ from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
-from bindaems.shared.settings import ThermalPlanSettings
+from bindaems.shared.settings import RuntimeSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, slot_start
 
 log = structlog.get_logger(__name__)
@@ -316,24 +316,19 @@ class PlanningService:
         keine neue Version. Bei einem Versionskonflikt (UI und HA schreiben gleichzeitig) wird
         einmal auf der neuen Version wiederholt; scheitert auch das, geht der Fehler weiter.
         """
-        for attempt in (1, 2):
-            current = self._settings.current()
-            if current.settings.planning.grid_charge_allowed == on:
-                return current
-            planning = current.settings.planning.model_copy(update={"grid_charge_allowed": on})
-            settings = current.settings.model_copy(update={"planning": planning})
-            try:
-                return self._settings.update(
-                    settings,
-                    base_version=current.version,
-                    actor=actor,
-                    source=source,
-                    comment="Netzladen ein" if on else "Netzladen aus",
-                )
-            except VersionConflictError:
-                if attempt == 2:
-                    raise
-        raise AssertionError("unerreichbar")  # pragma: no cover - die Schleife kehrt zurück
+
+        def apply(settings: RuntimeSettings) -> RuntimeSettings:
+            planning = settings.planning.model_copy(update={"grid_charge_allowed": on})
+            return settings.model_copy(update={"planning": planning})
+
+        return self._set_switch(
+            on,
+            has=lambda settings: settings.planning.grid_charge_allowed == on,
+            apply=apply,
+            comment="Netzladen ein" if on else "Netzladen aus",
+            actor=actor,
+            source=source,
+        )
 
     def set_thermal_plan(self, on: bool, *, actor: str, source: Source) -> SettingsVersion:
         """Schalter „Vorheizen und Vorkühlen“ (``learning.thermal.enabled``) als neue
@@ -343,21 +338,46 @@ class PlanningService:
         die Planung und lösen die Neuplanung aus. Wiederholung bei Versionskonflikt wie bei
         ``set_grid_charge``.
         """
+
+        def apply(settings: RuntimeSettings) -> RuntimeSettings:
+            thermal = settings.learning.thermal.model_copy(update={"enabled": on})
+            learning = settings.learning.model_copy(update={"thermal": thermal})
+            return settings.model_copy(update={"learning": learning})
+
+        return self._set_switch(
+            on,
+            has=lambda settings: settings.learning.thermal.enabled == on,
+            apply=apply,
+            comment="Vorheizen und Vorkühlen ein" if on else "Vorheizen und Vorkühlen aus",
+            actor=actor,
+            source=source,
+        )
+
+    def _set_switch(
+        self,
+        on: bool,
+        *,
+        has: Callable[[RuntimeSettings], bool],
+        apply: Callable[[RuntimeSettings], RuntimeSettings],
+        comment: str,
+        actor: str,
+        source: Source,
+    ) -> SettingsVersion:
+        """Setzt einen Schalter der Einstellungen als neue Version: ``has`` sagt, ob er schon den
+        Wert ``on`` hat (dann bleibt die Version), ``apply`` liefert die geänderten Einstellungen.
+        Bei einem Versionskonflikt einmal auf der neuen Version wiederholen, sonst geht der Fehler
+        weiter."""
         for attempt in (1, 2):
             current = self._settings.current()
-            thermal = current.settings.learning.thermal
-            if thermal.enabled == on:
+            if has(current.settings):
                 return current
-            learning = current.settings.learning.model_copy(
-                update={"thermal": thermal.model_copy(update={"enabled": on})}
-            )
             try:
                 return self._settings.update(
-                    current.settings.model_copy(update={"learning": learning}),
+                    apply(current.settings),
                     base_version=current.version,
                     actor=actor,
                     source=source,
-                    comment="Vorheizen und Vorkühlen ein" if on else "Vorheizen und Vorkühlen aus",
+                    comment=comment,
                 )
             except VersionConflictError:
                 if attempt == 2:
