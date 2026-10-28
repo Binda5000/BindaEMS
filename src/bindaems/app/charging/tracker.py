@@ -18,10 +18,14 @@ wer dort steht (``wallboxes[].occupant`` und ``assignment``).
   einer sehr kurzen Session, deren Insasse erst in der schließenden Beobachtung steht), zählt die
   letzte nicht leere Belegung der Wallbox zwischen Beginn und Ende.
 - Abstecken melden: Endet eine Session, weil das Auto abgezogen ist, liefert ``record`` ein
-  ``Unplugged`` mit dem Fahrzeug der Session; bei einer Pause über ``SESSION_GAP`` nur, wenn
-  dieselbe Beobachtung den Ladepunkt als nicht verbunden zeigt, und dann zum Zeitpunkt von
-  ``last_seen``. Ein unbekannter Steckzustand meldet nichts. Scheitert die Transaktion, gibt es
-  keine Meldung; der nächste Lauf liest die offenen Sessions neu und meldet dann.
+  ``Unplugged`` mit dem Fahrzeug der Session. Bei einer Pause über ``SESSION_GAP`` gilt der
+  Zeitpunkt von ``last_seen``: Zeigt dieselbe Beobachtung den Ladepunkt als nicht verbunden, kommt
+  die Meldung sofort. Ist er unbekannt oder fehlt er (nach dem Start oder dem Wiederverbinden zum
+  core fast immer), merkt sich der Tracker Fahrzeug und ``last_seen`` im Speicher und meldet bei
+  der ersten Beobachtung, die den Ladepunkt leer zeigt; steckt dort wieder ein Auto, entfällt die
+  Meldung. Ein unbekannter Steckzustand allein meldet nichts. Scheitert die Transaktion, gibt es
+  keine Meldung und der Speicher bleibt beim Stand vor dem Lauf; der nächste Lauf liest die offenen
+  Sessions neu und meldet dann.
 
 Das Schreiben läuft in einem Thread, ``wake`` setzt nur ein Ereignis.
 """
@@ -159,6 +163,9 @@ class ChargingTracker:
         # zuletzt geschriebene Belegung je Wallbox; nach dem Start leer, die erste schreibt immer
         self._assigned: dict[str, tuple[str, str]] = {}
         self._open: dict[str, _Open] = {}
+        # per Lücke geschlossen bei unbekanntem Steckzustand: (Fahrzeug, last_seen) je Wallbox,
+        # gemeldet, sobald der Ladepunkt leer ist
+        self._gap_closed: dict[str, tuple[str | None, datetime]] = {}
         self._loaded = False
 
     def wake(self) -> None:
@@ -188,6 +195,8 @@ class ChargingTracker:
         """Verarbeitet eine Beobachtung (synchron; ``run`` ruft es in einem Thread) und liefert
         die Meldungen über abgesteckte Autos."""
         unplugged: list[Unplugged] = []
+        # erst nach der Transaktion übernommen: ein Fehler lässt den Stand vor dem Lauf stehen
+        gap_closed = dict(self._gap_closed)
         try:
             with self._engine.begin() as conn:
                 if not self._loaded:
@@ -195,9 +204,13 @@ class ChargingTracker:
                 for wallbox, current in list(self._open.items()):
                     if now - current.last_seen > SESSION_GAP:  # Pause: Ende bei der letzten Sicht
                         vehicle = self._close(conn, wallbox, current.last_seen)
-                        if any(i.wallbox == wallbox and i.connected is False for i in seen):
-                            unplugged.append(Unplugged(wallbox, vehicle, current.last_seen))
+                        gap_closed[wallbox] = (vehicle, current.last_seen)
                 for item in seen:
+                    pending = gap_closed.get(item.wallbox)
+                    if pending is not None and item.connected is not None:
+                        del gap_closed[item.wallbox]  # wieder bekannt: leer meldet, belegt nicht
+                        if item.connected is False:
+                            unplugged.append(Unplugged(item.wallbox, *pending))
                     changed = self._log_assignment(conn, now, item)
                     report = self._track(conn, now, item, changed)
                     if report is not None:
@@ -209,6 +222,7 @@ class ChargingTracker:
             self._open.clear()
             self._assigned.clear()
             raise
+        self._gap_closed = gap_closed
         return unplugged
 
     def sessions(

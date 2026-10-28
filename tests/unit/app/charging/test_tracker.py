@@ -445,11 +445,71 @@ def test_still_plugged_after_gap_reports_nothing(tracker) -> None:
     assert len(all_sessions(tracker)) == 2  # die alte endete, eine neue läuft
 
 
-def test_unknown_state_after_gap_reports_nothing(tracker) -> None:
+def test_unplug_after_gap_with_unknown_state_reports_once_when_seen_empty(tracker) -> None:
+    # Nach dem Start (oder Wiederverbinden zum core) ist der Steckzustand zuerst unbekannt
     tracker.record(at(0), plugged("tesla", "detected"))
     assert tracker.record(at(45), unknown()) == []
     (session,) = all_sessions(tracker)
-    assert session.end == at(0)
+    assert session.end == at(0)  # die Lückenregel schließt die Session trotzdem
+    assert tracker.record(at(46), unknown()) == []
+    assert tracker.record(at(47), unplugged()) == [Unplugged("evcs", "tesla", at(0))]
+    assert tracker.record(at(48), unplugged()) == []
+
+
+def test_unplug_while_the_app_was_off_reports_after_an_unknown_start(
+    engine, clock, cfg, live
+) -> None:
+    first = ChargingTracker(engine, clock, cfg, live)
+    first.record(at(0), plugged("tesla", "detected"))
+    second = ChargingTracker(engine, clock, cfg, live)  # Neustart nach 2 h, core noch nicht da
+    assert second.record(at(120), unknown()) == []
+    assert second.record(at(121), unplugged()) == [Unplugged("evcs", "tesla", at(0))]
+
+
+def test_gap_with_unknown_state_then_plugged_reports_nothing(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(45), unknown()) == []
+    assert tracker.record(at(46), plugged("tesla", "detected")) == []
+    assert len(all_sessions(tracker)) == 2  # die alte endete, eine neue läuft
+    assert tracker.record(at(47), unplugged()) == [Unplugged("evcs", "tesla", at(47))]
+
+
+def test_gap_while_the_wallbox_is_missing_reports_when_seen_empty(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(45), [WallboxSeen("twc", None, None, None)]) == []
+    assert tracker.record(at(46), unplugged()) == [Unplugged("evcs", "tesla", at(0))]
+
+
+def test_pending_unplug_survives_a_failed_transaction(tracker, monkeypatch) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(45), unknown()) == []
+    original = tracker._log_assignment
+
+    def log_then_fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(tracker, "_log_assignment", log_then_fail)
+    with pytest.raises(RuntimeError):
+        tracker.record(at(46), unplugged())
+    monkeypatch.undo()
+    assert tracker.record(at(47), unplugged()) == [Unplugged("evcs", "tesla", at(0))]
+
+
+def test_failed_gap_close_with_unknown_state_reports_after_the_retry(tracker, monkeypatch) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    original = tracker._log_assignment
+
+    def log_then_fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(tracker, "_log_assignment", log_then_fail)
+    with pytest.raises(RuntimeError):
+        tracker.record(at(45), unknown())  # zurückgerollt: die Session ist wieder offen
+    monkeypatch.undo()
+    assert tracker.record(at(46), unknown()) == []
+    assert tracker.record(at(47), unplugged()) == [Unplugged("evcs", "tesla", at(0))]
 
 
 def test_failed_transaction_reports_nothing_and_the_next_run_reports(tracker, monkeypatch) -> None:
