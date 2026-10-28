@@ -11,6 +11,7 @@ from tests.unit.app.charging.charging_helpers import T0
 from bindaems.app.charging.tracker import (
     ChargingTracker,
     StoredSession,
+    Unplugged,
     WallboxSeen,
     observe,
     session_vehicle,
@@ -391,3 +392,139 @@ def test_session_vehicle_picks_the_longest_and_the_later_on_a_tie() -> None:
     assert session_vehicle([(at(0), None)], at(0), at(30)) is None
     assert session_vehicle([], at(0), at(30)) is None
     assert session_vehicle([(at(0), "a")], at(10), at(10)) is None
+
+
+# --- Abstecken melden ----------------------------------------------------------------------
+
+
+def test_unplug_reports_session_vehicle(tracker) -> None:
+    assert tracker.record(at(0), plugged("tesla", "detected")) == []
+    assert tracker.record(at(10), plugged("tesla", "detected")) == []
+    assert tracker.record(at(20), unplugged()) == [Unplugged("evcs", "tesla", at(20))]
+
+
+def test_unplug_of_guest_reports_guest(tracker) -> None:
+    tracker.record(at(0), plugged("guest", "default"))
+    tracker.record(at(10), plugged("guest", "default"))
+    assert tracker.record(at(20), unplugged()) == [Unplugged("evcs", "guest", at(20))]
+
+
+def test_unplug_without_known_vehicle_reports_none(tracker) -> None:
+    tracker.record(at(0), plugged(None, "unclear"))
+    (report,) = tracker.record(at(10), unplugged())
+    assert report == Unplugged("evcs", None, at(10)) and report.vehicle is None
+
+
+def test_unplug_without_a_session_reports_nothing(tracker) -> None:
+    assert tracker.record(at(0), unplugged()) == []
+    assert tracker.record(at(10), unplugged()) == []
+
+
+def test_unknown_plug_state_reports_nothing(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(10), unknown()) == []
+    (session,) = all_sessions(tracker)
+    assert session.end is None
+
+
+def test_unplug_reports_only_once(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert len(tracker.record(at(10), unplugged())) == 1
+    assert tracker.record(at(20), unplugged()) == []
+
+
+def test_unplug_after_gap_reports_once_at_last_seen(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(45), unplugged()) == [Unplugged("evcs", "tesla", at(0))]
+    assert tracker.record(at(55), unplugged()) == []
+
+
+def test_still_plugged_after_gap_reports_nothing(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(45), plugged("tesla", "detected")) == []
+    assert len(all_sessions(tracker)) == 2  # die alte endete, eine neue läuft
+
+
+def test_unknown_state_after_gap_reports_nothing(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    assert tracker.record(at(45), unknown()) == []
+    (session,) = all_sessions(tracker)
+    assert session.end == at(0)
+
+
+def test_failed_transaction_reports_nothing_and_the_next_run_reports(tracker, monkeypatch) -> None:
+    tracker.record(at(0), plugged("tesla", "detected"))
+    original = tracker._close
+
+    def close_then_fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(tracker, "_close", close_then_fail)
+    with pytest.raises(RuntimeError):
+        tracker.record(at(10), unplugged())
+    monkeypatch.undo()
+    assert tracker.record(at(20), unplugged()) == [Unplugged("evcs", "tesla", at(20))]
+
+
+async def test_run_passes_reports_and_observation_to_callback(engine, clock, cfg, live) -> None:
+    calls: list[tuple[list[Unplugged], list[WallboxSeen]]] = []
+
+    async def on_observed(unplugged_now: list[Unplugged], observed: list[WallboxSeen]) -> None:
+        calls.append((unplugged_now, observed))
+        if len(calls) == 1:
+            raise RuntimeError("Rückruf kaputt")  # stoppt run nicht
+
+    tracker = ChargingTracker(engine, clock, cfg, live, on_observed)
+    live.health = {"wallboxes": [{"id": "evcs", "occupant": "tesla", "assignment": "default"}]}
+    live.state = {"signals": {"wallbox.evcs.status": {"v": 1, "q": "ok"}}}
+
+    async def observation(count: int) -> None:
+        tracker.wake()
+        for _ in range(200):
+            if len(calls) >= count:
+                break
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(tracker.run())
+    try:
+        with capture_logs() as logs:
+            await observation(1)
+            await asyncio.sleep(0.05)
+        live.state = {"signals": {"wallbox.evcs.status": {"v": 0, "q": "ok"}}}
+        await observation(2)
+    finally:
+        await stop(task)
+    assert any(entry["log_level"] == "error" for entry in logs)
+    assert calls[0][0] == []  # auch ohne Meldung
+    assert calls[0][1] == [
+        WallboxSeen("evcs", True, "tesla", "default"),
+        WallboxSeen("twc", None, None, None),
+    ]
+    assert calls[1][0] == [Unplugged("evcs", "tesla", clock.now())]
+    assert calls[1][1][0] == WallboxSeen("evcs", False, "tesla", "default")
+
+
+async def test_run_skips_callback_when_recording_fails(
+    engine, clock, cfg, live, monkeypatch
+) -> None:
+    calls: list[int] = []
+
+    async def on_observed(unplugged_now: list[Unplugged], observed: list[WallboxSeen]) -> None:
+        calls.append(1)
+
+    tracker = ChargingTracker(engine, clock, cfg, live, on_observed)
+
+    def failing(now, seen_now):
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(tracker, "record", failing)
+    task = asyncio.create_task(tracker.run())
+    try:
+        with capture_logs() as logs:
+            tracker.wake()
+            await asyncio.sleep(0.1)
+    finally:
+        await stop(task)
+    assert calls == []
+    assert any(entry["log_level"] == "error" for entry in logs)
