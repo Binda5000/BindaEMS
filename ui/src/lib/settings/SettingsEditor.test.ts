@@ -204,6 +204,25 @@ it('wählt je Ladestation den Modus „Nach dem Abstecken“; „Unverändert“
 	expect(save.mock.calls[0][1].wallbox_default_modes).toEqual({ evcs: 'pv' });
 });
 
+it('nennt Screenreadern bei „Nach dem Abstecken“ die Ladestation, auch neben einem Fehler', async () => {
+	const save = reject422({ loc: ['wallbox_default_modes', 'evcs'], msg: 'Modus unbekannt' });
+	render(SettingsEditor, {
+		current: settingsCurrent(),
+		wallboxes: limits().wallboxes,
+		save,
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	const selects = screen.getAllByLabelText('Nach dem Abstecken');
+	expect(selects[0]).toHaveAccessibleDescription('evcs (EVCS)');
+	expect(selects[1]).toHaveAccessibleDescription('twc (Wall Connector)');
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Modus unbekannt')).toBeInTheDocument();
+	expect(selects[0]).toHaveAccessibleDescription('evcs (EVCS) Modus unbekannt');
+	expect(selects[0]).toHaveAttribute('aria-invalid', 'true');
+	expect(selects[1]).toHaveAccessibleDescription('twc (Wall Connector)');
+});
+
 it('zeigt Regelfehler des Servers am Zeitfenster, am Bestandteil und am Tarif', async () => {
 	const save = reject422(
 		{

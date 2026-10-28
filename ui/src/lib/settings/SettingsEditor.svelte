@@ -264,7 +264,7 @@
 				{@const field = `wallboxNames.${key}`}
 				{@const wallbox = wallboxes[key]}
 				<div class="field">
-					<label for="{uid}-wallbox-{key}">
+					<label for="{uid}-wallbox-{key}" id="{uid}-wallbox-{key}-label">
 						{wallbox ? `${key} (${WALLBOX_TYPES[wallbox.type]})` : key}
 					</label>
 					<input
@@ -278,13 +278,16 @@
 					{@render fieldError(field)}
 				</div>
 				{@const modeField = `wallboxDefaultModes.${key}`}
+				<!-- die Ladestation als Beschreibung: sonst heißen alle Auswahlen gleich -->
 				<div class="field">
 					<label for="{uid}-wallbox-mode-{key}">Nach dem Abstecken</label>
 					<select
 						id="{uid}-wallbox-mode-{key}"
 						bind:value={draft.wallboxDefaultModes[key]}
 						aria-invalid={errors[modeField] ? 'true' : undefined}
-						aria-describedby={describedBy(modeField)}
+						aria-describedby={[`${uid}-wallbox-${key}-label`, describedBy(modeField)]
+							.filter(Boolean)
+							.join(' ')}
 					>
 						<option value="">Unverändert</option>
 						{#each CHARGE_MODES as mode (mode)}
