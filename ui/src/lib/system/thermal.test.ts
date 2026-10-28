@@ -4,7 +4,7 @@ import { formatDateTime } from '$lib/format';
 import { thermalLoad, thermalOffset, thermalRows } from './thermal';
 
 const NB = ' ';
-const MINUS = '-';
+const MINUS = '\u2212';
 
 const base: ThermalHealth = {
 	label: 'Klimaanlage',
@@ -253,6 +253,15 @@ describe('Zeile „Plan“', () => {
 		// Kühlen: 2 Stufen mehr Leistung heißen 1 K tieferer Sollwert
 		expect(planRow({ planned: 2, mode: 'kuehlen' })).toBe(`\u22121,0${NB}K bis 10:45`);
 		expect(planRow({ planned: 2, mode: 'heizen' })).toBe(`+1,0${NB}K bis 10:45`);
+	});
+
+	it('sagt bei Planwert 0 „kein Versatz“ statt „0,0 K“', () => {
+		const NOW_ZERO = new Date('2026-10-09T08:50:00Z');
+		const found = thermalRows({ ...base, planned: 0, mode: 'heizen' }, plan, NOW_ZERO).find(
+			(row) => row.label === 'Plan'
+		);
+		expect(found?.value).toBe('kein Versatz bis 11:00');
+		expect(planRow({ planned: 0, mode: 'kuehlen' }, null)).toBe('kein Versatz');
 	});
 
 	it('zeigt ohne Ende im Plan nur den Versatz', () => {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Karte „Wärmemodell“ (Plan 5c): je Betriebsart Grundleistung, Zeitkonstante, Speicher und ob
-	// das Modell taugt. Ohne Klimaanlage (404) fehlt die Karte.
+	// das Modell taugt. Die Karte fehlt ohne Klimaanlage (404) und bis zur ersten Antwort.
 	import type { ApiError } from '$lib/api/errors';
 	import type { ThermalStatus } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
@@ -28,7 +28,7 @@
 	const footer = $derived(computedText(data?.computed_at ?? null));
 </script>
 
-{#if !missing}
+{#if !missing && (data || error)}
 	<Card title="Wärmemodell">
 		{#if error}
 			<Notice level="error">{error.detail}</Notice>
@@ -74,8 +74,6 @@
 			{#if footer}
 				<p class="muted footer">{footer}</p>
 			{/if}
-		{:else if !error}
-			<p class="muted">Lädt …</p>
 		{/if}
 	</Card>
 {/if}

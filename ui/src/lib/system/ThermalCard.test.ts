@@ -50,7 +50,7 @@ it('zeigt mit Werten die Zeilen', () => {
 	});
 	expect(screen.getByText('Werte kommen an')).toBeTruthy();
 	expect(screen.getByText('Kühlen')).toBeTruthy();
-	expect(screen.getByText('-1,0 K (bestätigt)')).toBeTruthy();
+	expect(screen.getByText('\u22121,0 K (bestätigt)')).toBeTruthy();
 });
 
 it('zeigt die Grundlast und die freigebbare Leistung, ohne Werte „–“', () => {

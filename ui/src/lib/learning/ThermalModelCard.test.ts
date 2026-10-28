@@ -101,6 +101,12 @@ it('zeigt ohne Klimaanlage (404) nichts', () => {
 	expect(screen.queryByRole('heading', { name: 'Wärmemodell' })).toBeNull();
 });
 
+it('zeigt vor der ersten Antwort nichts, auch kein „Lädt …“', () => {
+	show({ data: undefined, error: null });
+	expect(screen.queryByRole('heading', { name: 'Wärmemodell' })).toBeNull();
+	expect(screen.queryByText('Lädt …')).toBeNull();
+});
+
 it('zeigt andere Fehler in der Karte', () => {
 	show({ data: undefined, error: new ApiError(500, 'Serverfehler') });
 	expect(screen.getByRole('heading', { name: 'Wärmemodell' })).toBeVisible();

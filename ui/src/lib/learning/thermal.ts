@@ -106,7 +106,8 @@ export function thermalModeView(status: ThermalModeStatus): ThermalModeView {
 				];
 	return {
 		mode: status.mode,
-		head: model === null ? label : `${label} · ${model.days} Tage`,
+		head:
+			model === null ? label : `${label} · ${model.days === 1 ? '1 Tag' : `${model.days} Tage`}`,
 		rows,
 		state: status.text,
 		usable: status.usable

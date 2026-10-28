@@ -29,11 +29,11 @@ const MODES: Record<string, string> = {
 	unbekannt: 'unbekannt'
 };
 
-/** Versatz in K mit Vorzeichen, Komma und einer Nachkommastelle: „+0,5 K“, „-1,0 K“, „+0,0 K“ */
+/** Versatz in K mit Vorzeichen, Komma, einer Nachkommastelle und echtem Minus: „+0,5 K“, „−1,0 K“, „+0,0 K“ */
 export function thermalOffset(k: number | null): string {
 	if (k === null) return DASH;
 	const rounded = Math.round(k * 10) / 10;
-	return `${rounded < 0 ? '' : '+'}${formatNumber(rounded, 1)}${NBSP}K`;
+	return `${rounded < 0 ? '\u2212' : '+'}${formatNumber(Math.abs(rounded), 1)}${NBSP}K`;
 }
 
 function degrees(c: number | null): string {
@@ -52,7 +52,7 @@ function offsetText(block: ThermalHealth): string {
 function wishText(wish: number | null): string {
 	if (wish === null) return DASH;
 	if (wish === 0) return 'Stufe 0';
-	return `Stufe ${wish > 0 ? '+' : ''}${formatNumber(wish, 0)}`;
+	return `Stufe ${wish > 0 ? '+' : '\u2212'}${formatNumber(Math.abs(wish), 0)}`;
 }
 
 /**
@@ -88,7 +88,8 @@ function running(value: boolean | null): string {
  * Zeile „Plan“: der Planwert des core (`planned`, Stufen) als Versatz des Sollwerts, wie der core
  * ihn sendet (Heizen +0,5 K je Stufe, Kühlen −0,5 K je Stufe, `plannedOffsetK`), bis zum Ende der
  * Slots gleicher Stufen im Plan der Absicht: „+1,0 K bis 14:00“. Ohne diesen Plan oder ohne Slot
- * für jetzt nur der Versatz; ohne Planwert „kein Planwert“.
+ * für jetzt nur der Versatz; ohne Planwert „kein Planwert“. Bei Planwert 0 steht „kein Versatz“
+ * statt „0,0 K“.
  */
 function planText(
 	block: ThermalHealth,
@@ -98,7 +99,8 @@ function planText(
 	const k = plannedOffsetK(block.planned, block.mode);
 	if (k === null) return 'kein Planwert';
 	const until = plannedUntil(plan, now);
-	return until === null ? formatKelvinShift(k) : `${formatKelvinShift(k)} bis ${formatTime(until)}`;
+	const shift = k === 0 ? 'kein Versatz' : formatKelvinShift(k);
+	return until === null ? shift : `${shift} bis ${formatTime(until)}`;
 }
 
 /** „Grundlast 400 W · freigebbar 500 W“, ohne Wert und ohne Verbindung „–“ */

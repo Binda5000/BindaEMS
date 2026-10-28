@@ -82,6 +82,13 @@ describe('thermalModeView', () => {
 		});
 	});
 
+	it('schreibt bei einem Tag die Einzahl', () => {
+		const one: ThermalModeStatus = { ...HEATING, model: { ...HEATING.model!, days: 1 } };
+		expect(thermalModeView(one).head).toBe('Heizen · 1 Tag');
+		const none: ThermalModeStatus = { ...HEATING, model: { ...HEATING.model!, days: 0 } };
+		expect(thermalModeView(none).head).toBe('Heizen · 0 Tage');
+	});
+
 	it('hat ohne Stand keine Zeilen und nur die Betriebsart im Kopf', () => {
 		const empty: ThermalModeStatus = {
 			mode: 'kuehlen',

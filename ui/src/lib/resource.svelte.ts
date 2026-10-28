@@ -7,6 +7,8 @@ export interface ResourceOptions {
 	intervalMs?: number;
 	/** ohne Takt: nach einem Fehler in diesem Abstand erneut versuchen, bis es gelingt */
 	retryMs?: number;
+	/** Fehler, nach denen nicht mehr von selbst abgefragt wird (etwa 404: die Sache gibt es nicht) */
+	giveUp?: (error: ApiError) => boolean;
 	hidden?: () => boolean;
 }
 
@@ -25,6 +27,9 @@ export class Resource<T> {
 	#load: Loader<T>;
 	#intervalMs: number | undefined;
 	#retryMs: number | undefined;
+	#giveUp: (error: ApiError) => boolean;
+	/** der letzte Fehler war endgültig: weder Takt noch Rückkehr in den Tab fragen erneut */
+	#gaveUp = false;
 	#hidden: () => boolean;
 	#running = false;
 	#timer: ReturnType<typeof setTimeout> | null = null;
@@ -34,6 +39,7 @@ export class Resource<T> {
 		this.#load = load;
 		this.#intervalMs = options.intervalMs;
 		this.#retryMs = options.retryMs;
+		this.#giveUp = options.giveUp ?? (() => false);
 		this.#hidden = options.hidden ?? (() => document.visibilityState === 'hidden');
 	}
 
@@ -53,7 +59,7 @@ export class Resource<T> {
 	}
 
 	#onVisibility = (): void => {
-		if (this.#running && !this.#hidden()) void this.#run(true);
+		if (this.#running && !this.#gaveUp && !this.#hidden()) void this.#run(true);
 	};
 
 	async #run(background: boolean): Promise<void> {
@@ -67,12 +73,14 @@ export class Resource<T> {
 			if (controller.signal.aborted) return;
 			this.data = data;
 			this.error = null;
+			this.#gaveUp = false;
 		} catch (error) {
 			if (controller.signal.aborted || isAbort(error)) return;
 			this.error =
 				error instanceof ApiError
 					? error
 					: new ApiError(0, error instanceof Error ? error.message : String(error));
+			this.#gaveUp = this.#giveUp(this.error);
 		} finally {
 			if (this.#controller === controller) {
 				this.#controller = null;
@@ -84,7 +92,7 @@ export class Resource<T> {
 
 	#schedule(): void {
 		const delay = this.#intervalMs ?? (this.error ? this.#retryMs : undefined);
-		if (!this.#running || delay === undefined) return;
+		if (!this.#running || this.#gaveUp || delay === undefined) return;
 		this.#timer = setTimeout(() => {
 			this.#timer = null;
 			// verborgen: nur weiterzählen; beim Zurückkehren lädt `visibilitychange`

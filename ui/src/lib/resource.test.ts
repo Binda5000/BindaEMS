@@ -100,3 +100,42 @@ it('lädt einmalige Daten nach einem Fehler erneut, danach nicht mehr', async ()
 	expect(calls).toBe(2);
 	stop();
 });
+
+it('fragt nach einem endgültigen Fehler (giveUp) nicht mehr von selbst ab', async () => {
+	let calls = 0;
+	const resource = new Resource(
+		async () => {
+			calls++;
+			throw new ApiError(404, 'Keine Klimaanlage eingerichtet.');
+		},
+		{ retryMs: 30_000, giveUp: (error) => error.status === 404, hidden: () => false }
+	);
+	const stop = resource.start();
+	await vi.advanceTimersByTimeAsync(0);
+	expect([calls, resource.error?.status]).toEqual([1, 404]);
+	await vi.advanceTimersByTimeAsync(300_000);
+	expect(calls).toBe(1);
+	// auch die Rückkehr in den Tab fragt nicht erneut
+	document.dispatchEvent(new Event('visibilitychange'));
+	await vi.advanceTimersByTimeAsync(0);
+	expect(calls).toBe(1);
+	// eine Bedienung lädt weiter
+	await resource.refresh();
+	expect(calls).toBe(2);
+	stop();
+});
+
+it('fragt bei anderen Fehlern trotz giveUp weiter', async () => {
+	let calls = 0;
+	const resource = new Resource(
+		async () => {
+			calls++;
+			throw new ApiError(502, 'Server nicht erreichbar (HTTP 502)');
+		},
+		{ retryMs: 30_000, giveUp: (error) => error.status === 404, hidden: () => false }
+	);
+	const stop = resource.start();
+	await vi.advanceTimersByTimeAsync(65_000);
+	expect(calls).toBe(3);
+	stop();
+});

@@ -32,8 +32,12 @@
 	const quality = new Resource((o) => api.forecastQuality(days, o), { retryMs: RETRY_MS });
 	const daily = new Resource((o) => api.forecastQualityDaily(days, o), { retryMs: RETRY_MS });
 	const driving = new Resource((o) => api.drivingStatus(o), { retryMs: RETRY_MS });
-	// Wärmemodell der Klimaanlage (Plan 5c); ohne Klimaanlage antwortet der Server mit 404
-	const thermal = new Resource((o) => api.thermalStatus(o), { retryMs: RETRY_MS });
+	// Wärmemodell der Klimaanlage (Plan 5c); ohne Klimaanlage antwortet der Server mit 404, und das
+	// ändert sich erst mit einem Neustart der app: dann nicht weiter fragen
+	const thermal = new Resource((o) => api.thermalStatus(o), {
+		retryMs: RETRY_MS,
+		giveUp: (error) => error.status === 404
+	});
 	// Die Entität der Anwesenheit nennt nur die Quelle im Kopf eines Autos: eine Zugabe, ohne sie
 	// steht dort „Home Assistant“.
 	const settings = new Resource((o) => api.settings(o), { retryMs: RETRY_MS });

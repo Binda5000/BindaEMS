@@ -483,10 +483,39 @@ describe('Wärmemodell', () => {
 		api.thermalStatus.mockRejectedValue(new ApiError(404, 'Keine Klimaanlage eingerichtet.'));
 		render(Page);
 		await screen.findByRole('heading', { name: 'Fahrverhalten' });
-		await waitFor(() => expect(api.thermalStatus).toHaveBeenCalled());
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.thermalStatus).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole('heading', { name: 'Wärmemodell' })).toBeNull();
 		expect(screen.queryByText('Keine Klimaanlage eingerichtet.')).toBeNull();
+	});
+
+	it('fragt nach einem 404 nicht mehr nach', async () => {
+		api.thermalStatus.mockRejectedValue(new ApiError(404, 'Keine Klimaanlage eingerichtet.'));
+		render(Page);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.thermalStatus).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(10 * 30_000);
+		expect(api.thermalStatus).toHaveBeenCalledTimes(1);
+	});
+
+	it('fragt nach anderen Fehlern alle 30 s erneut', async () => {
+		api.thermalStatus.mockRejectedValue(new ApiError(500, 'Serverfehler'));
+		render(Page);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.thermalStatus).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(api.thermalStatus).toHaveBeenCalledTimes(2);
+		expect(screen.getByText('Serverfehler')).toBeVisible();
+	});
+
+	it('zeigt die Karte erst mit der ersten Antwort', async () => {
+		let answer: (value: ReturnType<typeof thermal>) => void = () => {};
+		api.thermalStatus.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+		render(Page);
+		await screen.findByRole('heading', { name: 'Fahrverhalten' });
+		expect(screen.queryByRole('heading', { name: 'Wärmemodell' })).toBeNull();
+		answer(thermal());
+		expect(await screen.findByRole('heading', { name: 'Wärmemodell' })).toBeVisible();
 	});
 
 	it('startet die Berechnung und zeigt bei 409 den Lauf ohne Fehler', async () => {
