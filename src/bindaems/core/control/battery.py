@@ -98,6 +98,8 @@ class BatteryCar:
     - ``charging``: ob das Auto lädt; ohne Leistung entscheidet das, ob der Bedarf unbekannt ist
     - ``vehicle``: der Fahrzeug-Schlüssel des Ladepunkts, auch der eines Gastes; ``None`` für eine
       Wallbox ohne Ladepunkt. Er wählt den Akkuanteil des Plans für „Geplant“ (Plan Akku ins Auto).
+    - ``step_w``: eine Stromstufe des Ladepunkts in W, ``U × Zahl seiner Phasen`` (1 A); 0 heißt
+      unbekannt oder ohne Ladepunkt, dann deckt der Akku in „Geplant“ keine Stufe (Fix-Welle F7)
     """
 
     wallbox: str
@@ -105,6 +107,7 @@ class BatteryCar:
     power_w: float | None
     charging: bool | None
     vehicle: str | None = None
+    step_w: float = 0.0
 
 
 def deficits(
@@ -331,9 +334,13 @@ def allowed(
       Rest ``support_max_w`` ist, vermindert um das, was die Autos davor in diesen Modi bekamen;
       ohne ``support_on`` nichts,
     - ein Auto in Boost seinen ganzen Fehlbetrag; er geht nicht vom Rest ab,
-    - ein Auto in Geplant mit Fahrzeug bei ``planned_on`` ``min(Fehlbetrag, Akkuanteil)``, wobei
-      ``planned_w`` den Akkuanteil des Slots je Fahrzeug nennt (ohne Eintrag 0); ohne
-      ``planned_on`` nichts (Plan 4b, Entscheidung 4; Plan Akku ins Auto, Entscheidung 4),
+    - ein Auto in Geplant mit Fahrzeug bei ``planned_on`` ``min(Fehlbetrag, Akkuanteil + Stufe)``,
+      wobei ``planned_w`` den Akkuanteil des Slots je Fahrzeug nennt (ohne Eintrag 0); ohne
+      ``planned_on`` nichts (Plan 4b, Entscheidung 4; Plan Akku ins Auto, Entscheidung 4). Die
+      Stufe ist ``BatteryCar.step_w``, nur bei einem Akkuanteil über 0: Der core rundet die
+      Leistung des Plans auf ganze A auf, und der Akku deckt auch diese letzte Stufe (Fix-Welle F7,
+      Entscheidung des Betreibers vom 28.10.2026). Ist sie keine endliche Zahl oder nicht über 0,
+      zählt sie als 0.
     - ein Auto in Sofort bei ``spare_on`` seinen ganzen Fehlbetrag (Plan Akku ins Auto,
       Entscheidung 6), sonst nichts,
     - ein Auto in Aus nichts.
@@ -360,7 +367,7 @@ def allowed(
             share_w = min(wanted_w, rest_w)
             rest_w -= share_w
         elif car.mode is Effective.PLANNED and planned_on and car.vehicle is not None:
-            share_w = min(wanted_w, float(planned_w.get(car.vehicle, 0)))
+            share_w = min(wanted_w, _planned_share_w(car, planned_w.get(car.vehicle, 0)))
         elif car.mode in SPARE_MODES and spare_on:
             share_w = wanted_w
         else:
@@ -375,6 +382,15 @@ def allowed(
                 shares[car.wallbox] = min(shares[car.wallbox], max(free_w, 0.0))
                 free_w -= shares[car.wallbox]
     return shares
+
+
+def _planned_share_w(car: BatteryCar, planned_w: int) -> float:
+    """Der Akkuanteil des Plans für ein Auto in Geplant und, bei einem Anteil über 0, eine
+    Stromstufe dazu (``allowed``); eine Stufe, die keine endliche Zahl über 0 ist, zählt als 0."""
+    if planned_w <= 0:
+        return 0.0
+    step = finite_number(car.step_w)
+    return float(planned_w) + (step if step is not None and step > 0 else 0.0)
 
 
 def _planned_on(soc_pct: float | None, active: ActiveSlot | None) -> bool:

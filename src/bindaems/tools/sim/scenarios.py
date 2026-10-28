@@ -133,11 +133,6 @@ weil sie im Modell nicht zu schaffen ist:
   fürs Netz gibt es keinen Override und damit keine Entscheidung, die ``battery_spare`` nennen
   könnte, wie bei Boost aus dem Akku in ``boost-abend``; den Grund trägt nur ein Override für einen
   Rest. Die erste Entscheidung an Victron ist der Override mit ``battery_comp``.
-- In ``akku-uebrig-geplant`` nennt der Plan ``PLANNED_BATTERY_W`` (2760 W) statt 2800 W, als
-  Leistung und Akkuanteil des e-Golf. Er lädt auf zwei Phasen in Stufen von 460 W (1 A bei
-  230 V): Für 2800 W rundet der core den Strom auf 7 A auf (3220 W, Plan 4b, Präzisierung 7), und
-  der Akku gibt nach Entscheidung 4 höchstens den Akkuanteil des Slots, 2800 W; 420 W kämen aus
-  dem Netz, mehr als die 300 W der Prüfung. 2760 W sind genau 6 A.
 """
 
 from __future__ import annotations
@@ -3953,12 +3948,13 @@ SPARE_THRESHOLD_PCT: Final = 70.0  # „akku-uebrig-sofort“: Plan-Schwelle des
 SPARE_SOC_PCT: Final = 72.0  # … und SOC des Akkus zu Beginn
 SPARE_SLOTS: Final = 2  # … der Plan hat so viele Slots, je mit übrigem Akku für Sofort
 SPARE_TESLA_A: Final = 10  # … der Tesla lädt in Sofort mit höchstens so viel Strom (now_max_a)
-# „akku-uebrig-geplant“: Slot-Leistung und Akkuanteil des e-Golf, 6 A auf zwei Phasen …
-PLANNED_BATTERY_W: Final = 2760
+# „akku-uebrig-geplant“: Slot-Leistung und Akkuanteil des e-Golf; der core lädt ihn mit 7 A auf
+# zwei Phasen (3220 W), die letzte Stufe gibt auch der Akku (Fix-Welle F7) …
+PLANNED_BATTERY_W: Final = 2800
 PLANNED_SOC_PCT: Final = 60.0  # … SOC des Akkus zu Beginn …
 # … und der geplante SOC am Ende je Slot: Der Akkuanteil endet im dritten Slot, wenn der SOC
-# seinen Wert erreicht
-PLANNED_SOC_END_PCT: Final = (56.0, 53.0, 52.0)
+# seinen Wert erreicht; der Akku verliert mit Auto (3220 W) und Haus rund 3,6 Punkte je Slot
+PLANNED_SOC_END_PCT: Final = (55.0, 52.0, 51.0)
 PLANNED_SHARE_SLOT: Final = 2  # in diesem Slot (vom ersten an gezählt ab 0) endet der Akkuanteil
 SOC_END_MARGIN_PCT: Final = 1.0  # der SOC fällt höchstens so weit unter das kleinste SOC am Ende
 SPARE_TARGET_PCT: Final = 80  # das Ziel des e-Golf in „akku-uebrig-geplant“, …
@@ -4142,11 +4138,12 @@ def _akku_uebrig_sofort() -> Scenario:
 
 
 def _akku_uebrig_geplant() -> Scenario:
-    """Der e-Golf lädt in der Nacht „Geplant“ mit 2760 W (``PLANNED_BATTERY_W``), alle aus dem Akku
+    """Der e-Golf lädt in der Nacht „Geplant“ mit 2800 W (``PLANNED_BATTERY_W``), alle aus dem Akku
     (``ev_battery_w``), solange der SOC über dem geplanten SOC am Ende des Slots liegt (Plan Akku
-    ins Auto, Entscheidung 4). Das Haus braucht mehr, als der Plan annimmt: Im dritten Slot
-    erreicht der SOC sein Ende, und der Rest kommt aus dem Netz; der Akku trägt nur noch das
-    Haus."""
+    ins Auto, Entscheidung 4). Der core rundet auf 7 A auf (3220 W, Plan 4b, Präzisierung 7); die
+    letzte Stromstufe gibt auch der Akku (Fix-Welle F7). Das Haus braucht mehr, als der Plan
+    annimmt: Im dritten Slot erreicht der SOC sein Ende, und der Rest kommt aus dem Netz; der Akku
+    trägt nur noch das Haus."""
     start, duration_s, seed = NIGHT, 45 * MINUTE_S, 45
     slots = tuple((k, OWN_USE, None) for k in range(len(PLANNED_SOC_END_PCT)))
     plan = _plan(

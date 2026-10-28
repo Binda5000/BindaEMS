@@ -1030,11 +1030,12 @@ def test_cars_show_the_points_of_the_last_step(cfg) -> None:  # Plan 2c-2a, Prä
     charging = evcs(charging=True, power_w=2760.0)
     c.step(inputs(cfg, evcs_obs=charging, intent=egolf_in(ChargeMode.NOW)))
     # Je Ladepunkt nach Priorität: Der Tesla hat seinen am Wall Connector auch abgesteckt, er lädt
-    # nicht (0 W). ``min_w`` ist min_a × 230 V × Phasen: 5 A × 3 beim Tesla, 6 A × 2 beim e-Golf.
-    # Geregelt wird nur der Ladepunkt des e-Golf: Der Tesla ist weder steuerbar noch weckbar.
+    # nicht (0 W). ``min_w`` ist min_a × 230 V × Phasen: 5 A × 3 beim Tesla, 6 A × 2 beim e-Golf;
+    # ``step_w`` ist 1 A davon (Fix-Welle F7). Geregelt wird nur der Ladepunkt des e-Golf: Der
+    # Tesla ist weder steuerbar noch weckbar.
     assert c.cars() == (
-        CarView("tesla", "twc", Effective.PV, 0.0, False, 3450.0, False),
-        CarView("egolf", "evcs", Effective.NOW, 2760.0, True, 2760.0, True),
+        CarView("tesla", "twc", Effective.PV, 0.0, False, 3450.0, False, step_w=690.0),
+        CarView("egolf", "evcs", Effective.NOW, 2760.0, True, 2760.0, True, step_w=460.0),
     )
     first = Intent(
         version=2,
@@ -1063,7 +1064,9 @@ def test_cars_take_the_power_from_tessie_without_the_wallbox(cfg) -> None:
     c = controller(cfg)
     plugged = tesla(plugged=True, charging=True, actual_current_a=10.0, phases=3)
     c.step(inputs(cfg, twc_obs=TWC_OUT, tesla_obs=plugged))
-    assert c.cars()[0] == CarView("tesla", "twc", Effective.PV, 6900.0, True, 3450.0, False)
+    assert c.cars()[0] == CarView(
+        "tesla", "twc", Effective.PV, 6900.0, True, 3450.0, False, step_w=690.0
+    )
     unknown = [
         replace(plugged, reachable=False),
         replace(plugged, actual_current_a=None),
@@ -1075,7 +1078,9 @@ def test_cars_take_the_power_from_tessie_without_the_wallbox(cfg) -> None:
     # Eine Leistung der Wallbox, die keine endliche Zahl ist, fehlt ebenso.
     odd = twc(connected=True, charging=True, power_w=math.nan)
     c.step(inputs(cfg, s=4, twc_obs=odd, tesla_obs=plugged))
-    assert c.cars()[0] == CarView("tesla", "twc", Effective.PV, 6900.0, True, 3450.0, False)
+    assert c.cars()[0] == CarView(
+        "tesla", "twc", Effective.PV, 6900.0, True, 3450.0, False, step_w=690.0
+    )
 
 
 def test_without_an_intent_every_vehicle_charges_in_pv(cfg) -> None:
@@ -1861,7 +1866,9 @@ def test_a_guest_at_a_wall_connector_that_is_out_reserves_its_maximum(cfg) -> No
     c.step(inputs(cfg, intent=egolf_in(ChargeMode.NOW), twc_obs=twc(connected=True)))
     c.step(inputs(cfg, s=1, intent=egolf_in(ChargeMode.NOW), twc_obs=TWC_OUT))
     assert c.health()[1]["limit_a"] == 15.0  # 33 − 2 − 16
-    assert c.cars()[-1] == CarView("guest@twc", "twc", Effective.PV, None, None, 4140.0, False)
+    assert c.cars()[-1] == CarView(
+        "guest@twc", "twc", Effective.PV, None, None, 4140.0, False, step_w=690.0
+    )
 
 
 def test_the_reason_lapses_when_the_car_is_no_longer_detected(cfg) -> None:  # Präzisierung 8

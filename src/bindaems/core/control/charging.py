@@ -256,6 +256,8 @@ class CarView:
     - ``min_w``: die Mindestleistung des Ladepunkts, ``min_a × U × Zahl seiner Phasen``
     - ``regulated``: ob die Laderegelung den Ladepunkt regelt (``ChargePoint.regulated``); nur
       dann wirkt eine Grenze des 15-min-Wächters
+    - ``step_w``: eine Stromstufe des Ladepunkts, ``1 A × U × Zahl seiner Phasen``; 0 heißt
+      unbekannt (für den Akkuanteil in „Geplant“, Fix-Welle F7)
 
     ``U`` ist ``grid.voltage_nominal_v``.
     """
@@ -267,6 +269,7 @@ class CarView:
     charging: bool | None
     min_w: float
     regulated: bool
+    step_w: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -1615,9 +1618,16 @@ def _car_view(
     power_w = finite_number(inputs.wallboxes[point.wallbox].power_w)
     if power_w is None and car_spec(cfg, point.vehicle).tessie:
         power_w = _tessie_w(inputs.vehicles.get(point.vehicle, NO_VEHICLE_DATA), volts)
-    min_w = point.min_a * volts * len(point.phases)
+    step_w = volts * len(point.phases)
     return CarView(
-        point.vehicle, point.wallbox, mode, power_w, vehicle.charging, min_w, point.regulated
+        point.vehicle,
+        point.wallbox,
+        mode,
+        power_w,
+        vehicle.charging,
+        point.min_a * step_w,
+        point.regulated,
+        step_w=step_w,
     )
 
 

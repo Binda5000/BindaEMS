@@ -3790,7 +3790,7 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
 |---|---|
 | PV-Überschuss, Min+PV | Wenn die Unterstützung gilt (unten): für diese Autos zusammen höchstens `support_max_w`, verteilt in der Reihenfolge `priority`. Sonst nichts. |
 | Sofort | Ohne „Akku ins Auto, wenn übrig“ nichts: Sofort lädt aus Netz und PV mit vollem Strom. Mit dem Schalter in einem Slot, in dem der Plan übrigen Akku für Sofort erlaubt (`now_battery`), den ganzen Fehlbetrag, solange der SOC über der Plan-Schwelle des Slots liegt (unten, „Akku ins Auto, wenn übrig“). Das gilt auch für einen Gast in Sofort. Geplant und Sofort zusammen bekommen höchstens die Entladeleistung, die nach Haus, Unterstützung und Boost frei bleibt (`battery.max_discharge_w`), zuerst Geplant; der Rest kommt über den Override aus dem Netz, und der 15-min-Wächter kann ihn drosseln. |
-| Geplant | Ohne „Akku ins Auto, wenn übrig“ nichts: Was dem Auto fehlt, kommt aus dem Netz, denn über das Netzladen des Autos entscheidet der Plan. Mit dem Schalter höchstens den Akkuanteil, den der gültige Slot für das Fahrzeug nennt (`ev_battery_w`), solange der SOC über dem geplanten SOC am Ende des Slots liegt. |
+| Geplant | Ohne „Akku ins Auto, wenn übrig“ nichts: Was dem Auto fehlt, kommt aus dem Netz, denn über das Netzladen des Autos entscheidet der Plan. Mit dem Schalter höchstens den Akkuanteil, den der gültige Slot für das Fahrzeug nennt (`ev_battery_w`), bei einem Anteil über 0 plus eine Stromstufe, solange der SOC über dem geplanten SOC am Ende des Slots liegt. |
 | Aus | Nichts. |
 | Boost | Alles, ohne SOC-Schwelle und ohne die Grenzen von Leistung und Dauer. Boost begrenzt nur der Schutz der USV-Reserve (Abschnitt „Lademodi“). |
 
@@ -3832,9 +3832,10 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
     als Netzanteil und kann das Auto drosseln. Beispiel: zwei Autos in Sofort mit je 11 kW, Haus
     1 kW: 11 kW aus dem Akku, 11 kW Netzanteil. Das ist die Grenze des Akkus, keine eigene.
   - **Stromstufen:** Der core lädt ein Auto in Geplant mit der Leistung des Plans, auf ganze A
-    aufgerundet (Abschnitt „Laderegelung“, „Geplant“), der Akku gibt aber nur den Akkuanteil. Lädt der
-    Plan ein Auto ganz aus dem Akku, kommt deshalb bis zu eine Stromstufe aus dem Netz: 460 W beim
-    e-Golf (zwei Phasen), 690 W beim Tesla (drei Phasen).
+    aufgerundet (Abschnitt „Laderegelung“, „Geplant“). Der Akku gibt den Akkuanteil und, wenn der
+    über 0 liegt, auch diese letzte Stromstufe: 460 W beim e-Golf (zwei Phasen), 690 W beim Tesla
+    (drei Phasen). Ein Slot ganz aus dem Akku braucht so nichts aus dem Netz. Auch die Stufe gibt
+    der Akku nur, solange der SOC über dem geplanten SOC am Ende des Slots liegt.
   - **Regel 2:** Erreicht der SOC die Plan-Schwelle, verschiebt der Override den Fehlbetrag eines
     Autos in Sofort nur bis `victron.max_grid_charge_setpoint_w` (8000 W) aufs Netz; den Rest liefert
     der Akku weiter (beim Tesla mit 16 A rund 3 kW, nächster Punkt), wie ohne den Schalter.
@@ -4208,9 +4209,9 @@ Gründe in `codes`, vor den Befunden der Safety-Schicht:
   Sofort, gibt es keinen Override und darum keine Entscheidung (wie bei Boost aus dem Akku). Dass ein
   Auto in Sofort aus dem Akku lädt, siehst du dann in Health (`battery.spare` `on`,
   `battery.spare_w`) und im Zeitplan (Satz „Autos in Sofort dürfen aus dem Akku laden, solange er
-  über … % liegt.“). Im Log steht der Grund bei einem Override für einen Rest, etwa die Stromstufe
-  eines Autos in Geplant oder ein weiteres Auto ohne Akkuanteil, und wenn ein Override wegfällt,
-  während Autos etwas aus dem Akku bekommen.
+  über … % liegt.“). Im Log steht der Grund bei einem Override für einen Rest, etwa bei einem Auto
+  in Geplant, dem mehr fehlt als Akkuanteil und Stromstufe, oder einem weiteren Auto ohne
+  Akkuanteil, und wenn ein Override wegfällt, während Autos etwas aus dem Akku bekommen.
 - Ein Beispiel: `Victron (ESS) (Akku nicht ins Auto): Netz-Sollwert 2340 W – Dry-Run, nicht
   gesendet.` Hebt der Akku-Sollwert den Override auf, steht dort „Netz-Sollwert-Override aufheben“.
 - Zu den Eingaben einer Entscheidung des Overrides gehören die der Laderegelung (`soc_pct`,
@@ -5593,10 +5594,9 @@ bleiben, wie sie sind.
   wechselnden Preisen erreichen das Zeitlimit von 20 s, mit einer Lösung, die dann gilt. Nähert sich
   `solve_ms` an der Anlage oft 20 s, ist das ein Befund (unten, „An der Anlage prüfen“).
 - **Grenzen** (Stand jetzt):
-  - **Stromstufe bei Geplant:** Plant der Optimierer einen Slot ganz aus dem Akku, kommt trotzdem
-    bis zu eine Stromstufe aus dem Netz (rund 460 W beim e-Golf, 690 W beim Tesla): Der core rundet
-    die Leistung des Plans auf ganze A auf, der Akku gibt aber höchstens den geplanten Anteil. Ob der
-    Akku diese Stufe mitgeben soll, entscheidet der Betreiber noch.
+  - **Stromstufe bei Geplant:** Der core rundet die Leistung des Plans auf ganze A auf. Der Akku
+    deckt auch diese letzte Stromstufe (rund 460 W beim e-Golf, 690 W beim Tesla), begrenzt durch
+    den geplanten SOC am Ende des Slots (Entscheidung des Betreibers vom 28.10.2026).
   - **Sofort ganz aus dem Akku** steht nicht im Entscheidungslog, denn ohne Rest fürs Netz gibt es
     keinen Override. Du siehst es in Health (`battery.spare`, `battery.spare_w`) und in der
     Erklärung im Zeitplan (`SOFORT_AUS_AKKU`).
@@ -6763,7 +6763,7 @@ Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Aut
 | `klima-plan-akku` | Akku deckt das geplante Vorheizen, 40 min | wie `klima-plan-vorheizen`, mit Planwert +2 in jedem Slot; ab 25 min darf der Akku entladen und deckt mit Victron im Dry-Run die ganze Last | Vor 25 min +1 K; danach geht der Versatz binnen 360 s zurück, nur mit `thermal_battery`, und wird nie größer; am Ende 0 K; kein Versatz gegen „mehr“; die Schrittregel hält; die Safety-Schicht lehnt nichts ab. |
 | `klima-plan-ende` | Plan der Klimaanlage läuft ab, 35 min | wie `klima-plan-akku` ohne Entladung; ein einziger Plan mit Planwert +2, gültig 20 min, danach kommt keiner mehr | Vor 20 min +1 K; am Ende des Plans bekommt die UVR im selben Zyklus 0 K (`thermal_plan`), danach nur 0 K; die Regelung nennt keinen Planwert mehr und keine Entscheidung außer 0 `thermal_plan`; kein Versatz gegen „mehr“. |
 | `akku-uebrig-sofort` | Sofort am Abend mit übrigem Akku, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 72 %, nur der Tesla, in Sofort mit höchstens 10 A (`now_max_a`); zu Beginn ein Plan mit `EIGENVERBRAUCH` über 2 Slots, übrigem Akku für Sofort (`now_battery`) und der Plan-Schwelle 70 % (`support_soc_pct`), gültig 30 min | Solange der SOC über 70 % liegt, ab 2 min kein Override: Netzbezug höchstens Haus und Autos über der Entladegrenze des Modells (12000 W) plus 300 W; ab 2 min, nachdem der SOC 70 % erreicht hat, Netzbezug mindestens die Leistung der Autos minus 300 W (der Akku gibt dem Auto nichts mehr); vor der ersten Entscheidung mit „battery_comp“ zeigt die Gesundheit `battery.spare` „on“ mit einem Anteil über 0 W. |
-| `akku-uebrig-geplant` | Geplant in der Nacht aus dem Akku, 45 min | 13.10.2026 ab 02:00, keine PV, Akku 60 %, nur der e-Golf, in Geplant, Ziel 80 %, Abfahrt 07:00; zu Beginn ein Plan mit `EIGENVERBRAUCH` über 3 Slots, der den e-Golf mit 2760 W nennt, alle aus dem Akku (`ev_battery_w`), geplanter SOC am Ende 56, 53 und 52 %, gültig 45 min | Ab 2 min, bis der SOC das geplante Ende seines Slots erreicht (im dritten Slot), höchstens 300 W Netzbezug; ab 2 min danach Netzbezug mindestens die Leistung der Autos minus 300 W; der SOC fällt nie unter 51 % (kleinstes SOC am Ende minus 1 Punkt). |
+| `akku-uebrig-geplant` | Geplant in der Nacht aus dem Akku, 45 min | 13.10.2026 ab 02:00, keine PV, Akku 60 %, nur der e-Golf, in Geplant, Ziel 80 %, Abfahrt 07:00; zu Beginn ein Plan mit `EIGENVERBRAUCH` über 3 Slots, der den e-Golf mit 2800 W nennt, alle aus dem Akku (`ev_battery_w`), geplanter SOC am Ende 55, 52 und 51 %, gültig 45 min | Ab 2 min, bis der SOC das geplante Ende seines Slots erreicht (im dritten Slot), höchstens 300 W Netzbezug; ab 2 min danach Netzbezug mindestens die Leistung der Autos minus 300 W; der SOC fällt nie unter 50 % (kleinstes SOC am Ende minus 1 Punkt). |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
@@ -6844,10 +6844,9 @@ Prüfung im Modell sonst nicht erfüllen ließe:
   und damit keine Entscheidung, die `battery_spare` nennen könnte (wie Boost aus dem Akku in
   `boost-abend`); den Grund trägt nur ein Override für einen Rest. Die erste Entscheidung an
   `victron` ist der Override mit `battery_comp`.
-- In `akku-uebrig-geplant` nennt der Plan 2760 W statt 2800 W, als Leistung und Akkuanteil des
-  e-Golf. Er lädt auf zwei Phasen in Stufen von 460 W (1 A bei 230 V): Für 2800 W rundet der core
-  den Strom auf 7 A auf (3220 W, Abschnitt „Geplant“), und der Akku gibt nur den Akkuanteil des
-  Slots, 2800 W; 420 W kämen aus dem Netz, mehr als die 300 W der Prüfung. 2760 W sind genau 6 A.
+- In `akku-uebrig-geplant` rundet der core die 2800 W des Plans auf 7 A auf (3220 W, Abschnitt
+  „Geplant“); der Akku gibt auch diese letzte Stromstufe. Der geplante SOC am Ende (55, 52 und
+  51 %) passt zu diesen 3220 W, damit der Akkuanteil im dritten Slot endet.
 
 ### Was das Modell nicht leistet
 

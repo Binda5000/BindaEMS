@@ -952,7 +952,8 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
     6. Ein Auto in „Geplant“ lädt mit der auf ganze A aufgerundeten Leistung des Plans, der Akku gibt aber nur den
        Akkuanteil: In einem Slot ganz aus dem Akku kommt bis zu eine Stromstufe aus dem Netz (460 W e-Golf, 690 W Tesla);
        darum nennt `akku-uebrig-geplant` 2760 W (6 A) statt 2800 W. Kosten: ein kleiner Netzanteil; Abhilfe wäre ein Plan
-       in Stromstufen (Produktfrage an den Betreiber).
+       in Stromstufen (Produktfrage an den Betreiber). Überholt durch Ruling 16 (Entscheidung des Betreibers vom
+       28.10.2026).
     7. Regel 2 kappt den Override bei 8 kW: Sperrt der übrige Akku, kann der Override den Fehlbetrag eines Autos in Sofort
        über 8 kW nicht aufs Netz verschieben (schon heute so, `akku-sofort`); darum lädt der Tesla in `akku-uebrig-sofort`
        mit höchstens 10 A. Kosten: Das Szenario zeigt die Lücke bei 16 A nicht (sie besteht ohne Akku ins Auto ebenso).
@@ -986,14 +987,22 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
         Grenze, keine eigene Leistungsgrenze: Entscheidung 6 bleibt. Boost zählt mit, weil er dieselbe Entladeleistung
         braucht. Eine Grenze der BMS kennt der Akku-Sollwert nicht; es gilt die Konfiguration. Kosten: Ein Auto nimmt
         etwas mehr aus dem Netz, als der Akku hätte geben können.
-    14. Die Stromstufe aus dem Netz bei Geplant (Ruling 6) ist eine Produktfrage an den Betreiber (Vorschlag: eine
-        Stufe mehr aus dem Akku, begrenzt durch `soc_end_pct`); nicht in der Fix-Welle.
+    14. Die Stromstufe aus dem Netz bei Geplant (Ruling 6) war eine Produktfrage an den Betreiber (Vorschlag: eine
+        Stufe mehr aus dem Akku, begrenzt durch `soc_end_pct`); der Betreiber hat entschieden (Ruling 16).
     15. Die Grenzen im Betriebshandbuch („Akku ins Auto, wenn übrig“, „Grenzen“) und der Validator von
         `IntentPlanSlot` (jedes Fahrzeug in `ev_battery_w` steht in `vehicles`, mit höchstens seiner Leistung; ohne
         Toleranz, denn `round` ist monoton) kamen in die Fix-Welle; die fehlende Hysterese von `_planned_on` bleibt
         aufgeschoben.
+    16. **Entscheidung des Betreibers vom 28.10.2026** (Entscheidungskarte „Stufe aus dem Akku“, Fix-Welle F7): Der
+        Akku deckt bei Geplant auch die letzte Stromstufe. Bei einem Akkuanteil über 0 bekommt das Auto höchstens
+        `min(Fehlbetrag, Akkuanteil + Stufe)`, die Stufe `1 A × U × Phasen` seines Ladepunkts (`BatteryCar.step_w`,
+        aus `CarView`; unbekannt 0). Sonst wie Entscheidung 4: nur bei `EIGENVERBRAUCH`, solange der SOC über `soc_end_pct`
+        liegt; die freie Entladeleistung (Ruling 13) begrenzt danach. `akku-uebrig-geplant` nennt wieder 2800 W, mit dem
+        geplanten SOC am Ende 55/52/51 % statt 56/53/52 %, denn der Akku gibt jetzt 3220 W statt 2760 W, und der
+        Akkuanteil soll im dritten Slot enden. Kosten: Der Akku gibt je Slot bis zu eine Stufe mehr, als der Optimierer
+        plant; die Grenze `soc_end_pct` fängt das ab.
   - **Aufgeschobene Kleinigkeiten:** unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan Akku ins Auto“.
-  - **Offen:** Integration nach `main` mit Zustimmung des Betreibers, die Produktfrage zur Stromstufe (Ruling 14), dann
+  - **Offen:** Integration nach `main` mit Zustimmung des Betreibers, dann
     das gemeinsame Ausrollen und die Abnahme an der Anlage (Punkt 16 unter
     „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
@@ -4029,8 +4038,9 @@ Fix-Welle erledigt.
 - **Simulator (Task 8):** ~~Der Docstring von `_akku_uebrig_geplant` nennt noch 2800 W (**Fix-Welle**);~~ (erledigt
   28.10.2026, Fix-Welle, F6) der Testfall der
   Gesundheitsprüfung prüft nur, dass sie nicht leer ist; `DISCHARGE_W` 12000 ist aus der Konfiguration abgeschrieben;
-  `test_spare_scenarios_are_registered` verlässt sich auf `events[-1]`; die Stromstufe aus dem Netz (Ruling 6) ist eine
-  Produktfrage an den Betreiber.
+  `test_spare_scenarios_are_registered` verlässt sich auf `events[-1]`; ~~die Stromstufe aus dem Netz (Ruling 6) ist
+  eine Produktfrage an den Betreiber.~~ (erledigt 28.10.2026, Fix-Welle, F7: Der Akku deckt die letzte Stufe,
+  Ruling 16)
 - **UI (Task 9):** Die Vertragsdatei `plan.json` hat nur leere `ev_battery_w` und `now_battery` `false` (keine Ausgabe der
   app mit Werten geprüft); der Kommentar oben in `PlanningEditor.svelte` ist länger als 100 Zeichen.
 - **Fix-Welle:** Netzenergie von vor dem Horizont gilt als weg, sobald ein Planungslauf den SOC höchstens bei Reserve

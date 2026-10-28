@@ -503,6 +503,85 @@ def test_planned_share_never_exceeds_the_deficit() -> None:
     assert shares == {"evcs": 1200.0}
 
 
+# --- Letzte Ampere-Stufe aus dem Akku (Fix-Welle F7, Entscheidung des Betreibers 28.10.2026) ------
+
+EGOLF_STEP_W = 460.0  # 1 A × 230 V × 2 Phasen
+
+
+def planned_egolf(step_w: float = EGOLF_STEP_W) -> list[BatteryCar]:
+    return [BatteryCar("evcs", Effective.PLANNED, 3220.0, True, vehicle="egolf", step_w=step_w)]
+
+
+def test_planned_car_takes_its_last_amp_step_from_the_battery() -> None:
+    # Geplant mit 2800 W, alle aus dem Akku: Der core lädt mit 7 A (3220 W). Der Akku deckt auch
+    # die aufgerundete Stufe, höchstens Akkuanteil plus eine Stufe (3260 W).
+    def share(deficit_w: float) -> float:
+        return allowed(
+            planned_egolf(),
+            {"evcs": deficit_w},
+            support_on=False,
+            support_max_w=3000.0,
+            room_w=ROOM_W,
+            planned_w={"egolf": 2800},
+            planned_on=True,
+        )["evcs"]
+
+    assert share(3220.0) == 3220.0
+    assert share(4000.0) == 3260.0
+
+
+def test_a_car_without_planned_share_gets_no_step() -> None:
+    for planned in ({"egolf": 0}, {}):
+        assert allowed(
+            planned_egolf(),
+            {"evcs": 3220.0},
+            support_on=False,
+            support_max_w=3000.0,
+            room_w=ROOM_W,
+            planned_w=planned,
+            planned_on=True,
+        ) == {"evcs": 0.0}
+
+
+@pytest.mark.parametrize("step", [0.0, -460.0, math.nan, math.inf])
+def test_an_unknown_step_gives_none(step: float) -> None:
+    shares = allowed(
+        planned_egolf(step),
+        {"evcs": 3220.0},
+        support_on=False,
+        support_max_w=3000.0,
+        room_w=ROOM_W,
+        planned_w={"egolf": 2800},
+        planned_on=True,
+    )
+    assert shares == {"evcs": 2800.0}
+
+
+def test_the_step_is_capped_at_the_free_discharge_power() -> None:
+    shares = allowed(
+        planned_egolf(),
+        {"evcs": 3220.0},
+        support_on=False,
+        support_max_w=3000.0,
+        room_w=3000.0,
+        planned_w={"egolf": 2800},
+        planned_on=True,
+    )
+    assert shares == {"evcs": 3000.0}
+
+
+def test_the_step_needs_planned_on() -> None:
+    shares = allowed(
+        planned_egolf(),
+        {"evcs": 3220.0},
+        support_on=False,
+        support_max_w=3000.0,
+        room_w=ROOM_W,
+        planned_w={"egolf": 2800},
+    )
+    assert shares == {"evcs": 0.0}
+
+
 def test_now_car_gets_its_whole_deficit_only_with_spare() -> None:
     cars = [car("evcs", Effective.NOW, 11000.0), car("twc", Effective.PV, 2000.0)]
     deficit = {"evcs": 11000.0, "twc": 2000.0}

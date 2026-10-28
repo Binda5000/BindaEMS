@@ -167,8 +167,8 @@ def test_spare_scenarios_are_registered() -> None:
     plan = SCENARIOS["akku-uebrig-geplant"].events[-1][1]
     assert isinstance(plan, _Plan)
     slots = plan.plan().slots
-    assert [slot.ev_battery_w for slot in slots] == [{EGOLF: 2760}] * 3
-    assert [slot.soc_end_pct for slot in slots] == [56.0, 53.0, 52.0]
+    assert [slot.ev_battery_w for slot in slots] == [{EGOLF: 2800}] * 3
+    assert [slot.soc_end_pct for slot in slots] == [55.0, 52.0, 51.0]
 
 
 @pytest.mark.parametrize("name", ALL)

@@ -277,10 +277,11 @@ def test_wallbox_without_vehicle_counts_with_the_guest_mode(cfg) -> None:  # Pr�
     charger.step(charge)
     found = battery_cars(cfg, charger.cars(), charge.wallboxes, ChargeMode.NOW)
     # Jedes Auto eines Ladepunkts nennt sein Fahrzeug, ein Gast seinen Schlüssel (Plan Akku ins
-    # Auto); eine Wallbox ohne Ladepunkt hat keins.
+    # Auto), und die Stromstufe seines Ladepunkts, 230 V × Phasen (Fix-Welle F7); eine Wallbox
+    # ohne Ladepunkt hat keins und keine Stufe.
     assert found == [
-        BatteryCar("evcs", Effective.PV, 0.0, False, vehicle="tesla"),
-        BatteryCar("twc", Effective.NOW, 2300.0, True, vehicle="guest@twc"),
+        BatteryCar("evcs", Effective.PV, 0.0, False, vehicle="tesla", step_w=690.0),
+        BatteryCar("twc", Effective.NOW, 2300.0, True, vehicle="guest@twc", step_w=690.0),
     ]
     # Ohne Ladepunkte zählt jede Wallbox in der Reihenfolge von config.yaml mit dem Modus des
     # Gastes; eine, die die Beobachtungen nicht nennen, ist unbekannt.
@@ -1111,7 +1112,8 @@ def test_a_now_car_charges_from_the_spare_battery(cfg) -> None:  # Plan Akku ins
 
 def test_a_planned_car_charges_its_plan_share_from_the_battery(cfg) -> None:  # Ent. 4
     # Der e-Golf in Geplant an der EVCS mit 2760 W; der Slot nennt 2000 W aus dem Akku und den SOC
-    # 40 % am Ende: Bei SOC 60 % kommen 760 W aus dem Netz, mit dem Grund ``battery_spare``.
+    # 40 % am Ende: Bei SOC 60 % gibt der Akku 2000 W und eine Stromstufe (460 W, Fix-Welle F7),
+    # 300 W kommen aus dem Netz, mit dem Grund ``battery_spare``.
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
     plan = spare_plan(vehicles={"egolf": 2760}, ev_battery_w={"egolf": 2000}, soc_end_pct=40.0)
     intent = Intent(
@@ -1130,9 +1132,32 @@ def test_a_planned_car_charges_its_plan_share_from_the_battery(cfg) -> None:  # 
     found = regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0))
     [override] = [x for x in found if x.command.actuator == VICTRON]
     assert override.command == Command(
-        VICTRON, CommandKind.GRID_SETPOINT, 760.0, reasons=("battery_spare",)
+        VICTRON, CommandKind.GRID_SETPOINT, 300.0, reasons=("battery_spare",)
     )
-    assert regulation.health(T0)["battery"]["spare_w"] == 2000.0
+    assert regulation.health(T0)["battery"]["spare_w"] == 2460.0
+
+
+def test_a_planned_car_takes_its_last_amp_step_from_the_battery(cfg) -> None:  # Fix-Welle F7
+    # Der Plan nennt 2800 W für den e-Golf, alle aus dem Akku; der core lädt mit 7 A (3220 W). Die
+    # Stromstufe der EVCS (230 V × 2 Phasen) kommt auch aus dem Akku: kein Override für einen Rest.
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    plan = spare_plan(vehicles={"egolf": 2800}, ev_battery_w={"egolf": 2800}, soc_end_pct=40.0)
+    intent = Intent(
+        version=1,
+        control=True,
+        vehicles={"egolf": VehicleIntent(mode=ChargeMode.PLANNED)},
+        plan=plan,
+    )
+    charge = inputs(
+        cfg,
+        s=10,
+        intent=intent,
+        evcs_obs=evcs(charging=True, power_w=3220.0),
+        controllable={**CONTROLLABLE, VICTRON: True},
+    )
+    found = regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0))
+    assert regulation.health(T0)["battery"]["spare_w"] == 3220.0
+    assert not [x for x in found if "battery_spare" in x.command.reasons]
 
 
 # --- Klimaanlage (Plan 6a, Task 8) ----------------------------------------------------------------

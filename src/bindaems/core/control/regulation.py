@@ -719,13 +719,16 @@ def battery_cars(
 
     Erst je Ladepunkt sein Auto (``cars``, aus ``ChargeController.cars`` in der Reihenfolge der
     Priorität; ein Gast dort mit dem Modus des Gastes) mit seinem Fahrzeug-Schlüssel, auch dem
-    eines Gastes, für den Akkuanteil des Plans (Plan Akku ins Auto, Entscheidung 4). Dann jede
-    Wallbox ohne Ladepunkt in der Reihenfolge von ``config.yaml``: ohne Fahrzeug, mit dem Modus des
+    eines Gastes, für den Akkuanteil des Plans (Plan Akku ins Auto, Entscheidung 4), und der
+    Stromstufe seines Ladepunkts (``CarView.step_w``, Fix-Welle F7). Dann jede Wallbox ohne
+    Ladepunkt in der Reihenfolge von ``config.yaml``: ohne Fahrzeug und Stufe, mit dem Modus des
     Gastes (``guest``), der Leistung der Wallbox und ob sie lädt. Eine Wallbox, die ``wallboxes``
     nicht nennt, ist ganz unbekannt.
     """
     found = [
-        BatteryCar(car.wallbox, car.mode, car.power_w, car.charging, vehicle=car.vehicle)
+        BatteryCar(
+            car.wallbox, car.mode, car.power_w, car.charging, vehicle=car.vehicle, step_w=car.step_w
+        )
         for car in cars
     ]
     taken = {car.wallbox for car in cars}

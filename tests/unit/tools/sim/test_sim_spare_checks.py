@@ -136,16 +136,16 @@ def test_the_plans_carry_the_battery_fields() -> None:
         timedelta(minutes=15 * k) for k in range(3)
     ]
     assert [(s.vehicles, s.ev_battery_w, s.soc_end_pct) for s in geplant.slots] == [
-        ({"egolf": 2760}, {"egolf": 2760}, 56.0),
-        ({"egolf": 2760}, {"egolf": 2760}, 53.0),
-        ({"egolf": 2760}, {"egolf": 2760}, 52.0),
+        ({"egolf": 2800}, {"egolf": 2800}, 55.0),
+        ({"egolf": 2800}, {"egolf": 2800}, 52.0),
+        ({"egolf": 2800}, {"egolf": 2800}, 51.0),
     ]
     assert not any(s.now_battery for s in geplant.slots)
 
 
 def test_a_plan_needs_one_soc_at_the_end_per_slot() -> None:
     plan = plan_of(GEPLANT)
-    broken = _Plan(plan.start, 0, plan.slots, valid_s=2700, soc_end_pct=(56.0, 53.0))
+    broken = _Plan(plan.start, 0, plan.slots, valid_s=2700, soc_end_pct=(55.0, 52.0))
     with pytest.raises(ValueError, match="2 SOC am Ende für 3 Slots"):
         broken.plan()
 
@@ -246,9 +246,9 @@ def test_until_the_share_ends_no_grid_for_the_car(cfg) -> None:
         "300 W Netzbezug für das Auto."
     )
 
-    def run(grid_w: dict[int, float], *, end_s: int | None = 2000, cars_w: float = 2760.0) -> Any:
+    def run(grid_w: dict[int, float], *, end_s: int | None = 2000, cars_w: float = 3220.0) -> Any:
         def soc(t: int) -> float:
-            return 51.9 if end_s is not None and t >= end_s else 57.0 if t < 900 else 54.0
+            return 50.9 if end_s is not None and t >= end_s else 56.0 if t < 900 else 53.0
 
         samples = [
             sample(t, grid_w=grid_w.get(t, 0.0), soc_pct=soc(t), cars_w=cars_w)
@@ -267,7 +267,7 @@ def test_until_the_share_ends_no_grid_for_the_car(cfg) -> None:
 
 def test_the_soc_stays_above_the_plan(cfg) -> None:
     kept = check(GEPLANT, 2)
-    assert kept.text == "Der SOC fällt nie unter 51 % (kleinstes SOC am Ende minus 1 Punkt)."
+    assert kept.text == "Der SOC fällt nie unter 50 % (kleinstes SOC am Ende minus 1 Punkt)."
     assert check(GEPLANT, 1).text == (
         "Ab 2 min nach dem Ende des Akkuanteils liegt der Netzbezug in jeder Sekunde mindestens "
         "bei der Leistung der Autos minus 300 W."
@@ -277,5 +277,5 @@ def test_the_soc_stays_above_the_plan(cfg) -> None:
         samples = [sample(0, soc_pct=60.0), sample(1, soc_pct=low)]
         return kept.find(result_of(cfg, GEPLANT, samples))
 
-    assert run(51.0) == []
-    assert run(50.99) == ["Der SOC fällt bei 1 s auf 50,99 %, verlangt mindestens 51 %."]
+    assert run(50.0) == []
+    assert run(49.99) == ["Der SOC fällt bei 1 s auf 49,99 %, verlangt mindestens 50 %."]
