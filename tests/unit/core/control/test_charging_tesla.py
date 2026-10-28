@@ -16,9 +16,9 @@ from tests.unit.core.control.charge_helpers import (
 )
 
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
-from bindaems.core.control.charge_modes import ModeDecision
+from bindaems.core.control.charge_modes import Effective, ModeDecision
 from bindaems.core.control.charging import ChargeController
-from bindaems.core.control.charging_tesla import AgainstMode
+from bindaems.core.control.charging_tesla import AgainstMode, climate_hold
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.foreign import WATCHED_KINDS
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
@@ -1398,6 +1398,166 @@ def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> Non
                 "wallbox.evcs", CHARGING, False, urgent=True, reasons=("mode_off", "self_start")
             ),
         )
+    ]
+
+
+# --- Vorklimatisieren, Regel K1 (Plan Vorklimatisieren, Entscheidungen 1, 3, 6, 7 und 9) ----------
+
+TESLA_PV = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+CLIMATISING = tesla(plugged=True, charging=True, actual_current_a=16.0, climate_on=True)
+CLIMATE_CURRENT = Command("vehicle.tesla", CURRENT, 5.0, reasons=("mode_pv", "climate"))
+
+
+def climate_run(cfg, seconds, *, intent=TESLA_PV, climate=lambda s: True, quiet_until=60, **kw):
+    """Wie ``self_start_run`` in PV ohne Überschuss (der Netzbezug deckt den ladenden Tesla).
+
+    Ab ``quiet_until`` lädt der Tesla selbst mit 16 A; Tessie meldet die Klimatisierung, solange
+    ``climate(s)`` wahr ist.
+    """
+
+    def obs(s):
+        return (
+            tesla(plugged=True) if s < quiet_until else replace(CLIMATISING, climate_on=climate(s))
+        )
+
+    kw.setdefault("grid_obs", grid(grid_w=12000.0))
+    kw.setdefault("tesla_obs", obs)
+    return self_start_run(cfg, intent, seconds, quiet_until=quiet_until, **kw)
+
+
+def test_a_climatising_tesla_is_not_stopped_by_the_self_start(cfg) -> None:
+    # 600 s Klimatisierung: kein „Laden aus“, nur einmal der Mindeststrom mit dem Grund ``climate``
+    found = climate_run(cfg, 660)
+    assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 60] == [(60, CLIMATE_CURRENT)]
+
+
+def test_climate_sends_no_charging_on(cfg) -> None:
+    # Der letzte eigene Wert ist „Laden aus“ (Sekunde 0); die Regel duldet nur (Entscheidung 1).
+    found = climate_run(cfg, 400)
+    switched = [(t, c.value) for t, c in of(found, "vehicle.tesla") if c.kind == CHARGING]
+    assert switched == [(0, False)]
+
+
+def test_climate_does_not_hold_a_tesla_in_off(cfg) -> None:
+    found = run(
+        controller(cfg),
+        cfg,
+        300,
+        make=tesla_inputs,
+        intent=TESLA_OFF,
+        twc_obs=TWC_16_A,
+        tesla_obs=CLIMATISING,
+        present=at_tesla(16.0, True),
+    )
+    tesla_commands = of(found, "vehicle.tesla")
+    assert tesla_commands[0] == (
+        0,
+        Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=("mode_off",)),
+    )
+    assert [c for _, c in tesla_commands if "climate" in c.reasons] == []
+
+
+def test_climate_needs_a_reachable_tessie(cfg) -> None:
+    # Ohne Tessie ist ``climate_on`` veraltet: keine Regel K1, die Regelung bleibt wie ohne
+    # Klimatisierung (der Selbststart braucht Tessie ebenso und greift auch nicht).
+    def unreachable(climate_on):
+        on = replace(CLIMATISING, reachable=False, climate_on=climate_on)
+        return lambda s: tesla(plugged=True) if s < 60 else on
+
+    found = climate_run(cfg, 400, tesla_obs=unreachable(True))
+    assert [c for _, c in of(found, "vehicle.tesla") if "climate" in c.reasons] == []
+    assert of(found, "vehicle.tesla") == of(
+        climate_run(cfg, 400, tesla_obs=unreachable(False)), "vehicle.tesla"
+    )
+
+
+def test_climate_off_by_config(cfg) -> None:
+    found = climate_run(with_vehicle(cfg, "tesla", climate_via_wallbox=False), 400)
+    assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 60] == [
+        (180, Command("vehicle.tesla", CHARGING, False, reasons=("mode_pv", "self_start")))
+    ]
+
+
+def test_climate_without_charging_changes_nothing(cfg) -> None:
+    # Der Tesla ist voll („Complete“) und lädt beim Klimatisieren nicht: kein Befehl
+    idle_climate = tesla(plugged=True, charging=False, complete=True, climate_on=True)
+    found = climate_run(
+        cfg, 400, tesla_obs=idle_climate, twc_obs=TWC_ON, present=at_tesla(0.0, False)
+    )
+    assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 1] == []
+
+
+def test_after_climate_the_self_start_begins_anew(cfg) -> None:
+    # Neuversuch des Selbststarts bei 121 (ab 1 lädt der Tesla selbst), Klimatisierung von 130 bis
+    # 300, danach lädt er weiter: Der Stopp kommt 120 s nach ihrem Ende (420), nicht erst 600 s nach
+    # dem Neuversuch (721; Entscheidung 9).
+    found = climate_run(cfg, 900, quiet_until=1, climate=lambda s: 130 <= s < 300)
+    self_stop = Command("vehicle.tesla", CHARGING, False, reasons=("mode_pv", "self_start"))
+    assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 1] == [
+        (121, self_stop),
+        (130, CLIMATE_CURRENT),
+        (420, self_stop),
+    ]
+
+
+def test_a_climatising_tesla_gets_no_wake_start(cfg) -> None:
+    # Nur weckbar (nicht steuerbar): Die Regel duldet, ein Weckstart wäre ein eigenes „Laden an“.
+    found = climate_run(cfg, 300, **ONLY_WAKEABLE)
+    assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 60] == []
+
+
+AT_THE_TWC = VehicleState("twc", AssignmentKind.DEFAULT, True, True, False, False, None)
+HOLD_ARGS = {
+    "key": "tesla",
+    "obs": CLIMATISING,
+    "vehicle": AT_THE_TWC,
+    "mode": Effective.PV,
+    "decision": ModeDecision(charge=False, reason=None),
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ({}, True),
+        ({"mode": Effective.PLANNED}, True),
+        ({"key": "egolf"}, False),  # ohne Tessie
+        ({"key": "guest@evcs"}, False),  # ein Gast
+        ({"via_wallbox": False}, False),
+        ({"obs": replace(CLIMATISING, reachable=False)}, False),
+        ({"obs": replace(CLIMATISING, climate_on=None)}, False),
+        ({"obs": replace(CLIMATISING, charging=None)}, False),
+        ({"vehicle": replace(AT_THE_TWC, plugged=None)}, False),
+        ({"vehicle": replace(AT_THE_TWC, kind=AssignmentKind.UNCLEAR)}, False),
+        ({"mode": Effective.OFF}, False),
+        ({"decision": ModeDecision(charge=True, reason=None)}, False),
+    ],
+)
+def test_climate_hold_conditions(cfg, change, expected) -> None:
+    args = {**HOLD_ARGS, **change}
+    if not args.pop("via_wallbox", True):
+        cfg = with_vehicle(cfg, "tesla", climate_via_wallbox=False)
+    assert climate_hold(cfg, **args) is expected
+
+
+def test_climate_with_surplus_keeps_the_pv_current(cfg) -> None:
+    # Der Überschuss trägt 10 A (der Wall Connector misst 10 A bei 0 W): PV will laden, die Regel
+    # greift nicht (Entscheidung 3), der Strom kommt aus dem Überschuss.
+    found = run(
+        controller(cfg),
+        cfg,
+        200,
+        make=tesla_inputs,
+        intent=TESLA_PV,
+        grid_obs=grid(grid_w=-7000.0),
+        twc_obs=TWC_10_A,
+        tesla_obs=replace(CLIMATISING, actual_current_a=10.0),
+        present=at_tesla(10.0, True),
+    )
+    surplus = ("mode_pv", "pv_surplus")
+    assert of(found, "vehicle.tesla") == [
+        (0, Command("vehicle.tesla", CURRENT, 10.0, reasons=surplus)),
+        (0, Command("vehicle.tesla", CHARGING, True, reasons=surplus)),
     ]
 
 

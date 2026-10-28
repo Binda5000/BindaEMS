@@ -78,6 +78,18 @@ Dazu legt die Regelung fest:
   denen der Stopp hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die
   Zeit weiter. Dringend ist es nur im Modus „Aus“ wie jeder Stopp dort. Ein neuer Vorgang und
   ``idle`` beginnen die Zeiten neu.
+- Vorklimatisieren (Regel K1; Plan Vorklimatisieren, Entscheidungen 1, 3 und 6 bis 9): Meldet
+  Tessie ein Fahrzeug klimatisierend und ladend, obwohl sein Modus nicht laden will
+  (``climate_hold``), gilt das Urteil seiner ``ModeMachine`` in diesem Zyklus als „laden“: Es
+  bekommt kein „Laden aus“, weder nach dem Modus noch als Selbststart, und kein eigenes „Laden
+  an“ (auch keinen Weckstart), nur den Mindeststrom des Ladepunkts, nicht dringend, mit dem Grund
+  ``climate`` nach dem Modus. Will der Modus laden, gilt sein Strom. Nicht im Modus „Aus“, nicht
+  bei unklarer Zuordnung, nicht ohne erreichbares Tessie und nicht mit
+  ``vehicles.<Schlüssel>.climate_via_wallbox: false``; die Überlast geht vor (``EVCS_STOP`` und
+  ``ALL_STOP`` stoppen, ab ``MINIMUM`` der Mindeststrom mit ``overload``). Während der Regel und
+  einmal an ihrem Ende beginnen die Zeiten des Selbststarts neu: Lädt das Fahrzeug danach weiter,
+  stoppt es ``control.tesla_against_s`` nach dem Ende, nicht erst ``tesla_against_retry_s`` nach
+  einem Neuversuch davor.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
@@ -172,12 +184,14 @@ from bindaems.core.control.charge_points import (
 from bindaems.core.control.charging_tesla import (
     ASSIGNMENT_DETECTED,
     ASSIGNMENT_UNCLEAR,
+    CLIMATE,
     SELF_START,
     WAKE,
     AgainstMode,
     ChargeLimits,
     EvcsOverrides,
     TeslaPolicy,
+    climate_hold,
     maximum_command,
     wake_command,
 )
@@ -228,6 +242,10 @@ _LIMIT: Final = CommandKind.CHARGE_LIMIT
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV, Effective.PLANNED})
 _PV_LIKE: Final = frozenset({Effective.PV, Effective.PLANNED})  # ladend halten sie ``min_a``
 _SELF_START_MIN_A: Final = 1.0  # ab diesem Strom in A lädt ein Fahrzeug laut Tessie
+# Die Gründe einer Halte-Regel (``_Situation.hold``), mit denen die Regelung selbst „Laden an“
+# senden darf. ``climate`` duldet nur ein Auto, das selbst lädt (Plan Vorklimatisieren,
+# Entscheidung 1): Es fehlt hier.
+_HOLD_STARTS: Final[frozenset[str]] = frozenset()
 # Die Modi, deren offener Wunsch der Klimaanlage vorgeht (Plan 6a, Entscheidung 5.3)
 _UNMET_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})
 # Anlauf (Ruling R23 a): So lange nach einem eigenen Start oder einer Erhöhung des Stroms gilt ein
@@ -406,6 +424,9 @@ class _Situation:
       das nicht lädt, starten (Design 5.3, 6.4).
     - ``uncapped_a``: Kappt das Sofort-Limit den Ladepunkt (``capped``: das Limit gilt und liegt
       unter dem Höchststrom), dessen Höchststrom ohne Limit; sonst ``None`` (Plan Sofort-Limit)
+    - ``hold``: Eine Halte-Regel lässt das Auto laden, obwohl sein Modus nicht laden will; ihr
+      Grund (``climate``, Regel K1), sonst ``None``. Das Urteil ``decision`` ist dann „laden“, der
+      Strom der Mindeststrom des Ladepunkts (Plan Vorklimatisieren).
     """
 
     plugged: bool | None
@@ -425,6 +446,7 @@ class _Situation:
     firm: str | None = None
     reached: bool = False
     uncapped_a: int | None = None
+    hold: str | None = None
 
     @property
     def capped(self) -> bool:
@@ -463,6 +485,8 @@ class ChargeController:
         self._tesla = {key: TeslaPolicy(cfg.control, v.wake) for key, v in cfg.vehicles.items()}
         # Selbststart: je Fahrzeug mit Tessie, wie lange es gegen seinen Modus lädt
         self._against = AgainstMode(cfg.control.tesla_against_s, cfg.control.tesla_against_retry_s)
+        # Vorklimatisieren: die Fahrzeuge, die die Regel K1 im letzten Zyklus hielt
+        self._climate: set[str] = set()
         self._vehicles = {vehicle_actuator(key): key for key in cfg.vehicles}  # Aktor → Fahrzeug
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE  # die Stufe der Überlast im letzten Zyklus
@@ -586,6 +610,7 @@ class ChargeController:
 
         commands: list[ChargeCommand] = []
         views: dict[str, _View] = {}
+        climate: set[str] = set()  # die Fahrzeuge, die die Regel K1 in diesem Zyklus hält
         for key in order:
             vehicle, point = state.vehicles[key], points.get(key)
             grant, share = cycle.grants.get(key), cycle.shares.get(key)
@@ -618,6 +643,16 @@ class ChargeController:
             decision = self._decide(
                 now, key, actuator, vehicle, mode, enough(point, share, free_a), plan
             )
+            # Vorklimatisieren (Regel K1): Das Urteil gilt als „laden“, der Selbststart zählt
+            # nicht. Endet die Regel, beginnen seine Zeiten neu (Entscheidung 9).
+            hold: str | None = None
+            tessie = inputs.vehicles.get(key, NO_VEHICLE_DATA)
+            if climate_hold(self._cfg, key, tessie, vehicle, mode, decision):
+                decision, hold = ModeDecision(True, None), CLIMATE
+                climate.add(key)
+                self._against.clear(key)
+            elif key in self._climate:
+                self._against.clear(key)
             if point.evcs:
                 wanted = cycle.wanted.get(key, 0)
                 limit = point.min_a if free_a is None else math.floor(free_a)
@@ -644,6 +679,7 @@ class ChargeController:
                 firm=None if plan is None else plan.code,
                 reached=plan is not None and plan.reached,
                 uncapped_a=(uncapped[key].max_a if point.max_a < uncapped[key].max_a else None),
+                hold=hold,
             )
             found = (
                 maximum_command(self._cfg, self._last, key, mode, inputs)
@@ -664,6 +700,7 @@ class ChargeController:
                 commands.append(ChargeCommand(command, facts))
 
         self._regulated = set(regulated.items())
+        self._climate = climate
         # Version und Ansichten wechseln zusammen: ``health`` läuft in einem anderen Thread und darf
         # die neue Version nie mit den Ansichten des vorigen Schritts zeigen
         self._views = views
@@ -1301,6 +1338,10 @@ class ChargeController:
         (geregelt ist er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart. Starten
         darf ein Auto, das nicht lädt, nur, wenn die Grenze seinen Mindeststrom trägt
         (``carries``).
+
+        Hält eine Halte-Regel das Auto (``hold``), gilt nach der Überlast der Mindeststrom des
+        Ladepunkts mit ihrem Grund nach dem Modus, nie dringend. Ein Start („Laden an“, auch der
+        Weckstart) kommt dann nur für die Gründe in ``_HOLD_STARTS``; ``climate`` duldet nur.
         """
         level = situation.level
         stop = level >= OverloadLevel.ALL_STOP or (point.evcs and level >= OverloadLevel.EVCS_STOP)
@@ -1310,7 +1351,11 @@ class ChargeController:
             charge = False
         blocked = inputs.blocked
         minimum = level >= OverloadLevel.MINIMUM
-        may_start = not minimum and (situation.carries or situation.charging is True)
+        may_start = (
+            not minimum
+            and (situation.carries or situation.charging is True)
+            and (situation.hold is None or situation.hold in _HOLD_STARTS)
+        )
         if inputs.controllable.get(actuator) is not True:
             if charge and may_start and situation.plugged is True:
                 return self._wake(point, actuator, situation, blocked)
@@ -1332,10 +1377,14 @@ class ChargeController:
         reasons: tuple[str, ...]
         if minimum:
             value, reasons = point.min_a, (*head, OVERLOAD)
+        elif situation.hold is not None:  # eine Halte-Regel: der Mindeststrom, nie dringend
+            value, reasons = point.min_a, (*head, situation.hold)
         else:
             value = _current_a(point, situation.wanted, situation.limit)
             reasons = (*head, *_why(situation, point.max_a))
-        urgent = minimum or _urgent(situation, point, value, present_a, situation.wanted)
+        urgent = minimum or (
+            situation.hold is None and _urgent(situation, point, value, present_a, situation.wanted)
+        )
         held = not urgent and self._reserved(
             point, actuator, inputs, value=value, present_a=present_a, limit=situation.limit
         )
