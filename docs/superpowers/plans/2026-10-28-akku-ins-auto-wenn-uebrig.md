@@ -18,7 +18,7 @@
 - **Wirkt erst mit Victron live.** Im Trockenlauf stehen die Befehle nur im Entscheidungslog.
 - **Ausrollen:** core und app **gemeinsam** (die Absicht hat neue Felder im Plan, ein alter core lehnt sie ab, `extra="forbid"`), mit dem nächsten gemeinsamen Pull. Keine Migration, keine ACL-Zeile. Den Schalter schaltest du erst ein, wenn Victron live ist.
 
-## Entscheidungen (zur Freigabe)
+## Entscheidungen (freigegeben vom Betreiber am 28.10.2026: „Freigegeben“)
 
 1. **Zuschnitt:** „Geplant“ über den Optimierer, „Sofort“ über übrigen Akku nach der Plan-Schwelle. PV-Überschuss, Min+PV und Boost bleiben unverändert (die Unterstützung ab 70 % gilt weiter; die Plan-Schwelle darf sie wie bisher nur anheben). Nicht in diesem Plan: Akku für Gäste über die Planung (ein Gast in „Sofort“ zählt wie ein Auto in „Sofort“, siehe 6), Home Assistant, Ersatzplan.
 2. **Nur PV-Energie aus dem Akku ins Auto:** Solange nach einem Netzladen Netzenergie im Akku sein kann (dieselbe Größe `c_t` wie Regel R1, bis der Akku wieder leer ist), gibt der Akku keinem Auto etwas. Sonst schöbe der Plan Netzstrom über den Akku ins Auto, an Regel R2 vorbei und mit rund 12 % Verlust.
