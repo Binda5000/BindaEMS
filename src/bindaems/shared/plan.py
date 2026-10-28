@@ -264,7 +264,10 @@ class IntentPlanSlot(_Model):
     ``ev_battery_w`` ist der Teil der Autoleistung (``vehicles``) je Fahrzeug, der aus dem Akku
     kommt (ganze W, nur Autos mit mindestens 1 W); ``now_battery`` erlaubt Autos in Sofort, aus
     dem Akku zu laden. Beides steht nur in Slots mit Eigenverbrauch; alte Absichten laden mit
-    ``{}`` und ``False``.
+    ``{}`` und ``False``. Jedes Fahrzeug in ``ev_battery_w`` steht auch in ``vehicles``, und sein
+    Akkuanteil ist höchstens seine Leistung (Fix-Welle F5); sonst ist der Slot ungültig. Ohne
+    Toleranz: ``intent_plan`` rundet beide mit ``round``, das monoton ist, und der Akkuanteil des
+    Plans ist nie größer als die Leistung.
     """
 
     start: AwareDatetime
@@ -286,6 +289,15 @@ class IntentPlanSlot(_Model):
     # Betriebsart, für die der Planwert gilt (``Plan.thermal.mode``, mit ``thermal_steps``
     # gesetzt); der core folgt ihm nur in derselben Betriebsart. Alte Absichten: ``None``.
     thermal_mode: ThermalMode | None = None
+
+    @model_validator(mode="after")
+    def _battery_within_power(self) -> IntentPlanSlot:
+        for key, share_w in self.ev_battery_w.items():
+            if key not in self.vehicles:
+                raise ValueError(f"ev_battery_w nennt {key}, das in vehicles fehlt")
+            if share_w > self.vehicles[key]:
+                raise ValueError(f"ev_battery_w von {key} liegt über seiner Leistung in vehicles")
+        return self
 
 
 class IntentPlan(_Model):

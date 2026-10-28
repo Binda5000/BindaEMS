@@ -600,7 +600,7 @@ def test_intent_plan_carries_car_battery_and_now_battery() -> None:
 
 
 def test_intent_plan_drops_battery_fields_outside_eigenverbrauch() -> None:
-    change = {"ev_battery_w": {"tesla": 2000.0}, "now_battery": True}
+    change = {"ev_w": {"tesla": 7000.0}, "ev_battery_w": {"tesla": 2000.0}, "now_battery": True}
     held = _stored(DAY + "10:01:00+00:00", ["10:00"], intents=[{**HOLD, **change}])
     slot = intent_plan(held, grid_charge_allowed=True).slots[0]
     assert slot.ev_battery_w == {} and slot.now_battery is False
@@ -625,3 +625,43 @@ def test_intent_plan_skips_expected_cars_and_tiny_battery_shares() -> None:
         intents=[{"ev_battery_w": {"tesla": 0.4, "egolf": 2000.0}}],
     ).model_copy(update={"vehicles": [_vehicle(), expected]})
     assert intent_plan(plan, grid_charge_allowed=True).slots[0].ev_battery_w == {}
+
+
+def test_intent_plan_slot_battery_share_needs_the_car() -> None:
+    # Fix-Welle F5: Jeder Akkuanteil gehört zu einem Auto des Slots, höchstens mit dessen Leistung.
+    start = at(DAY + "10:00:00+00:00")
+    slot = IntentPlanSlot(
+        start=start,
+        intent=BatteryIntent(),
+        vehicles={"tesla": 7000, "egolf": 0},
+        ev_battery_w={"tesla": 7000},
+    )
+    assert slot.ev_battery_w == {"tesla": 7000}
+    with pytest.raises(ValidationError, match="ev_battery_w"):
+        IntentPlanSlot(
+            start=start, intent=BatteryIntent(), vehicles={}, ev_battery_w={"tesla": 2000}
+        )
+
+
+def test_intent_plan_slot_battery_share_is_at_most_the_car_power() -> None:
+    start = at(DAY + "10:00:00+00:00")
+    with pytest.raises(ValidationError, match="ev_battery_w"):
+        IntentPlanSlot(
+            start=start,
+            intent=BatteryIntent(),
+            vehicles={"tesla": 2000},
+            ev_battery_w={"tesla": 2001},
+        )
+
+
+def test_intent_plan_output_passes_the_battery_check() -> None:
+    # Die app rundet Leistung und Akkuanteil getrennt; ``round`` ist monoton, der Anteil bleibt so
+    # nie über der Leistung, auch an der Rundungsgrenze.
+    for power_w, share_w in [(2500.5, 2500.5), (2500.4, 2500.4), (7000.0, 6999.6), (1.5, 1.5)]:
+        plan = _stored(
+            DAY + "10:01:00+00:00",
+            ["10:00"],
+            intents=[{"ev_w": {"tesla": power_w}, "ev_battery_w": {"tesla": share_w}}],
+        )
+        slot = intent_plan(plan, grid_charge_allowed=True).slots[0]
+        assert slot.ev_battery_w["tesla"] <= slot.vehicles["tesla"]
