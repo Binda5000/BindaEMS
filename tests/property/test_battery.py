@@ -6,6 +6,8 @@ einmal, nicht schrittweise wie der Code:
 - ``deficits``: Die Fehlbeträge ergeben zusammen, was die Autos über den Rest der PV hinaus ziehen,
   und ein Fehlbetrag hängt nicht von den Autos hinter ihm ab.
 - ``allowed``: Der Anteil folgt dem Modus, und das Limit geht in der Reihenfolge der Autos weg.
+  Geplant und Sofort bekommen zusammen nie mehr als die freie Entladeleistung (Fix-Welle F3), ein
+  Auto in Geplant nie mehr als Akkuanteil und Stromstufe (Fix-Welle F7).
 - der gewollte Netzbezug ``W``: nie negativ, nie über dem Fehlbetrag, nie mehr durch mehr Akku.
 - ``Support``: der SOC-Stand aus dem letzten Wert, der die Schwelle erreicht oder unter die
   Hysterese fällt; die Überbrückung aus den Läufen ohne Fehlbetrag im ganzen Verlauf, nicht mit den
@@ -18,6 +20,7 @@ einmal, nicht schrittweise wie der Code:
   ``NETZLADEN`` genau ``W_hold + P``.
 """
 
+import math
 from datetime import timedelta
 from pathlib import Path
 
@@ -28,6 +31,7 @@ from tests.helpers import T0
 
 from bindaems.core.control.battery import (
     BRIDGE_END_S,
+    SPARE_MODES,
     SUPPORT_MODES,
     BatteryCar,
     BatteryController,
@@ -46,6 +50,8 @@ from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 WATTS = st.floats(-1000.0, 20000.0)  # PV und Haus; ein negativer Wert ist Messrauschen
 LIMITS_W = st.floats(0.0, 12000.0)  # support_max_w
+# room_w, die freie Entladeleistung; auch keine endliche Zahl
+ROOMS_W = st.floats(-1000.0, 30000.0) | st.sampled_from([math.nan, math.inf])
 CARS = st.lists(
     st.tuples(st.sampled_from(list(Effective)), st.floats(0.0, 11000.0)), min_size=1, max_size=3
 ).map(
@@ -66,13 +72,13 @@ def drawn_beyond_pv_w(pv, house, cars) -> float:
     return max(0.0, sum(car.power_w for car in cars) - pv_rest_w)
 
 
-@given(pv=WATTS, house=WATTS, cars=CARS, support_on=st.booleans(), limit=LIMITS_W)
+@given(pv=WATTS, house=WATTS, cars=CARS, support_on=st.booleans(), limit=LIMITS_W, room=ROOMS_W)
 def test_wanted_grid_is_never_negative_nor_above_the_deficit(
-    pv, house, cars, support_on, limit
+    pv, house, cars, support_on, limit, room
 ) -> None:
     deficit = deficits(pv, house, cars)
     assert deficit is not None
-    shares = allowed(cars, deficit, support_on=support_on, support_max_w=limit)
+    shares = allowed(cars, deficit, support_on=support_on, support_max_w=limit, room_w=room)
     wanted = wanted_grid_w(cars, deficit, shares)
     assert 0.0 <= wanted <= sum(deficit.values()) + 1e-6
 
@@ -83,13 +89,16 @@ def test_wanted_grid_is_never_negative_nor_above_the_deficit(
     cars=CARS,
     limits=st.tuples(LIMITS_W, LIMITS_W).map(sorted),  # support_max_w: a ≤ b
     switches=st.sampled_from([(False, False), (False, True), (True, True)]),  # falsch ≤ wahr
+    room=ROOMS_W,
 )
-def test_more_allowed_battery_never_means_more_grid(pv, house, cars, limits, switches) -> None:
+def test_more_allowed_battery_never_means_more_grid(
+    pv, house, cars, limits, switches, room
+) -> None:
     deficit = deficits(pv, house, cars)
     assert deficit is not None
     (low_w, high_w), (low_on, high_on) = limits, switches
-    low = allowed(cars, deficit, support_on=low_on, support_max_w=low_w)
-    high = allowed(cars, deficit, support_on=high_on, support_max_w=high_w)
+    low = allowed(cars, deficit, support_on=low_on, support_max_w=low_w, room_w=room)
+    high = allowed(cars, deficit, support_on=high_on, support_max_w=high_w, room_w=room)
     assert wanted_grid_w(cars, deficit, high) <= wanted_grid_w(cars, deficit, low) + 1e-6
 
 
@@ -139,13 +148,13 @@ def test_the_need_is_unknown_exactly_when_a_car_may_charge_without_a_power(
     assert (deficits(pv, house, cars) is None) is unknown
 
 
-@given(pv=WATTS, house=WATTS, cars=CARS, support_on=st.booleans(), limit=LIMITS_W)
+@given(pv=WATTS, house=WATTS, cars=CARS, support_on=st.booleans(), limit=LIMITS_W, room=ROOMS_W)
 def test_allowed_follows_the_mode_and_hands_out_the_limit_in_order(
-    pv, house, cars, support_on, limit
+    pv, house, cars, support_on, limit, room
 ) -> None:
     deficit = deficits(pv, house, cars)
     assert deficit is not None
-    shares = allowed(cars, deficit, support_on=support_on, support_max_w=limit)
+    shares = allowed(cars, deficit, support_on=support_on, support_max_w=limit, room_w=room)
     assert list(shares) == [car.wallbox for car in cars]
     handed_w = 0.0  # was die Autos in PV-Überschuss und Min+PV bis hierher bekommen haben
     for car in cars:
@@ -160,6 +169,57 @@ def test_allowed_follows_the_mode_and_hands_out_the_limit_in_order(
                 assert handed_w == pytest.approx(limit, abs=1e-6)
         else:
             assert share == 0.0
+
+
+# Autos mit Fahrzeug und Stromstufe, damit Geplant einen Akkuanteil bekommt; die Stufe auch
+# unbekannt (0, negativ, keine endliche Zahl)
+STEPS_W = st.sampled_from([0.0, -460.0, 460.0, 690.0, math.nan, math.inf])
+PLAN_CARS = st.lists(
+    st.tuples(st.sampled_from(list(Effective)), st.floats(0.0, 11000.0), STEPS_W),
+    min_size=1,
+    max_size=3,
+).map(
+    lambda parts: [
+        BatteryCar(f"wb{index}", mode, power, True, vehicle=f"v{index}", step_w=step)
+        for index, (mode, power, step) in enumerate(parts)
+    ]
+)
+
+
+@given(
+    pv=WATTS,
+    house=WATTS,
+    cars=PLAN_CARS,
+    planned=st.integers(0, 11000),
+    room=ROOMS_W,
+    limit=LIMITS_W,
+)
+def test_plan_shares_stay_within_the_free_room_and_share_plus_step(
+    pv, house, cars, planned, room, limit
+) -> None:
+    deficit = deficits(pv, house, cars)
+    assert deficit is not None
+    shares = allowed(
+        cars,
+        deficit,
+        support_on=True,
+        support_max_w=limit,
+        room_w=room,
+        planned_w={car.vehicle: planned for car in cars if car.vehicle is not None},
+        planned_on=True,
+        spare_on=True,
+    )
+    plan_modes = SPARE_MODES | {Effective.PLANNED}
+    plan_w = sum(shares[car.wallbox] for car in cars if car.mode in plan_modes)
+    other_w = sum(shares[car.wallbox] for car in cars if car.mode not in plan_modes)
+    free_w = room if math.isfinite(room) else 0.0
+    assert plan_w <= max(free_w - other_w, 0.0) + 1e-6
+    for car in cars:
+        share = shares[car.wallbox]
+        assert 0.0 <= share <= deficit[car.wallbox] + 1e-9
+        if car.mode is Effective.PLANNED:
+            step = car.step_w if math.isfinite(car.step_w) and car.step_w > 0 else 0.0
+            assert share <= (planned + step if planned > 0 else 0.0) + 1e-9
 
 
 # --- Unterstützung --------------------------------------------------------------------------------
