@@ -1540,6 +1540,30 @@ def test_climate_hold_conditions(cfg, change, expected) -> None:
     assert climate_hold(cfg, **args) is expected
 
 
+def test_climate_goes_before_keep_on_complete(cfg) -> None:
+    # Der Tesla steht laut Übersteuerung an der EVCS, sie meldet „geladen“, und er klimatisiert und
+    # lädt dabei: K1 und K2 gelten, K1 geht vor. Sie duldet nur: kein „Laden an“.
+    at_evcs_pv = VehicleIntent(mode=ChargeMode.PV, wallbox="evcs")
+    complete_16 = evcs(
+        charging=True, complete=True, phase_a=dict.fromkeys(PHASES, 16.0), power_w=11040.0
+    )
+    found = run(
+        controller(cfg),
+        cfg,
+        60,
+        make=tesla_inputs,
+        intent=Intent(version=1, control=True, vehicles={"tesla": at_evcs_pv}),
+        twc_obs=twc(),
+        evcs_obs=complete_16,
+        tesla_obs=CLIMATISING,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(grid_w=12000.0),
+    )
+    evcs_commands = [c for _, c in of(found, "wallbox.evcs")]
+    assert Command("wallbox.evcs", CURRENT, 6.0, reasons=("mode_pv", "climate")) in evcs_commands
+    assert [c for c in evcs_commands if "keep_on_complete" in c.reasons or c.kind == CHARGING] == []
+
+
 def held_in_now(cfg, grid_obs) -> list:
     """Der Tesla in „Sofort“ am Wall Connector, im Ansteckvorgang schon „geladen“: In Sekunde 0
     meldet Tessie „Complete“, ab 1 klimatisiert er und lädt selbst mit 16 A. „Geladen“ gilt bis

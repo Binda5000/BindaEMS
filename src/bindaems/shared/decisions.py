@@ -78,6 +78,7 @@ _REASON_TEXT: Final = {
     "charge_limit": "Ladelimit",
     "now_limit": "Sofort-Limit",
     "climate": "Vorklimatisieren",  # Plan Vorklimatisieren, Entscheidung 11
+    "keep_on_complete": "Geladen, bleibt an",  # Plan Vorklimatisieren, Regel K2
     "thermal_more": "PV-Überschuss in die Klimaanlage",
     "thermal_back": "Netzbezug, Klimaanlage eine Stufe zurück",
     "thermal_cars": "Autos haben Vorrang",

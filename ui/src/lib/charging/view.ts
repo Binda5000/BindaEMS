@@ -102,6 +102,7 @@ const REASONS: Record<string, string> = {
 	target_reached: 'Ziel-SOC erreicht',
 	charge_limit: 'Ladelimit',
 	climate: 'Vorklimatisieren',
+	keep_on_complete: 'Geladen, bleibt an',
 	thermal_more: 'PV-Überschuss in die Klimaanlage',
 	thermal_back: 'Netzbezug, Klimaanlage eine Stufe zurück',
 	thermal_cars: 'Autos haben Vorrang',
