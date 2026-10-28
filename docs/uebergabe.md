@@ -3989,8 +3989,10 @@ vorgesehen.
   der Wintertest könnte `car_battery_kwh == 0` prüfen; `test_car_takes_planned_battery_share` setzt voraus, dass ein Plan
   den Slot deckt.
 - **core (Task 7):**
-  - Ein Auto in Sofort, das ganz aus dem Akku lädt, zählt beim 15-min-Wächter mit 0 W Netz; liefert der Akku doch weniger
-    (Entladegrenze), kann der Wächter es nicht drosseln, wie heute bei Boost (Entscheidung 6). Im Gesamtreview ansehen.
+  - ~~Ein Auto in Sofort, das ganz aus dem Akku lädt, zählt beim 15-min-Wächter mit 0 W Netz; liefert der Akku doch weniger
+    (Entladegrenze), kann der Wächter es nicht drosseln, wie heute bei Boost (Entscheidung 6). Im Gesamtreview ansehen.~~
+    (erledigt 28.10.2026, Fix-Welle, F3: Geplant und Sofort bekommen höchstens die freie Entladeleistung, der Rest ist
+    Netzanteil, den der Wächter sieht)
   - `_planned_on` hat keine Hysterese um `soc_end_pct` (so verlangt); der SOC kann im Slot um den Wert pendeln.
   - `planned_w` hat den veränderlichen Standardwert `{}`; Health `spare`/`spare_w` kommen aus `assess`, `support` aus
     `decide`; ein Testauto heißt „guest“, ist aber kein Gast-Schlüssel.

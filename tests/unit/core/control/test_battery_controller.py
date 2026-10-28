@@ -1021,3 +1021,25 @@ def test_idle_starts_the_spare_over(cfg) -> None:
     battery.idle()
     found = battery.assess(at(10), 72.0, 0.0, 500.0, cars, active=active)
     assert found is not None and found.spare == "on"
+
+
+def test_two_now_cars_are_capped_at_the_discharge_limit(cfg) -> None:
+    # Fix-Welle F3: Zwei Autos in Sofort mit je 11 kW, Haus 1 kW, ``max_discharge_w`` 12 kW: Der
+    # Akku gibt den Autos zusammen 11 kW, der Rest ist ein Netzanteil.
+    assert cfg.battery.max_discharge_w == 12000.0
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    cars = [now_car("tesla", 11000.0), now_car("egolf", 11000.0, wallbox="twc")]
+    found = spare_need(cfg, soc=80.0, active=active, cars=cars, house=1000.0)
+    assert sum(found.allowed_w.values()) == pytest.approx(11000.0)
+    assert found.allowed_w == {"evcs": 11000.0, "twc": 0.0}
+    assert found.grid_w == {"evcs": 0.0, "twc": 11000.0}
+    assert found.spare_w == 11000.0 and found.wanted_w == 11000.0
+
+
+def test_pv_lowers_the_house_deficit_for_the_cap(cfg) -> None:
+    # PV 3 kW deckt das Haus (1 kW) und 2 kW des ersten Autos: Die ganze Entladeleistung bleibt.
+    active = plan_slot(now_battery=True, support_soc_pct=70.0)
+    cars = [now_car("tesla", 11000.0), now_car("egolf", 11000.0, wallbox="twc")]
+    found = spare_need(cfg, soc=80.0, active=active, cars=cars, pv=3000.0, house=1000.0)
+    assert found.allowed_w == {"evcs": 9000.0, "twc": 3000.0}
+    assert found.grid_w == {"evcs": 0.0, "twc": 8000.0}

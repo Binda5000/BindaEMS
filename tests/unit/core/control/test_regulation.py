@@ -24,9 +24,11 @@ from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.peak_guard import (
     NO_LIMITS,
     PEAK_EXCEEDED,
+    Cap,
     PeakCar,
     PeakLimits,
     QuarterObs,
+    throttle,
 )
 from bindaems.core.control.plan_exec import ActiveSlot, plan_health
 from bindaems.core.control.regulation import (
@@ -1803,3 +1805,31 @@ def test_health_planned_is_clamped_to_the_band(cfg) -> None:
     regulation = Regulation(narrow, HardLimits.from_config(narrow), started=T0)
     klima(regulation, narrow, 0, mode="heizen", intent=heat_plan(6))
     assert klima_health(regulation)["planned"] == 2
+
+
+def test_a_now_car_capped_at_the_discharge_limit_can_be_throttled(cfg) -> None:
+    # Fix-Welle F3: Was der Akku einem Auto in Sofort nicht mehr geben kann, ist sein Netzanteil;
+    # der Wächter sieht ihn und kann das Auto drosseln. Vorher war der Netzanteil 0 W.
+    active = ActiveSlot(
+        1,
+        T0,
+        BatteryIntent(),
+        None,
+        None,
+        70.0,
+        now_battery=True,
+    )
+    battery_cars_ = (
+        BatteryCar("evcs", Effective.NOW, 11000.0, True, vehicle="egolf"),
+        BatteryCar("twc", Effective.NOW, 11000.0, True, vehicle="tesla"),
+    )
+    need = BatteryController(cfg).assess(T0, 80.0, 0.0, 1000.0, battery_cars_, active=active)
+    assert need is not None
+    views = (
+        CarView("egolf", "evcs", Effective.NOW, 11000.0, True, 4140.0, True),
+        CarView("tesla", "twc", Effective.NOW, 11000.0, True, 4140.0, True),
+    )
+    found = peak_cars(views, need)
+    assert [car.grid_w for car in found] == [0.0, 11000.0]
+    caps = throttle(found, {}, 3000.0)
+    assert caps == {"tesla": Cap(8000.0, 3000.0, Effective.NOW)}

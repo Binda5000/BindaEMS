@@ -3789,7 +3789,7 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
 | Modus | Aus dem Akku erlaubt |
 |---|---|
 | PV-Überschuss, Min+PV | Wenn die Unterstützung gilt (unten): für diese Autos zusammen höchstens `support_max_w`, verteilt in der Reihenfolge `priority`. Sonst nichts. |
-| Sofort | Ohne „Akku ins Auto, wenn übrig“ nichts: Sofort lädt aus Netz und PV mit vollem Strom. Mit dem Schalter in einem Slot, in dem der Plan übrigen Akku für Sofort erlaubt (`now_battery`), den ganzen Fehlbetrag, solange der SOC über der Plan-Schwelle des Slots liegt (unten, „Akku ins Auto, wenn übrig“). Das gilt auch für einen Gast in Sofort. |
+| Sofort | Ohne „Akku ins Auto, wenn übrig“ nichts: Sofort lädt aus Netz und PV mit vollem Strom. Mit dem Schalter in einem Slot, in dem der Plan übrigen Akku für Sofort erlaubt (`now_battery`), den ganzen Fehlbetrag, solange der SOC über der Plan-Schwelle des Slots liegt (unten, „Akku ins Auto, wenn übrig“). Das gilt auch für einen Gast in Sofort. Geplant und Sofort zusammen bekommen höchstens die Entladeleistung, die nach Haus, Unterstützung und Boost frei bleibt (`battery.max_discharge_w`), zuerst Geplant; der Rest kommt über den Override aus dem Netz, und der 15-min-Wächter kann ihn drosseln. |
 | Geplant | Ohne „Akku ins Auto, wenn übrig“ nichts: Was dem Auto fehlt, kommt aus dem Netz, denn über das Netzladen des Autos entscheidet der Plan. Mit dem Schalter höchstens den Akkuanteil, den der gültige Slot für das Fahrzeug nennt (`ev_battery_w`), solange der SOC über dem geplanten SOC am Ende des Slots liegt. |
 | Aus | Nichts. |
 | Boost | Alles, ohne SOC-Schwelle und ohne die Grenzen von Leistung und Dauer. Boost begrenzt nur der Schutz der USV-Reserve (Abschnitt „Lademodi“). |

@@ -45,6 +45,8 @@ class Cycle(TypedDict):
     plan_blocks: bool
 
 
+# freie Entladeleistung, die in den Tests vor der Fix-Welle F3 nie begrenzt
+ROOM_W = 1_000_000.0
 CARS = [car(mode=Effective.MIN_PV)]  # ein Auto, für das die Unterstützung gelten kann
 DEFICIT = {"evcs": 500.0}  # weit über der Schwelle von 100 W
 AT_70 = Cycle(
@@ -375,8 +377,8 @@ def test_allowed_share_follows_the_mode_and_the_limit() -> None:
         car("d", Effective.BOOST),
     ]
     deficit = {"a": 2000.0, "b": 2000.0, "c": 4000.0, "d": 5000.0}
-    on = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
-    off = allowed(cars, deficit, support_on=False, support_max_w=3000.0)
+    on = allowed(cars, deficit, support_on=True, support_max_w=3000.0, room_w=ROOM_W)
+    off = allowed(cars, deficit, support_on=False, support_max_w=3000.0, room_w=ROOM_W)
     assert on == {"a": 2000.0, "b": 1000.0, "c": 0.0, "d": 5000.0}
     assert off == {"a": 0.0, "b": 0.0, "c": 0.0, "d": 5000.0}
 
@@ -385,7 +387,7 @@ def test_planned_gets_no_battery_support() -> None:  # Plan 4b, Entscheidung 4, 
     assert SUPPORT_MODES == frozenset({Effective.PV, Effective.MIN_PV})
     cars = [car("a", Effective.PLANNED), car("b", Effective.PV)]
     deficit = {"a": 2000.0, "b": 1000.0}
-    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
+    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0, room_w=ROOM_W)
     assert found == {"a": 0.0, "b": 1000.0}
     # Sein Fehlbetrag geht ganz in den gewollten Netzbezug W, wie bei Sofort
     need = BatteryNeed(0.0, 0.0, 8000.0, deficit, found, "on", 0.0)
@@ -397,13 +399,15 @@ def test_planned_gets_no_battery_support() -> None:  # Plan 4b, Entscheidung 4, 
 
 def test_off_gets_nothing_from_the_battery() -> None:
     cars = [car("a", Effective.OFF)]
-    assert allowed(cars, {"a": 2000.0}, support_on=True, support_max_w=3000.0) == {"a": 0.0}
+    assert allowed(cars, {"a": 2000.0}, support_on=True, support_max_w=3000.0, room_w=ROOM_W) == {
+        "a": 0.0
+    }
 
 
 def test_the_limit_goes_to_the_cars_in_order_of_the_list() -> None:
     cars = [car("a", Effective.MIN_PV), car("b", Effective.PV), car("c", Effective.PV)]
     deficit = {"a": 2500.0, "b": 2500.0, "c": 2500.0}
-    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
+    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0, room_w=ROOM_W)
     assert found == {"a": 2500.0, "b": 500.0, "c": 0.0}
     assert list(found) == ["a", "b", "c"]
 
@@ -411,25 +415,32 @@ def test_the_limit_goes_to_the_cars_in_order_of_the_list() -> None:
 def test_boost_does_not_use_up_the_limit_of_the_others() -> None:
     cars = [car("b", Effective.BOOST), car("a", Effective.PV)]
     deficit = {"b": 5000.0, "a": 2000.0}
-    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
+    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0, room_w=ROOM_W)
     assert found == {"b": 5000.0, "a": 2000.0}
 
 
 def test_a_car_never_gets_more_than_its_deficit() -> None:
     cars = [car("a", Effective.PV), car("b", Effective.BOOST)]
-    found = allowed(cars, {"a": 800.0, "b": 0.0}, support_on=True, support_max_w=3000.0)
+    found = allowed(
+        cars, {"a": 800.0, "b": 0.0}, support_on=True, support_max_w=3000.0, room_w=ROOM_W
+    )
     assert found == {"a": 800.0, "b": 0.0}
 
 
 def test_without_a_limit_only_boost_gets_something() -> None:
     cars = [car("a", Effective.PV), car("b", Effective.BOOST)]
-    found = allowed(cars, {"a": 800.0, "b": 900.0}, support_on=True, support_max_w=0.0)
+    found = allowed(
+        cars, {"a": 800.0, "b": 900.0}, support_on=True, support_max_w=0.0, room_w=ROOM_W
+    )
     assert found == {"a": 0.0, "b": 900.0}
 
 
 def test_a_car_without_an_entry_gets_nothing() -> None:
     cars = [car("a", Effective.PV), car("b", Effective.BOOST)]
-    assert allowed(cars, {}, support_on=True, support_max_w=3000.0) == {"a": 0.0, "b": 0.0}
+    assert allowed(cars, {}, support_on=True, support_max_w=3000.0, room_w=ROOM_W) == {
+        "a": 0.0,
+        "b": 0.0,
+    }
 
 
 # --- Akku ins Auto: Geplant und Sofort (Plan Akku ins Auto, Entscheidungen 4 und 6) ---------------
@@ -442,6 +453,7 @@ def test_planned_car_gets_its_plan_battery_share() -> None:
         {"evcs": 7000.0},
         support_on=False,
         support_max_w=3000,
+        room_w=ROOM_W,
         planned_w={"tesla": 2500},
         planned_on=True,
     )
@@ -453,16 +465,25 @@ def test_planned_share_needs_the_switch_the_vehicle_and_its_entry() -> None:
     tesla = [BatteryCar("evcs", Effective.PLANNED, 7000.0, True, vehicle="tesla")]
     no_vehicle = [BatteryCar("evcs", Effective.PLANNED, 7000.0, True)]
     plan = {"tesla": 2500}
-    off = allowed(tesla, deficit, support_on=True, support_max_w=3000, planned_w=plan)
+    off = allowed(
+        tesla, deficit, support_on=True, support_max_w=3000, room_w=ROOM_W, planned_w=plan
+    )
     assert off == {"evcs": 0.0}  # ohne ``planned_on`` nichts
     assert allowed(
-        no_vehicle, deficit, support_on=True, support_max_w=3000, planned_w=plan, planned_on=True
+        no_vehicle,
+        deficit,
+        support_on=True,
+        support_max_w=3000,
+        room_w=ROOM_W,
+        planned_w=plan,
+        planned_on=True,
     ) == {"evcs": 0.0}
     assert allowed(
         tesla,
         deficit,
         support_on=True,
         support_max_w=3000,
+        room_w=ROOM_W,
         planned_w={"egolf": 2500},
         planned_on=True,
     ) == {"evcs": 0.0}
@@ -475,6 +496,7 @@ def test_planned_share_never_exceeds_the_deficit() -> None:
         {"evcs": 1200.0},  # die PV deckt einen Teil
         support_on=False,
         support_max_w=3000,
+        room_w=ROOM_W,
         planned_w={"tesla": 2500},
         planned_on=True,
     )
@@ -484,9 +506,9 @@ def test_planned_share_never_exceeds_the_deficit() -> None:
 def test_now_car_gets_its_whole_deficit_only_with_spare() -> None:
     cars = [car("evcs", Effective.NOW, 11000.0), car("twc", Effective.PV, 2000.0)]
     deficit = {"evcs": 11000.0, "twc": 2000.0}
-    on = allowed(cars, deficit, support_on=True, support_max_w=3000.0, spare_on=True)
+    on = allowed(cars, deficit, support_on=True, support_max_w=3000.0, room_w=ROOM_W, spare_on=True)
     assert on == {"evcs": 11000.0, "twc": 2000.0}  # zählt nicht gegen die 3 kW
-    off = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
+    off = allowed(cars, deficit, support_on=True, support_max_w=3000.0, room_w=ROOM_W)
     assert off == {"evcs": 0.0, "twc": 2000.0}
 
 
@@ -501,6 +523,7 @@ def test_allowed_mixes_support_planned_and_spare() -> None:
         {"evcs": 4000.0, "twc": 7000.0, "evcs2": 3000.0},
         support_on=True,
         support_max_w=3000,
+        room_w=ROOM_W,
         planned_w={"gast": 1000},
         planned_on=True,
         spare_on=True,
@@ -608,3 +631,62 @@ def test_the_plan_is_the_source_only_when_it_is_really_higher() -> None:
         50.0,
         "config",
     )
+
+
+# --- Freie Entladeleistung für Geplant und Sofort (Fix-Welle F3) ----------------------------------
+
+
+def test_plan_shares_are_capped_at_the_free_discharge_power() -> None:
+    # Zwei Autos in Sofort mit je 11 kW, nach dem Haus bleiben 11 kW Entladeleistung: Das erste
+    # bekommt sie, das zweite nichts; der Rest geht als Netzanteil an Override und Wächter.
+    cars = [car("evcs", Effective.NOW, 11000.0), car("twc", Effective.NOW, 11000.0)]
+    deficit = {"evcs": 11000.0, "twc": 11000.0}
+    shares = allowed(
+        cars, deficit, support_on=False, support_max_w=3000.0, spare_on=True, room_w=11000.0
+    )
+    assert shares == {"evcs": 11000.0, "twc": 0.0}
+
+
+def test_the_cap_serves_support_and_boost_first_then_planned_then_now() -> None:
+    cars = [
+        BatteryCar("evcs", Effective.NOW, 6000.0, True, vehicle="egolf"),
+        BatteryCar("twc", Effective.PV, 4000.0, True, vehicle="tesla"),
+        BatteryCar("evcs2", Effective.PLANNED, 5000.0, True, vehicle="gast"),
+        BatteryCar("evcs3", Effective.BOOST, 1000.0, True, vehicle="gast2"),
+    ]
+    deficit = {"evcs": 6000.0, "twc": 4000.0, "evcs2": 5000.0, "evcs3": 1000.0}
+    shares = allowed(
+        cars,
+        deficit,
+        support_on=True,
+        support_max_w=3000.0,
+        planned_w={"gast": 5000},
+        planned_on=True,
+        spare_on=True,
+        room_w=10000.0,
+    )
+    # 10 kW − 3 kW Unterstützung − 1 kW Boost = 6 kW: 5 kW für Geplant, 1 kW für Sofort
+    assert shares == {"evcs": 1000.0, "twc": 3000.0, "evcs2": 5000.0, "evcs3": 1000.0}
+
+
+@pytest.mark.parametrize("room", [0.0, -500.0, math.nan, math.inf])
+def test_without_free_discharge_power_plan_shares_get_nothing(room: float) -> None:
+    # Keine freie Entladeleistung oder keine endliche Zahl: nichts für Geplant und Sofort; die
+    # Unterstützung und Boost bleiben, wie sie sind.
+    cars = [
+        BatteryCar("evcs", Effective.NOW, 6000.0, True, vehicle="egolf"),
+        BatteryCar("twc", Effective.PLANNED, 4000.0, True, vehicle="tesla"),
+        BatteryCar("evcs2", Effective.BOOST, 2000.0, True, vehicle="gast"),
+    ]
+    deficit = {"evcs": 6000.0, "twc": 4000.0, "evcs2": 2000.0}
+    shares = allowed(
+        cars,
+        deficit,
+        support_on=True,
+        support_max_w=3000.0,
+        planned_w={"tesla": 4000},
+        planned_on=True,
+        spare_on=True,
+        room_w=room,
+    )
+    assert shares == {"evcs": 0.0, "twc": 0.0, "evcs2": 2000.0}

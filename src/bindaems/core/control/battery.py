@@ -26,7 +26,9 @@ Akku ins Auto (Plan Akku ins Auto, Entscheidungen 4 und 6): Im Eigenverbrauch be
 „Geplant“ höchstens den Akkuanteil, den der gültige Slot für sein Fahrzeug nennt, solange der SOC
 über dem geplanten SOC am Ende des Slots liegt; ein Auto in „Sofort“ seinen ganzen Fehlbetrag,
 solange der Slot übrigen Akku erlaubt und der SOC über der Plan-Schwelle liegt (``Spare``). Beides
-geht nicht von ``support_max_w`` ab. Ohne gültigen Slot regelt der core wie ohne Plan.
+geht nicht von ``support_max_w`` ab, ist aber auf die Entladeleistung begrenzt, die nach Haus,
+Unterstützung und Boost frei bleibt (Fix-Welle F3); der Rest ist Netzanteil, den Override und
+15-min-Wächter sehen. Ohne gültigen Slot regelt der core wie ohne Plan.
 
 Ein fehlender Wert ist ``None`` (unbekannt), ebenso ein Wert, der keine endliche Zahl ist
 (``finite_number``). Die Schicht ist rein: Die Zeit kommt als Argument, auf der Uhr der
@@ -316,6 +318,7 @@ def allowed(
     *,
     support_on: bool,
     support_max_w: float,
+    room_w: float,
     planned_w: Mapping[str, int] = {},
     planned_on: bool = False,
     spare_on: bool = False,
@@ -335,9 +338,17 @@ def allowed(
       Entscheidung 6), sonst nichts,
     - ein Auto in Aus nichts.
 
-    Was Geplant und Sofort bekommen, geht nicht vom Rest ab. Das Ergebnis nennt jede Wallbox von
-    ``cars``; ein Auto ohne Eintrag in ``deficit`` hat keinen Fehlbetrag. Fehlbeträge,
-    ``support_max_w`` und Akkuanteile sind nicht negativ.
+    Was Geplant und Sofort bekommen, geht nicht vom Rest ab. Es ist aber durch die freie
+    Entladeleistung begrenzt (Fix-Welle F3): ``room_w`` ist die Entladeleistung des Akkus, die nach
+    dem Haus bleibt; davon gehen zuerst die Anteile der Unterstützung und von Boost ab, der Rest
+    geht an die Autos in Geplant, dann an die in Sofort, je in der Reihenfolge von ``cars``. Was
+    darüber liegt, bleibt Netzanteil (``BatteryNeed.grid_w``), den Override und 15-min-Wächter
+    sehen; sonst holte ESS es ungesehen aus dem Netz. Das ist eine physikalische Grenze, keine
+    eigene Leistungsgrenze im Sinne von Entscheidung 6. Ist ``room_w`` keine endliche Zahl oder
+    nicht über 0, bekommen Geplant und Sofort nichts.
+
+    Das Ergebnis nennt jede Wallbox von ``cars``; ein Auto ohne Eintrag in ``deficit`` hat keinen
+    Fehlbetrag. Fehlbeträge, ``support_max_w`` und Akkuanteile sind nicht negativ.
     """
     rest_w = support_max_w
     shares: dict[str, float] = {}
@@ -355,6 +366,14 @@ def allowed(
         else:
             share_w = 0.0
         shares[car.wallbox] = share_w
+    room = finite_number(room_w)
+    free_w = 0.0 if room is None else room
+    free_w -= sum((shares[car.wallbox] for car in cars if car.mode not in _PLAN_SHARE_MODES), 0.0)
+    for modes in ({Effective.PLANNED}, SPARE_MODES):
+        for car in cars:
+            if car.mode in modes:
+                shares[car.wallbox] = min(shares[car.wallbox], max(free_w, 0.0))
+                free_w -= shares[car.wallbox]
     return shares
 
 
@@ -517,6 +536,8 @@ class BatteryController:
         self._deadband_w = control.setpoint_deadband_w
         self._refresh_s = control.override_refresh_s
         self._support_max_w = control.support_max_w
+        # die Entladegrenze des Akkus; ein Wert der BMS ist hier nicht bekannt (Fix-Welle F3)
+        self._max_discharge_w = cfg.battery.max_discharge_w
         self._support = Support(control)
         self._spare = Spare(control)
         self._last = LastValues()
@@ -556,7 +577,9 @@ class BatteryController:
         Der Slot bestimmt auch, was Geplant und Sofort aus dem Akku bekommen (Plan Akku ins Auto):
         Geplant den Akkuanteil seines Fahrzeugs (``vehicles_battery``), solange der SOC über
         ``soc_end_pct`` liegt; Sofort seinen ganzen Fehlbetrag, solange ``Spare`` ``"on"`` ist.
-        Den Stand von ``Spare`` rechnet jeder Aufruf, auch ohne Bedarf.
+        Beides zusammen höchstens die freie Entladeleistung (``allowed``, Fix-Welle F3):
+        ``battery.max_discharge_w`` der Konfiguration minus dem Teil der Hauslast, den die PV
+        nicht deckt. Den Stand von ``Spare`` rechnet jeder Aufruf, auch ohne Bedarf.
         """
         threshold_pct, source = effective_threshold(self._control, support, active)
         self._threshold = threshold_pct, source
@@ -586,6 +609,7 @@ class BatteryController:
                 deficit,
                 support_on=reason == "on",
                 support_max_w=self._support_max_w,
+                room_w=self._max_discharge_w - max(max(house, 0.0) - max(pv, 0.0), 0.0),
                 planned_w={} if active is None else active.vehicles_battery,
                 planned_on=_planned_on(soc_pct, active),
                 spare_on=spare == "on",
