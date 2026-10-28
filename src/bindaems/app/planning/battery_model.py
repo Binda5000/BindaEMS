@@ -5,8 +5,9 @@ prüft ihn auf Plausibilität, bildet den Ersatzplan und wertet die Szenarien au
 Leistungen sind Mittelwerte über den Slot in W, Energien in kWh.
 
 Geplante Autos (Plan 4b, Präzisierung 12) stehen als Summe ihrer Ladeleistung im Slot
-(``SimSlot.ev_w``): PV deckt zuerst das Haus, dann die Autos, dann den Akku; der Akku entlädt nur
-für das Haus, der Rest der Autos kommt aus dem Netz.
+(``SimSlot.ev_w``): PV deckt zuerst das Haus, dann die Autos, dann den Akku. Der Akku entlädt
+zuerst für das Haus; in ``EIGENVERBRAUCH``-Slots darf er danach bis ``SimSlot.ev_battery_w`` in die
+Autos geben (Akku ins Auto, wenn er übrig ist), der Rest der Autos kommt aus dem Netz.
 """
 
 from __future__ import annotations
@@ -43,7 +44,8 @@ class BatteryParams:
 class SimSlot:
     """Eingabe eines Slots: Leistungen in W, Preise in ct/kWh (Einspeisepreis kann fehlen).
 
-    ``load_w`` ist das Haus ohne Autos, ``ev_w`` die Ladeleistung aller geplanten Autos.
+    ``load_w`` ist das Haus ohne Autos, ``ev_w`` die Ladeleistung aller geplanten Autos und
+    ``ev_battery_w`` der Teil davon, den der Akku geben darf.
     """
 
     start: datetime
@@ -54,14 +56,15 @@ class SimSlot:
     max_charge_w: float
     max_discharge_w: float
     ev_w: float = 0.0
+    ev_battery_w: float = 0.0
 
 
 @dataclass(frozen=True)
 class SimStep:
     """Ergebnis eines Slots; ``cost_ct`` ist Bezug minus Einspeisung.
 
-    ``ev_pv_w`` und ``ev_grid_w`` sind PV und Netz in die Autos; ``import_w`` enthält
-    ``ev_grid_w``.
+    ``ev_pv_w``, ``ev_battery_w`` und ``ev_grid_w`` sind PV, Akku und Netz in die Autos;
+    ``import_w`` enthält ``ev_grid_w``, ``discharge_w`` enthält ``ev_battery_w``.
     """
 
     soc_start_kwh: float
@@ -74,6 +77,7 @@ class SimStep:
     cost_ct: float
     ev_pv_w: float = 0.0
     ev_grid_w: float = 0.0
+    ev_battery_w: float = 0.0
 
     @property
     def battery_w(self) -> float:
@@ -89,8 +93,10 @@ def eta(roundtrip_pct: float) -> float:
 def step(soc_kwh: float, slot: SimSlot, intent: BatteryIntent, params: BatteryParams) -> SimStep:
     """Rechnet einen Slot mit der gegebenen Absicht aus dem SOC ``soc_kwh``.
 
-    PV deckt zuerst das Haus, dann die Autos (``ev_w``), dann den Akku; der Akku entlädt nur für
-    das Haus, und was den Autos an PV fehlt, kommt aus dem Netz.
+    PV deckt zuerst das Haus, dann die Autos (``ev_w``), dann den Akku. Bei ``EIGENVERBRAUCH``
+    entlädt der Akku zuerst für das Haus, dann für die Autos höchstens ``ev_battery_w`` (und nur
+    den Rest nach PV, innerhalb Entladegrenze und Lieferbarem); was den Autos dann noch fehlt,
+    kommt aus dem Netz.
     """
     room_w = max(0.0, params.hi_kwh - soc_kwh) / params.eta_ch / SLOT_H * 1000
     deliverable_w = max(0.0, soc_kwh - params.lo_kwh) * params.eta_dis / SLOT_H * 1000
@@ -110,6 +116,21 @@ def step(soc_kwh: float, slot: SimSlot, intent: BatteryIntent, params: BatteryPa
         if intent.kind is BatteryIntentKind.EIGENVERBRAUCH:
             discharge_w = min(deficit_w, slot.max_discharge_w, deliverable_w)
         import_w += deficit_w - discharge_w
+
+    ev_battery_w = 0.0
+    if intent.kind is BatteryIntentKind.EIGENVERBRAUCH and slot.ev_battery_w > 0:
+        ev_battery_w = max(
+            0.0,
+            min(
+                slot.ev_battery_w,
+                ev_grid_w,
+                slot.max_discharge_w - discharge_w,
+                deliverable_w - discharge_w,
+            ),
+        )
+        discharge_w += ev_battery_w
+        ev_grid_w -= ev_battery_w
+        import_w -= ev_battery_w
 
     charge_grid_w = 0.0
     if intent.kind is BatteryIntentKind.NETZLADEN:
@@ -138,6 +159,7 @@ def step(soc_kwh: float, slot: SimSlot, intent: BatteryIntent, params: BatteryPa
         cost_ct=cost_ct,
         ev_pv_w=ev_pv_w,
         ev_grid_w=ev_grid_w,
+        ev_battery_w=ev_battery_w,
     )
 
 
@@ -175,15 +197,22 @@ def params_of(inputs: PlanInputs) -> BatteryParams:
     )
 
 
-def sim_slots(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()) -> list[SimSlot]:
+def sim_slots(
+    inputs: PlanInputs,
+    ev_w: Sequence[Mapping[str, float]] = (),
+    ev_battery_w: Sequence[Mapping[str, float]] = (),
+) -> list[SimSlot]:
     """Slots für das Akkumodell; in den ersten ``LIMIT_NOW_SLOTS`` gelten zusätzlich die
     BMS-Grenzen, soweit bekannt.
 
     ``ev_w`` ist die geplante Ladeleistung je Auto und Slot (eine Zuordnung je Slot); jeder Slot
-    bekommt ihre Summe. Leer heißt: keine Autos.
+    bekommt ihre Summe. Leer heißt: keine Autos. ``ev_battery_w`` ist ebenso der Teil davon, den der
+    Akku geben darf; leer heißt: nichts aus dem Akku.
     """
     if ev_w and len(ev_w) != len(inputs.slots):
         raise ValueError("Ladeleistung der Autos muss zu den Slots passen")
+    if ev_battery_w and len(ev_battery_w) != len(inputs.slots):
+        raise ValueError("Akkuanteil der Autos muss zu den Slots passen")
     battery = inputs.battery
     result: list[SimSlot] = []
     for index, slot in enumerate(inputs.slots):
@@ -204,6 +233,7 @@ def sim_slots(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()) -> l
                 max_charge_w=max_charge_w,
                 max_discharge_w=max_discharge_w,
                 ev_w=sum(ev_w[index].values()) if ev_w else 0.0,
+                ev_battery_w=sum(ev_battery_w[index].values()) if ev_battery_w else 0.0,
             )
         )
     return result

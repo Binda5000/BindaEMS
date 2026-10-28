@@ -199,3 +199,84 @@ def test_sim_slots_sum_the_cars_per_slot() -> None:
     assert [s.ev_w for s in sim_slots(inputs)] == [0.0] * 3
     with pytest.raises(ValueError, match="Slots"):
         sim_slots(inputs, [{}])
+
+
+# Akku ins Auto, wenn er übrig ist
+
+
+def battery_car_slot(
+    pv_w: float,
+    load_w: float,
+    ev_w: float,
+    ev_battery_w: float,
+    max_discharge_w: float = 5000.0,
+) -> SimSlot:
+    return SimSlot(
+        T0,
+        pv_w,
+        load_w,
+        20.0,
+        5.0,
+        5000.0,
+        max_discharge_w,
+        ev_w=ev_w,
+        ev_battery_w=ev_battery_w,
+    )
+
+
+def test_step_battery_feeds_planned_car_after_house() -> None:
+    slot = battery_car_slot(pv_w=0, load_w=500, ev_w=7000, ev_battery_w=3000)
+    result = step(20.0, slot, BatteryIntent(), P)
+    assert result.discharge_w == pytest.approx(3500)
+    assert result.ev_battery_w == pytest.approx(3000)
+    assert result.ev_grid_w == pytest.approx(4000)
+    assert result.import_w == pytest.approx(4000)
+    assert result.soc_end_kwh == pytest.approx(20.0 - SLOT_H / 1000 * 3500 / P.eta_dis)
+
+
+def test_step_hold_gives_the_car_nothing() -> None:
+    slot = battery_car_slot(pv_w=0, load_w=500, ev_w=7000, ev_battery_w=3000)
+    result = step(20.0, slot, BatteryIntent(kind=BatteryIntentKind.HALTEN), P)
+    assert result.ev_battery_w == 0 and result.import_w == pytest.approx(7500)
+    grid_charge = step(20.0, slot, grid(2000), P)
+    assert grid_charge.ev_battery_w == 0 and grid_charge.discharge_w == 0
+
+
+def test_step_car_battery_limited_by_discharge_and_reserve() -> None:
+    slot = battery_car_slot(pv_w=0, load_w=4000, ev_w=7000, ev_battery_w=7000, max_discharge_w=5000)
+    assert step(20.0, slot, BatteryIntent(), P).ev_battery_w == pytest.approx(1000)
+    near_reserve = P.lo_kwh + 0.1  # liefert nur noch 0,1 kWh · η_dis über den Slot
+    assert step(near_reserve, slot, BatteryIntent(), P).discharge_w == pytest.approx(
+        0.1 * P.eta_dis / SLOT_H * 1000
+    )
+    assert step(near_reserve, slot, BatteryIntent(), P).ev_battery_w == 0
+
+
+def test_step_pv_first_then_battery_for_the_car() -> None:
+    slot = battery_car_slot(pv_w=2000, load_w=500, ev_w=4000, ev_battery_w=4000)
+    result = step(20.0, slot, BatteryIntent(), P)
+    assert result.ev_pv_w == pytest.approx(1500)
+    assert result.ev_battery_w == pytest.approx(2500)
+    assert result.import_w == pytest.approx(0)
+
+
+def test_step_energy_balance_holds_with_battery_car() -> None:
+    for pv, load, ev in ((0, 1000, 3450), (2000, 500, 4000), (7000, 200, 3450)):
+        s = step(6.0, battery_car_slot(pv, load, ev, ev), BatteryIntent(), P)
+        assert s.ev_pv_w + s.ev_battery_w + s.ev_grid_w == pytest.approx(ev)
+        lhs = pv + s.import_w + s.discharge_w
+        rhs = load + ev + s.export_w + s.charge_pv_w + s.charge_grid_w
+        assert math.isclose(lhs, rhs, abs_tol=1e-9)
+
+
+def test_sim_slots_sum_the_battery_share_per_slot() -> None:
+    inputs = scenario(prices=[20.0] * 3, pv=[0.0] * 3, load=[500.0] * 3)
+    slots = sim_slots(
+        inputs,
+        [{"tesla": 3000.0, "egolf": 2000.0}, {}, {"egolf": 1500.0}],
+        [{"tesla": 1000.0, "egolf": 500.0}, {}, {"egolf": 1500.0}],
+    )
+    assert [s.ev_battery_w for s in slots] == [1500.0, 0.0, 1500.0]
+    assert [s.ev_battery_w for s in sim_slots(inputs)] == [0.0] * 3
+    with pytest.raises(ValueError, match="Akkuanteil"):
+        sim_slots(inputs, [{}] * 3, [{}])
