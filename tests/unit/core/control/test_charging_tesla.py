@@ -1540,6 +1540,40 @@ def test_climate_hold_conditions(cfg, change, expected) -> None:
     assert climate_hold(cfg, **args) is expected
 
 
+def held_in_now(cfg, grid_obs) -> list:
+    """Der Tesla in „Sofort“ am Wall Connector, im Ansteckvorgang schon „geladen“: In Sekunde 0
+    meldet Tessie „Complete“, ab 1 klimatisiert er und lädt selbst mit 16 A. „Geladen“ gilt bis
+    zum Abstecken, Sofort will nicht laden: Die Regel K1 hält ihn, mit dem Ziel des Phasenwächters
+    an der Sicherung. Zurück kommen seine Befehle ab Sekunde 1."""
+    found = run(
+        controller(cfg),
+        cfg,
+        120,
+        make=tesla_inputs,
+        intent=TESLA_NOW,
+        twc_obs=TWC_16_A,
+        tesla_obs=lambda s: (
+            tesla(plugged=True, complete=True) if s < 1 else replace(CLIMATISING, complete=False)
+        ),
+        present=at_tesla(16.0, True),
+        grid_obs=grid_obs,
+    )
+    return [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 1]
+
+
+def test_climate_hold_cut_is_urgent_when_the_fuse_demands_it(cfg) -> None:  # Präzisierung 11
+    # Der Akku liefert 20 A auf L1: Frei sind 33 − (20 + 20 − 16) = 9 A, ohne Überlast am Netz.
+    # Schon die Sicherung allein verlangt weniger als die 16 A, die fließen.
+    held = Command("vehicle.tesla", CURRENT, 5.0, urgent=True, reasons=("mode_now", "climate"))
+    assert held_in_now(cfg, grid(l1=20.0, feed=(20.0, 0.0, 0.0))) == [(1, held)]
+
+
+def test_climate_hold_cut_is_not_urgent_without_fuse_demand(cfg) -> None:
+    # Frei sind 33 − (20 − 16) = 29 A: Nur die Regel senkt auf den Mindeststrom, nicht dringend.
+    held = Command("vehicle.tesla", CURRENT, 5.0, reasons=("mode_now", "climate"))
+    assert held_in_now(cfg, grid(l1=20.0)) == [(1, held)]
+
+
 def test_climate_with_surplus_keeps_the_pv_current(cfg) -> None:
     # Der Überschuss trägt 10 A (der Wall Connector misst 10 A bei 0 W): PV will laden, die Regel
     # greift nicht (Entscheidung 3), der Strom kommt aus dem Überschuss.

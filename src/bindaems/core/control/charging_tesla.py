@@ -41,11 +41,11 @@ Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbin
 - Vorklimatisieren (Regel K1; Plan Vorklimatisieren, Entscheidungen 1 bis 3, 6, 7 und 9): Meldet
   Tessie die Klimatisierung an und lädt das Fahrzeug dabei, obwohl sein Modus nicht laden will,
   gilt das Urteil als „laden“ (``climate_hold``): kein „Laden aus“, weder nach dem Modus noch als
-  Selbststart, und kein eigenes „Laden an“; der Strom ist der Mindeststrom des Ladepunkts, nicht
-  dringend, mit dem Grund ``climate``. Nicht im Modus „Aus“, nicht bei unklarer Zuordnung, nicht
-  ohne erreichbares Tessie und nicht mit ``climate_via_wallbox: false``. Endet die
-  Klimatisierung, beginnen die Zeiten des Selbststarts neu: Lädt das Fahrzeug weiter, stoppt es
-  ``control.tesla_against_s`` danach.
+  Selbststart, und kein eigenes „Laden an“; der Strom ist der Mindeststrom des Ladepunkts mit dem
+  Grund ``climate``, dringend nur, wenn die Sicherung allein es verlangt. Nicht im Modus „Aus“,
+  nicht bei unklarer Zuordnung, nicht ohne erreichbares Tessie und nicht mit
+  ``climate_via_wallbox: false``. Endet die Klimatisierung, beginnen die Zeiten des Selbststarts
+  neu: Lädt das Fahrzeug weiter, stoppt es ``control.tesla_against_s`` danach.
 - Ladelimit (Plan 4b, Entscheidung 11, Präzisierung 9): Mit ``charge_limit_sync`` setzt die
   Regelung in „Geplant“ das Ladelimit eines angesteckten, wachen Tesla auf ``max(Ziel, 50)``,
   höchstens einmal je (Ansteckvorgang, Ziel), nie mit Weckerlaubnis und nie dringend. Eine Änderung

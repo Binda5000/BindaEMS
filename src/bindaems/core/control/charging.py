@@ -82,9 +82,10 @@ Dazu legt die Regelung fest:
   Tessie ein Fahrzeug klimatisierend und ladend, obwohl sein Modus nicht laden will
   (``climate_hold``), gilt das Urteil seiner ``ModeMachine`` in diesem Zyklus als „laden“: Es
   bekommt kein „Laden aus“, weder nach dem Modus noch als Selbststart, und kein eigenes „Laden
-  an“ (auch keinen Weckstart), nur den Mindeststrom des Ladepunkts, nicht dringend, mit dem Grund
-  ``climate`` nach dem Modus. Will der Modus laden, gilt sein Strom. Nicht im Modus „Aus“, nicht
-  bei unklarer Zuordnung, nicht ohne erreichbares Tessie und nicht mit
+  an“ (auch keinen Weckstart), nur den Mindeststrom des Ladepunkts mit dem Grund ``climate`` nach
+  dem Modus, dringend nur, wenn die Sicherung allein es verlangt (``_urgent`` mit dem Höchststrom
+  als Wunsch). Will der Modus laden, gilt sein Strom. Nicht im Modus „Aus“, nicht bei unklarer
+  Zuordnung, nicht ohne erreichbares Tessie und nicht mit
   ``vehicles.<Schlüssel>.climate_via_wallbox: false``; die Überlast geht vor (``EVCS_STOP`` und
   ``ALL_STOP`` stoppen, ab ``MINIMUM`` der Mindeststrom mit ``overload``). Während der Regel und
   einmal an ihrem Ende beginnen die Zeiten des Selbststarts neu: Lädt das Fahrzeug danach weiter,
@@ -1340,8 +1341,11 @@ class ChargeController:
         (``carries``).
 
         Hält eine Halte-Regel das Auto (``hold``), gilt nach der Überlast der Mindeststrom des
-        Ladepunkts mit ihrem Grund nach dem Modus, nie dringend. Ein Start („Laden an“, auch der
-        Weckstart) kommt dann nur für die Gründe in ``_HOLD_STARTS``; ``climate`` duldet nur.
+        Ladepunkts mit ihrem Grund nach dem Modus. Dringend ist die Senkung darauf nur, wenn schon
+        die Sicherung allein unter den Ist-Strom senkte: Ein gehaltenes Auto wünscht nichts
+        (``wanted`` ist 0), ``_urgent`` rechnet darum wie ``_hold`` mit dem Höchststrom als Wunsch.
+        Ein Start („Laden an“, auch der Weckstart) kommt dann nur für die Gründe in
+        ``_HOLD_STARTS``; ``climate`` duldet nur.
         """
         level = situation.level
         stop = level >= OverloadLevel.ALL_STOP or (point.evcs and level >= OverloadLevel.EVCS_STOP)
@@ -1375,16 +1379,15 @@ class ChargeController:
                 off = (*off, SELF_START)
             return self._switch_off(actuator, off, blocked, urgent=situation.mode is Effective.OFF)
         reasons: tuple[str, ...]
+        wish = situation.wanted
         if minimum:
             value, reasons = point.min_a, (*head, OVERLOAD)
-        elif situation.hold is not None:  # eine Halte-Regel: der Mindeststrom, nie dringend
-            value, reasons = point.min_a, (*head, situation.hold)
+        elif situation.hold is not None:  # eine Halte-Regel: der Mindeststrom, ohne Wunsch
+            value, reasons, wish = point.min_a, (*head, situation.hold), point.max_a
         else:
             value = _current_a(point, situation.wanted, situation.limit)
             reasons = (*head, *_why(situation, point.max_a))
-        urgent = minimum or (
-            situation.hold is None and _urgent(situation, point, value, present_a, situation.wanted)
-        )
+        urgent = minimum or _urgent(situation, point, value, present_a, wish)
         held = not urgent and self._reserved(
             point, actuator, inputs, value=value, present_a=present_a, limit=situation.limit
         )
