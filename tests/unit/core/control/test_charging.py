@@ -3127,6 +3127,24 @@ def test_a_guard_between_now_limit_and_wish_names_both_at_the_wall_connector(cfg
     ]
 
 
+def test_a_raised_now_limit_at_the_wall_connector_names_the_limit_while_the_window_follows(
+    cfg,
+) -> None:
+    # Das Limit steigt von 6 auf 12 A: Das Fenster wünscht im Mittel (6 + 12) / 2 = 9 A, unter dem
+    # Limit und ohne Wächter; der Grund bleibt ``now_limit`` (der Wunsch folgt dem Limit).
+    def now_at(limit: int, version: int) -> Intent:
+        entry = VehicleIntent(mode=ChargeMode.NOW, now_max_a=limit)
+        return Intent(version=version, control=True, vehicles={"tesla": entry})
+
+    c = controller(cfg)
+    plugged = {**TESLA_PLUGGED, "evcs_obs": evcs(connected=False)}
+    accept(c, c.step(inputs(cfg, intent=now_at(6, 1), **plugged)))
+    found = c.step(inputs(cfg, s=1, intent=now_at(12, 2), **plugged))
+    assert [x.command for x in found if x.command.actuator == "vehicle.tesla"] == [
+        Command("vehicle.tesla", CURRENT, 9.0, reasons=NOW_LIMIT_REASONS)
+    ]
+
+
 def test_now_limit_from_a_stale_intent_above_config_max_is_clamped(cfg) -> None:
     found = controller(cfg).step(inputs(cfg, intent=egolf_now(32)))
     assert [x.command for x in found] == [
