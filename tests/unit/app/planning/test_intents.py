@@ -19,6 +19,7 @@ from tests.plan_helpers import (
 )
 
 from bindaems.app.planning.battery_model import SLOT_H, eta, params_of
+from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import GRID_CHARGE_MIN_W, _drop_unprofitable, derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
@@ -502,3 +503,77 @@ def test_hold_compares_with_the_house_load_without_the_car() -> None:
     assert [i.kind for i in derive_intents(inputs, result)] == [
         BatteryIntentKind.EIGENVERBRAUCH
     ] * 2
+
+
+# Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist)
+
+
+def _car_battery_inputs(**kwargs: object) -> PlanInputs:
+    car = planned_car(departure_at=at(SCENARIO_START) + 3 * SLOT)
+    values: dict[str, object] = {
+        "prices": [20.0] * 2,
+        "pv": [0.0] * 2,
+        "load": [2000.0] * 2,
+        "soc_pct": 80.0,
+        "vehicles": [car],
+        "car_battery": True,
+    }
+    values.update(kwargs)
+    return scenario(**values)  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def result_with_small_house_discharge_and_car_battery() -> OptimizerResult:
+    """Der Akku gibt dem Haus nur 200 von 2000 W (das wäre ``HALTEN``), dem Auto aber 3000 W."""
+    return flows_result(
+        [
+            flow(
+                bt_h=200,
+                gr_h=1800,
+                ev={"tesla": (0.0, 1000.0)},
+                ev_battery={"tesla": 3000.0},
+                soc_end_kwh=23.2,
+            ),
+            flow(
+                bt_h=200,
+                gr_h=1800,
+                ev={"tesla": (0.0, 3950.0)},
+                ev_battery={"tesla": 50.0},
+                soc_end_kwh=23.1,
+            ),
+        ]
+    )
+
+
+def test_car_battery_slot_is_never_hold(
+    result_with_small_house_discharge_and_car_battery: OptimizerResult,
+) -> None:
+    intents = derive_intents(
+        _car_battery_inputs(), result_with_small_house_discharge_and_car_battery
+    )
+    assert intents[0].kind is BatteryIntentKind.EIGENVERBRAUCH
+    # unter ``HOLD_MIN_W`` aus dem Akku bleibt es bei der Regel für das Haus
+    assert intents[1].kind is BatteryIntentKind.HALTEN
+
+
+def test_resimulation_of_the_intents_counts_the_car_battery() -> None:
+    # Netzladen um 02:00 rechnet sich nur, weil das Auto um 02:15 aus dem Akku lädt (30 ct); das
+    # Haus deckt die PV. Ohne den Akkuanteil entlüde die Nachrechnung nie, und das Netzladen fiele
+    # weg. (Ob der Akku so Netzstrom ins Auto gibt, prüft erst ``check_plan``, Entscheidung 2.)
+    inputs = _car_battery_inputs(
+        prices=[10.0, 30.0, 30.0],
+        pv=[0.0, 500.0, 500.0],
+        load=[500.0] * 3,
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    result = flows_result(
+        [
+            flow(gr_h=500, gr_b=2000),
+            flow(pv_h=500, ev={"tesla": (0.0, 1000.0)}, ev_battery={"tesla": 3000.0}),
+            flow(pv_h=500),
+        ]
+    )
+    intents = derive_intents(inputs, result)
+    assert intents[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000)
+    assert intents[1].kind is BatteryIntentKind.EIGENVERBRAUCH

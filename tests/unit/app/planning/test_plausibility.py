@@ -602,3 +602,118 @@ def test_plausibility_flags_steps_outside_band() -> None:
     assert check_thermal(slots(7, 0, 0), up_k=5.0, down_k=5.0) != []
     assert check_thermal(slots(-7, 0, 0), up_k=5.0, down_k=5.0) != []
     assert check_thermal(slots(6, -6, 0), up_k=5.0, down_k=5.0) == []
+
+
+# Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist)
+
+EIGEN = BatteryIntent()
+HALTEN = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+
+
+def _battery_case(
+    start: str,
+    flows: list[SlotFlows],
+    intents: list[BatteryIntent],
+    *,
+    prices: list[float] | None = None,
+    pv: list[float] | None = None,
+    car_battery: bool = True,
+    grid_charge: bool = False,
+    battery: Any = None,
+) -> tuple[PlanInputs, OptimizerResult, list[BatteryIntent], list[SimStep]]:
+    """Eingaben, Flüsse, Absichten und ihre Nachrechnung mit dem Akkuanteil der Flüsse; Slots
+    ab ``start`` (UTC) mit 500 W Haus, SOC 80 %, ein Auto bis nach dem Horizont. ``soc_end_kwh``
+    der Flüsse zählt wie in ``_check`` ab dem SOC des Laufs weiter."""
+    count = len(flows)
+    vehicle = planned_car(departure_at=at(start) + 8 * SLOT)
+    inputs = scenario(
+        prices=prices or [20.0] * count,
+        pv=pv or [0.0] * count,
+        load=[500.0] * count,
+        soc_pct=80.0,
+        vehicles=[vehicle],
+        car_battery=car_battery,
+        grid_charge=grid_charge,
+        start=start,
+        battery=battery,
+    )
+    soc_kwh = inputs.battery.soc_pct / 100 * inputs.battery.usable_kwh
+    absolute: list[SlotFlows] = []
+    for item in flows:
+        soc_kwh += item.soc_end_kwh
+        absolute.append(replace(item, soc_end_kwh=soc_kwh))
+    result = flows_result(absolute)
+    ev_w = [
+        {k: pv + gr + f.ev_battery.get(k, 0.0) for k, (pv, gr) in f.ev.items()} for f in absolute
+    ]
+    ev_battery_w = [dict(f.ev_battery) for f in absolute]
+    steps = simulate(
+        soc_kwh - sum(f.soc_end_kwh for f in flows),
+        sim_slots(inputs, ev_w, ev_battery_w),
+        intents,
+        params_of(inputs),
+    )
+    return inputs, result, intents, steps
+
+
+def _car_from_battery(**flows: float) -> SlotFlows:
+    """Das Auto lädt 4 kW, 3 kW davon aus dem Akku; der Akku deckt auch das Haus."""
+    values = {"bt_h": 500.0, **flows}
+    return flow(ev={"tesla": (0.0, 1000.0)}, ev_battery={"tesla": 3000.0}, **values)
+
+
+def _case(case: str) -> tuple[PlanInputs, OptimizerResult, list[BatteryIntent], list[SimStep]]:
+    """Ein Slot um 22:00 Ortszeit (bzw. 12:00 mit PV), in dem das Auto aus dem Akku lädt."""
+    late = "2026-10-16T20:00:00+00:00"  # 22:00 Ortszeit
+    if case == "clean":
+        return _battery_case(late, [_car_from_battery()], [EIGEN])
+    if case == "switch_off":
+        return _battery_case(late, [_car_from_battery()], [EIGEN], car_battery=False)
+    if case == "hold":
+        return _battery_case(late, [_car_from_battery()], [HALTEN])
+    if case == "grid_in_battery":
+        # Netzladen um 21:45, um 22:00 ist der Akku noch nicht leer
+        return _battery_case(
+            "2026-10-16T19:45:00+00:00",
+            [flow(gr_h=500, gr_b=2000), _car_from_battery()],
+            [BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000), EIGEN],
+            prices=[10.0, 30.0],
+            grid_charge=True,
+        )
+    if case == "exporting":
+        exporting = flow(
+            pv_h=500, pv_x=7500, ev={"tesla": (0.0, 1000.0)}, ev_battery={"tesla": 3000.0}
+        )
+        return _battery_case("2026-10-16T10:00:00+00:00", [exporting], [EIGEN], pv=[8000.0])
+    raise ValueError(case)
+
+
+@pytest.mark.parametrize(
+    ("case", "text"),
+    [
+        ("switch_off", "Akku ins Auto um 22:00, obwohl ausgeschaltet"),
+        ("hold", "Akku ins Auto um 22:00 bei Halten oder Netzladen"),
+        ("grid_in_battery", "Akku ins Auto um 22:00, solange Netzstrom im Akku ist"),
+    ],
+)
+def test_check_plan_reports_wrong_car_battery(case: str, text: str) -> None:
+    assert text in check_plan(*_case(case))
+
+
+def test_car_battery_while_exporting_is_implausible() -> None:
+    assert "Akku ins Auto um 12:00, während eingespeist wird" in check_plan(*_case("exporting"))
+
+
+def test_car_battery_in_eigenverbrauch_with_the_switch_is_plausible() -> None:
+    assert check_plan(*_case("clean")) == []
+
+
+def test_car_limits_and_discharge_limit_count_the_battery_share() -> None:
+    # 1 kW Netz plus 3 kW Akku liegt in den Grenzen des Autos (3450 bis 11040 W)
+    assert check_plan(*_case("clean")) == []
+    # Haus 500 W plus Auto 5 kW aus dem Akku liegt über der Entladegrenze (5 kW)
+    over = flow(bt_h=500, ev={"tesla": (0.0, 0.0)}, ev_battery={"tesla": 5000.0})
+    findings = check_plan(
+        *_battery_case("2026-10-16T20:00:00+00:00", [over], [EIGEN], battery=small_battery())
+    )
+    assert findings == ["Leistung über der Grenze um 22:00"]

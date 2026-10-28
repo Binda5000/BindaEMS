@@ -543,3 +543,113 @@ def test_baseline_carries_the_same_cars() -> None:
 def test_power_below_one_watt_is_not_in_the_plan() -> None:
     plan = _car_plan([{"tesla": 0.4}] + [{}] * 7, shortfall={"tesla": 0.0})
     assert plan.slots[0].ev_w == {} and plan.vehicles[0].finish_at is None
+
+
+# Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist)
+
+
+def _battery_inputs(*, car_battery: bool = True, **kwargs: Any) -> Any:
+    """Vier Slots ohne PV (500 W Haus, 20 ct), SOC 80 %, ein Auto bis nach dem Horizont."""
+    vehicle = planned_car(departure_at=at(SCENARIO_START) + 8 * SLOT)
+    values: dict[str, Any] = {
+        "prices": [20.0] * 4,
+        "pv": [0.0] * 4,
+        "load": [500.0] * 4,
+        "soc_pct": 80.0,
+        "vehicles": [vehicle],
+        "car_battery": car_battery,
+    }
+    values.update(kwargs)
+    return scenario(**values)
+
+
+INPUTS = _battery_inputs()
+
+
+def test_build_plan_fills_ev_battery_and_threshold_counts_it() -> None:
+    plan = build_plan(
+        INPUTS,
+        [EV] * 4,
+        source="optimizer",
+        solver_status="optimal",
+        ev_w=[{"tesla": 4000}] * 4,
+        ev_battery_w=[{"tesla": 3000}] * 4,
+    )
+    assert plan.slots[0].ev_battery_w == {"tesla": 3000}
+    without = build_plan(
+        INPUTS, [EV] * 4, source="optimizer", solver_status="optimal", ev_w=[{"tesla": 4000}] * 4
+    )
+    assert plan.slots[0].support_soc_pct > without.slots[0].support_soc_pct
+    # Die Nachrechnung gibt dem Auto 3 kW aus dem Akku; nur 1 kW kommt aus dem Netz
+    assert plan.slots[0].discharge_w == pytest.approx(3500.0)
+    assert plan.slots[0].import_w == pytest.approx(1000.0)
+    assert without.slots[0].ev_battery_w == {}
+
+
+def test_baseline_cost_stays_without_the_car_battery() -> None:
+    # Entscheidung 10: „Victron allein“ lädt die Autos aus PV und Netz
+    common: dict[str, Any] = {"source": "optimizer", "solver_status": "optimal"}
+    plan = build_plan(
+        INPUTS, [EV] * 4, ev_w=[{"tesla": 4000}] * 4, ev_battery_w=[{"tesla": 3000}] * 4, **common
+    )
+    without = build_plan(INPUTS, [EV] * 4, ev_w=[{"tesla": 4000}] * 4, **common)
+    assert plan.baseline_cost_ct == pytest.approx(without.baseline_cost_ct)
+    assert plan.expected_cost_ct < without.expected_cost_ct
+
+
+def test_now_battery_only_in_an_optimizer_plan_with_the_switch() -> None:
+    # 20 ct − Verschleiß − Marge = 16 ct ≥ Restwert 0: übriger Akku in jedem Eigenverbrauch-Slot
+    intents = [EV, EV, HOLD, EV]
+    plan = build_plan(INPUTS, intents, source="optimizer", solver_status="optimal")
+    assert [s.now_battery for s in plan.slots] == [True, True, False, True]
+    fallback = build_plan(INPUTS, intents, source="fallback", solver_status="error")
+    assert not any(s.now_battery for s in fallback.slots)
+    off = build_plan(
+        _battery_inputs(car_battery=False), intents, source="optimizer", solver_status="optimal"
+    )
+    assert not any(s.now_battery for s in off.slots)
+
+
+def test_battery_share_below_one_watt_is_not_in_the_plan() -> None:
+    plan = build_plan(
+        INPUTS,
+        [EV] * 4,
+        source="optimizer",
+        solver_status="optimal",
+        ev_w=[{"tesla": 4000}] * 4,
+        ev_battery_w=[{"tesla": 0.4}] * 4,
+    )
+    assert plan.slots[0].ev_battery_w == {}
+
+
+def test_budget_without_expected_cars_keeps_the_battery_share_of_the_plugged_car() -> None:
+    # Ruling F-1: Das Budget rechnet ohne das erwartete Auto nach, aber mit dem Akkuanteil des
+    # angesteckten; der Akku deckt es ganz, das Budget bleibt bei der bisherigen Spitze
+    plugged = planned_car(departure_at=at(SCENARIO_START) + 8 * SLOT)
+    expected = planned_car(
+        key="egolf",
+        name="e-Golf",
+        wallbox="evcs",
+        departure_at=at(SCENARIO_START) + 8 * SLOT,
+        expected=True,
+        arrival_at=at(SCENARIO_START),
+    )
+    common: dict[str, Any] = {
+        "prices": [20.0] * 4,
+        "pv": [0.0] * 4,
+        "load": [500.0] * 4,
+        "soc_pct": 80.0,
+        "car_battery": True,
+        "peak_months": [month("2026-10", 2.0)],
+    }
+    ev_w = [{"tesla": 4000.0, "egolf": 1500.0}] * 4
+    ev_battery_w = [{"tesla": 4000.0}] * 4
+    plan = build_plan(
+        scenario(**common, vehicles=[plugged, expected]),
+        [EV] * 4,
+        source="optimizer",
+        solver_status="optimal",
+        ev_w=ev_w,
+        ev_battery_w=ev_battery_w,
+    )
+    assert [s.budget_kw for s in plan.slots] == [2.0] * 4

@@ -383,16 +383,25 @@ def pv_arc(start: str, slots: int, peak_w: float) -> list[float]:
     return values
 
 
-def flow(ev: Mapping[str, tuple[float, float]] | None = None, **flows: float) -> SlotFlows:
+def flow(
+    ev: Mapping[str, tuple[float, float]] | None = None,
+    ev_battery: Mapping[str, float] | None = None,
+    **flows: float,
+) -> SlotFlows:
     """Flüsse eines Slots in W; fehlende sind 0. ``soc_end_kwh`` (kWh) ist, wenn nicht
     angegeben, die Energie, die der Akku in diesem Slot netto aufnimmt (ohne Verluste). ``ev``
-    ist ``(pv_ev, gr_ev)`` je geplantem Auto."""
+    ist ``(pv_ev, gr_ev)`` je geplantem Auto, ``ev_battery`` der Akku ins Auto (``bt_ev``)."""
     values = {"pv_h": 0.0, "pv_b": 0.0, "pv_x": 0.0, "gr_h": 0.0, "gr_b": 0.0, "bt_h": 0.0}
     soc_end_kwh = flows.pop("soc_end_kwh", None)
     values.update(flows)
+    battery = dict(ev_battery or {})
     if soc_end_kwh is None:
-        soc_end_kwh = SLOT_H / 1000 * (values["pv_b"] + values["gr_b"] - values["bt_h"])
-    return SlotFlows(soc_end_kwh=soc_end_kwh, ev=dict(ev or {}), **values)
+        soc_end_kwh = (
+            SLOT_H
+            / 1000
+            * (values["pv_b"] + values["gr_b"] - values["bt_h"] - sum(battery.values()))
+        )
+    return SlotFlows(soc_end_kwh=soc_end_kwh, ev=dict(ev or {}), ev_battery=battery, **values)
 
 
 def flows_result(

@@ -14,6 +14,8 @@ import pytest
 from structlog.testing import capture_logs
 from tests.app_helpers import ingest, price_row
 from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
     blocking_solver,
     flows_of,
     live_signals,
@@ -535,6 +537,47 @@ def test_plan_once_budget_is_not_raised_by_an_expected_car():
     assert budgets(with_car) == without
     raised, _ = budgets(scenario(**base, vehicles=[plugged]))
     assert all(value is not None and value > 2.0 for value in raised)
+
+
+# --- Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist) ----------------------------------
+
+
+def _car_battery_inputs() -> PlanInputs:
+    """Acht Slots zu 30 ct ohne PV, voller Akku, ein Auto braucht 5 kWh bis 04:00 Ortszeit; Akku
+    ins Auto ist an. Akkustrom (4 ct Verschleiß und Marge) ist billiger als Netzstrom."""
+    car = planned_car(departure_at=at(SCENARIO_START) + 8 * SLOT, need_kwh=5.0)
+    return scenario(
+        prices=[30.0] * 8,
+        pv=[0.0] * 8,
+        load=[500.0] * 8,
+        soc_pct=90.0,
+        vehicles=[car],
+        car_battery=True,
+    )
+
+
+INPUTS_WITH_CAR_BATTERY_ON = _car_battery_inputs()
+
+
+def _failed_result() -> OptimizerResult:
+    return failed("error", "kaputt")
+
+
+def test_plan_once_carries_the_car_battery_of_the_optimizer():
+    inputs = INPUTS_WITH_CAR_BATTERY_ON
+    plan = plan_once(inputs, solve(inputs))
+    assert plan.source == "optimizer", plan.issues
+    from_battery = sum(w for s in plan.slots for w in s.ev_battery_w.values()) * 0.25 / 1000
+    assert from_battery == pytest.approx(5.0)
+    assert all(s.now_battery for s in plan.slots)
+    # Die Nachrechnung gibt dem Auto die Energie aus dem Akku: Bezug nur fürs Haus bleibt 0
+    assert all(s.import_w == pytest.approx(0.0, abs=1e-6) for s in plan.slots)
+
+
+def test_fallback_plan_has_no_car_battery() -> None:
+    plan = plan_once(INPUTS_WITH_CAR_BATTERY_ON, _failed_result())
+    assert plan.source == "fallback"
+    assert all(not s.ev_battery_w and not s.now_battery for s in plan.slots)
 
 
 # --- Auslöser und Schleife (Task 10) ---------------------------------------------------------

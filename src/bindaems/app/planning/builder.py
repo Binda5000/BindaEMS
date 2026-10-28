@@ -5,6 +5,11 @@ und 11), Kosten, Vergleichskosten „Victron allein“ und die Gründe der Erkl�
 
 Mit geplanten Autos (Plan 4b, Präzisierung 14) bekommt jeder Slot die Ladeleistung je Auto
 (``PlanSlot.ev_w``) und der Plan eine Zusammenfassung je Auto (``Plan.vehicles``).
+
+Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist): Der Akkuanteil je Auto
+(``PlanSlot.ev_battery_w``) geht in die Nachrechnung und damit in Kosten, Budget und Plan-Schwelle,
+nicht in die Vergleichskosten (Entscheidung 10). Ein Plan des Optimierers sagt je Slot, ob Autos in
+Sofort übrigen Akku bekommen (``PlanSlot.now_battery``, ``now_battery_flags``); der Ersatzplan nie.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from bindaems.app.planning.battery_model import (
 )
 from bindaems.app.planning.explain import reasons_for
 from bindaems.app.planning.inputs import PlanInputs
+from bindaems.app.planning.spare import now_battery_flags
 from bindaems.app.planning.vehicles import EV_ON_W, KWH_EPS, cars_charging
 from bindaems.shared.plan import (
     PLAN_VALID,
@@ -44,16 +50,17 @@ def _resimulate(
     inputs: PlanInputs,
     intents: Sequence[BatteryIntent],
     ev_w: Sequence[Mapping[str, float]] = (),
+    ev_battery_w: Sequence[Mapping[str, float]] = (),
 ) -> list[SimStep]:
     params = params_of(inputs)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
-    return simulate(soc0_kwh, sim_slots(inputs, ev_w), intents, params)
+    return simulate(soc0_kwh, sim_slots(inputs, ev_w, ev_battery_w), intents, params)
 
 
 def baseline_cost_ct(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()) -> float:
     """Energiekosten in ct, wenn der Akku in allen Slots ``EIGENVERBRAUCH`` fährt („Victron
-    allein“), ab demselben SOC. Die Autos laden darin wie im Plan (``ev_w``): Der Vergleich
-    zeigt, was der Plan des Akkus spart."""
+    allein“), ab demselben SOC. Die Autos laden darin wie im Plan (``ev_w``), aber nur aus PV und
+    Netz, nie aus dem Akku (Entscheidung 10): Der Vergleich zeigt, was der Plan des Akkus spart."""
     steps = _resimulate(inputs, [BatteryIntent() for _ in inputs.slots], ev_w)
     return sum(item.cost_ct for item in steps)
 
@@ -181,17 +188,22 @@ def _guard_steps(
     inputs: PlanInputs,
     intents: Sequence[BatteryIntent],
     powers: Sequence[Mapping[str, float]],
+    battery_powers: Sequence[Mapping[str, float]],
     steps: list[SimStep],
 ) -> list[SimStep]:
     """Nachrechnung für das Budget des Wächters (Ruling F-1): ohne die Ladeleistung erwarteter
-    Autos (Plan 5b). Das Budget geht an den core, und ein Auto, das nur die Anwesenheitsprognose
-    kennt, darf es vor seiner Ankunft nicht anheben; steckt es an, rechnet der nächste Plan es als
-    angestecktes Auto mit. Ohne erwartete Autos ist es die Nachrechnung des Plans."""
+    Autos (Plan 5b), mit dem Akkuanteil der übrigen. Das Budget geht an den core, und ein Auto,
+    das nur die Anwesenheitsprognose kennt, darf es vor seiner Ankunft nicht anheben; steckt es
+    an, rechnet der nächste Plan es als angestecktes Auto mit. Ohne erwartete Autos ist es die
+    Nachrechnung des Plans."""
     expected = {car.key for car in inputs.vehicles if car.expected}
     if not expected:
         return steps
-    known = [{key: w for key, w in slot.items() if key not in expected} for slot in powers]
-    return _resimulate(inputs, intents, known)
+
+    def known(slots: Sequence[Mapping[str, float]]) -> list[dict[str, float]]:
+        return [{key: w for key, w in slot.items() if key not in expected} for slot in slots]
+
+    return _resimulate(inputs, intents, known(powers), known(battery_powers))
 
 
 def support_thresholds(
@@ -232,30 +244,39 @@ def build_plan(
     optimizer_peaks_kw: Mapping[str, float] | None = None,
     ev_w: Sequence[Mapping[str, float]] = (),
     shortfall_kwh: Mapping[str, float] | None = None,
+    ev_battery_w: Sequence[Mapping[str, float]] = (),
 ) -> Plan:
     """Plan aus den Absichten: Nachrechnung, Budget, Gründe, Kosten und Vergleichskosten.
 
-    ``ev_w`` ist die Ladeleistung je geplantem Auto und Slot (W), ``shortfall_kwh`` die
-    Fehlmenge je Auto aus dem Optimierer (``vehicle_summary``); die Nachrechnung, das Budget und
-    die Vergleichskosten rechnen die Autos mit. Das Budget rechnet ohne die Leistung erwarteter
-    Autos (Ruling F-1, ``_guard_steps``).
+    ``ev_w`` ist die Ladeleistung je geplantem Auto und Slot (W), ``ev_battery_w`` der Teil davon
+    aus dem Akku (Akku ins Auto), ``shortfall_kwh`` die Fehlmenge je Auto aus dem Optimierer
+    (``vehicle_summary``); die Nachrechnung, das Budget und die Vergleichskosten rechnen die Autos
+    mit, den Akkuanteil nur die Nachrechnung und das Budget (Entscheidung 10). Das Budget rechnet
+    ohne die Leistung erwarteter Autos (Ruling F-1, ``_guard_steps``). Nur ein Plan des
+    Optimierers (``source``) erlaubt übrigen Akku für Sofort (``now_battery_flags``).
     """
     if len(intents) != len(inputs.slots):
         raise ValueError("Absichten und Slots müssen gleich viele sein")
     params = params_of(inputs)
     powers = _car_powers(inputs, ev_w)
-    steps = _resimulate(inputs, intents, powers)
+    battery_powers = _car_powers(inputs, ev_battery_w)
+    steps = _resimulate(inputs, intents, powers, battery_powers)
+    now_battery = (
+        now_battery_flags(inputs, intents, steps)
+        if source == "optimizer"
+        else [False] * len(intents)
+    )
     budgets = _budgets(
         inputs,
-        _guard_steps(inputs, intents, powers, steps),
+        _guard_steps(inputs, intents, powers, battery_powers, steps),
         source=source,
         optimizer_peaks_kw=optimizer_peaks_kw,
     )
     vehicles = vehicle_summary(inputs, powers, shortfall_kwh)
 
     drafts: list[PlanSlot] = []
-    for slot, intent, item, budget, cars in zip(
-        inputs.slots, intents, steps, budgets, powers, strict=True
+    for slot, intent, item, budget, cars, from_battery, now in zip(
+        inputs.slots, intents, steps, budgets, powers, battery_powers, now_battery, strict=True
     ):
         drafts.append(
             PlanSlot(
@@ -276,6 +297,8 @@ def build_plan(
                 cost_ct=item.cost_ct,
                 budget_kw=budget,
                 ev_w=cars,
+                ev_battery_w=from_battery,
+                now_battery=now,
                 reasons=[],
             )
         )

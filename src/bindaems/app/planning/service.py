@@ -52,7 +52,7 @@ from bindaems.app.planning.inputs import (
     car_floor_kw,
 )
 from bindaems.app.planning.intents import derive_intents
-from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w
+from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w, ev_power_w
 from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
@@ -134,7 +134,8 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
     Mit einer Lösung: Absichten, Nachrechnung und Plausibilität; ist der Plan plausibel, gilt
     er. Sonst der Ersatzplan mit dem Grund aus „Texte“, bei einem unplausiblen Plan dem ersten
     Befund und allen Befunden als Auffälligkeiten. Die geplanten Autos laden im Plan des
-    Optimierers mit seiner Ladeleistung und Fehlmenge, im Ersatzplan nach ``fallback_vehicles``.
+    Optimierers mit seiner Ladeleistung, ihrem Akkuanteil (Akku ins Auto) und seiner Fehlmenge,
+    im Ersatzplan nach ``fallback_vehicles`` und nie aus dem Akku (Entscheidung 8).
     Der Ersatzplan bleibt ohne erwartete Autos (Plan 5b, Entscheidung 11): Er rechnet mit den
     Eingangsdaten ohne sie.
     """
@@ -142,10 +143,12 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
     findings: list[str] = []
     if reason is None:
         ev_w = ev_power_w(result)
+        ev_battery_w = ev_battery_power_w(result)
         intents = derive_intents(inputs, result)
         params = params_of(inputs)
         soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
-        steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), intents, params)
+        steps = simulate(soc0_kwh, sim_slots(inputs, ev_w, ev_battery_w), intents, params)
+        # ``check_plan`` liest den Akkuanteil aus ``result``; ``steps`` rechnen ihn mit
         findings = check_plan(inputs, result, intents, steps)
         if not findings:
             return build_plan(
@@ -156,6 +159,7 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
                 optimizer_peaks_kw=result.peaks_kw,
                 ev_w=ev_w,
                 shortfall_kwh=result.shortfall_kwh,
+                ev_battery_w=ev_battery_w,
             )
         reason = f"Plan unplausibel: {findings[0]}"
     plugged = [car for car in inputs.vehicles if not car.expected]

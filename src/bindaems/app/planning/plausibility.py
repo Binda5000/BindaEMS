@@ -9,6 +9,11 @@ die Ladeleistung 0 oder zwischen ``min_w`` und ``max_w`` (``BALANCE_TOL_W`` Tole
 ersten Slot ab der Abfahrt lädt es nicht. Die Befunde gelten je Auto. Ein erwartetes Auto
 (Plan 5b, Präzisierung 10) lädt auch vor dem ersten Slot ab seiner Ankunft nicht.
 
+Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist): Die Leistung eines Autos und die
+Entladegrenze zählen den Akkuanteil ``bt_ev`` mit. Gibt der Akku einem Auto mehr als
+``BALANCE_TOL_W``, muss der Schalter an sein, der Slot ``EIGENVERBRAUCH`` sein, keine Netzenergie im
+Akku sein können (Entscheidung 2, ``grid_in_battery``) und nichts eingespeist werden.
+
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
@@ -22,7 +27,7 @@ from typing import Final, Literal
 
 from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.optimizer import OptimizerResult
+from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w
 from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import charge_window
 from bindaems.shared.plan import MAX_THERMAL_STEPS, BatteryIntent, BatteryIntentKind, PlanSlot
@@ -52,6 +57,24 @@ def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> i
         if steps[later].soc_end_kwh <= lo_kwh + EMPTY_TOL_KWH:
             return later + 1
     return len(steps)
+
+
+def grid_in_battery(
+    intents: Sequence[BatteryIntent], steps: Sequence[SimStep], lo_kwh: float
+) -> list[bool]:
+    """Je Slot, ob nach einem Netzladen Netzenergie im Akku sein kann (Entscheidung 2).
+
+    Das gilt für Slot ``t``, wenn es einen ``NETZLADEN``-Slot ``s ≤ t`` gibt, dessen Fenster
+    ``charged_window_end(steps, s, lo_kwh)`` über ``t`` reicht: bis der Akku wieder leer ist,
+    dieselbe Größe wie bei Regel R1.
+    """
+    result = [False] * len(steps)
+    for index, intent in enumerate(intents):
+        if intent.kind is not BatteryIntentKind.NETZLADEN:
+            continue
+        for later in range(index, charged_window_end(steps, index, lo_kwh)):
+            result[later] = True
+    return result
 
 
 def export_while_charged_kwh(steps: Sequence[SimStep], index: int, lo_kwh: float) -> float:
@@ -160,11 +183,13 @@ def check_plan(
 ) -> list[str]:
     """Befunde in der Reihenfolge der Slots (je Art der erste); leer, wenn der Plan plausibel ist.
 
-    ``steps`` ist die Nachrechnung der ``intents`` mit dem Akkumodell. Flüsse, Schritte und Slots
-    müssen gleich viele sein, sonst ``ValueError``.
+    ``steps`` ist die Nachrechnung der ``intents`` mit dem Akkumodell, mit der Ladeleistung der
+    Autos und ihrem Akkuanteil aus ``result``. Flüsse, Schritte und Slots müssen gleich viele sein,
+    sonst ``ValueError``.
     """
     params = params_of(inputs)
     slots = sim_slots(inputs)
+    from_battery = ev_battery_power_w(result)
     found: dict[str, tuple[int, str]] = {}
 
     def report(kind: str, index: int, text: str) -> None:
@@ -181,10 +206,11 @@ def check_plan(
         if abs(pv_w - inp.pv_w) > BALANCE_TOL_W or abs(load_w - inp.load_w) > BALANCE_TOL_W:
             report("balance", index, f"Bilanz verletzt um {at}")
         charge_w = flows.pv_b + flows.gr_b
+        discharge_w = flows.bt_h + sum(flows.ev_battery.values())
         if (
             charge_w > slot.max_charge_w + BALANCE_TOL_W
-            or flows.bt_h > slot.max_discharge_w + BALANCE_TOL_W
-            or (charge_w > BALANCE_TOL_W and flows.bt_h > BALANCE_TOL_W)
+            or discharge_w > slot.max_discharge_w + BALANCE_TOL_W
+            or (charge_w > BALANCE_TOL_W and discharge_w > BALANCE_TOL_W)
         ):
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(flows.soc_end_kwh):
@@ -194,7 +220,7 @@ def check_plan(
         window = charge_window(car, inputs.slots)
         for index, flows in enumerate(result.flows):
             pv, grid = flows.ev.get(car.key, (0.0, 0.0))
-            power_w = pv + grid
+            power_w = pv + grid + flows.ev_battery.get(car.key, 0.0)
             if power_w <= BALANCE_TOL_W:
                 continue
             if index >= window.stop:
@@ -239,6 +265,21 @@ def check_plan(
             )
         if not grid_charge_pays(inputs, steps, index):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
+
+    car_switch = inputs.planning.car_battery_allowed
+    grid_inside = grid_in_battery(intents, steps, params.lo_kwh)
+    for index, (flows, item, intent) in enumerate(zip(result.flows, steps, intents, strict=True)):
+        if sum(from_battery[index].values()) <= BALANCE_TOL_W:
+            continue
+        at = _local_time(inputs, index)
+        if not car_switch:
+            report("car_switch", index, f"Akku ins Auto um {at}, obwohl ausgeschaltet")
+        if intent.kind is not BatteryIntentKind.EIGENVERBRAUCH:
+            report("car_hold", index, f"Akku ins Auto um {at} bei Halten oder Netzladen")
+        if grid_inside[index]:
+            report("car_grid", index, f"Akku ins Auto um {at}, solange Netzstrom im Akku ist")
+        if flows.pv_x > BALANCE_TOL_W or item.export_w > BALANCE_TOL_W:
+            report("car_export", index, f"Akku ins Auto um {at}, während eingespeist wird")
 
     return [text for _, text in sorted(found.values(), key=lambda entry: entry[0])]
 

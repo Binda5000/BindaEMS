@@ -61,6 +61,7 @@ def horizons(draw: st.DrawFn) -> dict[str, object]:
         "load": [loads_h[h] for h in hour_of],
         "soc_pct": draw(st.floats(20.0, 90.0)),
         "grid_charge": draw(st.booleans()),
+        "car_battery": draw(st.booleans()),
         "feed_in": feed_in,
         "start": first.isoformat(),
         "end_value_ct": end_value_ct,
