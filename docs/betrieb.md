@@ -2584,10 +2584,14 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
     Mindeststrom trägt und keine Start-Sperre von 15 min gilt (wie jeder Start). Ein „geladenes“ Auto
     nimmt weiter nicht am PV-Überschuss teil; was es zieht, zählt als Last.
   - **„Vorklimatisieren“** (`climate`): Beim Tesla siehe „Tesla“ unten.
-  - Die Überlast geht vor: Stoppt der Phasenwächter oder die Überlast die EVCS (`EVCS_STOP`,
-    `ALL_STOP`), bleibt sie aus; nach einem solchen Stopp gilt die Mindestpause `control.min_off_s`
-    auch für ein Auto in dieser Regel, wie nach jedem Überlast-Stopp. Ab der Stufe `MINIMUM` bleibt es
-    beim Mindeststrom.
+  - Überlast und 15-min-Wächter gehen beiden Regeln vor: Stoppt der Phasenwächter oder die Überlast
+    das Laden (`EVCS_STOP`, `ALL_STOP`), bleibt es aus; nach einem solchen Stopp gilt die Mindestpause
+    `control.min_off_s` auch für ein Auto in einer der Regeln, wie nach jedem Überlast-Stopp: Ein
+    Moduswechsel, das Abstecken (auch ein neuer Ansteckvorgang, den die Regelung erst danach sieht)
+    und eine Pause der Regelung heben sie auf. Ab der Stufe `MINIMUM` bleibt es beim Mindeststrom.
+    Trägt die Grenze des 15-min-Wächters den Mindeststrom nicht, ruhen beide Regeln: Die EVCS eines
+    „geladenen“ Autos geht aus, und ein klimatisierender Tesla stoppt wie ohne die Regel (Selbststart).
+    Trägt die Grenze ihn wieder, gelten die Regeln wieder.
   - Wird die Senkung auf den Mindeststrom nötig, ist sie nur dringend, wenn die Sicherung allein eine
     Senkung unter den Ist-Strom verlangte; sonst geht sie den normalen Weg.
   - Im Entscheidungslog steht der Grund nach dem Grund des Modus, etwa „e-Golf (Sofort, Geladen, bleibt
@@ -2602,8 +2606,8 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   Auto, das schon lädt, geht auf den Mindeststrom.
 - Einen **Ziel-SOC** gibt es nur im Modus „Geplant“ (unten). In den anderen Modi stoppen die Autos an
   ihrem eigenen Ladelimit, der e-Golf lädt bis voll.
-  Meldet ein Auto „geladen“, startet die Regelung es erst nach dem Abstecken wieder, oder wenn Tessie
-  danach ein anderes Ladelimit meldet (etwa in der Tesla-App angehoben): „Geladen“ gilt je
+  Meldet ein Auto „geladen“, startet die Regelung es erst nach dem Abstecken wieder (Ausnahme:
+  „Geladen, bleibt an“ an der EVCS, oben), oder wenn Tessie danach ein anderes Ladelimit meldet (etwa in der Tesla-App angehoben): „Geladen“ gilt je
   Ansteckvorgang und Ladelimit, für das Limit, bei dem es gemeldet wurde, auch wenn danach noch ein
   alter Bericht kommt. Das gilt seit Plan 4b in jedem Modus.
 - **Abgesteckt:** Die Regelung will „Laden aus“; die EVCS bekommt das einmal. Bei einem **neuen
@@ -3309,14 +3313,17 @@ den ersten Tagen:
   und lädt, ist die Zuordnung klar, der Ladepunkt geregelt und der Modus nicht „Aus“, und will der
   Modus nicht laden (etwa PV-Überschuss ohne Überschuss), **stoppt die Regelung ihn nicht**: Es gibt
   kein „Laden aus“ (weder nach dem Modus noch als Selbststart) und kein eigenes „Laden an“, kein
-  Wecken, und der Strom fordert den Mindeststrom des Ladepunkts (`min_a`, 5 A). Den Rest der
+  Wecken, und der Strom fordert den Mindeststrom des Ladepunkts (`min_a`, Standard 5 A). Den Rest der
   Klimaleistung nimmt der Tesla aus dem Akku, ein Überschuss geht in den Akku des Autos. Will der
   Modus laden, gilt sein Strom wie bisher. Lädt der Tesla bei Klimatisierung nicht von selbst (etwa
   „Complete“), ändert sich nichts. **Nach dem Ende der Klimatisierung** beginnen die Zeit und der
   letzte Neuversuch des Selbststarts neu: Lädt der Tesla weiter, stoppt ihn der Selbststart nach
   `control.tesla_against_s` (120 s) plus der Abfrage von Tessie (bis zu 60 s), ohne die 600 s eines
-  Neuversuchs davor. Im Log steht „Vorklimatisieren“ an dem Befehl, der den Strom auf den
-  Mindeststrom setzt; solange nichts zu senden ist, erscheint nichts. Szenario: `tesla-vorklimatisieren`.
+  Neuversuchs davor. Überlast und 15-min-Wächter gehen vor (Abschnitt „Lademodi“, „Vorklimatisieren
+  über die Wallbox“): In der Mindestpause nach einem Überlast-Stopp und unter einer Grenze des
+  15-min-Wächters, die den Mindeststrom nicht trägt, stoppt ihn der Selbststart wie ohne die Regel.
+  Im Log steht „Vorklimatisieren“ an dem Befehl, der den Strom auf den Mindeststrom setzt; solange
+  nichts zu senden ist, erscheint nichts. Szenario: `tesla-vorklimatisieren`.
 - **Ansteckerkennung** (seit Plan 2d): Tessie fragt ein Auto alle 30 s ab, solange es lädt, alle 60 s,
   solange es angesteckt oder zu Hause ist, sonst alle 600 s. Erscheint an einer Wallbox ein
   Fahrzeug, fragt der core sofort nach, frühestens 10 s nach der letzten Abfrage. Ein Tesla, der beim
