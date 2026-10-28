@@ -809,3 +809,24 @@ def test_battery_share_does_not_count_for_rule_r2(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(runner, "plan_once", greedy)
     result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
     assert result.r2_violations == 0
+
+
+def test_replanning_carries_grid_energy_in_the_battery(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fix-Welle F2: Lädt der erste Plan im ersten Slot aus dem Netz, rechnet der nächste damit,
+    # dass zu Beginn Netzenergie im Akku sein kann, wie der Planungsdienst.
+    inputs = _record_inputs(monkeypatch)
+    original = runner.plan_once
+    calls: list[int] = []
+
+    def first_charges(plan_inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(plan_inputs, result)
+        calls.append(1)
+        if len(calls) > 1:
+            return plan
+        intent = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000.0)
+        slots = [plan.slots[0].model_copy(update={"intent": intent}), *plan.slots[1:]]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", first_charges)
+    run_scenario(synthetic("winter-spread", date(2027, 1, 11), 1), step_slots=4)
+    assert [item.grid_in_battery_at_start for item in inputs[:2]] == [False, True]

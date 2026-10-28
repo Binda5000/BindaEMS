@@ -6,7 +6,10 @@ Netzladen, den Leistungspreis je Monat und die Abweichung vom vorigen Plan in de
 abzüglich des Restwerts der Energie im Akku am Horizontende. Regel R1 ist hart: Nach Netzladen
 wird nichts eingespeist, solange Netzenergie im Akku sein kann, also bis der Akku wieder leer ist
 (SOC am Slotende ≤ untere Grenze ``min(Reserve, SOC₀)`` + ``R1_EMPTY_TOL_KWH``) oder der
-Horizont endet.
+Horizont endet. Das gilt auch für Netzenergie, die schon zu Beginn im Akku sein kann
+(``PlanInputs.grid_in_battery_at_start``, Fix-Welle F2): Sie sperrt Akku ins Auto hart, die
+Einspeisung kostet bis zum leeren Akku ``CARRIED_EXPORT_CT`` je kWh, denn vermeiden lässt sie sich
+nicht immer, wenn das Netzladen schon geschehen ist.
 
 Geplante Autos (``PlanInputs.vehicles``) laden je Slot vor ihrer Abfahrt ``e = pv_ev + gr_ev +
 bt_ev``, 0 oder zwischen ``min_w`` und ``max_w``. PV deckt zuerst das Haus, dann die Autos, dann
@@ -22,8 +25,9 @@ Akku ins Auto (Plan Akku ins Auto, Entscheidungen 2 und 3): Nur mit dem Schalter
 ``planning.car_battery_allowed`` gibt es ``bt_ev`` je Auto und Slot, ``0 ≤ bt_ev ≤ max_w``; sonst
 ist das Modell das von vorher. Haus und Autos teilen sich die Entladegrenze und den SOC, je kWh
 kostet ``bt_ev`` Verschleiß plus Marge (die Verluste stecken im SOC). Solange Netzenergie im Akku
-sein kann (``c_t`` aus Regel R1), gibt der Akku keinem Auto etwas, sonst ginge Netzstrom über den
-Akku an Regel R2 vorbei ins Auto. Regel R2 zählt ``bt_ev`` nicht.
+sein kann (``c_t`` aus Regel R1, auch Netzenergie von vor dem Horizont), gibt der Akku keinem Auto
+etwas, sonst ginge Netzstrom über den Akku an Regel R2 vorbei ins Auto. Regel R2 zählt ``bt_ev``
+nicht.
 
 Ein erwartetes Auto (Plan 5b, Präzisierung 10) steht erst ab seiner Ankunft im Modell: Seine
 Variablen gibt es nur in den Slots ``[arrival_at, departure_at)`` (``charge_window``); Bedarf,
@@ -54,6 +58,8 @@ MIP_GAP: Final = 0.005
 SHORTFALL_CT: Final = 2000.0  # Strafe je kWh, die einem Auto bis zur Abfahrt fehlt
 R2_CT: Final = 200.0  # Strafe je kWh Netzenergie ins Auto über Regel R2
 R1_EMPTY_TOL_KWH: Final = 0.05  # Akku gilt als leer bei SOC ≤ untere Grenze + Toleranz (Regel R1)
+# Strafe je kWh Einspeisung, solange Netzenergie von vor dem Horizont im Akku sein kann (Regel R1)
+CARRIED_EXPORT_CT: Final = 200.0
 
 _KWH: Final = SLOT_H / 1000  # W über einen Slot → kWh
 
@@ -323,21 +329,31 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     # hält fest, dass nach Netzladen noch Netzenergie im Akku ist: Es springt bei Netzladen auf 1
     # und fällt erst nach einem leeren Akku wieder. ``c_t`` ist nur nach unten beschränkt, der
     # Löser drückt es so weit wie möglich, und es bleibt stetig.
-    if z:
-        first = min(z)
+    #
+    # Netzenergie von vor dem Horizont (``grid_in_battery_at_start``, Fix-Welle F2) hält ``k_t``
+    # fest, ebenso gebaut, mit ``k_0`` = 1. Für Akku ins Auto ist es hart wie ``c_t``. Für die
+    # Einspeisung kostet es ``CARRIED_EXPORT_CT`` je kWh (``x_t``) statt sie zu verbieten: Das
+    # Netzladen ist schon geschehen, und wird der Akku vor der PV nicht leer, ließe sich die
+    # Einspeisung nicht mehr vermeiden; ein hartes Verbot machte das Modell unlösbar.
+    carried = inputs.grid_in_battery_at_start
+    if z or carried:
+        first = 0 if carried else min(z)
         span = params.hi_kwh - params.lo_kwh
         empty = {t: prob.add_variable(f"e_{t}", cat=pulp.LpBinary) for t in range(first, count)}
-        in_battery = {
-            t: prob.add_variable(f"c_{t}", lowBound=0, upBound=1) for t in range(first, count)
-        }
         for t in range(first, count):
             prob += (
                 soc[t] <= params.lo_kwh + R1_EMPTY_TOL_KWH + span * (1 - empty[t]),
                 f"leer_{t}",
             )
+    if z:
+        start = min(z)
+        in_battery = {
+            t: prob.add_variable(f"c_{t}", lowBound=0, upBound=1) for t in range(start, count)
+        }
+        for t in range(start, count):
             if t in z:
                 prob += in_battery[t] >= z[t], f"netz_im_akku_z_{t}"
-            if t > first:
+            if t > start:
                 prob += in_battery[t] >= in_battery[t - 1] - empty[t - 1], f"netz_im_akku_{t}"
             if inputs.slots[t].pv_w > 0:
                 prob += pv_x[t] <= inputs.slots[t].pv_w * (1 - in_battery[t]), f"r1_{t}"
@@ -346,6 +362,24 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                 prob += (
                     car_battery[t] <= car_battery_max[t] * (1 - in_battery[t]),
                     f"r1_auto_{t}",
+                )
+    if carried:
+        before = {
+            t: prob.add_variable(f"k_{t}", lowBound=1 if t == 0 else 0, upBound=1)
+            for t in range(count)
+        }
+        for t in range(count):
+            if t > 0:
+                prob += before[t] >= before[t - 1] - empty[t - 1], f"netz_von_vorher_{t}"
+            pv_w = inputs.slots[t].pv_w
+            if pv_w > 0:
+                over = var("x_vorher", t)
+                prob += pv_x[t] <= pv_w * (1 - before[t]) + over, f"r1_vorher_{t}"
+                terms.append(_KWH * CARRIED_EXPORT_CT * over)
+            if car_battery_max[t]:
+                prob += (
+                    car_battery[t] <= car_battery_max[t] * (1 - before[t]),
+                    f"r1_auto_vorher_{t}",
                 )
 
     # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont.

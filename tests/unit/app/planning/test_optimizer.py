@@ -790,3 +790,57 @@ def test_battery_to_car_never_while_pv_goes_to_grid() -> None:
     for f in result.flows:
         if sum(f.ev_battery.values()) >= EV_ON_W:
             assert f.pv_b + f.pv_x == pytest.approx(0.0, abs=1e-6)
+
+
+# Netzenergie aus der Zeit vor dem Horizont (Fix-Welle F2, Entscheidung 2 über Pläne hinweg)
+
+
+def _carried(inputs: PlanInputs) -> PlanInputs:
+    """Dieselben Eingangsdaten, aber zu Beginn kann Netzenergie im Akku sein."""
+    return inputs.model_copy(update={"grid_in_battery_at_start": True})
+
+
+def _night_then_sun() -> PlanInputs:
+    """22:00 Ortszeit im Juni, Akku 40 % (Reserve 20 %), Haus 1 kW: Der Akku ist gegen 04:00 leer.
+    Ab 09:00 füllt ihn die PV (9 kW) und speist ein (6 ct); kein Auto."""
+    start = "2026-06-20T20:00:00+00:00"
+    count, night = 64, 44
+    return scenario(
+        prices=[18.0] * count,
+        pv=[0.0] * night + [9000.0] * (count - night),
+        load=[1000.0] * count,
+        soc_pct=40.0,
+        feed_in=6.0,
+        start=start,
+    )
+
+
+def _first_empty(inputs: PlanInputs, result: OptimizerResult) -> int:
+    lo = params_of(inputs).lo_kwh
+    return next(
+        t
+        for t, f in enumerate(result.flows)
+        if f.soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+    )
+
+
+def test_grid_energy_at_start_ends_when_the_battery_is_empty() -> None:
+    # Ist der Akku einmal leer, ist keine Netzenergie mehr darin: Die PV darf danach einspeisen.
+    carried = _carried(_night_then_sun())
+    result = solve(carried)
+    assert result.status == "optimal"
+    empty = _first_empty(carried, result)
+    assert empty < 44
+    assert any(f.pv_x > 1000.0 for f in result.flows[empty + 1 :])
+
+
+def test_grid_energy_at_start_never_makes_the_model_infeasible() -> None:
+    # Der Akku (95 %) wird vor der PV nicht leer und läuft voll: Einspeisen lässt sich nicht
+    # vermeiden. Der Plan speist so wenig wie möglich ein (der Akku ist am Ende voll) und gibt dem
+    # Auto nichts; ohne Netzenergie gäbe er ihm über 5 kWh
+    # (``test_planned_car_takes_spare_battery_when_pv_refills_it``).
+    carried = _carried(_summer_night(car_battery=True))
+    result = solve(carried)
+    assert result.status == "optimal"
+    assert battery_kwh(result) == pytest.approx(0.0, abs=SLOT_KWH * EV_ON_W)
+    assert result.flows[-1].soc_end_kwh == pytest.approx(params_of(carried).hi_kwh, abs=0.01)

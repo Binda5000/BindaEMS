@@ -17,6 +17,7 @@ from tests.plan_helpers import (
     planned_car,
     pv_arc,
     resimulate,
+    sample_plan,
     scenario,
     small_battery,
 )
@@ -26,14 +27,17 @@ from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.planning.plausibility import (
+    EMPTY_TOL_KWH,
     charged_window_end,
     check_plan,
     export_while_charged_kwh,
+    grid_in_battery,
+    grid_in_battery_at_start,
     pays_off,
     spread_pays,
 )
 from bindaems.app.planning.service import plan_once
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan
 from bindaems.shared.timeutil import SLOT
 
 
@@ -726,3 +730,72 @@ def test_check_plan_checks_the_car_battery_it_is_given() -> None:
     assert check_plan(inputs, result, intents, steps, ev_battery_w=[{}]) == []
     found = check_plan(inputs, result, intents, steps, ev_battery_w=[{"tesla": 3000.0}])
     assert found == ["Akku ins Auto um 22:00 bei Halten oder Netzladen"]
+
+
+def test_grid_in_battery_from_before_the_horizon_lasts_until_empty() -> None:
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[10000.0] * 4, soc_pct=40.0)
+    steps = resimulate(inputs, [BatteryIntent()] * 4)  # 12 kWh, Reserve 6 kWh: leer in Slot 2
+    lo = params_of(inputs).lo_kwh
+    assert grid_in_battery([BatteryIntent()] * 4, steps, lo) == [False] * 4
+    assert grid_in_battery([BatteryIntent()] * 4, steps, lo, at_start=True) == [
+        True,
+        True,
+        True,
+        False,
+    ]
+
+
+def test_check_plan_counts_grid_energy_from_before_the_horizon() -> None:
+    inputs, result, intents, steps = _case("clean")
+    carried = inputs.model_copy(update={"grid_in_battery_at_start": True})
+    assert "Akku ins Auto um 22:00, solange Netzstrom im Akku ist" in check_plan(
+        carried, result, intents, steps
+    )
+
+
+# --- Netzenergie von vor dem Horizont (Fix-Welle F2) ---------------------------------------------
+
+_NETZLADEN = {"intent": BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000.0)}
+
+
+def _now_inputs(soc_pct: float) -> PlanInputs:
+    """Eingangsdaten um 02:01 (UTC) mit diesem SOC; Standardakku 30 kWh, Reserve 20 % (6 kWh)."""
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, soc_pct=soc_pct)
+    return inputs.model_copy(update={"created_at": at("2026-10-16T02:01:00+00:00")})
+
+
+def _previous(created: str, slots: list[str], grid_charge_at: str | None) -> Plan:
+    changes = [_NETZLADEN if start == grid_charge_at else {} for start in slots]
+    return sample_plan(created=created, slots=slots, intents=changes)
+
+
+def test_grid_in_battery_at_start_after_a_grid_charge_of_the_previous_plan() -> None:
+    previous = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00", "02:15"], "01:45")
+    assert grid_in_battery_at_start(_now_inputs(50.0), previous, carried=False)
+    # Der Slot, in dem der neue Plan beginnt, lief schon eine Minute nach dem vorigen Plan
+    running = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00", "02:15"], "02:00")
+    assert grid_in_battery_at_start(_now_inputs(50.0), running, carried=False)
+
+
+def test_no_grid_in_battery_at_start_without_a_started_grid_charge() -> None:
+    later = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00", "02:15"], "02:15")
+    assert not grid_in_battery_at_start(_now_inputs(50.0), later, carried=False)
+    assert not grid_in_battery_at_start(_now_inputs(50.0), None, carried=False)
+    # Nach ``valid_until`` des vorigen Plans (45 min) führt der core seine Slots nicht mehr aus
+    stale = _previous(
+        "2026-10-16T00:46:00+00:00",
+        ["00:45", "01:00", "01:15", "01:30", "01:45", "02:00"],
+        "01:45",
+    )
+    assert not grid_in_battery_at_start(_now_inputs(50.0), stale, carried=False)
+
+
+def test_grid_in_battery_at_start_is_carried_until_the_battery_is_empty() -> None:
+    previous = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00"], None)
+    assert grid_in_battery_at_start(_now_inputs(50.0), previous, carried=True)
+    # Leer: SOC höchstens Reserve + ``EMPTY_TOL_KWH`` (6,1 kWh von 30 kWh)
+    empty_pct = (6.0 + EMPTY_TOL_KWH) / 30.0 * 100
+    assert not grid_in_battery_at_start(_now_inputs(empty_pct), previous, carried=True)
+    assert grid_in_battery_at_start(_now_inputs(empty_pct + 0.1), previous, carried=True)
+    grid_charged = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00"], "01:45")
+    assert not grid_in_battery_at_start(_now_inputs(15.0), grid_charged, carried=True)

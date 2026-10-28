@@ -5419,7 +5419,12 @@ sind, kann die Nachrechnung mehr im Akku haben als das Modell; würde sie deshal
 `Netzladen`-Slot einspeisen, bevor der Akku leer ist, kürzt die app das Netzladen des letzten
 betroffenen Slots um diese Energie, höchstens aber um die Ladung, die vor der ersten Einspeisung
 noch über Reserve plus 0,1 kWh liegt (auf 100 W aufgerundet, unter 100 W wird daraus `Halten`).
-Die Regel wirkt erst, wenn Victron live ist und „Netzladen erlaubt“ an ist.
+Auch ein Netzladen vor dem Horizont zählt (seit der Fix-Welle von Akku ins Auto): Hat ein früherer
+Plan aus dem Netz geladen und war der SOC bei keinem Planungslauf seither höchstens Reserve plus
+0,1 kWh, rechnet der neue Plan mit Netzenergie im Akku, bis er leer ist. Verbieten kann er die
+Einspeisung dann nicht mehr, denn das Laden ist geschehen; füllt die PV den Akku vorher, speist er
+so wenig wie möglich ein (im Modell 200 ct je kWh Strafe). Die Regel wirkt erst, wenn Victron live
+ist und „Netzladen erlaubt“ an ist.
 
 Die **Spread-Regel** ist im Optimierer keine Bedingung: Marge, Verschleiß und Wirkungsgrad stehen
 als Kosten im Ziel. Die Prüfung kontrolliert sie danach je `Netzladen`-Slot. Er rechnet sich, wenn
@@ -5556,9 +5561,10 @@ bleiben, wie sie sind.
   `planning.margin_ct`, ab Werk zusammen 4 ct), wie beim Netzladen; die Verluste stecken im SOC. Die
   Marge hält den Plan von kleinen, unsicheren Gewinnen fern, und weil das Haus nur den Verschleiß
   kostet, deckt der Akku zuerst das Haus. **Nur PV-Energie aus dem Akku ins Auto:** Solange nach
-  einem Netzladen Netzenergie im Akku sein kann (bis er wieder leer ist, wie bei Regel R oben), gibt
-  der Akku keinem Auto etwas; sonst ginge Netzstrom über den Akku ins Auto, an Regel R2 vorbei und
-  mit rund 12 % Verlust. Regel R2 zählt den Akkuanteil nicht.
+  einem Netzladen Netzenergie im Akku sein kann (bis er wieder leer ist, wie bei Regel R oben, auch
+  nach einem Netzladen eines früheren Plans, etwa in der Nacht davor), gibt der Akku keinem Auto
+  etwas; sonst ginge Netzstrom über den Akku ins Auto, an Regel R2 vorbei und mit rund 12 % Verlust.
+  Regel R2 zählt den Akkuanteil nicht.
 - **Sofort:** Autos in „Sofort“ kennt der Optimierer nicht. Der Plan sagt je Slot nur, ob übriger
   Akku für sie da ist und sich rechnet: Der Plan kommt vom Optimierer (nie im Ersatzplan), die Absicht
   ist `Eigenverbrauch`, keine Netzenergie kann im Akku sein, und `Bezugspreis − Verschleiß − Marge ≥

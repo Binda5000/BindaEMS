@@ -119,6 +119,9 @@ class PlanInputs(_Model):
     # die geplanten Autos in der Reihenfolge ihrer Priorität, die angesteckten vor den erwarteten
     # (Plan 4b, 5b); alte Eingangsdaten: keine
     vehicles: list[PlanVehicleInput] = Field(default_factory=list)
+    # Zu Beginn des Horizonts kann Netzenergie im Akku sein, aus einem Netzladen vor dem Horizont
+    # (Fix-Welle F2, Entscheidung 2; ``grid_in_battery_at_start``); alte Eingangsdaten: nein
+    grid_in_battery_at_start: bool = False
 
 
 def _by_start(prices: Sequence[PriceInput]) -> dict[datetime, PriceInput]:

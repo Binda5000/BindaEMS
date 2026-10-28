@@ -12,7 +12,8 @@ ersten Slot ab der Abfahrt lädt es nicht. Die Befunde gelten je Auto. Ein erwar
 Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist): Die Leistung eines Autos und die
 Entladegrenze zählen den Akkuanteil ``bt_ev`` mit. Gibt der Akku einem Auto mehr als
 ``BALANCE_TOL_W``, muss der Schalter an sein, der Slot ``EIGENVERBRAUCH`` sein, keine Netzenergie im
-Akku sein können (Entscheidung 2, ``grid_in_battery``) und nichts eingespeist werden.
+Akku sein können (Entscheidung 2, ``grid_in_battery``, auch aus einem Netzladen vor dem Horizont)
+und nichts eingespeist werden.
 
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
@@ -30,7 +31,13 @@ from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w
 from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import charge_window
-from bindaems.shared.plan import MAX_THERMAL_STEPS, BatteryIntent, BatteryIntentKind, PlanSlot
+from bindaems.shared.plan import (
+    MAX_THERMAL_STEPS,
+    BatteryIntent,
+    BatteryIntentKind,
+    Plan,
+    PlanSlot,
+)
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
@@ -60,21 +67,61 @@ def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> i
 
 
 def grid_in_battery(
-    intents: Sequence[BatteryIntent], steps: Sequence[SimStep], lo_kwh: float
+    intents: Sequence[BatteryIntent],
+    steps: Sequence[SimStep],
+    lo_kwh: float,
+    *,
+    at_start: bool = False,
 ) -> list[bool]:
     """Je Slot, ob nach einem Netzladen Netzenergie im Akku sein kann (Entscheidung 2).
 
     Das gilt für Slot ``t``, wenn es einen ``NETZLADEN``-Slot ``s ≤ t`` gibt, dessen Fenster
     ``charged_window_end(steps, s, lo_kwh)`` über ``t`` reicht: bis der Akku wieder leer ist,
-    dieselbe Größe wie bei Regel R1.
+    dieselbe Größe wie bei Regel R1. Mit ``at_start`` (Netzenergie von vor dem Horizont,
+    ``PlanInputs.grid_in_battery_at_start``) gilt es ebenso ab Slot 0, bis die Nachrechnung den
+    Akku leer zeigt.
     """
     result = [False] * len(steps)
+    if at_start:
+        for later in range(charged_window_end(steps, 0, lo_kwh)):
+            result[later] = True
     for index, intent in enumerate(intents):
         if intent.kind is not BatteryIntentKind.NETZLADEN:
             continue
         for later in range(index, charged_window_end(steps, index, lo_kwh)):
             result[later] = True
     return result
+
+
+def grid_in_battery_at_start(inputs: PlanInputs, previous: Plan | None, *, carried: bool) -> bool:
+    """Ob zu Beginn des Horizonts Netzenergie im Akku sein kann (Entscheidung 2 über Pläne hinweg,
+    Fix-Welle F2; ``PlanInputs.grid_in_battery_at_start``).
+
+    Abgeleitet aus dem vorigen Plan ``previous`` (dem zuletzt gespeicherten, an den der core sich
+    gehalten hat) und dem SOC jetzt, weiter wie ``grid_in_battery``, „bis der Akku wieder leer ist“:
+
+    - Ist der Akku jetzt leer (SOC höchstens ``lo_kwh + EMPTY_TOL_KWH``, wie die Nachrechnung), ist
+      keine Netzenergie darin.
+    - Sonst ist sie darin, wenn der vorige Plan sie schon zu Beginn annahm (``carried``, sein
+      ``grid_in_battery_at_start``) oder einer seiner ``NETZLADEN``-Slots begonnen hat, solange der
+      Plan galt (Beginn vor ``created_at`` dieses Laufs und vor ``valid_until``): Nach diesem
+      Beginn hat der core ihn ausgeführt, der laufende Slot zählt also mit.
+
+    Ohne vorigen Plan: keine. Gemessen wird der SOC nur bei jedem Lauf; war der Akku dazwischen
+    kurz leer, bleibt die Netzenergie bis zum nächsten leeren SOC eines Laufs. Das ist die
+    vorsichtige Seite: Akku ins Auto und Einspeisung bleiben dann länger gesperrt.
+    """
+    params = params_of(inputs)
+    soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    if soc_kwh <= params.lo_kwh + EMPTY_TOL_KWH or previous is None:
+        return False
+    if carried:
+        return True
+    applied_until = min(ensure_utc(inputs.created_at), ensure_utc(previous.valid_until))
+    return any(
+        slot.intent.kind is BatteryIntentKind.NETZLADEN and ensure_utc(slot.start) < applied_until
+        for slot in previous.slots
+    )
 
 
 def export_while_charged_kwh(steps: Sequence[SimStep], index: int, lo_kwh: float) -> float:
@@ -274,7 +321,9 @@ def check_plan(
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
 
     car_switch = inputs.planning.car_battery_allowed
-    grid_inside = grid_in_battery(intents, steps, params.lo_kwh)
+    grid_inside = grid_in_battery(
+        intents, steps, params.lo_kwh, at_start=inputs.grid_in_battery_at_start
+    )
     for index, (flows, item, intent) in enumerate(zip(result.flows, steps, intents, strict=True)):
         if sum(from_battery[index].values()) <= BALANCE_TOL_W:
             continue

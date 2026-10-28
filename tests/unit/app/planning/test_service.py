@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import update
 from structlog.testing import capture_logs
 from tests.app_helpers import ingest, price_row
 from tests.plan_helpers import (
@@ -24,6 +25,8 @@ from tests.plan_helpers import (
     planned_health,
     resimulate,
     returns,
+    sample_inputs,
+    sample_plan,
     scenario,
     set_planning,
     small_battery,
@@ -31,6 +34,7 @@ from tests.plan_helpers import (
     vehicle_health,
 )
 
+from bindaems.app.db.schema import plan_inputs_table
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.learning.thermal_model import ModeModel, ModeProfile
 from bindaems.app.planning import thermal_stage
@@ -39,7 +43,7 @@ from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
 from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
-from bindaems.shared.plan import BatteryIntent, PlanTrigger, intent_plan
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanTrigger, intent_plan
 from bindaems.shared.settings import PlanningSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
@@ -1771,3 +1775,62 @@ async def test_thermal_switch_replans_as_settings(service_with, settings_service
         set_thermal(settings_service, enabled=True)
         await until(lambda: len(calls) == 2)
     assert triggers(calls) == ["start", "settings"]
+
+
+# --- Netzenergie von vor dem Horizont (Fix-Welle F2) ---------------------------------------------
+
+_NETZLADEN = {"intent": BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000.0)}
+
+
+def _grid_charged_before(store, *, carried: bool = False, grid_charge: bool = True) -> None:
+    """Speichert den vorigen Plan von 09:46 (UTC): Er lud im Slot ab 09:45 aus dem Netz
+    (``grid_charge``); seine Eingangsdaten nahmen Netzenergie zu Beginn an (``carried``)."""
+    plan = sample_plan(
+        created="2026-10-16T09:46:00+00:00",
+        slots=["09:45", "10:00", "10:15"],
+        intents=[_NETZLADEN if grid_charge else {}, {}, {}],
+    )
+    store.save(plan, sample_inputs().model_copy(update={"grid_in_battery_at_start": carried}))
+
+
+async def test_collect_finds_grid_energy_from_the_previous_plan(service_with, store, live):
+    _grid_charged_before(store)
+    assert (await service_with().collect("slot")).grid_in_battery_at_start
+    # Akku leer: Reserve 20 % von 30 kWh, Toleranz 0,1 kWh
+    live_signals(live, {"battery.soc_pct": 20.3})
+    assert not (await service_with().collect("slot")).grid_in_battery_at_start
+
+
+async def test_collect_carries_grid_energy_from_the_stored_inputs(service_with, store, live):
+    _grid_charged_before(store, carried=True, grid_charge=False)
+    assert (await service_with().collect("slot")).grid_in_battery_at_start
+    live_signals(live, {"battery.soc_pct": 20.0})
+    assert not (await service_with().collect("slot")).grid_in_battery_at_start
+
+
+async def test_collect_without_grid_energy_before(service_with, store):
+    assert not (await service_with().collect("start")).grid_in_battery_at_start  # kein Plan
+    _grid_charged_before(store, grid_charge=False)
+    assert not (await service_with().collect("slot")).grid_in_battery_at_start
+
+
+async def test_grid_energy_is_carried_from_run_to_run(service_with, store, clock):
+    _grid_charged_before(store)
+    service = service_with()
+    first = await service.replan("slot")
+    assert store.inputs_of(first.id).grid_in_battery_at_start
+    clock.advance(timedelta(minutes=15))  # der neue Plan lud nicht aus dem Netz
+    assert not any(slot.intent.kind is BatteryIntentKind.NETZLADEN for slot in first.slots[:2])
+    assert (await service.collect("slot")).grid_in_battery_at_start
+
+
+async def test_unreadable_inputs_of_the_previous_plan_count_as_grid_energy(
+    service_with, store, engine
+):
+    _grid_charged_before(store, grid_charge=False)
+    with engine.begin() as conn:
+        conn.execute(update(plan_inputs_table).values(data={"kaputt": True}))
+    with capture_logs() as logs:
+        inputs = await service_with().collect("slot")
+    assert inputs.grid_in_battery_at_start
+    assert [entry["code"] for entry in logs if "code" in entry] == ["plan_inputs_unreadable"]

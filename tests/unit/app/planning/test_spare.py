@@ -122,3 +122,15 @@ def test_now_battery_compares_with_the_feed_in_of_a_later_full_battery() -> None
     full_later = _steps(soc_end=[14.0, 13.0, 30.0], export_w=[0.0, 0.0, 800.0])
     assert now_battery_flags(inputs, [EIGEN] * 3, full_later)[:2] == [True, True]
     assert now_battery_flags(inputs, [EIGEN] * 3, _steps_never_full()) == [False] * 3
+
+
+def test_now_battery_off_while_grid_energy_from_before_the_horizon_is_in_the_battery() -> None:
+    # Fix-Welle F2: Netzladen vor dem Horizont (``grid_in_battery_at_start``) sperrt ab Slot 0, bis
+    # der Akku in der Nachrechnung leer ist; der Slot, in dem er leer wird, zählt noch dazu.
+    inputs = _inputs(import_ct=[30, 30, 30]).model_copy(update={"grid_in_battery_at_start": True})
+    assert now_battery_flags(inputs, [EIGEN] * 3, _steps_until_empty_at(1)) == [
+        False,
+        False,
+        True,
+    ]
+    assert now_battery_flags(inputs, [EIGEN] * 3, _steps_never_full()) == [False] * 3

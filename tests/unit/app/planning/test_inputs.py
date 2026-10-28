@@ -28,6 +28,7 @@ from bindaems.app.planning.battery_model import params_of, sim_slots
 from bindaems.app.planning.inputs import (
     END_WINDOW,
     MAX_SLOTS,
+    PlanInputs,
     PlanningUnavailable,
     end_value_ct,
     horizon_prices,
@@ -370,3 +371,24 @@ def test_expected_cars_follow_the_plugged_ones_and_round_trip(
     loaded = store.inputs_of(saved.id)
     assert loaded is not None and loaded.vehicles[1].arrival_at == arrival
     assert loaded == inputs
+
+
+def test_old_inputs_load_without_grid_energy_at_start(store: PlanStore, engine: Engine) -> None:
+    # Fix-Welle F2: Eingangsdaten vor dem Feld ``grid_in_battery_at_start`` laden mit „nein“
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    assert data.pop("grid_in_battery_at_start") is False
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs is not None and inputs.grid_in_battery_at_start is False
+    assert inputs == sample_inputs()
+    carried = sample_inputs().model_copy(update={"grid_in_battery_at_start": True})
+    assert PlanInputs.model_validate_json(carried.model_dump_json()) == carried

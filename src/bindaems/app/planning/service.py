@@ -53,7 +53,7 @@ from bindaems.app.planning.inputs import (
 )
 from bindaems.app.planning.intents import derive_intents, drop_held_battery
 from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w, ev_power_w
-from bindaems.app.planning.plausibility import check_plan
+from bindaems.app.planning.plausibility import check_plan, grid_in_battery_at_start
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
 from bindaems.app.planning.thermal_shift import TIME_LIMIT_S as THERMAL_TIME_LIMIT_S
@@ -655,7 +655,8 @@ class PlanningService:
             and any(entry.mode is ChargeMode.PLANNED for entry in intent.vehicles.values())
             and not trusted(intent.version, health)
         )
-        return assemble_inputs(
+        previous = self._plan
+        inputs = assemble_inputs(
             now=now,
             trigger=trigger,
             prices=prices,
@@ -665,7 +666,7 @@ class PlanningService:
             planning=current.settings.planning,
             tariff=current.settings.tariff,
             month_peak_kw=month_peak_kw,
-            previous=self._plan,
+            previous=previous,
             settings_version=current.version,
             support_soc_pct=self._support_pct(),
             peak_target_kw=self._cfg.control.peak_target_kw,
@@ -673,6 +674,35 @@ class PlanningService:
             pv_p25_w=pv.p25_w if pv is not None else None,
             vehicles=lambda slots: self._vehicles(health, intent, now, slots),
         )
+        carried = await asyncio.to_thread(self._carried, previous)
+        at_start = grid_in_battery_at_start(inputs, previous, carried=carried)
+        return inputs.model_copy(update={"grid_in_battery_at_start": at_start})
+
+    def _carried(self, previous: Plan | None) -> bool:
+        """``grid_in_battery_at_start`` der Eingangsdaten des vorigen Plans (blockiert: Datenbank).
+
+        Nach einem Lauf sind es die Eingangsdaten des Dienstes, nach dem Start die gespeicherten
+        (``PlanStore.inputs_of``); fehlen sie, nein. Lassen sie sich nicht lesen, ja (Warnung
+        ``code=plan_inputs_unreadable``): Dann sperrt der Lauf Akku ins Auto und Einspeisung, bis
+        der Akku leer ist, statt Netzenergie zu übersehen.
+        """
+        if previous is None:
+            return False
+        if self._inputs is not None:
+            return self._inputs.grid_in_battery_at_start
+        if previous.id is None:
+            return False
+        try:
+            stored = self._store.inputs_of(previous.id)
+        except ValueError as exc:  # ``ValidationError``
+            log.warning(
+                "Eingangsdaten des vorigen Plans nicht lesbar",
+                code="plan_inputs_unreadable",
+                plan_id=previous.id,
+                error=str(exc).splitlines()[0],
+            )
+            return True
+        return stored is not None and stored.grid_in_battery_at_start
 
     def _vehicles(
         self,

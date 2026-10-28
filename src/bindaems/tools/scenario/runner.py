@@ -7,8 +7,9 @@ Dienst) entsteht ein Plan wie im Planungsdienst:
   Horizontklasse des Vorlaufs (``forecast_at``); Preise bekannt bis Ende heute, ab 14:00 Uhr
   lokal bis Ende morgen (``known_until``), danach geschätzt als Median des Bezugspreises
   derselben lokalen Uhrzeit an bis zu ``ESTIMATE_DAYS`` Vortagen der Daten (mindestens 2 Werte).
-- **Plan:** ``assemble_inputs`` mit dem vorigen Plan, ``solve`` im selben Prozess und
-  ``plan_once`` (Absichten, Nachrechnung, Plausibilität, sonst Ersatzplan).
+- **Plan:** ``assemble_inputs`` mit dem vorigen Plan, Netzenergie im Akku zu Beginn wie im
+  Dienst (``grid_in_battery_at_start``), ``solve`` im selben Prozess und ``plan_once``
+  (Absichten, Nachrechnung, Plausibilität, sonst Ersatzplan).
 - **Ausführung:** Bis zur nächsten Neuplanung gelten die Absichten des Plans, umgesetzt vom
   Akkumodell auf den Ist-Werten; ein Slot ohne gültigen Plan (``valid_until`` ≤ Slotbeginn) läuft
   mit ``EIGENVERBRAUCH``.
@@ -82,6 +83,7 @@ from bindaems.app.planning.optimizer import solve
 from bindaems.app.planning.plausibility import (
     R1_TOL_KWH,
     export_while_charged_kwh,
+    grid_in_battery_at_start,
 )
 from bindaems.app.planning.service import plan_once
 from bindaems.app.planning.vehicles import (
@@ -331,6 +333,7 @@ class _Planned:
     index: dict[datetime, int]
     lo_kwh: float
     r2_broken: bool = False
+    grid_in_battery_at_start: bool = False  # aus seinen Eingangsdaten, für den nächsten Plan
 
 
 def _vehicle_inputs(
@@ -406,9 +409,12 @@ def _plan_at(
     *,
     trigger: PlanTrigger,
     cars: Sequence[tuple[CarSession, float]] = (),
+    carried: bool = False,
 ) -> _Planned | None:
     """Plan zum Slot ``index`` (Minute 1 nach Slotbeginn) mit den steckenden Autos ``cars`` und
-    ihrem Ladestand; ``None`` ohne Eingangsdaten."""
+    ihrem Ladestand; ``None`` ohne Eingangsdaten. ``carried`` ist ``grid_in_battery_at_start`` des
+    vorigen Plans; daraus und aus ``previous`` folgt es für diesen wie im Planungsdienst
+    (``grid_in_battery_at_start``)."""
     now = ensure_utc(data.slots[index].start) + PLAN_DELAY
     horizon = data.slots[index : index + MAX_SLOTS]
     pv_w: dict[datetime, float] = {}
@@ -439,6 +445,8 @@ def _plan_at(
         )
     except PlanningUnavailable:
         return None
+    at_start = grid_in_battery_at_start(inputs, previous, carried=carried)
+    inputs = inputs.model_copy(update={"grid_in_battery_at_start": at_start})
     plan = plan_once(inputs, solve(inputs))
     params = params_of(inputs)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
@@ -453,7 +461,7 @@ def _plan_at(
     grid = car_grid_kwh(inputs, ev_w, ev_battery_w) if ev_w else {}
     r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
     positions = {s.start: i for i, s in enumerate(plan.slots)}
-    return _Planned(plan, steps, positions, params.lo_kwh, r2_broken)
+    return _Planned(plan, steps, positions, params.lo_kwh, r2_broken, at_start)
 
 
 def _charge(car: ScenarioCar, soc_pct: float, wanted_w: float) -> tuple[float, float]:
@@ -615,6 +623,7 @@ def run_scenario(
                 current.plan if current is not None else None,
                 trigger=trigger,
                 cars=[(sessions[i], car_soc[i]) for i in plugged],
+                carried=current is not None and current.grid_in_battery_at_start,
             )
             if planned is not None:
                 current = planned
