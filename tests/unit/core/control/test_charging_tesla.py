@@ -1506,6 +1506,30 @@ def test_a_climatising_tesla_gets_no_wake_start(cfg) -> None:
     assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 60] == []
 
 
+def test_peak_guard_goes_before_climate(cfg) -> None:  # Entscheidung 8, Gesamtreview I1
+    # Die Grenze des 15-min-Wächters (0 W) trägt den Mindeststrom nicht: Die Regel K1 ruht, und der
+    # Selbststart stoppt den Tesla wie ohne Klimatisierung nach 120 s.
+    found = climate_run(cfg, 400, peak=PeakLimits(caps_w={"tesla": 0.0}))
+    assert [(t, c) for t, c in of(found, "vehicle.tesla") if t >= 60] == [
+        (180, Command("vehicle.tesla", CHARGING, False, reasons=("mode_pv", "self_start")))
+    ]
+
+
+def test_overload_pause_goes_before_climate(cfg) -> None:  # Entscheidung 8, Gesamtreview M1
+    # L1 liegt von 60 bis 70 über der Sicherung: „Laden aus“ wegen Überlast bei 70 (ALL_STOP).
+    # Tessie meldet den Tesla danach weiter klimatisierend und ladend. In der Mindestpause
+    # (``min_off_s`` 600 s) hält ihn die Regel K1 nicht wieder mit 5 A; erst danach.
+    def over(s: int):
+        return grid(l1=36.0, grid_w=12000.0) if 60 <= s <= 70 else grid(grid_w=12000.0)
+
+    found = climate_run(cfg, 700, grid_obs=over)
+    tesla_commands = of(found, "vehicle.tesla")
+    stop = Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=("mode_pv", "overload"))
+    assert (70, stop) in tesla_commands
+    assert [(t, c) for t, c in tesla_commands if c.kind == CURRENT and 70 < t < 670] == []
+    assert (670, CLIMATE_CURRENT) in tesla_commands
+
+
 AT_THE_TWC = VehicleState("twc", AssignmentKind.DEFAULT, True, True, False, False, None)
 HOLD_ARGS = {
     "key": "tesla",
