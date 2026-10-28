@@ -3715,19 +3715,19 @@ Kühlsaison 2027.
   - Die Betriebsbits stehen nur bei Änderung in InfluxDB `status` (90 Tage). Liegt die letzte Änderung länger zurück,
     fehlt der Seed, und der Anteil „läuft“ ist unbekannt (im Betriebshandbuch beschrieben; vor der Kühlsaison 2027
     beheben).
-  - `pv_w` ist eine Teilsumme, wenn nur ein Teil der PV-Reihen in einem Slot einen Wert hat (`thermal_data.py`);
-    `SLOT_S` ist unbenutzt, `_pv` setzt 15 min fest statt `STEP`.
+  - ~~`pv_w` ist eine Teilsumme, wenn nur ein Teil der PV-Reihen in einem Slot einen Wert hat (`thermal_data.py`);
+    `SLOT_S` ist unbenutzt, `_pv` setzt 15 min fest statt `STEP`.~~ (erledigt 28.10.2026, Kleinigkeiten 5c)
   - Die Speicherkapazität aus Ereignissen liegt bauartbedingt etwa 20 % zu tief (die Summe endet bei 0,3 K; die
     Grenzen fangen das ab); der Anteil „läuft“ übergeht Viertelstunden mit 20 bis 80 % und ist für taktende Geräte
     eher zu hoch; der Beginn einer Auskühl-Phase enthält bis zu 20 % Laufzeit und den schnellen Abfall der Luft, τ
     liegt damit etwas zu tief; `s` kommt ohne Prüfung, ob PV überhaupt schwankt (nur R² wacht).
-  - Eine Betriebsart ohne Slots meldet `few_days` mit 0 Tagen (`no_data` nur bei leerer Liste); die Karte
-    „Wärmemodell“ schreibt bei einem Tag „1 Tage“.
+  - ~~Eine Betriebsart ohne Slots meldet `few_days` mit 0 Tagen (`no_data` nur bei leerer Liste); die Karte
+    „Wärmemodell“ schreibt bei einem Tag „1 Tage“.~~ (erledigt 28.10.2026, Kleinigkeiten 5c)
   - Gespeicherte Parameter brauchen genau die Felder von `ModeModel`: Kommt ein Feld dazu, sind alte Zeilen bis zum
     nächsten Lauf nicht lesbar (der Dienst rechnet dann neu).
-  - `computed_at` ohne `ensure_utc`; kein Test für `run()` über Start und Nachtlauf; kein Schutz gegen `start_run`
-    nach `close`; „aktuell“ auch, wenn beide Betriebsarten nicht taugen; der Test der Migration `0015` prüft die
-    Spalte `mode` nicht.
+  - ~~`computed_at` ohne `ensure_utc`;~~ (erledigt 28.10.2026, Kleinigkeiten 5c) kein Test für `run()` über Start und Nachtlauf; ~~kein Schutz gegen
+    `start_run` nach `close`;~~ (erledigt 28.10.2026, Kleinigkeiten 5c) „aktuell“ auch, wenn beide Betriebsarten nicht taugen; ~~der Test der Migration
+    `0015` prüft die Spalte `mode` nicht.~~ (erledigt 28.10.2026, Kleinigkeiten 5c)
 - **Verschiebung (zweiter Planungsschritt):**
   - Nach einem teuren Block kann das Haus unter dem Soll bleiben, solange die Energiebedingung Spielraum hat.
   - Das Minimum-LP für `E_min` begrenzt nur noch die Basis und könnte entfallen (ein Lösen weniger).
@@ -3737,16 +3737,16 @@ Kühlsaison 2027.
   - Der Plan kann während einer Verschiebung zwischen „ok“ und „lohnt nicht“ wechseln (keine Hysterese; im
     Betriebshandbuch beschrieben).
   - Läuft HiGHS über die äußere Zeitgrenze (10 s), meldet der Schritt `solver`, der Thread rechnet aber zu Ende.
-- **Plan und Auslöser:** Der Auslöser „Betriebsart geändert“ wiederholt sich alle 5 min, solange kein Plan da ist;
-  `current()` wird im Worker-Thread gelesen (GIL-sicher); `_thermal_settings` ist Zustand der Instanz (nur
+- **Plan und Auslöser:** ~~Der Auslöser „Betriebsart geändert“ wiederholt sich alle 5 min, solange kein Plan da
+  ist;~~ (erledigt 28.10.2026, Kleinigkeiten 5c) `current()` wird im Worker-Thread gelesen (GIL-sicher); `_thermal_settings` ist Zustand der Instanz (nur
   nacheinander laufende Pläne).
 - **core:** `note_raised` verlängert nach einem späten Senden auch die Wartezeit von 6a (nur länger); `note_accepted`
   und Echo können bei einer Handänderung auseinanderlaufen (sicher); eine Überschuss-Stufe aus einem positiven Plan
   bleibt unter einem negativen Plan, bis Bezug oder SOC sie abbauen; Regel 6 (Netzbezug) greift nur über dem Plan
   (Idee für später: geplanter Bezug `import_w` in der Absicht).
 - **HA und API:** Ein HA-Benutzer mit Bedienrechten kann den Schalter umlegen (so gewollt, Präzisierung 15);
-  `set_thermal_plan` wiederholt die Schleife von `set_grid_charge`.
-- **UI:** Die Karte „Wärmemodell“ zeigt kurz „Lädt …“ und verschwindet bei 404, dann neuer Versuch alle 30 s ohne
+  ~~`set_thermal_plan` wiederholt die Schleife von `set_grid_charge`.~~ (erledigt 28.10.2026, Kleinigkeiten 5c)
+- **UI:** ~~Die Karte „Wärmemodell“ zeigt kurz „Lädt …“ und verschwindet bei 404, dann neuer Versuch alle 30 s ohne
   Ende; im System-Abschnitt stehen „−“ (U+2212) und „-“ nebeneinander, dazu „0,0 K bis“; der 404-Test hängt am
-  Timing.
+  Timing.~~ (erledigt 28.10.2026, Kleinigkeiten 5c)
 - **Doku:** Die Toleranz in Abnahme B1 (±0,5 K um das Band) lässt sich unterschiedlich lesen; einige lange Zeilen.

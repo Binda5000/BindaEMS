@@ -4756,6 +4756,10 @@ das Komfortband liegt immer innerhalb von `max_offset_k`.
   ohne eine einzige Viertelstunde im Fenster den letzten Stand**: Er legt keine Zeile ab und plant
   nicht neu. **Ein neues Modell löst neu planen aus** (Anlass „Klimaanlage geändert“, höchstens alle
   5 min, Abschnitt „Planung“), ebenso das Laden des abgelegten Modells beim Start der app.
+- **PV im Modell:** Die PV einer Viertelstunde ist die Summe aller PV-Reihen (Wechselrichter und
+  `dc`). Hat in einer Viertelstunde nicht jede Reihe, die InfluxDB im Fenster überhaupt liefert, einen
+  Wert, ist die PV dort **unbekannt**, nicht eine zu kleine Teilsumme: Die Viertelstunde geht weder in
+  die Grundleistung noch in die Auskühl-Phasen oder Versatz-Ereignisse ein.
 - **Das Modell einer Betriebsart** besteht aus der **Grundleistung** (Watt je Kelvin Temperaturdifferenz
   zwischen Sollwert und außen, dazu ein Anteil je kW PV und ein fester Anteil), der **Zeitkonstante** τ
   (aus den Auskühl-Phasen, in denen die Klimaanlage nicht lief) und dem **Speicher** `C` (kWh Strom je
@@ -4777,6 +4781,9 @@ das Komfortband liegt immer innerhalb von `max_offset_k`.
 | `poor_fit` | „Die Grundleistung passt noch nicht (R² {r}, nötig 0,5).“ |
 | `implausible_tau` | „Die Zeitkonstante {τ} h ist unplausibel (4 bis 200 h).“ |
 | `no_data` | „Noch keine Daten der Klimaanlage.“ |
+
+`no_data` meldet auch eine Betriebsart, in der das Fenster keinen einzigen Slot hat (etwa Kühlen im Winter),
+solange es Daten der anderen gibt; `few_days` heißt, dass es Slots gibt, aber zu wenig Tage.
 
 - **Komponente `thermal_model`** unter **System** → „Komponenten“: „Wärmemodell aktuell“, „Noch
   keine Daten der Klimaanlage“ (normal, bis die ersten Tage vorliegen; Status in Ordnung), „Keine
@@ -4948,8 +4955,11 @@ Namen (`label`) steht er statt „Klima“ vorn.
 
 ### Anzeige im UI
 
-- **Prognosen**, Karte „Wärmemodell“ (nach „Anwesenheit“; ohne Klimaanlage fehlt sie): je Betriebsart
-  der Kopf „Heizen“ bzw. „Kühlen“ mit „· {n} Tage“, die Zeilen „Grundleistung“ („{u} W je K
+- **Prognosen**, Karte „Wärmemodell“ (nach „Anwesenheit“): Sie erscheint erst mit der ersten Antwort
+  (davor steht nichts, auch kein „Lädt …“) und **fehlt ohne Klimaanlage**: Antwortet der Server mit
+  404, fragt die Seite nicht mehr nach (eine geänderte Konfiguration braucht ohnehin einen Neustart der
+  app und ein Neuladen der Seite); bei anderen Fehlern fragt sie weiter alle 30 s. Je Betriebsart
+  der Kopf „Heizen“ bzw. „Kühlen“ mit „· {n} Tage“ („· 1 Tag“), die Zeilen „Grundleistung“ („{u} W je K
   Temperaturdifferenz“), „Zeitkonstante“ („{τ} h“), „Speicher“ („{c} kWh Strom je K“, mit
   Versatz-Ereignissen „{c} kWh je K (aus {k} Versatz-Ereignissen, Modell {c₀})“), „Auskühl-Phasen“ und
   „Anpassung“ („R² {r}“), darunter der Zustand („Modell taugt.“ oder der Satz des Grundes, oben) und
@@ -4969,7 +4979,9 @@ Namen (`label`) steht er statt „Klima“ vorn.
 - **System**, Karte „Klimaanlage“: die Zeile „Plan“ zwischen „Wunsch“ und „Leistung“ zeigt den
   Planwert, dem der core folgt (Health `planned`), als Versatz des Sollwerts: „{k} K bis {HH:MM}“ (das
   Ende der Slots mit denselben Stufen im Plan, den der core hat, höchstens bis zu dessen Gültigkeit),
-  ohne Slot für jetzt nur „{k} K“, ohne Planwert „kein Planwert“. „Warum?“ nennt beim Folgen den Grund
+  ohne Slot für jetzt nur „{k} K“, ohne Planwert „kein Planwert“; bei Planwert 0 steht statt „0,0 K“
+  „kein Versatz“ („kein Versatz bis {HH:MM}“, ohne Slot-Ende „kein Versatz“). Das Minus ist in dieser
+  Karte das echte „−“ (U+2212). „Warum?“ nennt beim Folgen den Grund
   `thermal_plan` („Klimaanlage folgt dem Plan ({k} K)“, Abschnitt „Klimaanlage (Phase 6a)“, „Gründe“).
 - **Einstellungen:** der Abschnitt „Vorheizen und Vorkühlen“ (oben) mit dem Schalter, der Hilfe „Die
   Klimaanlage nutzt das Haus als Wärmespeicher. Aus: Der Zeitplan zeigt nur eine Vorschau.“ und den
@@ -5331,7 +5343,7 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `settings` | Einstellungen geändert | Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
 | `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus (ändern sich nur das Ladelimit oder die Quelle des Ladestands, plant die app höchstens alle 5 min neu; Ziel, Abfahrt und die Menge der geplanten Autos lösen sofort aus); außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
-| `thermal` | Klimaanlage geändert | die Betriebsart der Klimaanlage aus Health wechselt zwischen Heizen, Kühlen und dem Rest (Lüften, aus, unbekannt), oder ein neues Wärmemodell liegt vor (seit Plan 5c); höchstens alle 5 min |
+| `thermal` | Klimaanlage geändert | die Betriebsart der Klimaanlage aus Health wechselt zwischen Heizen, Kühlen und dem Rest (Lüften, aus, unbekannt), oder ein neues Wärmemodell liegt vor (seit Plan 5c); je Wechsel einmal, höchstens alle 5 min, auch wenn der Lauf keinen Plan ergibt |
 
 Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core ab seinem nächsten
 Zyklus mit ihr. Die app sieht das erst im nächsten Health, das sie abfragt (`intent_version`, bis zu
