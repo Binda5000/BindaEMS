@@ -263,6 +263,21 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   Absicht danach neu (Bedienung oder `PUT /v1/intent`). Die Datenbank der app ist nicht betroffen
   (keine Migration). In Home Assistant bleiben die Zahlen „Sofort-Höchststrom“ und
   „Gast-Sofort-Höchststrom“ als nicht mehr gepflegte Entitäten stehen, bis du sie dort entfernst.
+- **Update mit dem Plan Vorklimatisieren:** Der Plan ändert core und app; beide rollen
+  **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`):
+  der core sendet neue Grund-Codes („Vorklimatisieren“, „Geladen, bleibt an“), und die app kennt ihren
+  Text. Es gibt keine Migration, keine Änderung der Absicht und keine ACL-Zeile, und an `config.yaml`
+  ist nichts zu tun: der Schalter `vehicles.<Schlüssel>.climate_via_wallbox` ist ab Werk an. Was die
+  Regeln tun und wie du sie abschaltest, steht im Abschnitt „Laderegelung“, „Lademodi“
+  („Vorklimatisieren über die Wallbox“) und „Tesla“. Bei der Abnahme siehst du dir das Log einmal an
+  (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“, „Vorklimatisieren über die Wallbox“,
+  „An der Anlage prüfen“).
+- **Rollback auf einen Stand vor dem Vorklimatisieren über die Wallbox:** Hast du
+  `climate_via_wallbox` in `config.yaml` eingetragen (ab Werk steht der Schlüssel dort nicht), entferne
+  ihn **vor** dem Rollback des core: Ein älterer core lehnt unbekannte Schlüssel ab
+  (`extra="forbid"`) und startet mit dieser Datei nicht. Sonst ist nichts zu tun, denn die Absicht und
+  die Datenbank der app haben sich nicht geändert. Eine ältere app zeigt für die beiden neuen Gründe
+  nur den Code.
 - **Update mit Plan 5c (Vorheizen und Vorkühlen):** Plan 5c ändert core und app; beide rollen
   gemeinsam aus, mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Migration `0015` legt die
   Tabelle `thermal_model` an; **sichere die Datenbank vorher** (`/backup/vor-plan-5c.sqlite3`). Der
@@ -2554,6 +2569,30 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   dessen Grund. Liegt ein Wächter zwischen Limit und vollem Strom (etwa Limit 10 A, Phasenwächter
   12 A), stehen beide: „Sofort-Limit“, danach der Grund des Wächters. Ein Gast wird nur an der EVCS
   begrenzt.
+- **Vorklimatisieren über die Wallbox** (Plan Vorklimatisieren): Damit ein Auto beim Vorheizen und
+  Vorkühlen den Strom von der Wallbox nimmt und nicht aus seinem Akku, gelten zwei Regeln nach dem
+  Urteil des Modus. Beide gelten in jedem Modus außer „Aus“ („Aus“ bleibt aus, der Stopp bleibt
+  dringend), nur bei klarer Zuordnung und nur für Fahrzeuge aus `config.yaml` (ein Gast bekommt sie
+  nicht; eine volle Gast-EVCS geht wie bisher aus). Der Schalter je Fahrzeug steht unten
+  (Abschnitt „Zuordnung Auto und Wallbox“, „Vorklimatisieren über die Wallbox“, `climate_via_wallbox`).
+  - **„Geladen, bleibt an“** (`keep_on_complete`): Ein Auto an einer EVCS, das im Ansteckvorgang
+    „geladen“ meldet (oben), behält die EVCS an, mit dem Mindeststrom des Ladepunkts (`min_a`, beim
+    e-Golf 6 A), bis du absteckst. So kann er über die Wallbox heizen, statt den Akku zu leeren.
+    Zieht er nichts, kostet das nichts. Das gilt nur für „geladen“, **nicht** für ein erreichtes Ziel
+    in „Geplant“ (der Akku ist dort nicht voll, und das Auto würde weiterladen). Ist die EVCS aus
+    (etwa nach einem Neustart des core), startet sie wieder, wenn die Grenze des Phasenwächters den
+    Mindeststrom trägt und keine Start-Sperre von 15 min gilt (wie jeder Start). Ein „geladenes“ Auto
+    nimmt weiter nicht am PV-Überschuss teil; was es zieht, zählt als Last.
+  - **„Vorklimatisieren“** (`climate`): Beim Tesla siehe „Tesla“ unten.
+  - Die Überlast geht vor: Stoppt der Phasenwächter oder die Überlast die EVCS (`EVCS_STOP`,
+    `ALL_STOP`), bleibt sie aus; nach einem solchen Stopp gilt die Mindestpause `control.min_off_s`
+    auch für ein Auto in dieser Regel, wie nach jedem Überlast-Stopp. Ab der Stufe `MINIMUM` bleibt es
+    beim Mindeststrom.
+  - Wird die Senkung auf den Mindeststrom nötig, ist sie nur dringend, wenn die Sicherung allein eine
+    Senkung unter den Ist-Strom verlangte; sonst geht sie den normalen Weg.
+  - Im Entscheidungslog steht der Grund nach dem Grund des Modus, etwa „e-Golf (Sofort, Geladen, bleibt
+    an)“ (Tabelle „Gründe“, unten). Health, Ansicht und das Urteil des Modus ändern sich nicht; nur
+    das Log und „Warum?“ zeigen den neuen Grund.
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
@@ -3081,6 +3120,32 @@ vehicles:
   einen tessie-Abschnitt`. Ohne den Schlüssel bleibt das Limit, wie es im Auto steht; liegt es unter
   dem Ziel, rechnen core und Planer mit dem Limit als Ziel.
 
+**Vorklimatisieren über die Wallbox.** Ein Schlüssel je Fahrzeug in `config.yaml` schaltet beide
+Regeln (Abschnitt „Lademodi“, „Vorklimatisieren über die Wallbox“, und „Tesla“) für dieses Fahrzeug ab. Er
+hat einen Standard und ist ab Werk **an**, du musst also nichts eintragen (neu mit dem Plan
+Vorklimatisieren):
+
+```yaml
+vehicles:
+  tesla:
+    # ...
+    climate_via_wallbox: false     # optional, Standard true
+```
+
+- `climate_via_wallbox: false` schaltet beim Tesla den Verzicht auf den Stopp während der
+  Klimatisierung und beim e-Golf das „Geladen, bleibt an“ ab. Beides verhält sich dann wie vor dem
+  Plan: der Tesla bekommt „Laden aus“ (nach dem Modus oder als Selbststart), und die EVCS geht nach
+  „geladen“ aus. Nach einer Änderung startest du den core neu (Abschnitt 13, „Wartung“).
+- Vor einem **Rollback** des core auf einen Stand vor dem Plan entfernst du den Schlüssel wieder
+  (Abschnitt 4, „Rollback auf einen Stand vor dem Vorklimatisieren über die Wallbox“).
+- **An der Anlage prüfen** (einmal, bei der Abnahme): Heizt oder kühlt du den Tesla vor, während er am
+  Wall Connector steckt, zeigt das Log (Seite „Entscheidungen“, „Warum?“) „Vorklimatisieren“ und
+  **keinen** Stopp mit dem Grund „Selbststart“ („Tesla Model 3 (…, Selbststart): Laden aus“). Steckt ein
+  voller e-Golf (EVCS „geladen“), bleibt die EVCS an, im Log „Geladen, bleibt an“, und die Standheizung
+  zieht aus dem Netz statt aus dem Akku des Autos. Zeigt das Log doch „Selbststart“ während des
+  Vorheizens, meldet Tessie die Klimatisierung nicht (die Annahme des Plans stimmt dann nicht): Prüfe
+  `climate_state` im Tessie-Cache und gib den Befund weiter, bevor du den Schalter änderst.
+
 **Gast.** Je Wallbox gibt es einen Gast, im Health `guest` mit dem Namen „Gast“; so steht ein Gast
 nie an zwei Wallboxen. Der Gast hat keinen Eintrag in `config.yaml` und keine Tessie-Werte. Ein
 Fahrzeug in `config.yaml` darf darum nicht `guest` heißen und nicht mit `guest@` beginnen; sonst
@@ -3238,6 +3303,20 @@ den ersten Tagen:
   `control.tesla_against_retry_s` (600 s). Der Befehl zählt im Start/Stopp-Budget, außer im Modus
   „Aus“ (dort ist er dringend). Startet das Auto also selbst, etwa aus der Tesla-App, stoppt die
   Regelung es binnen rund 3,5 min wieder (Szenario `tesla-selbststart`).
+- **Vorklimatisieren** (Plan Vorklimatisieren, Grund `climate`): Startet die Klimatisierung am
+  Kabel, beginnt der Tesla oft selbst zu laden. Meldet Tessie `climate_state.is_climate_on` oder
+  `is_preconditioning` (Signal `vehicle.<Schlüssel>.climate_on`), ist das Auto erreichbar, angesteckt
+  und lädt, ist die Zuordnung klar, der Ladepunkt geregelt und der Modus nicht „Aus“, und will der
+  Modus nicht laden (etwa PV-Überschuss ohne Überschuss), **stoppt die Regelung ihn nicht**: Es gibt
+  kein „Laden aus“ (weder nach dem Modus noch als Selbststart) und kein eigenes „Laden an“, kein
+  Wecken, und der Strom fordert den Mindeststrom des Ladepunkts (`min_a`, 5 A). Den Rest der
+  Klimaleistung nimmt der Tesla aus dem Akku, ein Überschuss geht in den Akku des Autos. Will der
+  Modus laden, gilt sein Strom wie bisher. Lädt der Tesla bei Klimatisierung nicht von selbst (etwa
+  „Complete“), ändert sich nichts. **Nach dem Ende der Klimatisierung** beginnen die Zeit und der
+  letzte Neuversuch des Selbststarts neu: Lädt der Tesla weiter, stoppt ihn der Selbststart nach
+  `control.tesla_against_s` (120 s) plus der Abfrage von Tessie (bis zu 60 s), ohne die 600 s eines
+  Neuversuchs davor. Im Log steht „Vorklimatisieren“ an dem Befehl, der den Strom auf den
+  Mindeststrom setzt; solange nichts zu senden ist, erscheint nichts. Szenario: `tesla-vorklimatisieren`.
 - **Ansteckerkennung** (seit Plan 2d): Tessie fragt ein Auto alle 30 s ab, solange es lädt, alle 60 s,
   solange es angesteckt oder zu Hause ist, sonst alle 600 s. Erscheint an einer Wallbox ein
   Fahrzeug, fragt der core sofort nach, frühestens 10 s nach der letzten Abfrage. Ein Tesla, der beim
@@ -3347,6 +3426,8 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `latest_start` | Späteste Startzeit | Im Modus „Geplant“ gibt es keinen gültigen Plan-Slot und die späteste Startzeit ist erreicht: Das Auto lädt mit voller Leistung bis zum Ziel. |
 | `target_reached` | Ziel-SOC erreicht | Im Modus „Geplant“ hat das Auto den Ziel-SOC erreicht; die Regelung stoppt das Laden. |
 | `charge_limit` | Ladelimit | Der Befehl setzt das Ladelimit des Tesla auf das Ziel (nur mit `charge_limit_sync`). |
+| `climate` | Vorklimatisieren | Der Tesla klimatisiert und lädt dabei; die Regelung stoppt ihn nicht und fordert den Mindeststrom (Tesla, oben). Steht nach dem Grund des Modus. |
+| `keep_on_complete` | Geladen, bleibt an | Das Auto an der EVCS ist „geladen“; die EVCS bleibt mit dem Mindeststrom an, damit es über sie klimatisieren kann (Lademodi, oben). Steht nach dem Grund des Modus. |
 | `foreign_change` | Änderung von außen | Nur bei einer Entscheidung mit dem Ergebnis „von außen geändert“ (Abschnitt 13, „Sperren“): Ein anderes System hat den Wert am Gerät geändert. |
 
 Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht (etwa
