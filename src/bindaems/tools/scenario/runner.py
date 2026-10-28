@@ -45,7 +45,10 @@ geben; die Summe geht als ``SimSlot.ev_battery_w`` in das Akkumodell, das sie nu
 ``EIGENVERBRAUCH`` und nach dem Haus gibt. Was der Akku gab, steht je Tag in ``car_battery_kwh``;
 die Kosten des Optimierers zählen dafür den Verschleiß ``wear_ct`` je kWh, damit der Vergleich mit
 „Victron allein“ (Autos aus PV und Netz) ihn nicht beschönigt. Die Nachrechnung je Plan rechnet
-den Akkuanteil mit, Regel R2 zählt ihn nicht.
+den Akkuanteil mit, Regel R2 zählt ihn nicht. Die Grenze des core „nur solange der SOC über dem
+geplanten SOC am Ende des Slots liegt“ (``soc_end_pct``, Entscheidung 4) bildet der Runner nicht
+nach; er gibt den geplanten Anteil, begrenzt nur durch Reserve und Entladegrenze. Je nachdem, wie
+Last und PV vom Plan abweichen, rechnet er damit optimistischer oder vorsichtiger als die Anlage.
 """
 
 from __future__ import annotations

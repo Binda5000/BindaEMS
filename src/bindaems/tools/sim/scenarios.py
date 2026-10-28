@@ -4142,10 +4142,11 @@ def _akku_uebrig_sofort() -> Scenario:
 
 
 def _akku_uebrig_geplant() -> Scenario:
-    """Der e-Golf lädt in der Nacht „Geplant“ mit 2800 W, alle aus dem Akku (``ev_battery_w``),
-    solange der SOC über dem geplanten SOC am Ende des Slots liegt (Plan Akku ins Auto,
-    Entscheidung 4). Das Haus braucht mehr, als der Plan annimmt: Im dritten Slot erreicht der SOC
-    sein Ende, und der Rest kommt aus dem Netz; der Akku trägt nur noch das Haus."""
+    """Der e-Golf lädt in der Nacht „Geplant“ mit 2760 W (``PLANNED_BATTERY_W``), alle aus dem Akku
+    (``ev_battery_w``), solange der SOC über dem geplanten SOC am Ende des Slots liegt (Plan Akku
+    ins Auto, Entscheidung 4). Das Haus braucht mehr, als der Plan annimmt: Im dritten Slot
+    erreicht der SOC sein Ende, und der Rest kommt aus dem Netz; der Akku trägt nur noch das
+    Haus."""
     start, duration_s, seed = NIGHT, 45 * MINUTE_S, 45
     slots = tuple((k, OWN_USE, None) for k in range(len(PLANNED_SOC_END_PCT)))
     plan = _plan(
