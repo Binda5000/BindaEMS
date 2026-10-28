@@ -57,6 +57,8 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "AUTO_ERWARTET": {"name": "Tesla Model 3", "um": "17:30", "soc": 40.6},
     "KLIMA_MEHR": {"mode": "heizen", "k": 1.0},
     "KLIMA_WENIGER": {"mode": "kuehlen", "k": -0.5},
+    "AUTO_AUS_AKKU": {"name": "Tesla Model 3", "kw": 2.5},
+    "SOFORT_AUS_AKKU": {"soc": 62.0},
 }
 
 
@@ -131,6 +133,10 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         ),
         "KLIMA_MEHR": "Vorheizen um 1,0 K, weil Strom jetzt günstig ist oder PV übrig bleibt.",
         "KLIMA_WENIGER": "Kühlung 0,5 K schwächer, weil Strom jetzt teuer ist.",
+        "AUTO_AUS_AKKU": "Tesla Model 3 lädt 2,5 kW aus dem Akku statt aus dem Netz.",
+        "SOFORT_AUS_AKKU": (
+            "Autos in Sofort dürfen aus dem Akku laden, solange er über 62 % liegt."
+        ),
     }
     assert set(expected) == set(get_args(ReasonCode))
     for code, text in expected.items():
@@ -543,3 +549,103 @@ def test_explain_names_preheat_and_setback() -> None:
     assert with_thermal([main], less) == [main, less]
     assert with_thermal([main, guess], None) == [main, guess]
     assert with_thermal([], more) == [more]
+
+
+# Akku ins Auto
+
+
+def test_sentences_from_the_battery_literally() -> None:
+    reason = Reason(code="AUTO_AUS_AKKU", params={"name": "Tesla", "kw": 2.5})
+    assert sentence(reason) == "Tesla lädt 2,5 kW aus dem Akku statt aus dem Netz."
+    reason = Reason(code="SOFORT_AUS_AKKU", params={"soc": 62})
+    assert (
+        sentence(reason) == "Autos in Sofort dürfen aus dem Akku laden, solange er über 62 % liegt."
+    )
+
+
+def _battery_codes(
+    ev_w: list[dict[str, float]],
+    ev_battery_w: list[dict[str, float]],
+    *,
+    pv: float = 0.0,
+) -> list[list[Reason]]:
+    count = len(ev_w)
+    inputs = scenario(
+        prices=[20.0] * count,
+        pv=[pv] * count,
+        load=[500.0] * count,
+        vehicles=[planned_car(departure_at=_slot(count), need_kwh=1.0)],
+    )
+    intents = [EV] * count
+    return reasons_for(
+        inputs,
+        intents,
+        resimulate(inputs, intents),
+        [None] * count,
+        fallback=False,
+        ev_w=ev_w,
+        ev_battery_w=ev_battery_w,
+    )
+
+
+def test_car_from_battery_only_is_not_ziel_soc_abfahrt() -> None:
+    result = _battery_codes([{"tesla": 3000.0}], [{"tesla": 3000.0}])
+    assert [r.code for r in result[0]] == ["EIGENVERBRAUCH", "AUTO_AUS_AKKU"]
+    assert result[0][1].params == {"name": "Tesla Model 3", "kw": 3.0}
+
+
+def test_grid_share_keeps_ziel_soc_abfahrt_before_auto_aus_akku() -> None:
+    # 7 kW: 2,5 kW aus dem Akku, 1 kW aus PV (1,5 kW PV, 0,5 kW Haus), 3,5 kW aus dem Netz
+    result = _battery_codes([{"tesla": 7000.0}], [{"tesla": 2500.0}], pv=1500.0)
+    assert [r.code for r in result[0]][1:] == ["ZIEL_SOC_ABFAHRT", "AUTO_AUS_AKKU"]
+    assert result[0][1].params["kw"] == 7.0
+    assert result[0][2].params["kw"] == 2.5
+
+
+def test_small_battery_share_is_not_mentioned() -> None:
+    result = _battery_codes([{"tesla": 7000.0}], [{"tesla": 50.0}])
+    assert [r.code for r in result[0]] == ["EIGENVERBRAUCH", "ZIEL_SOC_ABFAHRT"]
+
+
+def _now_codes(now_battery: list[bool]) -> list[list[Reason]]:
+    count = len(now_battery)
+    inputs = scenario(prices=[20.0] * count, pv=[0.0] * count, load=[500.0] * count)
+    intents = [EV] * count
+    thresholds = [(62.0, SCENARIO_START_AT)] * count
+    return reasons_for(
+        inputs,
+        intents,
+        resimulate(inputs, intents),
+        [None] * count,
+        fallback=False,
+        thresholds=thresholds,
+        now_battery=now_battery,
+    )
+
+
+SCENARIO_START_AT = at(SCENARIO_START)
+
+
+def test_sofort_aus_akku_only_at_the_start_of_a_run() -> None:
+    result = _now_codes([True, True, False, True])
+    assert ["SOFORT_AUS_AKKU" in [r.code for r in c] for c in result] == [True, False, False, True]
+    assert result[0][-1] == Reason(code="SOFORT_AUS_AKKU", params={"soc": 62.0})
+
+
+def test_build_plan_passes_the_battery_share_on_to_the_reasons() -> None:
+    inputs = scenario(
+        prices=[20.0] * 2,
+        pv=[0.0] * 2,
+        load=[500.0] * 2,
+        vehicles=[planned_car(departure_at=_slot(2), need_kwh=1.0)],
+        car_battery=True,
+    )
+    plan = build_plan(
+        inputs,
+        [EV] * 2,
+        source="optimizer",
+        solver_status="optimal",
+        ev_w=[{"tesla": 3000.0}, {}],
+        ev_battery_w=[{"tesla": 3000.0}, {}],
+    )
+    assert [r.code for r in plan.slots[0].reasons][:2] == ["EIGENVERBRAUCH", "AUTO_AUS_AKKU"]

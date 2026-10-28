@@ -312,6 +312,8 @@ def build_plan(
         thresholds=thresholds,
         ev_w=powers,
         vehicles=vehicles,
+        ev_battery_w=battery_powers,
+        now_battery=now_battery,
     )
     slots = [
         draft.model_copy(update={"support_soc_pct": threshold, "reasons": slot_reasons})
