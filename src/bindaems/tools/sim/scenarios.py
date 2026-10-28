@@ -2915,6 +2915,9 @@ def _tesla_ladelimit() -> Scenario:
     )
 
 
+# --- Szenario 34: Sofort-Limit (Plan Sofort-Limit, Entscheidungen 3 und 4) ------------------------
+
+
 def _sofort_limit() -> Scenario:
     """Sommer, der e-Golf lädt an der EVCS in Sofort mit dem Höchststrom ``NOW_LIMIT_A`` (8 A),
     der Tesla am Wall Connector in PV-Überschuss (Plan Sofort-Limit, Entscheidungen 3 und 4). Das
@@ -2979,7 +2982,7 @@ def _sofort_limit() -> Scenario:
     )
 
 
-# --- Szenarien 34 bis 39: Klimaanlage (Plan 6a, Entscheidung 15) -------------------------------
+# --- Szenarien 35 bis 40: Klimaanlage (Plan 6a, Entscheidung 15) -------------------------------
 
 KLIMA: Final = "klima"  # Schlüssel der Klimaanlage in der Beispielkonfiguration
 KLIMA_ACTUATOR: Final = thermal_actuator(KLIMA)
