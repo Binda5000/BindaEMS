@@ -3825,6 +3825,12 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   - Diese Anteile zählen nicht gegen die 3 kW der Unterstützung (`support_max_w`) und nicht zur
     Überbrückung; die Reihenfolge ist die von `priority`, jede Wallbox bekommt höchstens ihren
     Fehlbetrag. Will der Slot `HALTEN` oder `NETZLADEN`, bekommt kein Auto etwas.
+  - **Entladegrenze:** Geplant und Sofort zusammen bekommen höchstens, was von
+    `battery.max_discharge_w` (12 kW) bleibt, nachdem der Akku den Teil der Hauslast deckt, den die
+    PV nicht deckt, und die Unterstützung und Boost ihren Anteil haben; zuerst Geplant, dann Sofort,
+    je nach `priority`. Den Rest verschiebt der Override aufs Netz, und der 15-min-Wächter sieht ihn
+    als Netzanteil und kann das Auto drosseln. Beispiel: zwei Autos in Sofort mit je 11 kW, Haus
+    1 kW: 11 kW aus dem Akku, 11 kW Netzanteil. Das ist die Grenze des Akkus, keine eigene.
   - **Stromstufen:** Der core lädt ein Auto in Geplant mit der Leistung des Plans, auf ganze A
     aufgerundet (Abschnitt „Laderegelung“, „Geplant“), der Akku gibt aber nur den Akkuanteil. Lädt der
     Plan ein Auto ganz aus dem Akku, kommt deshalb bis zu eine Stromstufe aus dem Netz: 460 W beim
@@ -5586,6 +5592,20 @@ bleiben, wie sie sind.
   den Szenarien der CI stieg `winter-leistung` von 87 s auf 112 s, und einzelne Pläne mit stark
   wechselnden Preisen erreichen das Zeitlimit von 20 s, mit einer Lösung, die dann gilt. Nähert sich
   `solve_ms` an der Anlage oft 20 s, ist das ein Befund (unten, „An der Anlage prüfen“).
+- **Grenzen** (Stand jetzt):
+  - **Stromstufe bei Geplant:** Plant der Optimierer einen Slot ganz aus dem Akku, kommt trotzdem
+    bis zu eine Stromstufe aus dem Netz (rund 460 W beim e-Golf, 690 W beim Tesla): Der core rundet
+    die Leistung des Plans auf ganze A auf, der Akku gibt aber höchstens den geplanten Anteil. Ob der
+    Akku diese Stufe mitgeben soll, entscheidet der Betreiber noch.
+  - **Sofort ganz aus dem Akku** steht nicht im Entscheidungslog, denn ohne Rest fürs Netz gibt es
+    keinen Override. Du siehst es in Health (`battery.spare`, `battery.spare_w`) und in der
+    Erklärung im Zeitplan (`SOFORT_AUS_AKKU`).
+  - **Regel 2:** Endet der übrige Akku, verschiebt der Override den Fehlbetrag eines Autos in Sofort
+    nur bis rund 8 kW (`victron.max_grid_charge_setpoint_w`) aufs Netz; darüber liefert der Akku
+    weiter (Abschnitt „Akku und Spitzen“, „Akku-Sollwert“).
+  - **Entladegrenze:** Geplant und Sofort bekommen zusammen höchstens die Entladeleistung, die nach
+    Haus, Akku-Unterstützung und Boost frei bleibt (`battery.max_discharge_w`), zuerst Geplant,
+    dann Sofort. Den Rest holt der Override aus dem Netz, und der 15-min-Wächter kann ihn drosseln.
 
 ### Übergabe an den core
 
