@@ -222,6 +222,7 @@ class ThermalModelService:
         self._error: str | None = None  # Fehler des letzten Laufs
         self._empty = False  # der letzte Lauf fand keine Viertelstunde im Fenster
         self._tasks: set[asyncio.Task[Any]] = set()  # Aufgaben in ``run`` und ``start_run``
+        self._closed = False  # ``close`` lief: ``start_run`` startet nichts mehr
         # Rechnungen und Schreibzugriffe im Thread; nach einem Abbruch laufen sie weiter, bis sie
         # wirklich enden (``close`` wartet darauf, bevor die Datenbank schließt)
         self._threads: set[asyncio.Future[Any]] = set()
@@ -288,9 +289,9 @@ class ThermalModelService:
 
     def start_run(self) -> bool:
         """Rechnet im Hintergrund neu (Taste „Jetzt neu berechnen“); ``False``, wenn schon ein Lauf
-        läuft. Der Lauf gilt sofort als laufend, auch bevor die Aufgabe beginnt. Nur aus der
-        Ereignisschleife aufrufen."""
-        if self._running:
+        läuft oder ``close`` schon lief (dann startet nichts). Der Lauf gilt sofort als laufend,
+        auch bevor die Aufgabe beginnt. Nur aus der Ereignisschleife aufrufen."""
+        if self._running or self._closed:
             return False
         self._running = True
         task = asyncio.get_running_loop().create_task(
@@ -330,6 +331,7 @@ class ThermalModelService:
     async def close(self, timeout_s: float) -> bool:
         """Beim Herunterfahren: bricht laufende Läufe ab und wartet höchstens ``timeout_s`` auf
         Rechnungen und Schreibzugriffe im Thread. ``True``, wenn keiner mehr läuft."""
+        self._closed = True
         tasks = [task for task in self._tasks if task is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
@@ -365,7 +367,7 @@ class ThermalModelService:
             self._error = str(exc) or type(exc).__name__
             return
         for mode, (model, profile) in built.items():
-            self._states[mode] = _State(model, profile, now)
+            self._states[mode] = _State(model, profile, ensure_utc(now))
         self._error = None
         self._empty = False
         log.info(

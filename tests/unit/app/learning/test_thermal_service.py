@@ -448,6 +448,21 @@ async def test_first_run_does_not_wait_forever(make_service, read, monkeypatch) 
     ]
 
 
+async def test_fresh_computed_at_is_utc_like_a_loaded_one(make_service) -> None:
+    class LocalClock:
+        """Eine Uhr in Ortszeit: ``computed_at`` muss trotzdem UTC sein."""
+
+        def now(self) -> datetime:
+            return NOW.astimezone(LOCAL_TZ)
+
+    service = make_service(clock=LocalClock())
+    assert await service.recompute() is True
+    current = service.current("heizen")
+    assert current is not None
+    assert current[2] == NOW and current[2].tzinfo is UTC
+    assert service.status()["computed_at"] == NOW.isoformat()
+
+
 async def test_close_without_a_run_is_done_at_once(service) -> None:
     assert await service.close(0) is True
 
@@ -470,6 +485,13 @@ async def test_close_cancels_the_run_and_waits_for_the_thread(service, monkeypat
     release.set()
     assert await service.close(5) is True
     assert service.running is False
+
+
+async def test_start_run_after_close_starts_nothing(service, read) -> None:
+    assert await service.close(0) is True
+    assert service.start_run() is False
+    assert service.running is False
+    assert read.calls == []
 
 
 # --- Gerät ------------------------------------------------------------------------------------

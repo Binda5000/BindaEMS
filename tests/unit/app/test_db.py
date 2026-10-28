@@ -651,7 +651,7 @@ def test_migration_0015_creates_thermal_model(engine: Engine) -> None:
         for c in inspector.get_columns("thermal_model")
         if c["name"] in ("device", "mode", "reason")
     }
-    assert lengths["device"] == 32 and lengths["reason"] == 32
+    assert lengths == {"device": 32, "mode": 16, "reason": 32}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
 
