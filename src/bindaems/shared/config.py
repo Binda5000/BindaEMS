@@ -458,6 +458,9 @@ class VehicleConfig(_Model):
     charge_efficiency_pct: Annotated[float, Field(ge=50, le=100)] = 90.0
     # Ladelimit des Tesla in „Geplant“ an das Ziel angleichen (Plan 4b, Entscheidung 11)
     charge_limit_sync: bool = False
+    # Vorklimatisieren über die Wallbox: Tesla beim Klimatisieren nicht stoppen, EVCS nach „geladen“
+    # an lassen (Plan Vorklimatisieren)
+    climate_via_wallbox: bool = True
 
     @field_validator("name")
     @classmethod

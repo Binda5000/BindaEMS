@@ -51,6 +51,19 @@ def test_parse_state_missing_location() -> None:
     assert parse_state(data, HOME, 150)["at_home"] is None
 
 
+def test_parse_state_climate_on_from_climate_or_preconditioning() -> None:
+    for climate, pre, expected in [(True, False, True), (False, True, True), (False, False, False)]:
+        data = {**STATE, "climate_state": {"is_climate_on": climate, "is_preconditioning": pre}}
+        assert parse_state(data, HOME, 150.0)["climate_on"] is expected
+
+
+def test_parse_state_climate_unknown_without_climate_state() -> None:
+    data = {k: v for k, v in STATE.items() if k != "climate_state"}
+    assert parse_state(data, HOME, 150.0)["climate_on"] is None
+    data = {**STATE, "climate_state": {"is_climate_on": "yes"}}
+    assert parse_state(data, HOME, 150.0)["climate_on"] is None
+
+
 @pytest.mark.parametrize(
     ("state", "plugged", "home", "expected"),
     [

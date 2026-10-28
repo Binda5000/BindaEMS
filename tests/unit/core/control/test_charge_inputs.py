@@ -503,6 +503,7 @@ def test_observations_keep_the_order_of_the_configuration(cfg) -> None:
                 "soc_pct",
                 "soc_at",
                 "charge_limit_pct",
+                "climate_on",
             ],
         ),
         (
@@ -585,6 +586,16 @@ def test_homes_list_the_vehicles_with_a_home_entity_in_the_order_of_the_configur
     assert list(homes(snap(values), both).items()) == [("tesla", False), ("egolf", True)]
     # ohne home_entity fehlt das Fahrzeug, auch wenn sein Signal einen Wert hat
     assert homes(snap(values), cfg) == {"egolf": True}
+
+
+def test_vehicle_obs_reads_climate_on(cfg) -> None:
+    assert obs(cfg, {"vehicle.tesla.climate_on": True})[2]["tesla"].climate_on is True
+    assert obs(cfg, {"vehicle.tesla.climate_on": False})[2]["tesla"].climate_on is False
+    assert obs(cfg, {})[2]["tesla"].climate_on is None
+    assert obs(cfg, {"vehicle.tesla.climate_on": "ja"})[2]["tesla"].climate_on is None
+    stale = snap({"vehicle.tesla.climate_on": True}, quality=Quality.STALE)
+    _, _, vehicles = observe(stale, derive(stale, cfg), cfg, lambda source: True)
+    assert vehicles["tesla"].climate_on is None
 
 
 def test_plugged_at_is_the_time_of_the_tessie_value(cfg) -> None:

@@ -93,6 +93,10 @@ vehicles:
     # verlangt tessie)
     # charge_efficiency_pct: 90
     # charge_limit_sync: false
+    # Vorklimatisieren über die Wallbox (Standard an): Der core stoppt den Tesla nicht, solange er
+    # klimatisiert, und lässt die Wallbox nach „geladen“ an, damit die Klimaanlage Netzstrom
+    # bekommt. Zum Abschalten:
+    # climate_via_wallbox: false
   egolf:
     name: e-Golf
     usable_kwh: 38.6
@@ -105,6 +109,9 @@ vehicles:
     # device_tracker des Autos in Home Assistant: `home` heißt zu Hause. Der core abonniert ihn selbst
     # (Signal vehicle.egolf.home_state); er sollte das Ankommen binnen einer Minute melden.
     home_entity: device_tracker.egolf
+    # Vorklimatisieren über die Wallbox (Standard an): Die EVCS bleibt nach „geladen“ an, damit der
+    # e-Golf über sie klimatisieren kann. Zum Abschalten:
+    # climate_via_wallbox: false
 
 pv:
   planes:
