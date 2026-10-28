@@ -1626,6 +1626,50 @@ async def test_mode_change_triggers_replan(service_with, live, clock, cold):
     assert plan is not None and plan.thermal is not None and plan.thermal.mode == "heizen"
 
 
+@pytest.mark.parametrize("change", ["mode", "model"])
+async def test_thermal_change_is_requested_once_while_no_plan_comes(
+    service_with, live, clock, cold, monkeypatch, change
+):
+    """Ergibt der Lauf „thermal“ keinen Plan (``PlanningUnavailable``), merkt sich
+    ``_with_thermal`` nichts; dieselbe Änderung der Betriebsart (oder ein neues Wärmemodell)
+    fordert trotzdem nur einmal an, nicht alle 5 min erneut."""
+    live.health = thermal_health("heizen")
+    calls: list[PlanInputs] = []
+    models = FakeModels()
+    service = service_with(solver=recording(calls), sleep=fast_sleep(), thermal_model=models)
+    attempts: list[PlanTrigger] = []
+    collect = service.collect
+
+    async def unavailable_after_start(trigger: PlanTrigger) -> PlanInputs:
+        if calls:
+            attempts.append(trigger)
+            raise PlanningUnavailable("Keine Preise")
+        return await collect(trigger)
+
+    monkeypatch.setattr(service, "collect", unavailable_after_start)
+    checks = 0
+    thermal_due = service._thermal_due
+
+    def counted(now: datetime) -> bool:
+        nonlocal checks
+        checks += 1
+        return thermal_due(now)
+
+    monkeypatch.setattr(service, "_thermal_due", counted)
+    async with running(service):
+        await until(lambda: _stored_runs(service) == 1)
+        if change == "mode":
+            live.health = thermal_health("kuehlen")
+        else:
+            service.thermal_model_changed()
+        await until(lambda: attempts == ["thermal"])
+        clock.advance(timedelta(seconds=601))  # mehr als 5 min später: schon gesehen
+        target = checks + 10
+        await until(lambda: checks >= target)
+    assert attempts.count("thermal") == 1  # die Viertelstunde („slot“) darf dazwischen planen
+    assert triggers(calls) == ["start"]
+
+
 async def test_missing_health_is_no_mode_change(service_with, live, cold):
     live.health = thermal_health("heizen")
     calls: list[PlanInputs] = []

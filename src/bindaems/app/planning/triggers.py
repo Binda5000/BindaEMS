@@ -32,7 +32,8 @@ PEAK_RISE_KW: Final = 0.05
 # Ladelimit und Quelle des Ladestands flattern (der Tesla meldet sie wechselnd): Ein Lauf
 # deswegen höchstens alle 5 min; Menge der Autos, Ziel und Abfahrt planen sofort
 VEHICLE_REPLAN_MIN_S: Final = 300.0
-# Betriebsart der Klimaanlage und neues Wärmemodell: höchstens alle 5 min ein Lauf (Plan 5c)
+# Betriebsart der Klimaanlage und neues Wärmemodell: je Änderung ein Lauf, höchstens alle 5 min
+# (Plan 5c)
 THERMAL_REPLAN_MIN_S: Final = 300.0
 # Felder eines Eintrags von ``vehicles_fingerprint`` bis einschließlich Abfahrt; danach folgen
 # die gedrosselten Felder (Ladestand angenommen, Ladelimit)

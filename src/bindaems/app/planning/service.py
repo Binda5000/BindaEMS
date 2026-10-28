@@ -477,7 +477,9 @@ class PlanningService:
         Health (``thermal_class``) eine andere ist als die, mit der der letzte Plan rechnete,
         oder seitdem ein neues Wärmemodell kam; höchstens alle ``THERMAL_REPLAN_MIN_S`` s. Eine
         gedrosselte Änderung bleibt fällig, bis die Zeit um ist. Ohne Health gibt es keinen
-        Vergleich, vor dem ersten Plan auch nicht."""
+        Vergleich, vor dem ersten Plan auch nicht. Eine ausgelöste Änderung gilt als gesehen,
+        auch wenn der Lauf keinen Plan ergibt (``_with_thermal`` merkt sich Betriebsart und Modell
+        nur mit einem Plan): sonst löste dieselbe Änderung alle 5 min erneut aus."""
         device = self._thermal_device
         if device is None or self._thermal_models is None:
             return False
@@ -493,6 +495,9 @@ class PlanningService:
         ):
             return False
         self._thermal_at = now
+        if current is not None:
+            self._thermal_seen = current
+        self._thermal_model_changed = False
         return True
 
     def _expected_changed(self, health: Mapping[str, Any] | None, intent: Intent | None) -> bool:
