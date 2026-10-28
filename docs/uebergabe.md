@@ -4045,7 +4045,11 @@ Fix-Welle erledigt.
   app mit Werten geprüft); der Kommentar oben in `PlanningEditor.svelte` ist länger als 100 Zeichen.
 - **Fix-Welle:** Netzenergie von vor dem Horizont gilt als weg, sobald ein Planungslauf den SOC höchstens bei Reserve
   + 0,1 kWh misst; bleibt der gemessene SOC am Ende der Entladung knapp darüber (bei 30 kWh 0,4 Punkte), hält die Sperre
-  bis zum nächsten leeren Akku. Der Akku-Sollwert rechnet die freie Entladeleistung mit `battery.max_discharge_w` der
+  bis zum nächsten leeren Akku. Liegt der Min-SOC der ESS über der USV-Reserve (die Selbstprüfung warnt dann),
+  erreicht der Akku die Reserve nie, und nach einem Netzladen bleiben Akku ins Auto und die Ausfuhr gesperrt, bis das
+  behoben ist (sicher, aber teuer). Die Strafe von 200 ct/kWh auf die Ausfuhr dieser Energie lockert die Lücke des
+  Solvers in diesem Fall etwas (0,5 % des Zielwerts). Ein Planungslauf zählt ein `NETZLADEN` des vorigen Plans auch, wenn
+  es wegen „Netzladen erlaubt“ aus nie gesendet wurde. Der Akku-Sollwert rechnet die freie Entladeleistung mit `battery.max_discharge_w` der
   Konfiguration, nicht mit der Grenze der BMS (`battery.dcl_a`). Ein Lauf, der die Eingangsdaten des vorigen Plans nicht
   lesen kann, nimmt Netzenergie im Akku an.
 - **Doku (Task 10):** Der Rückweg braucht zwei Handgriffe ohne Migration (`intent.json` per Skript, die Einstellungen wie

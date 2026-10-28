@@ -3823,7 +3823,7 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
     der SOC die Schwelle erreicht. Ein unbekannter SOC sperrt im Zyklus und ändert den Stand nicht;
     ein Slot ohne Plan-Schwelle gibt nichts. Eine eigene Leistungsgrenze gibt es nicht.
   - Diese Anteile zählen nicht gegen die 3 kW der Unterstützung (`support_max_w`) und nicht zur
-    Überbrückung; die Reihenfolge ist die von `priority`, jede Wallbox bekommt höchstens ihren
+    Überbrückung; die Reihenfolge ist die von `priority` (unter der Entladegrenze zuerst Geplant), jede Wallbox bekommt höchstens ihren
     Fehlbetrag. Will der Slot `HALTEN` oder `NETZLADEN`, bekommt kein Auto etwas.
   - **Entladegrenze:** Geplant und Sofort zusammen bekommen höchstens, was von
     `battery.max_discharge_w` (12 kW) bleibt, nachdem der Akku den Teil der Hauslast deckt, den die
