@@ -1,3 +1,5 @@
+"""Standard-Lademodus nach dem Abstecken (``DefaultModes``) mit einer gefälschten Absicht."""
+
 from collections.abc import Callable
 from datetime import timedelta
 
@@ -145,9 +147,8 @@ async def test_guest_unplug_sets_guest_mode(service, settings_service) -> None:
 
 async def test_planned_default_leaves_guest_unchanged(service, settings_service) -> None:
     intents = FakeIntents(Intent(version=2))
-    set_defaults(
-        settings_service, {"evcs": ChargeMode.PLANNED}
-    )  # „Geplant“ gibt es für Gäste nicht
+    # „Geplant“ gibt es für Gäste nicht
+    set_defaults(settings_service, {"evcs": ChargeMode.PLANNED})
     modes = service(intents)
     await modes.observed(unplugged("evcs", GUEST), free("evcs"))
     await modes.observed([], free("evcs"))
@@ -256,9 +257,8 @@ async def test_new_unplug_replaces_pending_change(service, settings_service) -> 
     intents.down = True
     modes = service(intents)
     await modes.observed(unplugged("twc", "tesla"), free("twc"))
-    await modes.observed(
-        unplugged("evcs", "tesla"), free("evcs")
-    )  # Steckzustand dazwischen unbekannt
+    # der Steckzustand dazwischen war unbekannt
+    await modes.observed(unplugged("evcs", "tesla"), free("evcs"))
     intents.down = False
     await modes.observed([], free("twc"))
     assert intents.applied == [(SetMode("tesla", ChargeMode.MIN_PV), ACTOR, "system")]
@@ -277,3 +277,77 @@ async def test_settings_read_at_unplug_time(service, settings_service) -> None:
         SetMode("tesla", ChargeMode.PV),
         SetMode("tesla", ChargeMode.MIN_PV),
     ]
+
+
+async def test_failed_attempt_takes_read_mode_as_baseline(service, settings_service) -> None:
+    intents = FakeIntents(tesla_in(ChargeMode.OFF))  # der core steht schon auf „Aus“
+    intents._cached = tesla_in(ChargeMode.NOW)  # der Cache beim Abstecken ist veraltet
+    set_defaults(settings_service, {"twc": ChargeMode.PV})
+    intents.errors = [CoreDown()]
+    modes = service(intents)
+    await modes.observed(unplugged("twc", "tesla"), free("twc"))
+    assert intents.applied == []
+    await modes.observed([], free("twc"))  # „Aus“ war gelesen, nicht bedient: nachholen
+    assert intents.applied == [(SetMode("tesla", ChargeMode.PV), ACTOR, "system")]
+
+
+async def test_baseline_after_empty_cache_protects_manual_change(service, settings_service) -> None:
+    intents = FakeIntents(tesla_in(ChargeMode.NOW))
+    intents._cached = None  # nach dem Start noch keine Absicht im Cache
+    set_defaults(settings_service, {"twc": ChargeMode.PV})
+    intents.errors = [ConflictAgain()]
+    modes = service(intents)
+    await modes.observed(unplugged("twc", "tesla"), free("twc"))
+    intents.operate(SetMode("tesla", ChargeMode.OFF))  # jemand bedient vor dem Nachholen
+    await modes.observed([], free("twc"))
+    await modes.observed([], free("twc"))
+    assert intents.applied == []
+    assert intents.intent is not None and intents.intent.vehicles["tesla"].mode == ChargeMode.OFF
+
+
+async def test_guest_wish_dropped_while_a_guest_is_plugged(service, settings_service) -> None:
+    # Der Gast-Lademodus ist gemeinsam: steckt irgendwo ein Gast, gilt der Wunsch nicht mehr
+    intents = FakeIntents(Intent(version=2, guest=GuestIntent(mode=ChargeMode.NOW)))
+    set_defaults(settings_service, {"evcs": ChargeMode.PV})
+    intents.down = True
+    modes = service(intents)
+    await modes.observed(unplugged("evcs", GUEST), free("evcs"))
+    intents.down = False
+    seen = [*free("evcs"), WallboxSeen("twc", True, GUEST, "default")]
+    await modes.observed([], seen)
+    await modes.observed([], free("evcs"))
+    assert intents.applied == []
+    assert intents.reads == 1  # nur der gescheiterte Versuch
+
+
+async def test_replugged_guest_drops_pending_change(service, settings_service) -> None:
+    intents = FakeIntents(Intent(version=2, guest=GuestIntent(mode=ChargeMode.NOW)))
+    set_defaults(settings_service, {"evcs": ChargeMode.PV})
+    intents.down = True
+    modes = service(intents)
+    await modes.observed(unplugged("evcs", GUEST), free("evcs"))
+    intents.down = False
+    await modes.observed([], [WallboxSeen("evcs", True, GUEST, "default")])  # wieder angesteckt
+    await modes.observed([], free("evcs"))
+    assert (intents.applied, intents.reads) == ([], 1)
+
+
+async def test_unexpected_error_is_logged_once_and_dropped(service, settings_service) -> None:
+    intents = FakeIntents(
+        Intent(
+            version=3,
+            vehicles={"tesla": VehicleIntent(mode=ChargeMode.NOW)},
+            guest=GuestIntent(mode=ChargeMode.NOW),
+        )
+    )
+    set_defaults(settings_service, {"twc": ChargeMode.PV, "evcs": ChargeMode.MIN_PV})
+    intents.errors = [RuntimeError("kaputt")]
+    modes = service(intents)
+    reports = [*unplugged("twc", "tesla"), *unplugged("evcs", GUEST)]
+    with capture_logs() as logs:
+        await modes.observed(reports, [*free("twc"), *free("evcs")])
+        await modes.observed([], [*free("twc"), *free("evcs")])
+    [entry] = [e for e in logs if e["event"] == "Standard-Lademodus fehlgeschlagen"]
+    assert (entry["log_level"], entry["vehicle"], entry["exc_info"]) == ("error", "tesla", True)
+    assert intents.applied == [(SetGuestMode(ChargeMode.MIN_PV), ACTOR, "system")]
+    assert intents.reads == 1  # danach ist nichts mehr offen

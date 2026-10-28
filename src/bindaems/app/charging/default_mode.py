@@ -16,11 +16,16 @@ den Stand der Wallboxen (``WallboxSeen``); ``DefaultModes.observed`` setzt darau
   den core, mit der Vorbedingung, dass der Modus seit dem Lesen unverändert ist. Erfolg,
   ``PreconditionFailed`` (jemand hat bedient, die Bedienung geht vor) und ``Rejected`` (Log)
   erledigen den Wunsch; bei ``CoreDown`` und ``ConflictAgain`` bleibt er offen und wird mit der
-  nächsten Beobachtung (Health, etwa alle 10 s) nachgeholt.
+  nächsten Beobachtung (Health, etwa alle 10 s) nachgeholt. Jeder andere Fehler kommt einmal ins
+  Log und erledigt den Wunsch; die übrigen Wünsche werden trotzdem versucht.
+- Der Gast-Lademodus ist gemeinsam: Steckt irgendwo ein Gast, entfällt der Wunsch für den Gast,
+  auch wenn es ein anderer ist.
 - Bedient jemand den Modus, nachdem ein Wunsch beim Abstecken nicht ging, geht die Bedienung vor:
   Der Wunsch merkt sich den Modus des Ziels beim Abstecken (aus ``IntentService.cached()``,
-  ``None`` ohne Absicht); weicht der gelesene Modus beim Nachholen davon ab, ist er erledigt. Die
-  Version der Absicht taugt dafür nicht, der Plan erhöht sie laufend.
+  ``None`` ohne Absicht); weicht der gelesene Modus beim Nachholen davon ab, ist er erledigt.
+  Scheitert ein Versuch erst beim Senden, gilt ab dann der dabei gelesene Modus (der Cache kann
+  veraltet oder leer gewesen sein). Die Version der Absicht taugt dafür nicht, der Plan erhöht sie
+  laufend.
 
 Ohne neue Meldung und ohne offenen Wunsch fragt ``observed`` den core nicht.
 """
@@ -59,7 +64,7 @@ class _Wish:
 
     wallbox: str
     mode: ChargeMode
-    before: ChargeMode | None  # ``None``: beim Abstecken war keine Absicht bekannt
+    before: ChargeMode | None  # ``None``: keine Absicht bekannt, weder beim Abstecken noch danach
     retry: bool = False  # schon einmal versucht: jetzt gilt eine Bedienung seit dem Abstecken
 
 
@@ -141,7 +146,11 @@ class DefaultModes:
             log.warning("Standard-Lademodus abgelehnt", vehicle=key, details=exc.details)
             return True
         except (CoreDown, ConflictAgain):
+            wish.before = read  # gelesen, nicht bedient: Maßstab für eine spätere Bedienung
             return False
+        except Exception:
+            log.exception("Standard-Lademodus fehlgeschlagen", wallbox=wish.wallbox, vehicle=key)
+            return True
         log.info(
             "Standard-Lademodus gesetzt", wallbox=wish.wallbox, vehicle=key, mode=wish.mode.value
         )
