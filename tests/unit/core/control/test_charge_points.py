@@ -1,14 +1,18 @@
+from dataclasses import replace
+
 import pytest
 from tests.unit.core.control.charge_helpers import evcs, inputs, tesla, twc
 
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charge_points import (
+    ChargePoint,
     can_charge,
     cars_w,
     charge_points,
     enough,
     holding_a,
+    now_capped,
     reserved_a,
     wanted_a,
 )
@@ -238,3 +242,21 @@ def test_a_guest_gets_the_whole_evcs_and_is_load_at_the_wall_connector(cfg) -> N
         True,
     )
     assert (points["guest@twc"].actuator, points["guest@twc"].regulated) == (None, False)
+
+
+# Plan Sofort-Limit: Höchststrom in „Sofort“
+
+
+def make_point(**kw) -> ChargePoint:
+    """Ein geregelter Ladepunkt an der EVCS auf zwei Phasen; ``kw`` ändert Felder."""
+    base = ChargePoint("egolf", "evcs", "wallbox.evcs", True, ("L1", "L2"), 6, 16, None, True)
+    return replace(base, **kw)
+
+
+def test_now_capped_lowers_max_a_but_never_below_min_a() -> None:
+    point = make_point(min_a=6, max_a=16)
+    assert now_capped(point, None) is point
+    assert now_capped(point, 10).max_a == 10
+    assert now_capped(point, 5).max_a == 6  # Mindeststrom der EVCS geht vor
+    assert now_capped(point, 20).max_a == 16  # nie über den Ladepunkt
+    assert now_capped(point, 10) == replace(point, max_a=10)  # sonst bleibt alles

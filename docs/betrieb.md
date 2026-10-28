@@ -226,6 +226,43 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Update mit dem Sofort-Limit:** Der Plan Sofort-Limit ändert core und app; beide rollen
+  **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`).
+  Die Absicht hat ein neues Feld, ein alter core lehnt es ab. Es gibt keine Migration, und die ACL des
+  Mosquitto-Benutzers `bindaems` bleibt unverändert (die Zahlen sind die Plattform `number`, die schon
+  freigegeben ist). Home Assistant bekommt je Fahrzeug die Zahl „Sofort-Höchststrom“ und, mit einer
+  EVCS, „Gast-Sofort-Höchststrom“. Alle Autos laden danach mit „Volle Leistung“, bis du ein Limit
+  wählst. Den Rückweg beschreibt der nächste Punkt.
+- **Rollback auf einen Stand vor dem Sofort-Limit:** Die Absicht des core hat das neue Feld
+  `now_max_a`, und ein älterer core lehnt unbekannte Felder ab (`extra="forbid"`). Das Feld steht in
+  `intent.json` (unter `core.data_dir`, im Volume `core-data` `/data/intent.json`; die Absicht steht
+  dort unter dem Schlüssel `intent`) bei **jedem** Eintrag unter `vehicles` und unter `guest`, auch
+  mit dem Wert `null`: „Volle Leistung“ vor dem Rollback zu wählen reicht also nicht. Ein älterer
+  core liest die Datei sonst nicht, startet ohne Absicht (Regelbetrieb aus) und meldet den Alarm
+  `intent.file`, wie beim Rollback vor Plan 5b (unten). Core und app gehen gemeinsam zurück, auf
+  dasselbe Tag. Schalte vorher den **Regelbetrieb aus** (System → „Bedienung“) und entferne die
+  Schlüssel, bevor du das Tag änderst:
+
+  ```bash
+  cd /opt/bindaems
+  docker compose stop ems-core
+  docker compose run --rm --no-deps --entrypoint python ems-core -c '
+  import json
+  from pathlib import Path
+  path = Path("/data/intent.json")
+  document = json.loads(path.read_text())
+  intent = document["intent"]
+  for entry in [*intent.get("vehicles", {}).values(), intent.get("guest", {})]:
+      entry.pop("now_max_a", None)
+  path.write_text(json.dumps(document))
+  print("now_max_a entfernt")'
+  ```
+
+  Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app), und
+  erst danach den Regelbetrieb wieder einschalten. Gehst du ohne diesen Schritt zurück, setzt du die
+  Absicht danach neu (Bedienung oder `PUT /v1/intent`). Die Datenbank der app ist nicht betroffen
+  (keine Migration). In Home Assistant bleiben die Zahlen „Sofort-Höchststrom“ und
+  „Gast-Sofort-Höchststrom“ als nicht mehr gepflegte Entitäten stehen, bis du sie dort entfernst.
 - **Update mit Plan 5c (Vorheizen und Vorkühlen):** Plan 5c ändert core und app; beide rollen
   gemeinsam aus, mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Migration `0015` legt die
   Tabelle `thermal_model` an; **sichere die Datenbank vorher** (`/backup/vor-plan-5c.sqlite3`). Der
@@ -497,10 +534,15 @@ Die app meldet ihre Sensoren per MQTT Discovery am Mosquitto von Home Assistant 
 Befehle der Bedienelemente unter `bindaems/cmd/`. Lege dafür einen eigenen Benutzer `bindaems` an;
 sein Passwort steht in `BINDAEMS_HA_MQTT_PASSWORD`. Die ACL beschränkt ihn auf das Nötige (beim
 Mosquitto-Add-on über `customize` und eine ACL-Datei unter `/share/mosquitto`). Die Bedienelemente
-brauchen dafür sechs Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
-Plan 3c, die Unterstützungsschwelle), `text` (seit Plan 4b, die Abfahrtszeit) und `button` und das
-Leserecht auf `bindaems/cmd/#`. Nach dem Ausrollen von Plan 4b ergänzt du die Zeile für `text`; ohne
-sie fehlt die Entität „Abfahrtszeit“ in Home Assistant.
+brauchen dafür sieben Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
+Plan 3c, die Unterstützungsschwelle), `time` (seit Plan „Abfahrt als Uhrzeit“, die Abfahrtszeit; dafür
+brauchst du Home Assistant ab 2026.5), `text`, `button` und das Leserecht auf `bindaems/cmd/#`. Die
+Zeile für `text` bleibt, obwohl die Abfahrtszeit kein Textfeld mehr ist: Die app veröffentlicht bei
+jedem MQTT-Verbinden und beim Neustart von Home Assistant eine leere Konfiguration für das alte
+Textfeld, damit Home Assistant es entfernt, und dafür braucht sie das Schreibrecht. Ohne die Zeile für
+`time` fehlt die Entität „Abfahrtszeit“ in Home Assistant. Gehst du mit `ems-app` auf einen Stand vor
+diesem Plan zurück, bleibt die gehaltene Discovery der Uhrzeit stehen; lösche sie dann mit
+`mosquitto_pub -r -n -t homeassistant/time/bindaems/<objekt-id>_departure/config` je Fahrzeug.
 
 ```text
 user bindaems
@@ -509,6 +551,7 @@ topic write homeassistant/binary_sensor/bindaems/#
 topic write homeassistant/select/bindaems/#
 topic write homeassistant/switch/bindaems/#
 topic write homeassistant/number/bindaems/#
+topic write homeassistant/time/bindaems/#
 topic write homeassistant/text/bindaems/#
 topic write homeassistant/button/bindaems/#
 topic write bindaems/#
@@ -578,13 +621,15 @@ steht die Quelle „ha“.
 |---|---|---|
 | Lademodus (je Fahrzeug) | Auswahl | PV-Überschuss, Min+PV, Sofort, Aus oder Geplant; „Boost“ gibt es hier nicht |
 | Ziel-SOC (je Fahrzeug) | Zahl | das Ziel für „Geplant“ in %, eine ganze Zahl von 20 bis 100; die Abfahrt bleibt |
-| Abfahrtszeit (je Fahrzeug) | Text | die tägliche Abfahrt für „Geplant“ als `HH:MM` (00:00 bis 23:59); das Ziel bleibt |
+| Sofort-Höchststrom (je Fahrzeug) | Zahl | der höchste Ladestrom in „Sofort“ in A je Phase, eine ganze Zahl von `min_a` bis `max_a` des Fahrzeugs; der Höchststrom des Fahrzeugs heißt „volle Leistung“. Das Limit bleibt über Abstecken und Neustart stehen |
+| Abfahrtszeit (je Fahrzeug) | Uhrzeit | die tägliche Abfahrt für „Geplant“, Uhrzeit von 00:00 bis 23:59 (Sekunden fallen weg); das Ziel bleibt |
 | Boost (je Fahrzeug) | Taste | Boost bis zum Abstecken, höchstens 12 h |
 | Boost beenden (je Fahrzeug) | Taste | beendet den Boost |
 | Automatik Ziel und Abfahrt (je Fahrzeug) | Schalter | schaltet die Automatik, die Ziel und Abfahrt von „Geplant“ nach dem Vorschlag setzt (Abschnitt „Fahrverhalten (Phase 5b)“); ab Werk aus. Eine Änderung ist eine neue Version der Einstellungen und steht im Änderungsprotokoll als `control.automation` mit der Quelle „ha“ |
 | Zuordnung (je Wallbox) | Auswahl | „Automatisch“ oder der Name eines Fahrzeugs; „Automatisch“ hebt jede Übersteuerung dieser Wallbox auf (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | Regelbetrieb | Schalter | schaltet den Regelbetrieb ein oder aus |
 | Gast-Lademodus | Auswahl | der Modus für einen Gast an jeder Wallbox; ohne „Geplant“, denn für einen Gast gibt es weder Ladestand noch Abfahrt |
+| Gast-Sofort-Höchststrom | Zahl | wie der Sofort-Höchststrom, für jeden Gast an der EVCS: eine ganze Zahl vom kleinsten `min_a` bis zum größten `max_a` aller EVCS; die Zahl gibt es nur mit einer EVCS in `config.yaml` |
 | Netzladen erlaubt | Schalter | die Einstellung „Netzladen erlaubt“ (Abschnitt „Planung“); jede Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
 | Akku-Unterstützung erlaubt | Schalter | erlaubt oder sperrt die Unterstützung der Autos aus dem Akku (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Unterstützungsschwelle | Zahl | die Schwelle in %, von der USV-Reserve bis 100 (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
@@ -592,7 +637,7 @@ steht die Quelle „ha“.
 | Neu planen | Taste | löst eine Neuplanung aus |
 
 Die Bedienelemente stehen am Gerät des Fahrzeugs bzw. der Wallbox, Regelbetrieb, Gast-Lademodus,
-Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle, Vorheizen und Vorkühlen und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
+Gast-Sofort-Höchststrom, Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle, Vorheizen und Vorkühlen und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
 
 - **Befehle** kommen über `bindaems/cmd/<Objekt>`. Eine gehaltene (retained) Nachricht auf diesen
   Topics ignoriert die app: Sie käme sonst bei jeder Verbindung wieder.
@@ -601,7 +646,7 @@ Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle, Vorheiz
 - **Nach jedem Befehl veröffentlicht die app den Zustand der Entität neu**, auch nach einem
   verworfenen oder abgelehnten Befehl. Home Assistant zeigt so immer, was gilt.
 - **Ablehnungen:** Ein ungültiger Wert (eine Option, die es nicht gibt, ein Ziel-SOC außerhalb von
-  20–100 % oder eine Abfahrt, die keine Uhrzeit `HH:MM` ist) oder ein Befehl, den der core ablehnt oder
+  20–100 %, ein Sofort-Höchststrom außerhalb des Strombereichs oder eine Abfahrt, die keine Uhrzeit `HH:MM` ist) oder ein Befehl, den der core ablehnt oder
   der nicht ankommt, ändert nichts. Home Assistant zeigt dann die persistente Meldung
   `bindaems_ha_command` mit „Befehl aus Home Assistant abgelehnt: …“; eine neue Ablehnung ersetzt die
   alte. Ist der core nicht erreichbar, lautet der Grund „core nicht erreichbar.“.
@@ -623,7 +668,7 @@ vorn. Die Warnung „Ziel-SOC unerreichbar“ gilt für alle Fahrzeuge.
 | Objekt-ID | Name | Plattform | Wert |
 |---|---|---|---|
 | `tesla_target_soc` | Ziel-SOC | number | das Ziel der Absicht in % (20 bis 100, Schritt 1); schreibend |
-| `tesla_departure` | Abfahrtszeit | text | die tägliche Abfahrt der Absicht, `HH:MM` (Muster `^([01]\d\|2[0-3]):[0-5]\d$`); schreibend |
+| `tesla_departure` | Abfahrtszeit | time | die tägliche Abfahrt der Absicht; Zustand `HH:MM:00`, Befehl `HH:MM` oder `HH:MM:SS` (die Sekunden fallen weg); schreibend |
 | `tesla_done_by` | Fertig um | sensor | wann das Auto voraussichtlich am Ziel ist (Zeitstempel) |
 | `tesla_target_reachable` | Ziel erreichbar | sensor | „ja“ oder „nein“ (Geräteklasse „enum“); Attribute `expected_soc_pct` (Ladestand an der Abfahrt, eine Nachkommastelle), `departure_at` (die nächste Abfahrt, Ortszeit) und `soc_source` (`measured`, `estimated` oder `assumed`) |
 | `problem_target_unreachable` | Ziel-SOC unerreichbar | binary_sensor | an, wenn ein Auto im Modus „Geplant“ sein Ziel nicht erreicht; Attribut `vehicles` mit den Namen dieser Autos |
@@ -1446,6 +1491,17 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Dauer wählst du nicht. Ab „Bedienen“ steht unter den Bedienelementen, was ein Boost kosten kann:
   „Boost kann bis zu {€} € Leistungspreis im Monat kosten ({kW} kW mehr Spitze).“ (Abschnitt
   „Laderegelung“, „Lademodi“, Boost).
+- **Höchststrom:** Steht das Fahrzeug auf „Sofort“, hat die Karte ab „Bedienen“ die Auswahl
+  „Höchststrom“ (Plan Sofort-Limit). Die erste Wahl ist „Volle Leistung“ mit dem Höchststrom des
+  Fahrzeugs und seinen kW („Volle Leistung (16 A · 11,0 kW)“), darunter jeder Strom bis zum
+  Mindeststrom, jeweils mit den kW (Ampere · `grid.voltage_nominal_v` · Phasen des Fahrzeugs, etwa
+  beim Tesla mit 3 Phasen „5 A · 3,5 kW“ bis „16 A · 11,0 kW“, beim e-Golf mit 2 Phasen „6 A · 2,8 kW“
+  bis „16 A · 7,4 kW“). Die Wahl schickt `PUT /api/control/vehicles/{key}/now-limit`, gilt sofort und
+  bleibt über Abstecken, Neustart und Moduswechsel stehen, bis du sie änderst. „Lesen“ sieht statt der
+  Auswahl den Satz „Sofort mit höchstens {n} A ({kW} kW)“, und nur bei einem Limit und ohne Boost. In
+  anderen Modi steht die Auswahl nicht da. Läuft in „Sofort“ ein Boost, bleibt sie sichtbar (der Satz
+  für „Lesen“ fehlt dann), das Limit ruht aber:
+  Boost lädt mit voller Leistung, und „Geplant“ rechnet mit voller Leistung (Abschnitt „Laderegelung“, „Lademodi“, „Sofort-Limit“).
 - **Geplant:** Steht das Fahrzeug auf „Geplant“, hat die Karte ab „Bedienen“ die Felder „Ziel-SOC“ (%,
   ganze Zahl von 20 bis 100) und „Abfahrt“ (tägliche Uhrzeit) mit der Taste „Übernehmen“; sie schickt
   nur, was sich geändert hat (`PUT /api/control/vehicles/{key}/target`). Ein ungültiger Wert steht mit
@@ -1489,7 +1545,11 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Übersteuerung dieser Wallbox aufhebt, und die Fahrzeuge; eine Wallbox als leer zu übersteuern geht
   nicht.
 - **Gast:** der Lademodus für einen Gast an jeder Wallbox (Abschnitt „Laderegelung“, „Zuordnung Auto
-  und Wallbox“).
+  und Wallbox“). Steht der Gast auf „Sofort“, hat die Karte ab „Bedienen“ dieselbe Auswahl
+  „Höchststrom“ für jeden Gast (`PUT /api/control/guest/now-limit`), im Strombereich der EVCS (kleinstes
+  `min_a` bis größtes `max_a` aller EVCS; auf 3 Phasen etwa „6 A · 4,1 kW“ bis „16 A · 11,0 kW“).
+  Die Auswahl fehlt ohne EVCS in `config.yaml`: Am Wall Connector hat ein Gast keinen Aktor und bleibt
+  Last wie bisher.
 - **Vorrang:** die Reihenfolge der Fahrzeuge bei der Zuteilung („nach oben“, „nach unten“) und der
   Vorrang beim Überschuss: „Autos zuerst“, „Akku zuerst“ oder „Akku bis {SOC} %, dann Autos“.
 
@@ -1766,8 +1826,8 @@ Dry-Run, und ein installierter Watchdog wartet.
   **Version** ist das Größere aus den Millisekunden seit 1970 (Uhr der app) und der gültigen Version + 1,
   damit auch eine aus der Sicherung wiederhergestellte app neuere Versionen erzeugt. Jede Änderung steht
   im Änderungsprotokoll (Quelle `ui` oder `ha`; Aktionen `intent.control`, `intent.mode`,
-  `intent.target`, `intent.boost`, `intent.assignment`, `intent.guest_mode`, `intent.priority`,
-  `intent.actuators`, `control.support`).
+  `intent.target`, `intent.now_limit`, `intent.boost`, `intent.assignment`, `intent.guest_mode`,
+  `intent.guest_now_limit`, `intent.priority`, `intent.actuators`, `control.support`).
 - **`PUT /v1/intent` per `curl` mischt sich über die Version korrekt ein.** Die app führt Änderungen
   nacheinander aus. Antwortet der core mit 409, weil die Version veraltet ist (jemand hat dazwischen eine
   Absicht per `curl` gesendet), holt sie die gültige Absicht neu und wendet die Änderung genau einmal
@@ -2478,6 +2538,22 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   Sie gilt, wenn der Boost die Spitze wirklich um die volle Ladeleistung hebt. Gilt im Monat kein
   Leistungspreis mit Satz, fehlt der Hinweis. Die Zahlen liefert `GET /api/control/boost-cost`
   (ab „Lesen“).
+- **Sofort-Limit** (Plan Sofort-Limit): In „Sofort“ lädt ein Auto höchstens mit dem Strom, den du
+  bei „Höchststrom“ gewählt hast (Seite „Laden“, oder in Home Assistant die Zahl „Sofort-Höchststrom“;
+  für Gäste „Gast-Sofort-Höchststrom“). Der Strom ist eine ganze Zahl in A je Phase, vom Mindeststrom
+  bis zum Höchststrom des Fahrzeugs; „volle Leistung“ ist der Höchststrom des Fahrzeugs und wird als
+  „kein Limit“ gespeichert, sodass das Auto einem später höheren `max_a` in `config.yaml` folgt. Das
+  Limit gilt je Auto (und einmal für Gäste) dauerhaft und nur in „Sofort“; Boost lädt weiter mit
+  voller Leistung, „Geplant“ rechnet mit voller Leistung, PV-Überschuss und Min+PV begrenzt der
+  Überschuss. Es ist eine harte Grenze: Das Auto lädt nie darüber, auch wenn mehr PV-Überschuss da
+  wäre; der Rest geht an andere PV-Autos, die Klimaanlage, den Akku oder ins Netz. Unter den
+  Mindeststrom der Wallbox geht es nie (ein Limit darunter lädt mit dem Mindeststrom), und die
+  Wächter kappen weiter darunter. Ändert sich das Limit während des Ladens, folgt der Strom im
+  nächsten Regelzyklus (beim Tesla im Rahmen der Befehlslimits von Tessie). Kappt das Limit, trägt der
+  Befehl nach „Sofort“ den Grund „Sofort-Limit“ (`now_limit`); kappt ein Wächter darunter, steht
+  dessen Grund. Liegt ein Wächter zwischen Limit und vollem Strom (etwa Limit 10 A, Phasenwächter
+  12 A), stehen beide: „Sofort-Limit“, danach der Grund des Wächters. Ein Gast wird nur an der EVCS
+  begrenzt.
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
@@ -2541,8 +2617,8 @@ laden: Für ihn gibt es weder Ladestand noch Abfahrt.
   Abfahrtszeit setzt, ersetzt den Tag: ohne `departure_on` im Aufruf wird er gelöscht. Ein Aufruf ohne
   Abfahrtszeit lässt ihn stehen, und `departure_on` ohne Abfahrtszeit lehnt die app ab („Ein
   Abfahrtstag verlangt eine Abfahrtszeit.“). Im Änderungsprotokoll steht er mit Wochentag: „Ziel 80 %,
-  Abfahrt Mo 23.11. 07:15“. Die Home-Assistant-Entität „Abfahrtszeit“ sendet nur die Uhrzeit und
-  löscht den Tag also.
+  Abfahrt Mo 23.11. 07:15“. Die Home-Assistant-Entität „Abfahrtszeit“ (`time`) sendet nur die Uhrzeit
+  und löscht den Tag also.
 - **Ladestand** (Health `soc_pct` mit `soc_source`):
   - `measured` (gemessen): beim Tesla aus Tessie, höchstens 900 s alt; beim e-Golf aus Home Assistant
     (`soc_entity`; die Einstellung steht unten in „Zuordnung Auto und Wallbox“).
@@ -3256,6 +3332,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `mode_pv`, `mode_min_pv`, `mode_now`, `mode_off`, `mode_planned` | PV-Überschuss, Min+PV, Sofort, Aus, Geplant | der Lademodus des Fahrzeugs |
 | `boost` | Boost | Ein Boost gilt (er steht an Stelle des Modus). |
 | `pv_surplus` | Überschuss | Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten des PV-Überschusses haben einen Start oder Stopp ergeben. |
+| `now_limit` | Sofort-Limit | Das Sofort-Limit (Höchststrom des Autos, „Laderegelung“, „Lademodi“) senkt den Strom in „Sofort“; kappt ein Wächter darunter, steht dessen Grund; liegt ein Wächter zwischen Limit und vollem Strom, steht sein Grund danach. |
 | `phase_limit` | Phasengrenze | Der Wächter kappt am Ziel der Sicherung (Sofort, Boost). |
 | `import_limit` | Importlimit | Der Wächter kappt am Importlimit (PV-Überschuss, Min+PV). |
 | `reserve_guard` | Schutz der USV-Reserve | Sofort oder Boost richtet sich wegen eines niedrigen SOC am Importlimit aus. |
@@ -3443,7 +3520,9 @@ nicht nötig.
 
 1. **ACL ergänzen:** In der ACL des Mosquitto-Benutzers `bindaems` die Zeile
    `topic write homeassistant/text/bindaems/#` eintragen (Abschnitt 7) und das Add-on neu starten. Ohne
-   sie fehlt in Home Assistant die Entität „Abfahrtszeit“; alles andere geht.
+   sie fehlt in Home Assistant die Entität „Abfahrtszeit“; alles andere geht. Seit Plan „Abfahrt als
+   Uhrzeit“ ist die Abfahrtszeit eine `time`-Entität und braucht zusätzlich die Zeile
+   `topic write homeassistant/time/bindaems/#` (Home Assistant ab 2026.5); die Zeile für `text` bleibt.
 2. **Regelbetrieb aus:** im UI unter **System** → „Bedienung“ oder in Home Assistant. Der core übergibt
    die Aktoren und geht nach OBSERVE (Abschnitt 13); warte, bis die Übergabe fertig ist. Notiere dir die
    Einstellungen der Seite „Laden“ (für einen Rollback, Abschnitt 4).
@@ -6197,7 +6276,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der zweiundvierzig Szenarien bei jedem Push
+In der CI läuft jedes der dreiundvierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -6225,7 +6304,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der zweiundvierzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der dreiundvierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -6241,7 +6320,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  zweiundvierzig zusammen rund 5 min.
+  dreiundvierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -6365,6 +6444,7 @@ Beginn kein Auto an, und die Klimaanlage ist live.
 | `geplant-pv` | Geplant mit PV-Überschuss, 2 h | 21.06.2026 ab 10:00, PV wie `sonnig`, Akku 60 %, nur der Tesla mit 60 %, in Geplant, Ziel 70 %, Abfahrt 07:00 (am nächsten Morgen); zu Beginn und alle 15 min ein Plan mit `EIGENVERBRAUCH`, der den Tesla mit 0 W nennt | Höchstens 5 % der Energie des Tesla kommen aus dem Akku (ohne Übergänge): Er lädt nur aus dem Überschuss, wie ein PV-Auto; er bekommt „Laden aus“ mit „target_reached“ bei mindestens 70 % und lädt danach nicht mehr, obwohl die Sonne weiter scheint. |
 | `geplant-unbekannt` | Geplant ohne Ladestand, 2 h | wie `geplant-spaet`, aber Home Assistant meldet keinen Ladestand des e-Golf; Abfahrt 23:15 | Jede Gesundheit, die einen Ladestand des e-Golf nennt, nennt ihn „angenommen“ mit 0 %; er lädt erst ab der spätesten Startzeit für 0 % (gegen 18:31) und beginnt binnen 30 s danach; keine Entscheidung nennt „target_reached“. |
 | `tesla-ladelimit` | Ladelimit des Tesla an das Ziel angleichen, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, nur der Tesla mit 65 % und dem Ladelimit 60 % im Auto, also „Complete“, `charge_limit_sync` an, in Geplant, Ziel 75 %, Abfahrt 19:00 (die späteste Startzeit ist schon vorbei) | Genau eine Entscheidung „Ladelimit 75 %“ an den Tesla, keine andere über das Ladelimit; am Ende zeigt die Gesundheit das Ladelimit 75 %; nach dem Laden meldet der Tesla „Complete“ bei 75 %. |
+| `sofort-limit` | Sofort mit Ladelimit, 1 h | 15.07.2026 ab 12:00, sonniger Tag, Akku 60 %, der e-Golf an der EVCS in Sofort mit dem Höchststrom 8 A (`now_max_a`), der Tesla am Wall Connector mit 50 % SOC in PV | Kein Strombefehl an die EVCS über 8 A, und der e-Golf lädt nie mit mehr; der Tesla lädt in mindestens der halben Zeit aus dem Überschuss. |
 | `klima-pv-kuehlen` | Klimaanlage nimmt PV-Überschuss beim Kühlen, 1 h | 15.07.2026 ab 12:00, PV konstant, Akku 100 %, die Klimaanlage kühlt mit 600 W, ohne Versatz 1,5 kW Einspeisung | Der Versatz an der UVR wechselt nur in Schritten von −0,5 K im Abstand von mindestens 600 s, mindestens dreimal; er liegt zwischen −3 K und 0 K und geht nur in Richtung „mehr“; jede Entscheidung an die Klimaanlage nennt `thermal_more`; die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. |
 | `klima-auto-vorrang` | Klimaanlage weicht einem Auto im Modus PV, 80 min | wie `klima-pv-kuehlen`, aber ohne Versatz 4 kW Einspeisung; ab 40 min steckt der e-Golf in PV an der EVCS | Bis 40 min mindestens drei Schritte von −0,5 K; danach geht der Versatz nur in Schritten von 0,5 K zurück, jede Entscheidung dazu nennt `thermal_cars`, und er wird nie größer; am Ende wendet die UVR 0 K an, der e-Golf lädt, und die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. |
 | `klima-moduswechsel` | Betriebsart der Klimaanlage wechselt, 50 min | wie `klima-pv-kuehlen`; bei 2115 s, nach drei Stufen, wechselt die Klimaanlage auf Heizen | Vor dem Wechsel drei Schritte bis −1,5 K; in der Sekunde des Wechsels bekommt die UVR 0 K, und die Regelung wünscht 0 Stufen mit `thermal_mode`; kein Versatz an der UVR gegen „mehr“ der Betriebsart, keine Entscheidung vor dem Wechsel über 0 K und danach unter 0 K. |

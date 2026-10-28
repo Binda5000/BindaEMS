@@ -15,10 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
-from bindaems.app.control.intent import (
-    ASSIGNMENT_OVERRIDE,
-    DEPARTURE_PATTERN,
-)
+from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE, guest_range
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.learning.driving_profile import (
@@ -39,6 +36,7 @@ from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import (
     ASSIGNMENT_AUTOMATIC,
+    HA_GUEST_LIMIT_ID,
     HA_THERMAL_PLAN_ID,
     HA_THERMAL_PREFIX,
     THERMAL_DEFAULT_LABEL,
@@ -170,7 +168,7 @@ class HaInputs:
 @dataclass(frozen=True)
 class EntitySpec:
     object_id: str
-    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "text", "button"]
+    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "time", "button"]
     name: str
     device: DeviceSpec
     value: Callable[[HaInputs], str]
@@ -184,7 +182,6 @@ class EntitySpec:
     min: float | None = None  # Bereich und Schritt einer ``number``
     max: float | None = None
     step: float | None = None
-    pattern: str | None = None  # erlaubte Eingabe eines ``text`` (regulärer Ausdruck)
 
 
 def _number(value: Any) -> float | None:
@@ -324,11 +321,44 @@ def _target_soc_state(key: str) -> Callable[[HaInputs], str]:
     return value
 
 
+def _now_max_text(limit: int | None, low: int, high: int) -> str:
+    """Das Limit im angebotenen Bereich der Zahl: ohne Limit (``None``) und ab ``high`` dieses,
+    unter ``low`` dieses (wie ``nowLimitChoice`` im UI). Ein gespeicherter Wert außerhalb, etwa
+    nach einem gesenkten ``max_a``, ergäbe sonst einen Zustand, den HA nicht annimmt."""
+    return str(high if limit is None or limit >= high else max(limit, low))
+
+
+def _now_max_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    """Höchststrom in „Sofort“ in A im Bereich ``min_a`` bis ``max_a`` des Autos; ohne Limit
+    (``None``) zeigt HA den Höchststrom des Autos (``_now_max_text``)."""
+    vehicle = cfg.vehicles[key]
+
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        limit = inputs.intent.vehicles.get(key, VehicleIntent()).now_max_a
+        return _now_max_text(limit, vehicle.min_a, vehicle.max_a)
+
+    return value
+
+
+def _guest_now_max_state(span: tuple[int, int]) -> Callable[[HaInputs], str]:
+    """Wie ``_now_max_state`` für Gäste, im EVCS-Bereich ``span``; ohne Limit gilt sein oberes
+    Ende."""
+
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        return _now_max_text(inputs.intent.guest.now_max_a, *span)
+
+    return value
+
+
 def _departure_state(key: str) -> Callable[[HaInputs], str]:
     def value(inputs: HaInputs) -> str:
         if inputs.intent is None:
             return UNKNOWN
-        return inputs.intent.vehicles.get(key, VehicleIntent()).departure
+        return f"{inputs.intent.vehicles.get(key, VehicleIntent()).departure}:00"  # HH:MM:SS
 
     return value
 
@@ -906,6 +936,26 @@ def _price(
 
 def build_entities(cfg: Config) -> list[EntitySpec]:
     main = MAIN_DEVICE
+    # Gäste können nur an der EVCS begrenzt werden; ohne EVCS gibt es die Zahl nicht
+    span = guest_range(cfg)
+    guest_limit = (
+        [
+            EntitySpec(
+                HA_GUEST_LIMIT_ID,
+                "number",
+                "Gast-Sofort-Höchststrom",
+                main,
+                _guest_now_max_state(span),
+                unit="A",
+                command=True,
+                min=float(span[0]),
+                max=float(span[1]),
+                step=1.0,
+            )
+        ]
+        if span is not None
+        else []
+    )
     entities = [
         _price("price_now", "Bezugspreis", lambda i: fmt(i.price_now_ct, 2), _price_attributes),
         _price("feed_in_price", "Einspeisepreis", lambda i: fmt(i.feed_in_ct, 2)),
@@ -1078,6 +1128,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             _guest_mode_state,
             tuple(GUEST_MODE_LABELS.values()),
         ),
+        *guest_limit,
         _control(
             "grid_charge",
             "switch",
@@ -1173,13 +1224,24 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 step=1.0,
             ),
             EntitySpec(
+                f"{oid}_now_max_a",
+                "number",
+                "Sofort-Höchststrom",
+                device,
+                _now_max_state(cfg, key),
+                unit="A",
+                command=True,
+                min=float(vehicle.min_a),
+                max=float(vehicle.max_a),
+                step=1.0,
+            ),
+            EntitySpec(
                 f"{oid}_departure",
-                "text",
+                "time",
                 "Abfahrtszeit",
                 device,
                 _departure_state(key),
                 command=True,
-                pattern=f"^{DEPARTURE_PATTERN.pattern}$",
             ),
             EntitySpec(
                 f"{oid}_done_by",
@@ -1315,8 +1377,8 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
 
     Ein Bedienelement trägt zusätzlich ``command_topic`` (``{base}/cmd/<object_id>``); ein
     ``button`` hat keinen Zustand und darum kein ``state_topic``. Eine ``number`` trägt ``min``,
-    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``), ein ``text`` sein
-    ``pattern``, ein ``select`` und ein ``enum``-Sensor ihre ``options``.
+    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``), ein ``select`` und ein
+    ``enum``-Sensor ihre ``options``; eine ``time`` hat keine weiteren Felder.
     """
     base = mqtt.base_topic
     payload: dict[str, Any] = {
@@ -1352,12 +1414,22 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
         payload["options"] = list(spec.options)
     elif spec.component == "number":
         payload.update({"min": spec.min, "max": spec.max, "step": spec.step, "mode": "box"})
-    elif spec.component == "text" and spec.pattern is not None:
-        payload["pattern"] = spec.pattern
     elif spec.component == "button":
         payload["payload_press"] = "PRESS"
     topic = f"{mqtt.discovery_prefix}/{spec.component}/{NODE_ID}/{spec.object_id}/config"
     return topic, json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def retired_discovery(cfg: Config, mqtt: HaMqttConfig) -> tuple[str, ...]:
+    """Discovery-Topics, die nicht mehr gelten und beim Verbinden geleert werden.
+
+    Die Abfahrtszeit war ein ``text``; als ``time`` bekommt sie ein anderes Topic, und das alte
+    gehaltene Textfeld bliebe in Home Assistant stehen.
+    """
+    return tuple(
+        f"{mqtt.discovery_prefix}/text/{NODE_ID}/{ha_object_id(key)}_departure/config"
+        for key in cfg.vehicles
+    )
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:

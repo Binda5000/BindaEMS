@@ -177,6 +177,23 @@ Betreiber beim Abschluss** (so steht es in der Einordnung des Plans); Vorschlag:
 Pull von `ems-app`, auch zusammen mit Plan 4c, falls der noch aussteht. Betrieb: `docs/betrieb.md`, Abschnitt 12, „Seiten“,
 Zeile „Übersicht“.
 
+**Plan Sofort-Limit (Ladelimit für „Sofort“) ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt**
+(Gesamtreview „mit Korrekturen“, kein kritischer und kein wichtiger Befund; die Fix-Welle: HA-Zustand im angebotenen Bereich,
+kein Limit-Satz für Lesende während Boost, ein Wächter zwischen Limit und vollem Strom steht im Grund nach `now_limit`)
+(`docs/superpowers/plans/2026-10-27-sofort-ladelimit.md`, 7 Tasks, freigegeben vom Betreiber am 27.10.2026 mit allen 8
+Entscheidungen und der Änderung „Limit bitte auch für Gäste, ansonsten passt alles“): Branch
+`claude/project-thread-wi9jx5`, **seit dem 28.10.2026 auf `main`** (per Fast-Forward mit Zustimmung des Betreibers, CI des Branches grün), **nicht ausgerollt**.
+Wer in „Sofort“ nicht mit voller Leistung laden will, stellt je Auto und einmal für Gäste einen Höchststrom ein (`now_max_a`, ganze
+A je Phase, dauerhaft, „Volle Leistung“ ist `null`): Der core kappt Autos (an jeder geregelten Wallbox) und Gäste (nur an der EVCS) in „Sofort“ (nicht in Boost, nicht
+in „Geplant“), nie unter den Mindeststrom, mit dem Grund `now_limit` („Sofort-Limit“); die app hat
+`PUT /api/control/vehicles/{key}/now-limit` und `PUT /api/control/guest/now-limit`, das UI die Auswahl „Höchststrom“ in der
+Fahrzeug- und Gastkarte, Home Assistant die Zahlen `<Fahrzeug>_now_max_a` und `guest_now_max_a`; neu ist das Simulator-Szenario
+`sofort-limit` (jetzt 40). **Ausgerollt werden core und app gemeinsam** (die Absicht hat ein neues Feld, ein alter core lehnt es ab),
+mit dem nächsten gemeinsamen Pull; **keine Migration, keine ACL-Zeile**. Der Rückweg zu einem core vor dem Plan braucht einen Schritt
+an der `intent.json` (Betrieb: `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor dem Sofort-Limit“). Plan 5c und „Abfahrt
+als Uhrzeit“ ändern `app/ha/entities.py`, `commands.py` und `VehicleCard.svelte` an anderen Stellen; wer zuletzt nach `main`
+geht, rebased. Betrieb: `docs/betrieb.md`, „Laden“ und „Lademodi“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -626,8 +643,8 @@ Zeile „Übersicht“.
     Autos, Auslöser „Fahrzeug geändert“, drei neue Grundcodes, Plausibilität mit Autos.
   - **app:** `PUT /api/control/vehicles/{key}/target`, Zählung der geplanten Ladungen (Migration
     `0012`, Tabelle `planned_charge`) und `planned` in `GET /api/stats`; HA vollständig (Ziel-SOC,
-    Abfahrtszeit als `text`, „Fertig um“, „Ziel erreichbar“, „Ziel-SOC unerreichbar“) und
-    Benachrichtigungen für alle Warnungen.
+    Abfahrtszeit mit 4b als `text`, seit Plan „Abfahrt als Uhrzeit“ als `time`, „Fertig um“,
+    „Ziel erreichbar“, „Ziel-SOC unerreichbar“) und Benachrichtigungen für alle Warnungen.
   - **UI:** Ziel-SOC, Abfahrt und „Fertig um“ auf „Laden“, Diagramm „Autos“ im Zeitplan, Karte
     „Geplantes Laden“ in der Statistik.
   - **Simulator und Szenarien:** fünf Szenarien dazu (jetzt 33), Planungsszenarien mit einem Auto.
@@ -649,8 +666,9 @@ Zeile „Übersicht“.
       überschreiten (Spec 18, „Stand Plan 4b“, „Offen“).
     - Die Lösezeit mit einem Auto in den Wintermonaten mit Leistungspreis hat im Dev-Container die
       Grenze von 20 s erreicht; an der Anlagenmaschine messen.
-    - Einmal in HA prüfen, dass die Text-Entität „Abfahrtszeit“ „unbekannt“ zeigt (nicht den Text
-      „None“), solange keine Absicht bekannt ist.
+    - Einmal in HA prüfen, dass die Entität „Abfahrtszeit“ (seit Plan „Abfahrt als Uhrzeit“ eine
+      `time`-Entität statt des Textfelds) „unbekannt“ zeigt (nicht „None“), solange keine Absicht
+      bekannt ist.
     - ~~`horizon_need` hat keinen Puffer: Liegt die Abfahrt knapp hinter dem Ende des Horizonts, gibt es
       keinen Spielraum.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K18)
     - Die gesammelten Kleinigkeiten stehen in der Abschlusszusammenfassung
@@ -901,7 +919,7 @@ Zeile „Übersicht“.
     (Punkt 11 unter „Offen an der Anlage“); danach die Abnahme 5b (28 Tage,
     `docs/verification/abnahme-phase-5b.md`)
   - an der Anlage: Plan 5c (core und app gemeinsam, Regelbetrieb aus) frühestens nach den Abnahmen 5a und
-    5b am 22.11.2026 ausrollen (Punkt 13 unter „Offen an der Anlage“); danach die Abnahme 5c Teil A (14 Tage
+    5b am 22.11.2026 ausrollen (Punkt 14 unter „Offen an der Anlage“); danach die Abnahme 5c Teil A (14 Tage
     Vorschau) und Teil B (14 Tage live, `docs/verification/abnahme-phase-5c.md`)
   - im Code, Plan 5c: Die Betriebsbits der Klimaanlage (`running`, `heating`, `cooling`, `venting`) stehen nur
     bei Änderung in InfluxDB, `raw` hält 90 Tage; ändert sich ein Bit über 90 Tage nicht (ohne Neustart des
@@ -1016,6 +1034,7 @@ Zeile „Übersicht“.
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md` | Plan 4c, 5 Tasks, umgesetzt, seit dem 25.10.2026 auf `main` (nicht ausgerollt): Verlauf je Auto in `GET /api/stats` (`vehicle_buckets`), Auswahl des Autos und Karte „Laden je Auto“ auf „Statistik“, Ladesessions bis 2000 mit Nachladen und CSV; die sieben Entscheidungen des Betreibers vom 23.10.2026 |
 | `docs/superpowers/plans/2026-10-27-uebersicht-kennzahlen.md` | Plan Übersicht B, 6 Tasks, auf `main` seit 27.10.2026 (`8ae335e`), nicht ausgerollt: die Übersicht als Kennzahlen-Leiste mit Hausakku, Hinweis-Leiste, „Woher – Wohin“, Autos, Diagramm mit Akku-SOC und -Plan; nur UI und Doku; die zehn Entscheidungen des Betreibers vom 27.10.2026 |
+| `docs/superpowers/plans/2026-10-27-sofort-ladelimit.md` | Plan Sofort-Limit, 7 Tasks, umgesetzt auf dem Branch `claude/project-thread-wi9jx5`, Gesamtreview und Fix-Welle gemacht, auf `main` seit dem 28.10.2026, nicht ausgerollt: Höchststrom `now_max_a` für „Sofort" je Auto und für Gäste, Grund `now_limit`, Szenario `sofort-limit`, App-API, HA-Zahlen, Auswahl im UI; die 8 Entscheidungen des Betreibers vom 27.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
@@ -1668,7 +1687,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      im Betriebshandbuch, „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“:
      1. **ACL:** Der Benutzer `bindaems` braucht für die Abfahrtszeit die Zeile
         `topic write homeassistant/text/bindaems/#` in der ACL von Mosquitto (Betriebshandbuch 7),
-        danach das Add-on neu starten. Ohne sie fehlt in Home Assistant nur die Abfahrtszeit.
+        danach das Add-on neu starten. Ohne sie fehlt in Home Assistant nur die Abfahrtszeit. Seit Plan
+        „Abfahrt als Uhrzeit“ braucht der Benutzer zusätzlich `topic write homeassistant/time/bindaems/#`;
+        die Zeile für `text` bleibt.
      2. **Regelbetrieb aus** (Seite „System“ oder HA), dann die **Datenbank kopieren**
         (`/backup/vor-plan-4b.sqlite3`; eine ältere app startet mit der Migration `0012` nicht).
      3. **Ausrollen:** `cd /opt/bindaems && docker compose pull && docker compose up -d`; core und app
@@ -1774,7 +1795,14 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
       Diagramm mit Akku-SOC und Akku-Plan; am Handy (360 bis 390 px) ohne waagrechtes Scrollen und mit einem Blick auf
       „Warum?“ (siehe die aufgeschobenen Kleinigkeiten am Ende der Datei).
-  13. **Vorheizen und Vorkühlen (Plan 5c) ausrollen**, frühestens nach den Abnahmen 5a und 5b am
+  13. **Sofort-Limit (Plan Sofort-Limit) ausrollen:** core **und** app gemeinsam (ein alter core lehnt das neue Feld `now_max_a`
+      der Absicht ab), **keine Migration, keine ACL-Zeile** (die Zahlen sind die Plattform `number`). Noch nicht auf `main`;
+      wann integriert und ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem nächsten gemeinsamen Pull
+      (`cd /opt/bindaems && docker compose pull && docker compose up -d`). Danach auf „Laden“ ein Auto auf „Sofort“ stellen, bei
+      „Höchststrom“ einen Strom wählen (der Strom folgt im nächsten Regelzyklus, der Grund im Log heißt „Sofort-Limit“, mit einem Wächter zwischen Limit und vollem Strom danach dessen Grund), dasselbe
+      beim Gast an der EVCS und die beiden Zahlen in Home Assistant ansehen (Abnahme: `docs/verification/abnahme-phase-4.md`,
+      Abschnitt 5). Der Rückweg steht in `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor dem Sofort-Limit“.
+  14. **Vorheizen und Vorkühlen (Plan 5c) ausrollen**, frühestens nach den Abnahmen 5a und 5b am
       22.11.2026 und nicht während des Wechsels von Victron auf live; wann, entscheidet der Betreiber (Plan
       5c, Entscheidung 15), und erst nach dem Gesamtreview und seiner Zustimmung zur Integration auf `main`.
       Anders als ein Pull nur von `ems-app` ändert 5c den core (der Planwert in der Absicht), core und app
@@ -1975,11 +2003,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      `claude/project-thread-x8izsc`, **noch nicht auf `main`** (Gesamtreview erledigt, Zustimmung des
      Betreibers steht aus), nicht ausgerollt (Kurzfassung). Wärmemodell je Betriebsart, zweiter Planungsschritt mit
      Vorschau, Planwert an den core, Schalter ab Werk aus. Es folgt das Ausrollen frühestens nach den
-     Abnahmen 5a und 5b am 22.11.2026 (Punkt 13 unter „Offen an der Anlage“), dann die Abnahme Teil A
+     Abnahmen 5a und 5b am 22.11.2026 (Punkt 14 unter „Offen an der Anlage“), dann die Abnahme Teil A
      (14 Tage Vorschau) und nach der Abnahme 6a und der Entscheidung des Betreibers Teil B (14 Tage live).
 8. **Plan Übersicht B** (Kennzahlen-Leiste, nur UI): umgesetzt, geprüft und seit 27.10.2026 auf
    `main` (`8ae335e`; Kurzfassung oben, „Plan Übersicht B“). Es folgt das Ausrollen von `ems-app` (Punkt 12 unter
    „Offen an der Anlage“); wann, entscheidet der Betreiber. Die aufgeschobenen Kleinigkeiten stehen am Ende dieser Datei.
+9. **Plan Sofort-Limit** (Ladelimit für „Sofort“, auch für Gäste): umgesetzt und je Task geprüft, auf dem Branch
+   `claude/project-thread-wi9jx5`, Gesamtreview („mit Korrekturen“, kein kritischer und kein wichtiger Befund) gemacht und
+   Fix-Welle umgesetzt; seit dem 28.10.2026 auf `main` (Fast-Forward mit Zustimmung des Betreibers), nicht ausgerollt
+   (Kurzfassung oben, „Plan Sofort-Limit“). Es folgt das gemeinsame Ausrollen von core und app (Punkt 13 unter „Offen an der
+   Anlage“); wann, entscheidet der Betreiber.
 
 ### Nächster Schritt: die Anlage
 
@@ -2034,6 +2067,19 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    - an der Anlage das Ausrollen von `ems-app` mit oder nach 4b und 6a (Punkt 10 unter „Offen an der
      Anlage“) und die Abnahme über 28 Tage;
    - als nächster Plan **5b (Fahrverhalten)**, Spec 10.4 und 18; danach 5c (Vorheizen und Vorkühlen).
+9. **Plan „Abfahrt als Uhrzeit“** (`docs/superpowers/plans/2026-10-27-ha-abfahrt-als-uhrzeit.md`): Die
+   Home-Assistant-Entität „Abfahrtszeit“ je Fahrzeug ist jetzt eine MQTT-`time`-Entität
+   (`time.bindaems_<auto>_abfahrtszeit` statt `text.bindaems_<auto>_abfahrtszeit`). An der Anlage in
+   dieser Reihenfolge:
+   1. Die Home-Assistant-Version prüfen (Einstellungen → Info, mindestens 2026.5).
+   2. In der ACL des Benutzers `bindaems` die Zeile `topic write homeassistant/time/bindaems/#`
+      ergänzen (die Zeile für `text` bleibt) und das Mosquitto-Add-on neu starten.
+   3. `ems-app` ziehen.
+   4. In Home Assistant prüfen, dass `time.bindaems_<auto>_abfahrtszeit` die Abfahrt zeigt und das alte
+      Textfeld weg ist.
+   5. Dann die neuen Dashboard-Dateien (`/mnt/project-files/dashboard/`) einspielen.
+   6. Eigene Automationen, die die alte ID `text.bindaems_…_abfahrtszeit` nennen, auf die neue ID
+      umstellen.
 
 ## Hinweise für die Pläne 2c-2 und 2d
 

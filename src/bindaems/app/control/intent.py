@@ -22,7 +22,7 @@ import structlog
 
 from bindaems.app.audit import AuditLog, Source
 from bindaems.app.core_link import CoreClient, CoreReply, CoreUnavailableError, LiveFeed, LiveState
-from bindaems.shared.config import Config
+from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.control import (
     TARGET_SOC_MAX,
     TARGET_SOC_MIN,
@@ -47,6 +47,7 @@ SUPPORT_TARGET: Final = "Akku-Unterstützung"  # Ziel im Änderungsprotokoll
 DEPARTURE_PATTERN: Final = re.compile(r"([01]\d|2[0-3]):[0-5]\d")  # wie ``VehicleIntent.departure``
 DEPARTURE_DATE_NEEDS_TIME: Final = "Ein Abfahrtstag verlangt eine Abfahrtszeit."
 TARGET_NEEDS_A_FIELD: Final = "Ziel oder Abfahrt angeben."
+NO_GUEST_LIMIT: Final = "Ohne EVCS gibt es kein Limit für Gäste."
 WEEKDAYS: Final = (
     "Mo",
     "Di",
@@ -90,6 +91,18 @@ class SetTarget:
 
 
 @dataclass(frozen=True)
+class SetNowLimit:
+    """Höchststrom eines Fahrzeugs in „Sofort“ in ganzen A je Phase; ``None`` ist volle Leistung.
+
+    Gültig ist ``min_a`` bis ``max_a`` des Fahrzeugs (``IntentService._check``); der Höchststrom
+    selbst wird als ``None`` gespeichert (Entscheidung 7, ``IntentService._normalised``).
+    """
+
+    vehicle: str
+    max_a: int | None
+
+
+@dataclass(frozen=True)
 class SetBoost:
     """Boost eines Fahrzeugs an (jetzt + 12 h) oder aus."""
 
@@ -110,6 +123,16 @@ class SetGuestMode:
     """Lademodus eines Gastes."""
 
     mode: ChargeMode
+
+
+@dataclass(frozen=True)
+class SetGuestNowLimit:
+    """Höchststrom der Gäste in „Sofort“ in ganzen A je Phase; ``None`` ist volle Leistung.
+
+    Gültig ist der Strombereich der EVCS (``guest_range``); ohne EVCS nur ``None``.
+    """
+
+    max_a: int | None
 
 
 @dataclass(frozen=True)
@@ -159,14 +182,25 @@ Change = (
     SetControl
     | SetMode
     | SetTarget
+    | SetNowLimit
     | SetBoost
     | SetAssignment
     | SetGuestMode
+    | SetGuestNowLimit
     | SetPriority
     | SetSupport
     | SetActuators
     | SetPlan
 )
+
+
+def guest_range(cfg: Config) -> tuple[int, int] | None:
+    """Strombereich der Gäste: kleinstes ``min_a`` bis größtes ``max_a`` aller EVCS; ``None``
+    ohne EVCS (am Wall Connector hat ein Gast keinen Aktor)."""
+    evcs = [box for box in cfg.wallboxes.values() if isinstance(box, EvcsConfig)]
+    if not evcs:
+        return None
+    return min(box.min_a for box in evcs), max(box.max_a for box in evcs)
 
 
 def boost_until(now: datetime) -> datetime:
@@ -265,6 +299,8 @@ def _apply(change: Change, base: Intent, now: datetime) -> Intent:
                 edit(key, target_soc_pct=soc)
             if departure is not None:
                 edit(key, departure=departure, departure_on=day)
+        case SetNowLimit(vehicle=key, max_a=max_a):
+            edit(key, now_max_a=max_a)
         case SetBoost(vehicle=key, on=on):
             edit(key, boost_until=boost_until(now) if on else None)
         case SetAssignment(wallbox=wallbox, vehicle=key):
@@ -275,6 +311,9 @@ def _apply(change: Change, base: Intent, now: datetime) -> Intent:
                 edit(key, wallbox=wallbox)
         case SetGuestMode(mode=mode):
             return base.model_copy(update={"guest": base.guest.model_copy(update={"mode": mode})})
+        case SetGuestNowLimit(max_a=max_a):
+            guest = base.guest.model_copy(update={"now_max_a": max_a})
+            return base.model_copy(update={"guest": guest})
         case SetPriority(priority=priority, surplus=surplus):
             return base.model_copy(update={"priority": list(priority), "surplus_priority": surplus})
         case SetSupport(allowed=allowed, soc_pct=soc_pct):
@@ -380,6 +419,13 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
                 _target_comment(_vehicle(base, key)),
                 _target_comment(_vehicle(new, key)),
             )
+        case SetNowLimit(vehicle=key):
+            return (
+                "intent.now_limit",
+                key,
+                _now_limit_comment(_vehicle(base, key).now_max_a),
+                _now_limit_comment(_vehicle(new, key).now_max_a),
+            )
         case SetBoost(vehicle=key):
             return (
                 "intent.boost",
@@ -392,6 +438,13 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
             return "intent.assignment", wallbox, before, key
         case SetGuestMode():
             return "intent.guest_mode", "gast", base.guest.mode.value, new.guest.mode.value
+        case SetGuestNowLimit():
+            return (
+                "intent.guest_now_limit",
+                "gast",
+                _now_limit_comment(base.guest.now_max_a),
+                _now_limit_comment(new.guest.now_max_a),
+            )
         case SetPriority():
             return (
                 "intent.priority",
@@ -428,6 +481,11 @@ def _support_comment(support: SupportIntent) -> str:
     if support.soc_pct is None:
         return "erlaubt, Schwelle aus der Konfiguration"
     return f"erlaubt, ab {de(support.soc_pct)} %"
+
+
+def _now_limit_comment(max_a: int | None) -> str:
+    """Kommentar im Änderungsprotokoll: „Sofort-Höchststrom {n} A“ oder „… volle Leistung“."""
+    return "Sofort-Höchststrom volle Leistung" if max_a is None else f"Sofort-Höchststrom {max_a} A"
 
 
 def _target_comment(vehicle: VehicleIntent) -> str:
@@ -543,6 +601,16 @@ class IntentService:
                     raise Rejected([DEPARTURE_DATE_NEEDS_TIME])
                 if soc is None and departure is None:
                     raise Rejected([TARGET_NEEDS_A_FIELD])
+            case SetNowLimit(vehicle=key, max_a=max_a):
+                self._require_vehicle(key)  # vor dem Bereich: ein unbekanntes Fahrzeug ist 404
+                if max_a is not None:
+                    vehicle = self._cfg.vehicles[key]
+                    self._check_now_limit(max_a, (vehicle.min_a, vehicle.max_a))
+            case SetGuestNowLimit(max_a=max_a) if max_a is not None:
+                span = guest_range(self._cfg)
+                if span is None:
+                    raise Rejected([NO_GUEST_LIMIT])
+                self._check_now_limit(max_a, span)
             case SetAssignment(wallbox=wallbox, vehicle=key):
                 if wallbox not in self._cfg.wallboxes:
                     raise UnknownTarget(f"Unbekannte Wallbox „{wallbox}“.")
@@ -551,6 +619,25 @@ class IntentService:
                 keys = priority
         for key in keys:
             self._require_vehicle(key)
+
+    @staticmethod
+    def _check_now_limit(max_a: int, span: tuple[int, int]) -> None:
+        low, high = span
+        if not low <= max_a <= high:
+            raise Rejected([f"Sofort-Höchststrom „{max_a} A“ liegt außerhalb von {low}–{high} A."])
+
+    def _normalised(self, change: Change) -> Change:
+        """Der Höchststrom des Fahrzeugs (beim Gast: der EVCS) ist „volle Leistung“ und wird als
+        ``None`` gespeichert (Entscheidung 7); die Prüfung ``_check`` ist vorausgegangen."""
+        match change:
+            case SetNowLimit(vehicle=key, max_a=max_a) if max_a is not None:
+                if max_a >= self._cfg.vehicles[key].max_a:
+                    return SetNowLimit(key, None)
+            case SetGuestNowLimit(max_a=max_a) if max_a is not None:
+                span = guest_range(self._cfg)
+                if span is not None and max_a >= span[1]:
+                    return SetGuestNowLimit(None)
+        return change
 
     def _require_vehicle(self, key: str) -> None:
         if key not in self._cfg.vehicles:
@@ -576,6 +663,7 @@ class IntentService:
         ``PreconditionFailed``.
         """
         self._check(change)
+        change = self._normalised(change)
         async with self._lock:
             if precondition is not None and not precondition():
                 raise PreconditionFailed

@@ -83,6 +83,12 @@ def _cases(cfg: Config) -> dict[str, Case]:
             api=("/api/control/guest", {"mode": "min_pv"}),
             shown="Min+PV",
         ),
+        "guest_now_max_a": Case(
+            "8",
+            lambda w: _intent(w).guest.now_max_a == 8,
+            api=("/api/control/guest/now-limit", {"max_a": 16}),
+            shown="16",
+        ),
         "grid_charge": Case(
             "ON",
             lambda w: w.app.settings.current().settings.planning.grid_charge_allowed,
@@ -138,11 +144,20 @@ def _cases(cfg: Config) -> dict[str, Case]:
                 api=(f"{path}/target", {"target_soc_pct": 75, "departure": None}),
                 shown="75",
             ),
+            # „10“ aus HA; die API setzt den Höchststrom des Fahrzeugs (16 A), die app speichert
+            # dafür „volle Leistung“, und HA zeigt wieder 16
+            f"{oid}_now_max_a": Case(
+                "10",
+                lambda w, get=get: get(w).now_max_a == 10,
+                api=(f"{path}/now-limit", {"max_a": 16}),
+                shown="16",
+            ),
             f"{oid}_departure": Case(
-                "06:30",
+                "06:30:00",
                 lambda w, get=get: get(w).departure == "06:30",
                 api=(f"{path}/target", {"target_soc_pct": None, "departure": "08:15"}),
-                shown="08:15",
+                published="06:30:00",
+                shown="08:15:00",
             ),
             # die Automatik des Tesla ist in der Demo an, die des e-Golf aus: HA kehrt sie um, die
             # API danach wieder

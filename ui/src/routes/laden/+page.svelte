@@ -18,6 +18,7 @@
 	import WallboxCard from '$lib/charging/WallboxCard.svelte';
 	import {
 		boostInfo,
+		guestCurrentRange,
 		healthIsCurrent,
 		latestSession,
 		overrideVehicle,
@@ -25,7 +26,8 @@
 		plannedLine,
 		priorityOrder,
 		sessionLine,
-		type CardNotice
+		type CardNotice,
+		type NowLimitSetup
 	} from '$lib/charging/view';
 	import Notice from '$lib/components/Notice.svelte';
 	import { socEntries } from '$lib/dashboard/socs';
@@ -178,6 +180,29 @@
 		});
 	}
 
+	/** Höchststrom in „Sofort“ eines Fahrzeugs; `null` ohne dessen Grenzen. Ohne Feld: volle Leistung. */
+	function nowLimitOf(id: string): NowLimitSetup | null {
+		const car = limits.data?.vehicles[id];
+		if (!limits.data || !car) return null;
+		return {
+			max_a: intent?.vehicles[id]?.now_max_a ?? null,
+			range: car,
+			voltage: limits.data.grid.voltage_nominal_v
+		};
+	}
+
+	/** Höchststrom in „Sofort“ für Gäste an der EVCS; `null` ohne Grenzen oder ohne EVCS */
+	const guestNowLimit = $derived.by((): NowLimitSetup | null => {
+		if (!limits.data) return null;
+		const range = guestCurrentRange(limits.data.wallboxes);
+		if (range === null) return null;
+		return {
+			max_a: intent?.guest.now_max_a ?? null,
+			range,
+			voltage: limits.data.grid.voltage_nominal_v
+		};
+	});
+
 	function vehicleLine(id: string): string | null {
 		const session = latestSession(sessions.data ?? [], id);
 		return session === null ? null : sessionLine(session);
@@ -283,6 +308,9 @@
 						)}
 					onAutomation={(on) =>
 						act(`vehicle:${vehicle.id}`, () => api.setAutomation(vehicle.id, on))}
+					nowLimit={nowLimitOf(vehicle.id)}
+					onNowLimit={(maxA) =>
+						act(`vehicle:${vehicle.id}`, () => api.setNowLimit(vehicle.id, maxA))}
 				/>
 			{/each}
 			{#each health.wallboxes as wallbox (wallbox.id)}
@@ -304,6 +332,8 @@
 				{busy}
 				notice={notices.guest ?? null}
 				onMode={(mode: ChargeMode) => act('guest', () => api.setGuestMode(mode))}
+				nowLimit={guestNowLimit}
+				onNowLimit={(maxA) => act('guest', () => api.setGuestNowLimit(maxA))}
 			/>
 			{#if limits.data}
 				<SupportCard

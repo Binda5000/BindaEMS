@@ -35,7 +35,9 @@ from bindaems.app.control.intent import (
     SetBoost,
     SetControl,
     SetGuestMode,
+    SetGuestNowLimit,
     SetMode,
+    SetNowLimit,
     SetPriority,
     SetSupport,
     SetTarget,
@@ -90,6 +92,15 @@ class TargetBody(_Body):
         if value is not None and not (isinstance(value, str) and DATE_PATTERN.fullmatch(value)):
             raise ValueError("Abfahrtstag muss ein Datum sein (YYYY-MM-DD).")
         return value
+
+
+class NowLimitBody(_Body):
+    """Höchststrom in „Sofort“ in ganzen A je Phase; ``null`` heißt volle Leistung. Den Bereich
+    prüft der ``IntentService``."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    max_a: int | None
 
 
 class AssignmentBody(_Body):
@@ -217,6 +228,10 @@ def control_router(
             SetTarget(key, body.target_soc_pct, body.departure, body.departure_on), session
         )
 
+    @router.put("/api/control/vehicles/{key}/now-limit")
+    async def vehicle_now_limit(key: str, body: NowLimitBody, session: Operator) -> dict[str, Any]:
+        return await change(SetNowLimit(key, body.max_a), session)
+
     @router.put("/api/control/vehicles/{key}/automation")
     async def vehicle_automation(key: str, body: OnBody, session: Operator) -> dict[str, Any]:
         # Der Eintrag ``control.automation`` im Änderungsprotokoll entsteht im Schalter selbst
@@ -239,6 +254,10 @@ def control_router(
     @router.put("/api/control/guest")
     async def guest(body: ModeBody, session: Operator) -> dict[str, Any]:
         return await change(SetGuestMode(body.mode), session)
+
+    @router.put("/api/control/guest/now-limit")
+    async def guest_now_limit(body: NowLimitBody, session: Operator) -> dict[str, Any]:
+        return await change(SetGuestNowLimit(body.max_a), session)
 
     @router.put("/api/control/support")
     async def support(body: SupportBody, session: Operator) -> dict[str, Any]:

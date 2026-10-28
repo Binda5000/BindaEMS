@@ -38,6 +38,8 @@ const ACTIONS: Record<string, string> = {
 	'intent.boost': 'Boost geändert',
 	'intent.assignment': 'Zuordnung geändert',
 	'intent.guest_mode': 'Gast-Lademodus geändert',
+	'intent.now_limit': 'Sofort-Höchststrom geändert',
+	'intent.guest_now_limit': 'Gast-Sofort-Höchststrom geändert',
 	'intent.priority': 'Vorrang geändert',
 	'intent.actuators': 'Betriebsart der Aktoren geändert',
 	'control.support': 'Akku-Unterstützung geändert',

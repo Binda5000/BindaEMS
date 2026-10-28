@@ -69,6 +69,9 @@ HA_SYSTEM_IDS = (
     "autarky_today",
     "problem_target_unreachable",
 )
+# Höchststrom der Gäste in „Sofort“: nur mit EVCS (dort allein hat ein Gast einen Aktor). Ein
+# Fahrzeug „guest“ stößt schon an ``guest_mode``, deshalb steht die ID nicht in ``HA_SYSTEM_IDS``.
+HA_GUEST_LIMIT_ID = "guest_now_max_a"
 HA_VEHICLE_SUFFIXES = (
     "soc",
     "mode",
@@ -77,6 +80,7 @@ HA_VEHICLE_SUFFIXES = (
     "wallbox",
     "charge_energy",
     "target_soc",
+    "now_max_a",
     "departure",
     "done_by",
     "target_reachable",
@@ -811,6 +815,8 @@ class Config(_Model):
 def ha_object_ids(cfg: Config) -> list[str]:
     """Objekt-IDs aller Entitäten, die ``app.ha.entities`` für diese Konfiguration baut."""
     ids = list(HA_SYSTEM_IDS)
+    if any(isinstance(box, EvcsConfig) for box in cfg.wallboxes.values()):
+        ids.append(HA_GUEST_LIMIT_ID)
     for key in cfg.vehicles:
         ids += [f"{ha_object_id(key)}_{suffix}" for suffix in HA_VEHICLE_SUFFIXES]
     for key in cfg.wallboxes:

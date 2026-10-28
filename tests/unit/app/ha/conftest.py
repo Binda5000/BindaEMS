@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import date
 
 import pytest
@@ -135,6 +135,7 @@ def publisher_env(cfg):
         stream_error: Exception | None = None,
         stream_ends: bool = False,
         commands: CommandHandler | None = None,
+        retired: Sequence[str] = (),
     ) -> tuple[HaPublisher, FakeTransport]:
         mqtt = cfg.homeassistant.mqtt
         transport = FakeTransport(
@@ -151,6 +152,7 @@ def publisher_env(cfg):
             transport_factory=lambda: transport,
             sleep=transport.sleep,
             commands=commands,
+            retired=retired,
         )
         return publisher, transport
 

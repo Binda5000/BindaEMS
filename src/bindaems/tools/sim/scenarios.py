@@ -211,6 +211,8 @@ RESERVE_PCT: Final = 20.0  # unter diese USV-Reserve entlädt das Modell nie (Sz
 RESERVE_L1_W: Final = 1000.0  # dort mehr Hauslast auf L1: frei ≈ 13 A unter dem Importziel
 SUNNY_TESLA_PCT: Final = 72.0  # SOC des Tesla in „sonnig“: „Complete“ nach etwa einer Stunde
 CLOUDY_TESLA_PCT: Final = 75.0  # dasselbe in „wolkig“, wo er im Mittel weniger Strom bekommt
+NOW_LIMIT_A: Final = 8  # „sofort-limit“: Höchststrom des e-Golf in Sofort (Plan Sofort-Limit)
+NOW_LIMIT_TESLA_PCT: Final = 50.0  # … SOC des Tesla: Er lädt in der Stunde nie „Complete“
 # „sonnig“: höchstens so viele Strombefehle an die EVCS je Stunde Laden des e-Golf (Design 6.5)
 EVCS_CURRENTS_PER_HOUR: Final = 10
 
@@ -794,9 +796,19 @@ def _setup(
         box.start_stop = 1
 
 
-def _intent(*, guest_mode: ChargeMode = ChargeMode.PV, **modes: ChargeMode) -> Intent:
-    """Die Absicht mit Regelbetrieb, den Modi der Fahrzeuge und dem Modus des Gastes."""
-    vehicles = {key: VehicleIntent(mode=mode) for key, mode in modes.items()}
+def _intent(
+    *,
+    guest_mode: ChargeMode = ChargeMode.PV,
+    limits: Mapping[str, int] | None = None,
+    **modes: ChargeMode,
+) -> Intent:
+    """Die Absicht mit Regelbetrieb, den Modi der Fahrzeuge und dem Modus des Gastes. ``limits``
+    nennt je Fahrzeug den Höchststrom in „Sofort“ (``now_max_a``); ohne Eintrag lädt es mit voller
+    Leistung."""
+    limits = limits or {}
+    vehicles = {
+        key: VehicleIntent(mode=mode, now_max_a=limits.get(key)) for key, mode in modes.items()
+    }
     return Intent(version=1, control=True, vehicles=vehicles, guest=GuestIntent(mode=guest_mode))
 
 
@@ -2928,7 +2940,74 @@ def _tesla_ladelimit() -> Scenario:
     )
 
 
-# --- Szenarien 34 bis 39: Klimaanlage (Plan 6a, Entscheidung 15) -------------------------------
+# --- Szenario 34: Sofort-Limit (Plan Sofort-Limit, Entscheidungen 3 und 4) ------------------------
+
+
+def _sofort_limit() -> Scenario:
+    """Sommer, der e-Golf lädt an der EVCS in Sofort mit dem Höchststrom ``NOW_LIMIT_A`` (8 A),
+    der Tesla am Wall Connector in PV-Überschuss (Plan Sofort-Limit, Entscheidungen 3 und 4). Das
+    Limit gilt hart, auch wenn die Sonne mehr Überschuss gäbe; der Rest geht an den Tesla. Der Lauf
+    beginnt wie die Klimaanlagen-Szenarien am Mittag (``SUMMER_NOON``) statt um 10:00: Um 10:00
+    bleiben nach Haus und e-Golf (rund 2,9 kW) weniger als der Mindeststrom des Tesla (5 A auf 3
+    Phasen, rund 3,5 kW) übrig, er startet erst nach 55 min. Der Gast kommt nicht vor, ihn deckt ein
+    Test der Regelung."""
+    start, duration_s, seed = SUMMER_NOON, HOUR_S, 40
+    evcs = wallbox_actuator(EVCS_BOX)
+
+    def never_above(result: SimResult) -> list[str]:
+        currents = [
+            (d, d.requested)
+            for d in result.decisions
+            if d.actuator == evcs and d.kind is CommandKind.CURRENT
+        ]
+        found = [
+            f"Strombefehl {de(amps)} A an die EVCS bei {_second(result, d.ts)} s, "
+            f"verlangt höchstens {NOW_LIMIT_A} A."
+            for d, amps in currents
+            if isinstance(amps, int | float) and amps > NOW_LIMIT_A
+        ]
+        found += [
+            f"„{EGOLF}“ lädt bei {s.t} s mit {de(s.cars[EGOLF].current_a)} A, "
+            f"verlangt höchstens {NOW_LIMIT_A} A."
+            for s in result.samples
+            if s.cars[EGOLF].current_a > NOW_LIMIT_A
+        ][:3]
+        if not currents:
+            found.append("Kein Strombefehl an die EVCS: Die Prüfung hätte nichts gemessen.")
+        return found
+
+    def tesla_from_the_surplus(result: SimResult) -> list[str]:
+        minutes = _minutes(result.samples, TESLA)
+        if minutes >= duration_s / MINUTE_S / 2:
+            return []
+        shown = shown_number(minutes, 1, lambda number: number >= duration_s / MINUTE_S / 2)
+        return [
+            f"„{TESLA}“ lädt {shown} min, verlangt mindestens {de(duration_s / MINUTE_S / 2)} min."
+        ]
+
+    return Scenario(
+        name="sofort-limit",
+        title="Sofort mit Ladelimit",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla_soc_pct=NOW_LIMIT_TESLA_PCT),
+        intent=_intent(tesla=ChargeMode.PV, egolf=ChargeMode.NOW, limits={EGOLF: NOW_LIMIT_A}),
+        live=True,
+        events=_weather(start, duration_s, seed, pv=_sun(start)),
+        checks=Checks(
+            (
+                Check(f"Die EVCS wird nie über {NOW_LIMIT_A} A angefordert.", never_above),
+                Check(
+                    "Der Tesla lädt in mindestens der Hälfte der Zeit aus dem Überschuss.",
+                    tesla_from_the_surplus,
+                ),
+            )
+        ),
+    )
+
+
+# --- Szenarien 35 bis 40: Klimaanlage (Plan 6a, Entscheidung 15) -------------------------------
 
 KLIMA: Final = "klima"  # Schlüssel der Klimaanlage in der Beispielkonfiguration
 KLIMA_ACTUATOR: Final = thermal_actuator(KLIMA)
@@ -3859,6 +3938,7 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _geplant_pv(),
         _geplant_unbekannt(),
         _tesla_ladelimit(),
+        _sofort_limit(),
         _klima_pv_kuehlen(),
         _klima_auto_vorrang(),
         _klima_moduswechsel(),

@@ -26,7 +26,7 @@ from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
 from bindaems.app.db.schema import charging_session, planned_charge
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
-from bindaems.app.ha.entities import build_inputs
+from bindaems.app.ha.entities import build_inputs, retired_discovery
 from bindaems.app.runtime import AppRuntime, StatsInputs
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent, SupportIntent
@@ -156,11 +156,13 @@ def test_runtime_wires_the_cost_basis(runtime, cfg: Config, tmp_path) -> None:
         restarted.engine.dispose()
 
 
-def test_without_token_the_rejections_are_only_logged(runtime) -> None:
+def test_without_token_the_rejections_are_only_logged(runtime, cfg: Config) -> None:
     assert runtime.ha_notifier is None and runtime.alarm_notifications is None
     assert runtime.warning_notifications is None
     assert type(runtime.ha_publisher._commands).__name__ == "HaCommandHandler"
     assert type(runtime.ha_publisher._commands._rejections).__name__ == "LogRejections"
+    # die alte Abfahrtszeit als `text` wird beim Verbinden geleert
+    assert runtime.ha_publisher._retired == retired_discovery(cfg, cfg.homeassistant.mqtt)
 
 
 def test_with_token_the_notifier_takes_over_the_rejections(cfg: Config, tmp_path) -> None:

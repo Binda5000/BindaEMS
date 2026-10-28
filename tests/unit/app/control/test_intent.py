@@ -21,7 +21,9 @@ from bindaems.app.control.intent import (
     SetBoost,
     SetControl,
     SetGuestMode,
+    SetGuestNowLimit,
     SetMode,
+    SetNowLimit,
     SetPlan,
     SetPriority,
     SetSupport,
@@ -29,11 +31,13 @@ from bindaems.app.control.intent import (
     UnknownTarget,
     boost_until,
     derive,
+    guest_range,
 )
 from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
 from bindaems.shared.control import (
     ActuatorMode,
     ChargeMode,
+    GuestIntent,
     Intent,
     SupportIntent,
     SurplusOrder,
@@ -882,3 +886,124 @@ async def test_met_precondition_applies_the_change(
     )
     assert result.result == "accepted"
     assert fake_client.sent == [result.intent]
+
+
+def test_set_now_limit_stores_whole_amps() -> None:
+    current = Intent(version=3, vehicles={"egolf": VehicleIntent(mode=ChargeMode.NOW)})
+    derived = derive(current, None, SetNowLimit("egolf", 10), T_APP)
+    assert derived.vehicles["egolf"].now_max_a == 10
+    assert derived.vehicles["egolf"].mode is ChargeMode.NOW
+
+
+async def test_set_now_limit_at_vehicle_max_is_full_power(service: IntentService, cfg) -> None:
+    """Der Höchststrom des Fahrzeugs wird als ``None`` gespeichert (Entscheidung 7); die
+    Normalisierung braucht die Konfiguration und liegt deshalb im Dienst, nicht in ``derive``."""
+    await service.apply(SetNowLimit("egolf", 10), actor="anna", source="ui")
+    result = await service.apply(
+        SetNowLimit("egolf", cfg.vehicles["egolf"].max_a), actor="anna", source="ui"
+    )
+    assert result.intent.vehicles["egolf"].now_max_a is None
+
+
+def test_set_now_limit_none_clears() -> None:
+    current = Intent(version=3, vehicles={"egolf": VehicleIntent(now_max_a=10)})
+    assert (
+        derive(current, None, SetNowLimit("egolf", None), T_APP).vehicles["egolf"].now_max_a is None
+    )
+
+
+def test_set_mode_keeps_the_vehicle_limit() -> None:
+    current = Intent(version=3, vehicles={"egolf": VehicleIntent(now_max_a=10)})
+    derived = derive(current, None, SetMode("egolf", ChargeMode.NOW), T_APP)
+    assert derived.vehicles["egolf"].now_max_a == 10
+
+
+async def test_set_now_limit_outside_vehicle_range_is_rejected(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog, cfg
+) -> None:
+    low, high = cfg.vehicles["tesla"].min_a, cfg.vehicles["tesla"].max_a
+    assert (low, high) == (5, 16)
+    for value in (low - 1, high + 1):
+        with pytest.raises(Rejected) as rejected:
+            await service.apply(SetNowLimit("tesla", value), actor="anna", source="ui")
+        assert rejected.value.details == [
+            f"Sofort-Höchststrom „{value} A“ liegt außerhalb von 5–16 A."
+        ]
+    assert fake_client.sent == []
+    assert audit.recent() == []
+    for value in (low, high):
+        await service.apply(SetNowLimit("tesla", value), actor="anna", source="ui")
+
+
+async def test_set_now_limit_unknown_vehicle_is_404(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    with pytest.raises(UnknownTarget) as unknown:
+        await service.apply(SetNowLimit("zoe", 99), actor="anna", source="ui")  # vor dem Bereich
+    assert unknown.value.text == "Unbekanntes Fahrzeug „zoe“."
+    assert fake_client.sent == []
+
+
+async def test_now_limit_is_audited(service: IntentService, audit: AuditLog) -> None:
+    result = await service.apply(SetNowLimit("tesla", 10), actor="anna", source="ui")
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source) == ("anna", "ui")
+    assert (entry.action, entry.target) == ("intent.now_limit", "tesla")
+    assert entry.details == {
+        "from": "Sofort-Höchststrom volle Leistung",
+        "to": "Sofort-Höchststrom 10 A",
+        "version": result.version,
+        "result": "accepted",
+    }
+    await service.apply(SetNowLimit("tesla", None), actor="anna", source="ui")
+    assert last_audit(audit) == (
+        "intent.now_limit",
+        "tesla",
+        "Sofort-Höchststrom volle Leistung",
+    )
+
+
+def test_guest_range_spans_all_evcs(cfg) -> None:
+    assert guest_range(cfg) == (6, 16)
+    assert guest_range(cfg.model_copy(update={"wallboxes": {}})) is None
+
+
+def test_set_guest_now_limit_derive() -> None:
+    current = Intent(version=3, guest=GuestIntent(mode=ChargeMode.NOW))
+    derived = derive(current, None, SetGuestNowLimit(8), T_APP)
+    assert derived.guest.now_max_a == 8
+    assert derived.guest.mode is ChargeMode.NOW
+
+
+async def test_set_guest_now_limit_within_evcs_range(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog
+) -> None:
+    fake_client.valid = Intent(version=1, guest=GuestIntent(mode=ChargeMode.NOW))
+    result = await service.apply(SetGuestNowLimit(8), actor="anna", source="ui")
+    assert (result.intent.guest.now_max_a, result.intent.guest.mode) == (8, ChargeMode.NOW)
+    assert last_audit(audit) == ("intent.guest_now_limit", "gast", "Sofort-Höchststrom 8 A")
+    result = await service.apply(SetGuestNowLimit(16), actor="anna", source="ui")
+    assert result.intent.guest.now_max_a is None
+    for value in (5, 17):
+        with pytest.raises(Rejected) as rejected:
+            await service.apply(SetGuestNowLimit(value), actor="anna", source="ui")
+        assert rejected.value.details == [
+            f"Sofort-Höchststrom „{value} A“ liegt außerhalb von 6–16 A."
+        ]
+
+
+async def test_guest_now_limit_without_evcs_only_accepts_none(
+    service: IntentService, fake_client: FakeCoreClient, cfg
+) -> None:
+    service._cfg = cfg.model_copy(update={"wallboxes": {}})
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(SetGuestNowLimit(8), actor="anna", source="ui")
+    assert rejected.value.details == ["Ohne EVCS gibt es kein Limit für Gäste."]
+    result = await service.apply(SetGuestNowLimit(None), actor="anna", source="ui")
+    assert result.intent.guest.now_max_a is None
+
+
+async def test_set_guest_mode_keeps_the_guest_limit(service: IntentService) -> None:
+    await service.apply(SetGuestNowLimit(8), actor="anna", source="ui")
+    result = await service.apply(SetGuestMode(ChargeMode.NOW), actor="anna", source="ui")
+    assert (result.intent.guest.mode, result.intent.guest.now_max_a) == (ChargeMode.NOW, 8)

@@ -123,7 +123,9 @@ export const VehicleIntentSchema = v.object({
 	/** Tägliche Abfahrt für „Geplant“, lokale Uhrzeit `HH:MM` */
 	departure: v.string(),
 	/** Abfahrt an diesem Tag (`YYYY-MM-DD`, Plan 5b); `null` täglich; ältere Antworten ohne */
-	departure_on: v.optional(v.nullable(v.string()))
+	departure_on: v.optional(v.nullable(v.string())),
+	/** Höchststrom je Phase in „Sofort“ in A; `null` volle Leistung; ältere Antworten ohne */
+	now_max_a: v.optional(v.nullable(v.number()))
 });
 export type VehicleIntent = v.InferOutput<typeof VehicleIntentSchema>;
 
@@ -157,7 +159,11 @@ export const IntentSchema = v.object({
 	/** Reihenfolge der Fahrzeug-Schlüssel; `null`: die der Konfiguration */
 	priority: v.nullable(v.array(v.string())),
 	surplus_priority: SurplusPrioritySchema,
-	guest: v.object({ mode: ChargeModeSchema }),
+	guest: v.object({
+		mode: ChargeModeSchema,
+		/** Höchststrom je Phase in „Sofort“ in A; `null` volle Leistung; ältere Antworten ohne */
+		now_max_a: v.optional(v.nullable(v.number()))
+	}),
 	support: SupportIntentSchema,
 	/**
 	 * Der Plan, den der core ausführt (Plan 3c), hier nur, was die Karte „Klimaanlage“ braucht:

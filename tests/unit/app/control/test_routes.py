@@ -96,6 +96,8 @@ def test_every_change_route_needs_operator_and_a_csrf_token(client, auth) -> Non
         ("/api/control/vehicles/tesla/target", {"target_soc_pct": 80, "departure": "07:00"}),
         ("/api/control/wallboxes/evcs/vehicle", {"vehicle": "tesla"}),
         ("/api/control/guest", {"mode": "now"}),
+        ("/api/control/vehicles/tesla/now-limit", {"max_a": 10}),
+        ("/api/control/guest/now-limit", {"max_a": 10}),
         ("/api/control/support", {"allowed": True, "soc_pct": 60.0}),
         (
             "/api/control/priority",
@@ -786,3 +788,54 @@ def test_automation_body_forbids_extra_fields(client, auth) -> None:
         "/api/control/vehicles/tesla/automation", json={"on": True, "x": 1}, headers=operator
     )
     assert response.status_code == 422
+
+
+def test_now_limit_route_requires_operator_and_rejects_floats(client, auth, fake_client) -> None:
+    url = "/api/control/vehicles/tesla/now-limit"
+    viewer = login_as(client, auth, "viewer")
+    assert client.put(url, json={"max_a": 10}, headers=viewer).status_code == 403
+    operator = login_as(client, auth, "operator")
+    for bad in ({"max_a": 10.5}, {"max_a": "10"}, {"max_a": 10, "extra": 1}, {}):
+        assert client.put(url, json=bad, headers=operator).status_code == 422, bad
+    assert fake_client.sent == []
+    response = client.put(url, json={"max_a": 10}, headers=operator)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"result", "version", "details", "intent"}
+    assert body["intent"]["vehicles"]["tesla"]["now_max_a"] == 10
+    cleared = client.put(url, json={"max_a": None}, headers=operator)
+    assert cleared.json()["intent"]["vehicles"]["tesla"]["now_max_a"] is None
+
+
+def test_now_limit_route_rejects_a_value_outside_the_range(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/now-limit", json={"max_a": 4}, headers=operator
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Sofort-Höchststrom „4 A“ liegt außerhalb von 5–16 A."
+    unknown = client.put("/api/control/vehicles/zoe/now-limit", json={"max_a": 4}, headers=operator)
+    assert unknown.status_code == 404
+    assert fake_client.sent == []
+
+
+def test_now_limit_is_audited(client, auth, audit) -> None:
+    operator = login_as(client, auth, "operator")
+    client.put("/api/control/vehicles/tesla/now-limit", json={"max_a": 10}, headers=operator)
+    entry = audit.recent()[0]
+    assert (entry.action, entry.target) == ("intent.now_limit", "tesla")
+    assert entry.details is not None and entry.details["to"] == "Sofort-Höchststrom 10 A"
+
+
+def test_guest_now_limit_route(client, auth, fake_client) -> None:
+    url = "/api/control/guest/now-limit"
+    viewer = login_as(client, auth, "viewer")
+    assert client.put(url, json={"max_a": 8}, headers=viewer).status_code == 403
+    operator = login_as(client, auth, "operator")
+    assert client.put(url, json={"max_a": 8.5}, headers=operator).status_code == 422
+    response = client.put(url, json={"max_a": 8}, headers=operator)
+    assert response.status_code == 200
+    assert response.json()["intent"]["guest"]["now_max_a"] == 8
+    too_high = client.put(url, json={"max_a": 17}, headers=operator)
+    assert too_high.status_code == 422
+    assert "außerhalb von 6–16 A" in too_high.json()["detail"]

@@ -59,6 +59,36 @@ it('sendet Bedienungen als PUT mit CSRF-Token und prüft die Antwort', async () 
 	expect(result.intent.vehicles.tesla.mode).toBe('now');
 });
 
+it('sendet den Sofort-Höchststrom eines Fahrzeugs, „volle Leistung“ als null', async () => {
+	reply(control);
+	await api.setNowLimit('tesla', 10);
+	expect(sent()).toEqual({
+		url: '/api/control/vehicles/tesla/now-limit',
+		method: 'PUT',
+		body: { max_a: 10 },
+		csrf: 'tok-123'
+	});
+	fetchMock.mockClear();
+	reply(control);
+	await api.setNowLimit('tesla', null);
+	expect(sent().body).toEqual({ max_a: null });
+});
+
+it('sendet den Sofort-Höchststrom für Gäste, „volle Leistung“ als null', async () => {
+	reply(control);
+	await api.setGuestNowLimit(8);
+	expect(sent()).toEqual({
+		url: '/api/control/guest/now-limit',
+		method: 'PUT',
+		body: { max_a: 8 },
+		csrf: 'tok-123'
+	});
+	fetchMock.mockClear();
+	reply(control);
+	await api.setGuestNowLimit(null);
+	expect(sent().body).toEqual({ max_a: null });
+});
+
 it('sendet die Zuordnung „Automatisch“ als null', async () => {
 	reply(control);
 	await api.setWallboxVehicle('evcs', null);

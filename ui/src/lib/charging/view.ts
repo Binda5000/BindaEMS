@@ -6,6 +6,7 @@ import type {
 	Clue,
 	EffectiveMode,
 	Intent,
+	Limits,
 	PlanVehicle,
 	SocSource,
 	SupportSource,
@@ -75,6 +76,7 @@ const REASONS: Record<string, string> = {
 	mode_pv: 'PV-Überschuss',
 	mode_min_pv: 'Min+PV',
 	mode_now: 'Sofort',
+	now_limit: 'Sofort-Limit',
 	mode_off: 'Aus',
 	mode_planned: 'Geplant',
 	boost: 'Boost',
@@ -519,4 +521,81 @@ export function plannedLine({
 		notes.push(`Ladelimit im Auto ${formatSoc(limit)} liegt unter dem Ziel.`);
 	}
 	return { text: plannedText(vehicle, car, source, departureOn), notes };
+}
+
+// --- Höchststrom in „Sofort“ -------------------------------------------------------------
+
+/** Strombereich und Phasen eines Ladepunkts (Fahrzeug oder EVCS für Gäste) */
+export interface CurrentRange {
+	min_a: number;
+	max_a: number;
+	phases: number;
+}
+
+/** Was eine Karte für die Auswahl „Höchststrom“ braucht; `max_a` `null`: volle Leistung */
+export interface NowLimitSetup {
+	max_a: number | null;
+	range: CurrentRange;
+	/** Nennspannung des Netzes in V (`grid.voltage_nominal_v`) */
+	voltage: number;
+}
+
+/** kW einer Stromstärke je Phase mit einer Nachkommastelle: „6,9 kW“ */
+function kwText(amps: number, range: CurrentRange, voltage: number): string {
+	return `${formatNumber((amps * voltage * range.phases) / 1000, 1)} kW`;
+}
+
+/**
+ * Das wirksame Limit: `null` ab dem Höchststrom (volle Leistung, wie es die app speichert), nie
+ * unter dem Mindeststrom, denn darunter lädt der Ladepunkt nicht.
+ */
+export function nowLimitChoice(maxA: number | null, range: CurrentRange): number | null {
+	if (maxA === null || maxA >= range.max_a) return null;
+	return Math.max(maxA, range.min_a);
+}
+
+/** „Volle Leistung (16 A · 11,0 kW)“, dann jeder Strom darunter bis zum Mindeststrom */
+export function nowLimitOptions(
+	range: CurrentRange,
+	voltage: number
+): { value: number | null; label: string }[] {
+	const options: { value: number | null; label: string }[] = [
+		{
+			value: null,
+			label: `Volle Leistung (${range.max_a} A · ${kwText(range.max_a, range, voltage)})`
+		}
+	];
+	for (let amps = range.max_a - 1; amps >= range.min_a; amps--) {
+		options.push({ value: amps, label: `${amps} A · ${kwText(amps, range, voltage)}` });
+	}
+	return options;
+}
+
+/** „Sofort mit höchstens 10 A (6,9 kW)“; `null` ohne Limit */
+export function nowLimitText(
+	maxA: number | null,
+	range: CurrentRange,
+	voltage: number
+): string | null {
+	const limit = nowLimitChoice(maxA, range);
+	return limit === null
+		? null
+		: `Sofort mit höchstens ${limit} A (${kwText(limit, range, voltage)})`;
+}
+
+/**
+ * Bereich und Phasen für Gäste: Gäste laden nur an der EVCS. Der Bereich reicht vom kleinsten
+ * `min_a` bis zum größten `max_a` aller EVCS, die Phasen nimmt die erste. `null` ohne EVCS.
+ */
+export function guestCurrentRange(wallboxes: Limits['wallboxes']): CurrentRange | null {
+	const evcs = Object.values(wallboxes).flatMap((box) =>
+		box.type === 'victron_evcs_ns' ? [box] : []
+	);
+	const first = evcs[0];
+	if (first === undefined) return null;
+	return {
+		min_a: Math.min(...evcs.map((box) => box.min_a)),
+		max_a: Math.max(...evcs.map((box) => box.max_a)),
+		phases: first.phase_map.length
+	};
 }

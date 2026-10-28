@@ -76,6 +76,7 @@ _REASON_TEXT: Final = {
     "latest_start": "Späteste Startzeit",
     "target_reached": "Ziel-SOC erreicht",
     "charge_limit": "Ladelimit",
+    "now_limit": "Sofort-Limit",
     "thermal_more": "PV-Überschuss in die Klimaanlage",
     "thermal_back": "Netzbezug, Klimaanlage eine Stufe zurück",
     "thermal_cars": "Autos haben Vorrang",

@@ -855,8 +855,8 @@ def test_simulator_section_matches_the_tool(capsys: pytest.CaptureFixture[str]) 
     assert documented == known - {"--help"}
     scenarios = re.findall(r"^\| `([a-z0-9-]+)` \|", section, re.MULTILINE)
     assert scenarios == list(SCENARIOS)
-    assert len(SCENARIOS) == 42 and "neununddreißig" not in section  # die Zahl im Text zieht mit
-    assert section.count("zweiundvierzig") == 3
+    assert len(SCENARIOS) == 43 and "zweiundvierzig" not in section  # die Zahl im Text zieht mit
+    assert section.count("dreiundvierzig") == 3
 
 
 def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:
@@ -1069,7 +1069,7 @@ def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
 
 
 # Plattformen der Tabellen im Handbuch
-HA_PLATFORMS = {"sensor", "binary_sensor", "switch", "number", "text", "button"}
+HA_PLATFORMS = {"sensor", "binary_sensor", "switch", "number", "time", "button"}
 
 
 def _documented_entities(section: str) -> dict[str, tuple[str, str]]:
@@ -1125,8 +1125,9 @@ def test_planned_charging_entities_in_the_guide_exist() -> None:
     section = _guide_section("7. Home Assistant über MQTT")
     assert "auf die volle Minute aufgerundet" in " ".join(section.split())
     assert "| Ziel-SOC (je Fahrzeug) | Zahl |" in section
-    assert "| Abfahrtszeit (je Fahrzeug) | Text |" in section
+    assert "| Abfahrtszeit (je Fahrzeug) | Uhrzeit |" in section
     assert "topic write homeassistant/text/bindaems/#" in section
+    assert "topic write homeassistant/time/bindaems/#" in section
     assert "Sofort, Aus oder Geplant" in section
 
 

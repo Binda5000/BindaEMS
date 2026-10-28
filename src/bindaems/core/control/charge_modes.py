@@ -3,6 +3,7 @@
 - ``Effective``, ``MODE_CODES``, ``FULL_POWER`` und ``PV_SURPLUS``: der geltende Modus, sein
   Grund-Code im Entscheidungslog, die Modi mit vollem Strom und der Grund-Code ``pv_surplus``
 - ``PLAN_POWER``, ``LATEST_START`` und ``TARGET_REACHED``: die Grund-Codes von „Geplant“
+- ``NOW_LIMIT``: der Grund-Code des Höchststroms in „Sofort“
 - ``ModeTimers``: die Zeiten aus ``control`` der Konfiguration
 - ``ModeInput`` und ``ModeDecision``: Eingaben und Urteil eines Schritts
 - ``ModeMachine``: der Zustand eines Fahrzeugs; sie entscheidet nur, ob geladen werden soll,
@@ -33,6 +34,9 @@ PV_SURPLUS: Final = "pv_surplus"
 PLAN_POWER: Final = "plan_power"
 LATEST_START: Final = "latest_start"
 TARGET_REACHED: Final = "target_reached"
+# Grund-Code (Plan Sofort-Limit, Entscheidung 8): In „Sofort“ begrenzt der Höchststrom der Absicht
+# (``now_max_a``) den Strom, kein Wächter darunter.
+NOW_LIMIT: Final = "now_limit"
 
 
 class Effective(StrEnum):

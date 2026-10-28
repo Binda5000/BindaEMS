@@ -561,6 +561,8 @@ def test_object_ids_include_planned_and_statistics_entities(cfg) -> None:
         "autarky_today",
         "problem_target_unreachable",
         "tesla_target_soc",
+        "tesla_now_max_a",
+        "guest_now_max_a",
         "tesla_departure",
         "tesla_done_by",
         "tesla_target_reachable",
@@ -945,6 +947,14 @@ def test_object_ids_include_thermal_entities(cfg) -> None:
     assert len(ids) == len(set(ids))
     bare = cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
     assert "thermal_plan" not in ha_object_ids(bare)  # ohne Klimaanlage nichts davon
+
+
+def test_guest_now_max_a_needs_an_evcs(cfg) -> None:
+    assert "guest_now_max_a" in ha_object_ids(cfg)
+    data = cfg.model_dump(mode="json")
+    del data["wallboxes"]["evcs"]
+    data["vehicles"]["egolf"]["default_wallbox"] = "twc"
+    assert "guest_now_max_a" not in ha_object_ids(Config.model_validate(data))
 
 
 def test_a_vehicle_key_must_not_collide_with_a_thermal_entity(tmp_path) -> None:
