@@ -10,6 +10,11 @@ Für die Autos: kein Laden ab der Abfahrt, Ladeleistung 0 oder zwischen ``min_w`
 die PV-Bilanz und der Netzanschluss gelten mit den Autos, die Netzenergie ins Auto bleibt unter
 ``grid_allowed_kwh`` plus der gemeldeten Überschreitung (Regel R2), Ladung und Fehlmenge decken den
 Bedarf im Horizont, und solange ein Auto aus dem Netz lädt, geht keine PV in Akku oder Netz.
+
+Akku ins Auto (Plan Akku ins Auto): Haus und Autos zusammen entladen nie über der Entladegrenze,
+nie zugleich mit Laden, nichts bei ausgeschaltetem Schalter, nichts, solange nach Netzladen
+Netzenergie im Akku sein kann (Regel R1 bis zum Leerstand), und nichts, solange PV in Akku oder Netz
+geht.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from tests.plan_helpers import planned_car, scenario
 
-from bindaems.app.planning.battery_model import SLOT_H, params_of
+from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, solve
 from bindaems.app.planning.vehicles import (
@@ -63,6 +68,7 @@ def horizons(draw: st.DrawFn) -> dict[str, object]:
         "load": draw(series(st.floats(100.0, 3000.0), min_size=n, max_size=n)),
         "soc_pct": draw(st.floats(10.0, 100.0)),
         "grid_charge": draw(st.booleans()),
+        "car_battery": draw(st.booleans()),
         "cars": cars,
     }
 
@@ -105,13 +111,18 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
     result = solve(inputs)
     assert result.status in ("optimal", "time_limit") and result.flows
     params = params_of(inputs)
+    sims = sim_slots(inputs)
     for index, (slot, flow) in enumerate(zip(inputs.slots, result.flows, strict=True)):
+        bt_ev = sum(flow.ev_battery.values())
         assert params.lo_kwh - 0.01 <= flow.soc_end_kwh <= params.hi_kwh + 0.01
         assert flow.pv_x <= slot.pv_w + 1
         assert flow.gr_h + flow.bt_h <= max(0.0, slot.load_w - slot.pv_w) + 1
-        assert min(flow.pv_b + flow.gr_b, flow.bt_h) <= 1
+        assert flow.bt_h + bt_ev <= sims[index].max_discharge_w + 1
+        assert min(flow.pv_b + flow.gr_b, flow.bt_h + bt_ev) <= 1
         if not inputs.planning.grid_charge_allowed:
             assert flow.gr_b == 0
+        if not inputs.planning.car_battery_allowed:
+            assert bt_ev == 0
         if flow.gr_b > 1:
             end = next(
                 (
@@ -122,16 +133,20 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
                 ),
                 len(result.flows) - 1,
             )
-            later = sum(f.pv_x for f in result.flows[index : end + 1]) * SLOT_H / 1000
-            assert later <= 0.001
+            later = result.flows[index : end + 1]
+            assert sum(f.pv_x for f in later) * SLOT_H / 1000 <= 0.001
+            assert all(sum(f.ev_battery.values()) <= 1 for f in later)
         pv_ev = sum(pv for pv, _ in flow.ev.values())
         gr_ev = sum(grid for _, grid in flow.ev.values())
         assert flow.pv_h + pv_ev + flow.pv_b + flow.pv_x <= slot.pv_w + 1
         assert flow.gr_h + flow.gr_b + gr_ev <= inputs.battery.grid_max_import_w + 1
-        if gr_ev > 1:
+        if gr_ev > 1 or bt_ev > 1:
             assert flow.pv_b + flow.pv_x <= 1
     for car in inputs.vehicles:
-        charged = [sum(flow.ev.get(car.key, (0.0, 0.0))) for flow in result.flows]
+        charged = [
+            sum(flow.ev.get(car.key, (0.0, 0.0))) + flow.ev_battery.get(car.key, 0.0)
+            for flow in result.flows
+        ]
         for slot, power_w in zip(inputs.slots, charged, strict=True):
             if slot.start >= car.departure_at:
                 assert power_w == 0

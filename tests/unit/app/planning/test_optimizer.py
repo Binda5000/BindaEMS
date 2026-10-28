@@ -1,7 +1,7 @@
 """Tests des Optimierers für den Akku (Präzisierungen 5 und 6): Netzladen mit Marge und Schalter,
 Regel R1, Reserve, Leistungspreis je Monat, Planträgheit und Fehler des Solvers; dazu die geplanten
 Autos (Plan 4b, Präzisierung 11): günstigste Slots, Vorrang vor dem Akku, Fehlmenge, Regel R2 und
-Trägheit."""
+Trägheit; Akku ins Auto, wenn er übrig ist (Plan Akku ins Auto, Entscheidungen 2 und 3)."""
 
 from __future__ import annotations
 
@@ -30,10 +30,12 @@ from bindaems.app.planning.optimizer import (
     TIME_LIMIT_S,
     OptimizerResult,
     SlotFlows,
+    ev_battery_power_w,
+    ev_power_w,
     grid_charge_cap_w,
     solve,
 )
-from bindaems.app.planning.vehicles import grid_allowed, horizon_need, need_kwh
+from bindaems.app.planning.vehicles import EV_ON_W, grid_allowed, horizon_need, need_kwh
 from bindaems.shared.timeutil import SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
@@ -637,3 +639,154 @@ def test_two_cars_over_36_hours_solve_in_time() -> None:
     assert result.status == "optimal"
     assert result.solve_ms < TIME_LIMIT_S * 1000
     assert all(value == pytest.approx(0.0, abs=1e-6) for value in result.shortfall_kwh.values())
+
+
+# Akku ins Auto, wenn er übrig ist (Plan Akku ins Auto, Entscheidungen 2 und 3)
+
+
+def _slot_at(start: str, n: int) -> datetime:
+    """Beginn des Slots ``n`` eines Szenarios ab ``start``."""
+    return at(start) + n * SLOT
+
+
+def battery_kwh(result: OptimizerResult) -> float:
+    """Energie aus dem Akku in alle Autos über den Horizont (Wallbox-Seite)."""
+    return sum(sum(f.ev_battery.values()) for f in result.flows) * SLOT_KWH
+
+
+def _summer_night(*, car_battery: bool) -> PlanInputs:
+    """22:00 bis 14:00 Ortszeit im Juni: Akku 95 %, Haus 400 W, das Auto in „Geplant“ fährt um
+    07:00 mit 20 kWh Bedarf; Bezug 18 ct, Einspeisung 6 ct, ab 09:00 9 kW PV, die den Akku füllt
+    und einspeist."""
+    start = "2026-06-20T20:00:00+00:00"
+    count, night = 64, 44
+    car = planned_car(departure_at=_slot_at(start, 36), need_kwh=20.0)
+    return scenario(
+        prices=[18.0] * count,
+        pv=[0.0] * night + [9000.0] * (count - night),
+        load=[400.0] * count,
+        soc_pct=95.0,
+        feed_in=6.0,
+        start=start,
+        vehicles=[car],
+        car_battery=car_battery,
+    )
+
+
+def _winter_night(*, car_battery: bool, end_value_ct: float = 20.0) -> PlanInputs:
+    """22:00 bis 04:00 Ortszeit im Dezember, keine PV: Akku 80 %, Haus 400 W, Bezug 12 ct; das Auto
+    braucht 10 kWh bis zum Horizontende."""
+    start = "2026-12-15T21:00:00+00:00"
+    count = 24
+    car = planned_car(departure_at=_slot_at(start, count), need_kwh=10.0)
+    return scenario(
+        prices=[12.0] * count,
+        pv=[0.0] * count,
+        load=[400.0] * count,
+        soc_pct=80.0,
+        end_value_ct=end_value_ct,
+        start=start,
+        vehicles=[car],
+        car_battery=car_battery,
+    )
+
+
+def _grid_then_car(*, car_battery: bool, grid_charge: bool) -> PlanInputs:
+    """Vier billige Slots (5 ct) mit Netzladen, dann 40 ct; ein erwartetes Auto kommt erst nach
+    den billigen Slots und braucht 5 kWh. Ohne Regel R1 für den Akku ins Auto lohnte sich
+    Netz → Akku → Auto."""
+    count = 16
+    car = planned_car(departure_at=slot(count), need_kwh=5.0, expected=True, arrival_at=slot(4))
+    return scenario(
+        prices=[5.0] * 4 + [40.0] * (count - 4),
+        pv=[0.0] * count,
+        load=[500.0] * count,
+        soc_pct=20.0,
+        grid_charge=grid_charge,
+        vehicles=[car],
+        car_battery=car_battery,
+    )
+
+
+def test_planned_car_takes_spare_battery_when_pv_refills_it() -> None:
+    on = solve(_summer_night(car_battery=True))
+    off = solve(_summer_night(car_battery=False))
+    assert on.status == off.status == "optimal"
+    assert battery_kwh(on) > 5.0
+    assert all(not f.ev_battery for f in off.flows)
+    assert on.objective_ct is not None and off.objective_ct is not None
+    assert on.objective_ct < off.objective_ct
+    # Der Akkuanteil zählt zum Bedarf, nicht zu Regel R2
+    assert car_kwh(on) + battery_kwh(on) == pytest.approx(20.0)
+    assert on.shortfall_kwh == {"tesla": pytest.approx(0.0, abs=1e-6)}
+
+
+def test_planned_car_gets_no_battery_when_it_does_not_pay() -> None:
+    # Restwert 20 ct, Nachtpreis 12 ct: 12 − 2 − 2 < 20 / η_dis
+    result = solve(_winter_night(car_battery=True))
+    assert result.status == "optimal"
+    assert all(sum(f.ev_battery.values()) < EV_ON_W for f in result.flows)
+    # Kontrollfall: Ohne Restwert gibt derselbe Akku dem Auto
+    assert battery_kwh(solve(_winter_night(car_battery=True, end_value_ct=0.0))) > 5.0
+
+
+def test_no_battery_to_car_while_grid_energy_is_in_the_battery() -> None:
+    inputs = _grid_then_car(car_battery=True, grid_charge=True)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    lo = params_of(inputs).lo_kwh
+    charged = [t for t, f in enumerate(result.flows) if f.gr_b >= 100]
+    assert charged
+    empty = next(
+        (
+            t
+            for t, f in enumerate(result.flows)
+            if t > charged[0] and f.soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+        ),
+        len(result.flows) - 1,
+    )
+    assert all(
+        sum(result.flows[t].ev_battery.values()) < EV_ON_W for t in range(charged[0], empty + 1)
+    )
+
+
+def test_without_r1_the_grid_energy_would_go_into_the_car(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Kontrollfall zum Test davor: Gilt der Akku immer als leer, fällt die Sperre, und die
+    # Netzenergie geht über den Akku ins Auto
+    monkeypatch.setattr(optimizer, "R1_EMPTY_TOL_KWH", 100.0)
+    result = solve(_grid_then_car(car_battery=True, grid_charge=True))
+    assert battery_kwh(result) > 1.0
+
+
+def test_ev_power_counts_the_battery_share() -> None:
+    result = solve(_summer_night(car_battery=True))
+    shares = ev_battery_power_w(result)
+    assert any(shares)
+    for flows, powers, share in zip(result.flows, ev_power_w(result), shares, strict=True):
+        for key, (pv, grid) in flows.ev.items():
+            battery = flows.ev_battery.get(key, 0.0)
+            assert powers.get(key, 0.0) == pytest.approx(pv + grid + battery, abs=EV_ON_W)
+            assert share.get(key, 0.0) == pytest.approx(battery, abs=EV_ON_W)
+
+
+def test_battery_to_car_never_while_pv_goes_to_grid() -> None:
+    # Voller Akku ohne Restwert, Einspeisung 20 ct: Akku ins Auto und die PV einspeisen hieße,
+    # den Akku ins Netz zu entladen. PV deckt zuerst die Autos.
+    car = planned_car(departure_at=slot(8), need_kwh=10.0)
+    inputs = scenario(
+        prices=[30.0] * 8,
+        pv=[4000.0] * 8,
+        load=[500.0] * 8,
+        soc_pct=100.0,
+        feed_in=20.0,
+        vehicles=[car],
+        car_battery=True,
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert battery_kwh(result) > 1.0
+    for f in result.flows:
+        if sum(f.ev_battery.values()) >= EV_ON_W:
+            assert f.pv_b + f.pv_x == pytest.approx(0.0, abs=1e-6)

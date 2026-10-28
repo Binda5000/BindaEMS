@@ -8,15 +8,22 @@ wird nichts eingespeist, solange Netzenergie im Akku sein kann, also bis der Akk
 (SOC am Slotende ≤ untere Grenze ``min(Reserve, SOC₀)`` + ``R1_EMPTY_TOL_KWH``) oder der
 Horizont endet.
 
-Geplante Autos (``PlanInputs.vehicles``) laden je Slot vor ihrer Abfahrt ``e = pv_ev + gr_ev``,
-0 oder zwischen ``min_w`` und ``max_w``. PV deckt zuerst das Haus, dann die Autos, dann den Akku:
-Solange ein Auto aus dem Netz lädt, geht keine PV in den Akku oder ins Netz. Der Akku gibt nichts
-ins Auto. Die Energien der Autos stehen auf der Wallbox-Seite (Ruling R10): Der Bedarf
+Geplante Autos (``PlanInputs.vehicles``) laden je Slot vor ihrer Abfahrt ``e = pv_ev + gr_ev +
+bt_ev``, 0 oder zwischen ``min_w`` und ``max_w``. PV deckt zuerst das Haus, dann die Autos, dann
+den Akku: Solange ein Auto aus dem Netz oder dem Akku lädt, geht keine PV in den Akku oder ins
+Netz. Die Energien der Autos stehen auf der Wallbox-Seite (Ruling R10): Der Bedarf
 ``Σ e · Δ + Fehlmenge ≥ horizon_need_kwh`` rechnet ohne Wirkungsgrad, denn der steckt schon in
 ``need_kwh``; Regel R2 vergleicht die Netzenergie ins Auto ``Σ gr_ev · Δ`` mit
 ``grid_allowed_kwh``. Die Fehlmenge kostet ``SHORTFALL_CT``, die Überschreitung von R2 ``R2_CT``
 je kWh: Ziel vor Regel R vor Kosten. PV ins Auto kostet nichts, Netz ins Auto den Bezugspreis.
 Ohne Autos ist das Modell das des Akkus allein.
+
+Akku ins Auto (Plan Akku ins Auto, Entscheidungen 2 und 3): Nur mit dem Schalter
+``planning.car_battery_allowed`` gibt es ``bt_ev`` je Auto und Slot, ``0 ≤ bt_ev ≤ max_w``; sonst
+ist das Modell das von vorher. Haus und Autos teilen sich die Entladegrenze und den SOC, je kWh
+kostet ``bt_ev`` Verschleiß plus Marge (die Verluste stecken im SOC). Solange Netzenergie im Akku
+sein kann (``c_t`` aus Regel R1), gibt der Akku keinem Auto etwas, sonst ginge Netzstrom über den
+Akku an Regel R2 vorbei ins Auto. Regel R2 zählt ``bt_ev`` nicht.
 
 Ein erwartetes Auto (Plan 5b, Präzisierung 10) steht erst ab seiner Ankunft im Modell: Seine
 Variablen gibt es nur in den Slots ``[arrival_at, departure_at)`` (``charge_window``); Bedarf,
@@ -58,7 +65,9 @@ class SlotFlows:
     ``pv_h``/``pv_b``/``pv_x``: PV ins Haus, in den Akku, ins Netz; ``gr_h``/``gr_b``: Netz ins
     Haus, in den Akku; ``bt_h``: Akku ins Haus. ``ev``: ``(pv_ev, gr_ev)`` je geplantem Auto, PV
     und Netz ins Auto; es fehlen Autos, die in dem Slot nicht laden können (ab der Abfahrt, ohne
-    Bedarf, ein erwartetes Auto vor seiner Ankunft).
+    Bedarf, ein erwartetes Auto vor seiner Ankunft). ``ev_battery``: ``bt_ev`` je Auto, Akku ins
+    Auto, nur mit dem Schalter „Akku ins Auto, wenn übrig“ und nur für Autos, die im Slot laden
+    können.
     """
 
     pv_h: float
@@ -69,6 +78,7 @@ class SlotFlows:
     bt_h: float
     soc_end_kwh: float
     ev: Mapping[str, tuple[float, float]] = field(default_factory=dict)
+    ev_battery: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -95,12 +105,22 @@ class OptimizerResult:
 
 
 def ev_power_w(result: OptimizerResult) -> list[dict[str, float]]:
-    """Ladeleistung ``e = pv_ev + gr_ev`` je Auto und Slot in W; ein Auto unter ``EV_ON_W``
-    (Rundung des Solvers) fehlt im Slot."""
+    """Ladeleistung ``e = pv_ev + gr_ev + bt_ev`` je Auto und Slot in W; ein Auto unter
+    ``EV_ON_W`` (Rundung des Solvers) fehlt im Slot."""
     return [
-        cars_charging({key: pv + grid for key, (pv, grid) in flows.ev.items()})
+        cars_charging(
+            {
+                key: pv + grid + flows.ev_battery.get(key, 0.0)
+                for key, (pv, grid) in flows.ev.items()
+            }
+        )
         for flows in result.flows
     ]
+
+
+def ev_battery_power_w(result: OptimizerResult) -> list[dict[str, float]]:
+    """Akkuanteil ``bt_ev`` je Auto und Slot in W; ein Auto unter ``EV_ON_W`` fehlt im Slot."""
+    return [cars_charging(dict(flows.ev_battery)) for flows in result.flows]
 
 
 def grid_charge_cap_w(inputs: PlanInputs, index: int) -> float:
@@ -153,17 +173,21 @@ def _elapsed_ms(started: float) -> int:
 @dataclass(frozen=True, eq=False)
 class _Car:
     """Variablen des Autos ``inputs.vehicles[index]`` je Slot, in dem es laden kann (Schlüssel
-    von ``pv`` und ``grid``: ab der Ankunft, vor der Abfahrt)."""
+    von ``pv`` und ``grid``: ab der Ankunft, vor der Abfahrt). ``battery`` (Akku ins Auto) hat
+    dieselben Schlüssel, mit ausgeschaltetem Schalter keine."""
 
     index: int
     car: PlanVehicleInput
     pv: dict[int, pulp.LpVariable]
     grid: dict[int, pulp.LpVariable]
+    battery: dict[int, pulp.LpVariable]
     short: pulp.LpVariable
     rho: pulp.LpVariable
 
     def power(self, t: int) -> Any:
         """Ladeleistung ``e`` im Slot ``t`` in W."""
+        if t in self.battery:
+            return self.pv[t] + self.grid[t] + self.battery[t]
         return self.pv[t] + self.grid[t]
 
 
@@ -177,7 +201,7 @@ def _add_car(prob: pulp.LpProblem, inputs: PlanInputs, index: int) -> _Car:
     (Ruling R10): ``Σ e · Δ + short ≥ horizon_need_kwh``, ohne Wirkungsgrad. Mehr als
     ``need_kwh`` lädt es nicht, denn am Ziel stoppt der core; liegt der Bedarf unter einem Slot
     mit ``min_w``, darf es diesen einen Slot laden. Regel R2: ``Σ gr_ev · Δ ≤ grid_allowed_kwh +
-    rho``.
+    rho``; ``bt_ev`` (nur mit ``planning.car_battery_allowed``) zählt zum Bedarf, nicht zu R2.
     """
     car = inputs.vehicles[index]
     window = charge_window(car, inputs.slots) if car.need_kwh > 0 else range(0)
@@ -185,9 +209,14 @@ def _add_car(prob: pulp.LpProblem, inputs: PlanInputs, index: int) -> _Car:
     grid = {
         t: prob.add_variable(f"gr_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in window
     }
+    battery = (
+        {t: prob.add_variable(f"bt_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in window}
+        if inputs.planning.car_battery_allowed
+        else {}
+    )
     short = prob.add_variable(f"fehl{index}", lowBound=0)
     rho = prob.add_variable(f"rho{index}", lowBound=0)
-    entry = _Car(index=index, car=car, pv=pv, grid=grid, short=short, rho=rho)
+    entry = _Car(index=index, car=car, pv=pv, grid=grid, battery=battery, short=short, rho=rho)
     for t in window:
         on = prob.add_variable(f"u{index}_{t}", cat=pulp.LpBinary)
         prob += entry.power(t) <= car.max_w * on, f"auto{index}_max_{t}"
@@ -244,6 +273,11 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     active = [[c for c in cars if t in c.pv] for t in range(count)]
     car_pv = [pulp.lpSum(c.pv[t] for c in active[t]) for t in range(count)]
     car_grid = [pulp.lpSum(c.grid[t] for c in active[t]) for t in range(count)]
+    # Akku ins Auto je Slot (nur mit dem Schalter; sonst leer)
+    car_battery = [
+        pulp.lpSum(c.battery[t] for c in active[t] if t in c.battery) for t in range(count)
+    ]
+    car_battery_max = [sum(c.car.max_w for c in active[t] if t in c.battery) for t in range(count)]
     imports = [gr_h[t] + gr_b[t] + car_grid[t] for t in range(count)]
 
     terms: list[Any] = []
@@ -252,19 +286,22 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         prob += pv_h[t] + car_pv[t] + pv_b[t] + pv_x[t] == slot.pv_w, f"pv_{t}"
         prob += pv_h[t] + gr_h[t] + bt_h[t] == slot.load_w, f"haus_{t}"
         prob += charge <= sim.max_charge_w * y[t], f"laden_{t}"
-        prob += bt_h[t] <= sim.max_discharge_w * (1 - y[t]), f"entladen_{t}"
+        discharge = bt_h[t] + car_battery[t] if car_battery_max[t] else bt_h[t]
+        prob += discharge <= sim.max_discharge_w * (1 - y[t]), f"entladen_{t}"
         if t in z:
             prob += gr_b[t] <= caps[t] * z[t], f"netzladen_{t}"
         prob += imports[t] <= battery.grid_max_import_w, f"bezug_{t}"
         if active[t] and slot.pv_w > slot.load_w:
             # PV erst in die Autos: Lädt eines aus dem Netz, geht keine PV in Akku oder Netz
-            # (sonst Netz über das Auto in den Akku, an R1 und Schalter vorbei)
+            # (sonst Netz über das Auto in den Akku, an R1 und Schalter vorbei); ebenso, wenn es
+            # aus dem Akku lädt (sonst entlüde der Akku über das Auto ins Netz)
             w = prob.add_variable(f"w_{t}", cat=pulp.LpBinary)
-            prob += car_grid[t] <= sum(c.car.max_w for c in active[t]) * w, f"auto_netz_{t}"
+            from_outside = car_grid[t] + car_battery[t] if car_battery_max[t] else car_grid[t]
+            prob += from_outside <= sum(c.car.max_w for c in active[t]) * w, f"auto_netz_{t}"
             prob += pv_b[t] + pv_x[t] <= slot.pv_w * (1 - w), f"auto_pv_{t}"
         before = soc0 if t == 0 else soc[t - 1]
         prob += (
-            soc[t] == before + _KWH * (params.eta_ch * charge - bt_h[t] / params.eta_dis),
+            soc[t] == before + _KWH * (params.eta_ch * charge - discharge / params.eta_dis),
             f"soc_{t}",
         )
         feed_in_ct = slot.feed_in_ct or 0.0
@@ -277,6 +314,8 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                 + planning.margin_ct * gr_b[t]
             )
         )
+        if car_battery_max[t]:
+            terms.append(_KWH * (planning.wear_ct + planning.margin_ct) * car_battery[t])
 
     # Regel R1: Keine Einspeisung, solange Netzenergie im Akku sein kann. ``e_t`` = 1 heißt: Der
     # Akku ist am Ende von Slot t leer (SOC ≤ untere Grenze ``min(Reserve, SOC₀)`` + Toleranz).
@@ -302,6 +341,12 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                 prob += in_battery[t] >= in_battery[t - 1] - empty[t - 1], f"netz_im_akku_{t}"
             if inputs.slots[t].pv_w > 0:
                 prob += pv_x[t] <= inputs.slots[t].pv_w * (1 - in_battery[t]), f"r1_{t}"
+            # Entscheidung 2: Kein Akku ins Auto, solange Netzenergie im Akku sein kann
+            if car_battery_max[t]:
+                prob += (
+                    car_battery[t] <= car_battery_max[t] * (1 - in_battery[t]),
+                    f"r1_auto_{t}",
+                )
 
     # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont.
     peaks: dict[str, tuple[float, pulp.LpVariable, pulp.LpVariable]] = {}
@@ -323,7 +368,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         if slot.prev_battery_w is None:
             continue
         dev = var("dev", t)
-        net = pv_b[t] + gr_b[t] - bt_h[t]
+        net = pv_b[t] + gr_b[t] - bt_h[t] - car_battery[t]
         prob += dev >= net - slot.prev_battery_w, f"traeg_auf_{t}"
         prob += dev >= slot.prev_battery_w - net, f"traeg_ab_{t}"
         terms.append(_KWH * planning.inertia_ct * dev)
@@ -364,6 +409,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             bt_h=_value(bt_h[t]),
             soc_end_kwh=float(soc[t].varValue),
             ev={c.car.key: (_value(c.pv[t]), _value(c.grid[t])) for c in active[t]},
+            ev_battery={c.car.key: _value(c.battery[t]) for c in active[t] if t in c.battery},
         )
         for t in range(count)
     )

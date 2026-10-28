@@ -287,11 +287,13 @@ def scenario(
     car_floor_kw: float = 0.0,
     vehicles: list[PlanVehicleInput] | None = None,
     pv_p25: list[float] | None = None,
+    car_battery: bool = False,
 ) -> PlanInputs:
     """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
     ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots,
     ``origins`` ist die Herkunft der Preise je Slot (Standard ``primary``). ``vehicles`` sind die
-    geplanten Autos (``planned_car``), ``pv_p25`` die PV-Prognose P25 je Slot (ohne gilt ``pv``)."""
+    geplanten Autos (``planned_car``), ``pv_p25`` die PV-Prognose P25 je Slot (ohne gilt ``pv``),
+    ``car_battery`` der Schalter „Akku ins Auto, wenn übrig“."""
     if not len(prices) == len(pv) == len(load):
         raise ValueError("Preise, PV und Last müssen gleich lang sein")
     if origins is not None and len(origins) != len(prices):
@@ -299,7 +301,10 @@ def scenario(
     if pv_p25 is not None and len(pv_p25) != len(prices):
         raise ValueError("P25 je Slot nötig")
     first = at(start)
-    planning_values: dict[str, Any] = {"grid_charge_allowed": grid_charge}
+    planning_values: dict[str, Any] = {
+        "grid_charge_allowed": grid_charge,
+        "car_battery_allowed": car_battery,
+    }
     if inertia_ct is not None:
         planning_values["inertia_ct"] = inertia_ct
     if margin_ct is not None:
