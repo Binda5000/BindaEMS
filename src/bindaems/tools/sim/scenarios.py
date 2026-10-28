@@ -1185,9 +1185,10 @@ def _idle_from(key: str, begin_s: int) -> Check:
 
 
 def _no_stop_between(actuator: str, begin_s: int, end_s: int) -> Check:
-    """Der Aktor ``actuator`` bekommt von ``begin_s`` bis ``end_s`` kein „Laden aus“: keine
+    """Der Aktor ``actuator`` bekommt von ``begin_s`` bis vor ``end_s`` kein „Laden aus“: keine
     Entscheidung über ``charging`` mit dem Wert falsch, die ein Befehl war (nicht abgelehnt,
-    zurückgestellt oder eine fremde Änderung); auch ein Dry-Run oder ein Fehlschlag zählt."""
+    zurückgestellt oder eine fremde Änderung); auch ein Dry-Run oder ein Fehlschlag zählt. Das Ende
+    zählt nicht mehr: Dort endet etwa die Klimatisierung, und ein Stopp ab dann ist erlaubt."""
 
     def find(result: SimResult) -> list[str]:
         begin = result.scenario.start + timedelta(seconds=begin_s)
@@ -1199,7 +1200,7 @@ def _no_stop_between(actuator: str, begin_s: int, end_s: int) -> Check:
             and d.kind is CommandKind.CHARGING
             and d.requested is False
             and d.result not in _HELD_BACK
-            and begin <= d.ts <= end
+            and begin <= d.ts < end
         ]
         if not stops:
             return []

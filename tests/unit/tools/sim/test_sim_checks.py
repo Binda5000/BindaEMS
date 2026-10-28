@@ -943,8 +943,9 @@ def test_no_stop_between_counts_only_commands_in_the_window(cfg) -> None:
     def found(*decisions: Decision) -> list[str]:
         return none.find(result_of(cfg, "tesla-vorklimatisieren", decisions=list(decisions)))
 
-    assert found() == [] and found(stop(299), stop(1501)) == []  # außerhalb des Fensters
-    assert found(stop(300)) != [] and found(stop(1500)) != []  # die Ränder zählen
+    # außerhalb des Fensters; sein Ende zählt nicht mehr: Dort endet die Klimatisierung
+    assert found() == [] and found(stop(299), stop(1500), stop(1501)) == []
+    assert found(stop(300)) != [] and found(stop(1499)) != []  # der Beginn zählt
     elsewhere = decision(400, EVCS, CHARGING, False, OK)
     start = stop(400, value=True)
     held = [stop(400, REJECTED), stop(400, DecisionResult.DEFERRED)]
