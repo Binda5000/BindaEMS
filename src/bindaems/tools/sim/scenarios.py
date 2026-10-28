@@ -3797,7 +3797,7 @@ def _without_plan_from(from_s: int) -> Check:
 def _klima_plan_vorheizen() -> Scenario:
     """Billige Nacht, teurer Morgen: Der Wunsch steigt planmäßig auf +3 (+1,5 K), im teuren Block
     über 0 auf −2 (−1,0 K), nie über die Schrittregel."""
-    start, duration_s, seed = WINTER_NIGHT, EXPENSIVE_S + 30 * MINUTE_S, 40
+    start, duration_s, seed = WINTER_NIGHT, EXPENSIVE_S + 30 * MINUTE_S, 41
 
     def slot(q: int) -> ShiftSlot:
         return CHEAP if q < EXPENSIVE_S // QUARTER_S else EXPENSIVE
@@ -3837,7 +3837,7 @@ def _klima_plan_vorheizen() -> Scenario:
 def _klima_plan_akku() -> Scenario:
     """Planwert +2 aus dem Netz, dann deckt der Akku die Last: binnen 6 min eine Stufe zurück und
     keine mehr hoch, solange er entlädt."""
-    start, duration_s, seed = WINTER_NIGHT, BATTERY_COVERS_S + 15 * MINUTE_S, 41
+    start, duration_s, seed = WINTER_NIGHT, BATTERY_COVERS_S + 15 * MINUTE_S, 42
     return Scenario(
         name="klima-plan-akku",
         title="Akku deckt das geplante Vorheizen",
@@ -3871,7 +3871,7 @@ def _klima_plan_akku() -> Scenario:
 def _klima_plan_ende() -> Scenario:
     """Planwert +2, dann läuft der Plan ab und die app schweigt: Im selben Zyklus gehen die
     geplanten Stufen auf 0 (kein Vorheizen ohne Plan, Entscheidung 8), danach gilt 6a."""
-    start, duration_s, seed = WINTER_NIGHT, PLAN_ENDS_S + 15 * MINUTE_S, 42
+    start, duration_s, seed = WINTER_NIGHT, PLAN_ENDS_S + 15 * MINUTE_S, 43
     slots = tuple((q, PLAN_UP) for q in range(PLAN_SLOTS))
     return Scenario(
         name="klima-plan-ende",
