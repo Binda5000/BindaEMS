@@ -78,7 +78,7 @@ async def test_slots_are_quarter_hour_means(fake_reader, weather) -> None:
         "'pv'",
         [
             _means("power", "p_w", {START: 400.0}, id="a"),
-            _means("power", "p_w", {START + SLOT: 50.0}, id="dc"),
+            _means("power", "p_w", {START: 100.0, START + SLOT: 50.0}, id="dc"),
         ],
     )
     slots = await _read(fake_reader, weather)
@@ -87,7 +87,8 @@ async def test_slots_are_quarter_hour_means(fake_reader, weather) -> None:
     assert slots[0].setpoint_c == 22.0 and slots[0].offset_k == -1.0
     assert [s.power_w for s in slots] == [0.0, 100.0, 200.0, 300.0]
     assert [s.outdoor_c for s in slots] == [10.0, 11.0, 12.0, 13.0]
-    assert [s.pv_w for s in slots] == [400.0, 50.0, None, None]
+    # Viertelstunde 1 hat nur die Reihe dc: keine Teilsumme, sondern unbekannt
+    assert [s.pv_w for s in slots] == [500.0, None, None, None]
     assert all(s.running is None and s.mode is None for s in slots)  # keine Bits gelesen
     text, database = fake_reader.queries[0]
     assert '"raw"."thermal"' in text and "GROUP BY time(15m)" in text and database is None
@@ -242,9 +243,23 @@ async def test_pv_sums_all_planes(fake_reader, weather) -> None:
         ],
     )
     slots = await _read(fake_reader, weather)
-    assert slots[0].pv_w == 1300.0 and slots[1].pv_w == 10.0 and slots[2].pv_w is None
+    assert slots[0].pv_w == 1300.0 and slots[1].pv_w is None and slots[2].pv_w is None
     text = fake_reader.texts("'pv'")[0]
     assert "\"phase\"='total'" in text and 'GROUP BY time(15m),"id"' in text
+
+
+async def test_pv_with_a_missing_plane_is_unknown(fake_reader, weather) -> None:
+    _basic(fake_reader)
+    fake_reader.answer(
+        "'pv'",
+        [
+            _means("power", "p_w", {START: 1000.0, START + SLOT: 900.0}, id="south"),
+            _means("power", "p_w", {START + SLOT: 100.0}, id="west"),
+        ],
+    )
+    slots = await _read(fake_reader, weather)
+    # Viertelstunde 0 kennt nur south: die Teilsumme 1000 W wäre zu klein, also kein Wert
+    assert [s.pv_w for s in slots] == [None, 1000.0, None, None]
 
 
 async def test_read_error_raises_thermal_data_error(fake_reader, weather, unreadable) -> None:

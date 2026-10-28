@@ -33,7 +33,6 @@ from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import SLOT, ensure_utc, slots_between
 
 STEP: Final = "15m"
-SLOT_S: Final = SLOT.total_seconds()
 # Ab diesem Anteil gilt ein Bit als gesetzt, bis zu ``1 - ON_SHARE`` als nicht gesetzt
 ON_SHARE: Final = 0.8
 OFF_SHARE: Final = 1 - ON_SHARE
@@ -116,19 +115,24 @@ async def _means(
 
 async def _pv(reader: InfluxReader, window: str) -> dict[datetime, float]:
     """PV gesamt je Viertelstunde: die Summe aller Reihen mit ``source=pv`` und ``phase=total``
-    (Wechselrichter und ``dc``)."""
+    (Wechselrichter und ``dc``). Unbekannt bleibt unbekannt: Hat in einer Viertelstunde nicht jede
+    Reihe, die in der Antwort vorkommt, einen Wert, gibt es dafür keinen PV-Wert (eine Teilsumme
+    wäre zu klein und ginge als Wert in die Anpassung)."""
     text = (
         f'SELECT mean("p_w") AS "p_w" FROM {quote_ident(RP_RAW)}."power" '  # noqa: S608
         f"WHERE \"source\"='pv' AND \"phase\"='total' AND {window} "
-        'GROUP BY time(15m),"id" fill(none)'
+        f'GROUP BY time({STEP}),"id" fill(none)'
     )
-    total: dict[datetime, float] = {}
+    ids: set[str] = set()
+    parts: dict[datetime, dict[str, float]] = {}
     for item in await _query(reader, text):
+        series_id = item.tags.get("id", "")
+        ids.add(series_id)
         for ts, cells in _rows([item]):
             value = _number(cells.get("p_w"))
             if value is not None:
-                total[ts] = total.get(ts, 0.0) + value
-    return total
+                parts.setdefault(ts, {})[series_id] = value
+    return {ts: sum(values.values()) for ts, values in parts.items() if len(values) == len(ids)}
 
 
 @dataclass(frozen=True)
