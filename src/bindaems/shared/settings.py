@@ -235,6 +235,7 @@ class PlanningSettings(_Model):
     wear_ct: NonNegative = 2.0  # Verschleiß je kWh Durchsatz
     end_value_factor: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.9
     inertia_ct: NonNegative = 0.5  # Planträgheit je kWh Abweichung vom vorigen Plan
+    car_battery_allowed: bool = False  # Akku ins Auto, wenn übrig (Plan Akku ins Auto)
 
 
 HaEntityId = Annotated[str, Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")]

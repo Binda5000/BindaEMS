@@ -72,6 +72,8 @@ ReasonCode = Literal[
     "AUTO_ERWARTET",
     "KLIMA_MEHR",
     "KLIMA_WENIGER",
+    "AUTO_AUS_AKKU",
+    "SOFORT_AUS_AKKU",
 ]
 PlanSource = Literal["optimizer", "fallback"]
 PlanTrigger = Literal[
@@ -101,6 +103,9 @@ class PlanSlot(_Model):
     """Eine Viertelstunde des Plans; Leistungen sind Mittelwerte in W.
 
     ``ev_w`` ist die geplante Ladeleistung je Fahrzeug-Schlüssel (nur Autos mit Leistung über 0).
+    ``ev_battery_w`` ist der Teil davon, der aus dem Akku kommt (Akku ins Auto, je Fahrzeug-
+    Schlüssel, in W); ``now_battery`` sagt, dass Autos in Sofort in diesem Slot aus dem Akku laden
+    dürfen. Alte Pläne laden ohne beide Felder mit ``{}`` und ``False``.
     """
 
     start: AwareDatetime
@@ -121,6 +126,8 @@ class PlanSlot(_Model):
     budget_kw: Finite | None
     support_soc_pct: Finite | None = None
     ev_w: dict[str, Finite] = Field(default_factory=dict)
+    ev_battery_w: dict[str, Finite] = Field(default_factory=dict)
+    now_battery: bool = False
     # Vorheizen und Vorkühlen (Plan 5c, Präzisierung 7): Mehr- (positiv) oder Minderverbrauch der
     # Klimaanlage in W, davon aus dem Netz, und der Versatz in Stufen am Slotende; ohne
     # Verschiebung 0, 0 und ``None``. ``import_w``, ``export_w`` und ``cost_ct`` bleiben die des
@@ -252,7 +259,13 @@ MAX_THERMAL_STEPS: Final = 6  # Planwert der Klimaanlage in Stufen, im Betrag h�
 
 
 class IntentPlanSlot(_Model):
-    """Eine Viertelstunde des Plans in der Absicht: nur, was der core zum Ausführen braucht."""
+    """Eine Viertelstunde des Plans in der Absicht: nur, was der core zum Ausführen braucht.
+
+    ``ev_battery_w`` ist der Teil der Autoleistung (``vehicles``) je Fahrzeug, der aus dem Akku
+    kommt (ganze W, nur Autos mit mindestens 1 W); ``now_battery`` erlaubt Autos in Sofort, aus
+    dem Akku zu laden. Beides steht nur in Slots mit Eigenverbrauch; alte Absichten laden mit
+    ``{}`` und ``False``.
+    """
 
     start: AwareDatetime
     intent: BatteryIntent
@@ -260,6 +273,8 @@ class IntentPlanSlot(_Model):
     import_ct: Finite | None = None
     support_soc_pct: Annotated[float, Field(ge=0, le=100)] | None = None
     vehicles: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+    ev_battery_w: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+    now_battery: bool = False
     # Alte gespeicherte Absichten kennen beide Felder nicht und laden mit den Standardwerten.
     thermal: ThermalHint = "neutral"
     soc_end_pct: Annotated[float, Field(ge=0, le=100)] | None = None
@@ -338,7 +353,10 @@ def intent_plan(
 ) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
-    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Jedes Auto aus
+    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Ebenso der Akku-
+    Anteil daran (``ev_battery_w``, ohne erwartete Autos und ohne Anteile unter 1 W) und
+    ``now_battery`` (Akku ins Auto): beides nur, wenn die Absicht des Slots nach dieser Umwandlung
+    ``EIGENVERBRAUCH`` ist, sonst ``{}`` und ``False``. Jedes Auto aus
     ``plan.vehicles`` steht in jedem Slot vor seiner Abfahrt, auch mit 0 W (Ruling R22): Ein Auto,
     das ein gültiger Slot nicht nennt, kennt der Plan nicht, und der core lädt es nach der
     spätesten Startzeit. Erwartete Autos (``expected``, Plan 5b) fehlen ganz, ohne Leistung und
@@ -366,6 +384,12 @@ def intent_plan(
             intent = BatteryIntent()
         planned = {car.key: 0 for car in cars if slot.start < car.departure_at}
         powers = {key: round(w) for key, w in slot.ev_w.items() if key not in expected}
+        from_battery = intent.kind is BatteryIntentKind.EIGENVERBRAUCH
+        battery = {
+            key: round(w)
+            for key, w in slot.ev_battery_w.items()
+            if from_battery and key not in expected and round(w) >= 1
+        }
         return IntentPlanSlot(
             start=slot.start,
             intent=intent,
@@ -373,6 +397,8 @@ def intent_plan(
             import_ct=slot.import_ct,
             support_soc_pct=slot.support_soc_pct,
             vehicles=planned | powers,
+            ev_battery_w=battery,
+            now_battery=slot.now_battery and from_battery,
             thermal=thermal_hint(slot, expensive_ct),
             soc_end_pct=min(100.0, max(0.0, round(slot.soc_end_pct, 1))),
             thermal_steps=slot.thermal_steps if thermal is not None else None,

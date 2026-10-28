@@ -562,3 +562,66 @@ def test_thermal_reason_codes_and_trigger_are_accepted() -> None:
         assert Reason(code=code, params={"mode": "heizen", "k": 0.5}).code == code  # type: ignore[arg-type]
     plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_copy(update={"trigger": "thermal"})
     assert Plan.model_validate_json(plan.model_dump_json()).trigger == "thermal"
+
+
+def test_battery_reason_codes_are_accepted() -> None:
+    for code in ("AUTO_AUS_AKKU", "SOFORT_AUS_AKKU"):
+        assert Reason(code=code, params={}).code == code  # type: ignore[arg-type]
+
+
+def test_old_plan_slot_loads_without_battery_fields() -> None:
+    raw = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_dump(mode="json")["slots"][0]
+    del raw["ev_battery_w"]
+    del raw["now_battery"]
+    slot = PlanSlot.model_validate(raw)
+    assert slot.ev_battery_w == {} and slot.now_battery is False
+
+
+def test_old_intent_slot_loads_without_battery_fields() -> None:
+    sent = intent_plan(_stored(DAY + "10:01:00+00:00", ["10:00"]), grid_charge_allowed=True)
+    raw = sent.model_dump(mode="json")["slots"][0]
+    del raw["ev_battery_w"]
+    del raw["now_battery"]
+    slot = IntentPlanSlot.model_validate(raw)
+    assert slot.ev_battery_w == {} and slot.now_battery is False
+
+
+def test_intent_plan_carries_car_battery_and_now_battery() -> None:
+    plan = _stored(
+        DAY + "10:01:00+00:00",
+        ["10:00"],
+        intents=[
+            {"ev_w": {"tesla": 7000.4}, "ev_battery_w": {"tesla": 2500.6}, "now_battery": True}
+        ],
+    ).model_copy(update={"vehicles": [_vehicle(departure_at=at(DAY + "12:00:00+00:00"))]})
+    slot = intent_plan(plan, grid_charge_allowed=True).slots[0]
+    assert slot.ev_battery_w == {"tesla": 2501}
+    assert slot.now_battery is True
+
+
+def test_intent_plan_drops_battery_fields_outside_eigenverbrauch() -> None:
+    change = {"ev_battery_w": {"tesla": 2000.0}, "now_battery": True}
+    held = _stored(DAY + "10:01:00+00:00", ["10:00"], intents=[{**HOLD, **change}])
+    slot = intent_plan(held, grid_charge_allowed=True).slots[0]
+    assert slot.ev_battery_w == {} and slot.now_battery is False
+    # NETZLADEN wird bei ausgeschaltetem Netzladen zu EIGENVERBRAUCH: dann gehen sie mit
+    charging = _stored(DAY + "10:01:00+00:00", ["10:00"], intents=[{**NETZLADEN_3000, **change}])
+    kept = intent_plan(charging, grid_charge_allowed=False).slots[0]
+    assert kept.ev_battery_w == {"tesla": 2000} and kept.now_battery is True
+    dropped = intent_plan(charging, grid_charge_allowed=True).slots[0]
+    assert dropped.ev_battery_w == {} and dropped.now_battery is False
+
+
+def test_intent_plan_skips_expected_cars_and_tiny_battery_shares() -> None:
+    expected = _vehicle(
+        key="egolf",
+        departure_at=at(DAY + "12:00:00+00:00"),
+        expected=True,
+        arrival_at=at(DAY + "10:15:00+00:00"),
+    )
+    plan = _stored(
+        DAY + "10:01:00+00:00",
+        ["10:00"],
+        intents=[{"ev_battery_w": {"tesla": 0.4, "egolf": 2000.0}}],
+    ).model_copy(update={"vehicles": [_vehicle(), expected]})
+    assert intent_plan(plan, grid_charge_allowed=True).slots[0].ev_battery_w == {}

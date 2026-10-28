@@ -38,3 +38,13 @@ def test_stored_settings_without_planning_load_defaults() -> None:
 def test_planning_rejects_out_of_range(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
         PlanningSettings.model_validate({field: value})
+
+
+def test_planning_settings_car_battery_defaults_off() -> None:
+    assert PlanningSettings().car_battery_allowed is False
+    assert (
+        PlanningSettings.model_validate({"grid_charge_allowed": True}).car_battery_allowed is False
+    )
+    assert (
+        PlanningSettings.model_validate({"car_battery_allowed": True}).car_battery_allowed is True
+    )
