@@ -3,7 +3,7 @@
 	import { ApiError } from '$lib/api/errors';
 	import type { ControlReply, CoreHealth, Intent } from '$lib/api/schemas';
 	import Dialog from '$lib/components/Dialog.svelte';
-	import { actuatorDisplay } from '$lib/wallboxes';
+	import { uniqueDisplays } from '$lib/wallboxes';
 	import { liveConditions, needsEvccConfirmation } from './view';
 
 	interface Props {
@@ -16,6 +16,9 @@
 	}
 
 	let { open = $bindable(false), health, intent, wallboxNames = {}, onDone }: Props = $props();
+
+	// gleiche Namen zweier Wallboxen zeigen die Bezeichnung mit dem Schlüssel
+	const displays = $derived(uniqueDisplays(health.actuators, wallboxNames));
 
 	let selected = $state<Record<string, boolean>>({});
 	let protocol = $state(false);
@@ -83,7 +86,7 @@
 							bind:checked={selected[actuator.id]}
 							onchange={selectionChanged}
 						/>
-						{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
+						{displays[actuator.id]}
 					</label>
 					<ul class="conditions">
 						{#each liveConditions(actuator, health, intent) as condition (condition.label)}

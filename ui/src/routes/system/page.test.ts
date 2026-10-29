@@ -675,6 +675,31 @@ it('Live- und Dry-Run-Dialog nennen die Wallbox beim Namen aus den Einstellungen
 	expect(await within(dialog()).findByRole('checkbox', { name: 'EVCS' })).toBeInTheDocument();
 });
 
+it('Dialoge zeigen bei gleichem Namen zweier Wallboxen die Bezeichnung mit dem Schlüssel', async () => {
+	const base = limits();
+	const evcs = base.wallboxes['evcs']!;
+	api.limits.mockResolvedValue({
+		...base,
+		wallboxes: { evcs, evcs2: evcs, twc: base.wallboxes['twc']! }
+	});
+	const actuators = actuatorsWith({
+		'wallbox.evcs': { requested: 'live', effective: 'live' }
+	});
+	const second = { ...actuators.find((a) => a.id === 'wallbox.evcs')!, id: 'wallbox.evcs2' };
+	show({ actuators: [...actuators, { ...second, label: 'EVCS „evcs2“' }] });
+	await waitFor(() => expect(api.limits).toHaveBeenCalled());
+	const live = await openLive();
+	expect(await live.findByRole('checkbox', { name: 'EVCS „evcs“' })).toBeInTheDocument();
+	expect(live.getByRole('checkbox', { name: 'EVCS „evcs2“' })).toBeInTheDocument();
+	expect(live.queryByRole('checkbox', { name: 'EVCS' })).toBeNull();
+	await fireEvent.click(live.getByRole('button', { name: 'Abbrechen' }));
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	await fireEvent.click(await screen.findByRole('button', { name: 'Auf Dry-Run…' }));
+	const confirm = within(dialog());
+	expect(await confirm.findByRole('checkbox', { name: 'EVCS „evcs“' })).toBeInTheDocument();
+	expect(confirm.getByRole('checkbox', { name: 'EVCS „evcs2“' })).toBeInTheDocument();
+});
+
 it('Admin stellt die gewählten Live-Aktoren nach Bestätigung auf Dry-Run', async () => {
 	show({
 		actuators: actuatorsWith({

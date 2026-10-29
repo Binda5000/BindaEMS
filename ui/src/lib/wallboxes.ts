@@ -32,8 +32,25 @@ export function actuatorDisplay(id: string, label: string, names: Record<string,
 	return key === undefined || !(key in names) ? label : wallboxDisplay(key, names);
 }
 
+/**
+ * Anzeigenamen mehrerer Aktoren auf einmal (Aktor-ID → Name). Kommt ein Name mehr als einmal vor
+ * (Namen sind nicht eindeutig), zeigen diese Aktoren die Bezeichnung des core mit dem Schlüssel,
+ * damit zwei Einträge nie gleich heißen.
+ */
+export function uniqueDisplays(
+	entries: readonly { id: string; label: string }[],
+	names: Record<string, string>
+): Record<string, string> {
+	const shown = entries.map((entry) => actuatorDisplay(entry.id, entry.label, names));
+	return Object.fromEntries(
+		entries.map((entry, index) => [
+			entry.id,
+			shown.filter((name) => name === shown[index]).length > 1 ? entry.label : shown[index]
+		])
+	);
+}
+
 /** Bezeichnung einer Reihe im Verlauf: `wallbox.<key>` mit dem Namen der Wallbox, sofern bekannt */
 export function seriesLabel(id: string, label: string, names: Record<string, string>): string {
-	const key = WALLBOX_ID.exec(id)?.[1];
-	return key !== undefined && key in names ? wallboxDisplay(key, names) : label;
+	return actuatorDisplay(id, label, names);
 }

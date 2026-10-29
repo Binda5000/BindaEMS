@@ -3,7 +3,7 @@
 	import { ApiError } from '$lib/api/errors';
 	import type { ActuatorMode, ControlReply, CoreHealth } from '$lib/api/schemas';
 	import Dialog from '$lib/components/Dialog.svelte';
-	import { actuatorDisplay } from '$lib/wallboxes';
+	import { uniqueDisplays } from '$lib/wallboxes';
 
 	interface Props {
 		open: boolean;
@@ -30,6 +30,8 @@
 	});
 
 	const liveActuators = $derived(health.actuators.filter((a) => a.requested === 'live'));
+	// gleiche Namen zweier Wallboxen zeigen die Bezeichnung mit dem Schlüssel
+	const displays = $derived(uniqueDisplays(liveActuators, wallboxNames));
 	const chosen = $derived(liveActuators.filter((a) => !skipped[a.id]).map((a) => a.id));
 
 	async function submit(event: SubmitEvent) {
@@ -65,7 +67,7 @@
 							disabled={busy}
 							onchange={(event) => (skipped[actuator.id] = !event.currentTarget.checked)}
 						/>
-						{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
+						{displays[actuator.id]}
 					</label>
 				</li>
 			{/each}
