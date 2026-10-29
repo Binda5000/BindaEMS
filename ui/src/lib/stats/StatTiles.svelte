@@ -11,7 +11,7 @@
 <div class="stat-tiles">
 	<div class="tiles">
 		{#each tiles as tile (tile.id)}
-			<div class="tile" data-testid="tile" data-size={tile.size}>
+			<div class="tile" data-testid="tile" data-size={tile.size} style:--chars={tile.value.length}>
 				<span class="label">{tile.label}</span>
 				<strong class="value">{tile.value}</strong>
 				{#if tile.subtitle}
@@ -56,6 +56,10 @@
 		.tile[data-size='large'] .value {
 			font-size: 1.5rem;
 		}
+
+		.tile[data-size='small'] {
+			--cap: 1.5rem;
+		}
 	}
 
 	.stat-tiles {
@@ -71,6 +75,7 @@
 
 	.tile {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		align-content: start;
 		gap: 0.125rem;
 		min-width: 0;
@@ -85,10 +90,25 @@
 		color: var(--muted);
 	}
 
+	/* Zahl und Einheit bleiben in einer Zeile (geschütztes Leerzeichen vor „€“) */
 	.value {
 		font-size: 1.5rem;
 		line-height: 1.25;
-		overflow-wrap: anywhere;
+		white-space: nowrap;
+	}
+
+	/*
+	 * Geldwerte in den kleinen Kacheln: 19 px, bei langen Beträgen („1.234,56 €“) so viel kleiner,
+	 * dass der Wert in die Kachel passt (eine Ziffer braucht rund 0,56 em). 100cqi ist die innere
+	 * Breite der Kachel.
+	 */
+	.tile[data-size='small'] {
+		container-type: inline-size;
+		--cap: 1.1875rem;
+	}
+
+	.tile[data-size='small'] .value {
+		font-size: min(var(--cap), calc(100cqi / (var(--chars) * 0.56)));
 	}
 
 	.sub {

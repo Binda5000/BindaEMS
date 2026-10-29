@@ -173,3 +173,44 @@ test('Statistik hält Heute und den Titel bei 390 px in einer Zeile', async ({ p
 	);
 	expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test('Statistik zeigt Geldwerte in den Kacheln bei 360 px in einer Zeile', async ({ page }) => {
+	await page.setViewportSize({ width: 360, height: 740 });
+	// lange Beträge einsetzen: die Demo-Werte sind kürzer als „1.234,56 €“
+	await page.route('**/api/stats?*', async (route) => {
+		const response = await route.fetch();
+		const body = await response.json();
+		body.money = {
+			...body.money,
+			total_eur: 1234.56,
+			savings_no_plant_eur: 1234.56,
+			revenue_eur: 1234.56
+		};
+		await route.fulfill({ response, json: body });
+	});
+	await login(page, 'gast');
+	await page.clock.setFixedTime(T_DEMO);
+	await page.goto('/statistik?zeitraum=jahr&datum=2026-10-09');
+	const values = page.getByTestId('tile').locator('.value');
+	await expect(values).toHaveCount(5);
+	await expect(values.nth(4)).toContainText('1.234,56');
+	const metrics = await values.evaluateAll((items) =>
+		items.map((item) => {
+			const style = getComputedStyle(item);
+			const tile = item.closest('[data-testid="tile"]') as HTMLElement;
+			return {
+				text: item.textContent,
+				// weder der Wert noch seine Kachel läuft über
+				overflows:
+					item.scrollWidth > item.clientWidth ||
+					tile.scrollWidth > tile.clientWidth ||
+					item.getBoundingClientRect().right > tile.getBoundingClientRect().right,
+				lines: item.getBoundingClientRect().height / parseFloat(style.lineHeight)
+			};
+		})
+	);
+	for (const metric of metrics) {
+		expect(metric.overflows, `${metric.text} läuft über`).toBe(false);
+		expect(metric.lines, `${metric.text} bricht um`).toBeLessThan(1.6);
+	}
+});
