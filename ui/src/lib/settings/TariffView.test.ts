@@ -101,3 +101,19 @@ it('ist eine Kartentabelle: Klasse stack, jede Zelle außer der ersten mit data-
 		expect(cells.slice(1).map((cell) => cell.getAttribute('data-label'))).toEqual(heads.slice(1));
 	}
 });
+
+it('hat in der Zelle Zeitfenster genau ein Kind, das alle Fenster enthält', () => {
+	const settings = settingsCurrent().settings;
+	let name = '';
+	settings.tariff.components = settings.tariff.components.map((c) => {
+		if (c.kind !== 'energy_per_kwh' || c.windows.length === 0) return c;
+		name = c.name;
+		const [first] = c.windows;
+		return { ...c, windows: [first, { ...first, start: '17:00:00', end: '20:00:00' }] };
+	});
+	expect(name).not.toBe('');
+	render(TariffView, { settings });
+	const cell = screen.getByText(name).closest('tr')?.querySelector('td[data-label="Zeitfenster"]');
+	expect(cell?.children).toHaveLength(1);
+	expect(cell?.children[0].querySelectorAll('.window')).toHaveLength(2);
+});

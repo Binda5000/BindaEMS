@@ -73,9 +73,12 @@
 					<td data-label="Gültig">{validityText(component)}</td>
 					<td data-label="Zeitfenster">
 						{#if windowsOf(component).length > 0}
-							{#each windowsOf(component) as window, index (index)}
-								<span class="window">{describeWindow(window)}</span>
-							{/each}
+							<!-- ein Kind, damit die Zelle am Handy (flex) die Fenster untereinander stellt -->
+							<span class="windows">
+								{#each windowsOf(component) as window, index (index)}
+									<span class="window">{describeWindow(window)}</span>
+								{/each}
+							</span>
 						{:else}
 							{DASH}
 						{/if}
