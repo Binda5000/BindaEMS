@@ -433,7 +433,7 @@ def test_guide_describes_the_load_model() -> None:
         "`/data/models/load/`",
         "Eine Sicherung ist nicht nötig",
         "`libgomp1`",
-        "docker compose pull ems-app && docker compose up -d ems-app",
+        "docker compose pull ems-app && docker compose up -d --no-deps ems-app",
         "`0013`",
         "/backup/vor-plan-5a.sqlite3",
         "Jetzt neu trainieren",
@@ -1869,3 +1869,11 @@ def test_docs_name_the_limits_found_in_the_5c_review() -> None:
         "Vor der Kühlsaison 2027 beheben (Seed aus dem frühesten Punkt im Fenster oder "
         "periodisches Neuschreiben der Zustände)"
     ) in handover
+
+
+def test_app_only_commands_in_the_guide_keep_the_core_running() -> None:
+    # BINDAEMS_VERSION setzt auch den core-Tag, und ems-app hängt per depends_on am core:
+    # Ohne --no-deps würde ``up -d ems-app`` den core mit neu anlegen (Regelbetrieb!).
+    for doc in ("docs/betrieb.md", "docs/uebergabe.md"):
+        text = Path(doc).read_text(encoding="utf-8")
+        assert not re.search(r"up -d(?: --build)? ems-app", text), doc

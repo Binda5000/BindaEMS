@@ -220,7 +220,7 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Schritte stehen im Abschnitt
   „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“.
 - **Update mit Plan 5a (Lastmodell):** Plan 5a ändert nur die app. Du ziehst und startest nur
-  `ems-app` (`docker compose pull ems-app && docker compose up -d ems-app`); der core läuft weiter, und
+  `ems-app` (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`); der core läuft weiter, und
   der Regelbetrieb bleibt an. Ausgerollt wird mit oder nach 4b und 6a; die Schritte stehen im
   Abschnitt „Lastmodell (Phase 5a)“, „Lastmodell ausrollen (Plan 5a)“.
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
@@ -232,10 +232,10 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   nächsten Sammel-Pull (`docker compose pull && docker compose up -d`), nie allein. Danach prüfst du am
   Handy die Seiten „Laden“, „Prognosen“, „System“, „Statistik“ und die Diagramme (Legenden als Chips,
   Tabellen als Karten). Der Rückweg ist `BINDAEMS_VERSION` auf den älteren Stand und
-  `docker compose up -d ems-app`; es gibt nichts zu exportieren oder zu löschen, die Anzeige ist wieder
+  `docker compose up -d --no-deps ems-app`; es gibt nichts zu exportieren oder zu löschen, die Anzeige ist wieder
   die alte.
 - **Rollback auf einen Stand vor Diagramme und Plantexte:** Nur `ems-app` geht zurück
-  (`BINDAEMS_VERSION` setzen, `docker compose up -d ems-app`); der core, die Datenbank und die Absicht
+  (`BINDAEMS_VERSION` setzen, `docker compose up -d --no-deps ems-app`); der core, die Datenbank und die Absicht
   sind unberührt, es gibt keine Migration und nichts zu exportieren. Das neue Image schreibt in
   **jeden** Plan `soc_start_pct` und in jedes Auto `vehicles[].reached` (auch mit `null` und `false`),
   und die Modelle der älteren app lehnen unbekannte Felder ab (`extra="forbid"`). Das hat zwei Folgen,
@@ -329,7 +329,7 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 
   **Nur als Notbehelf, wenn du vor dem Rollback nicht exportiert hast:** Die ältere app exportiert dann
   nur die Standardwerte. Den Schlüssel nimmst du in dem Fall direkt aus allen gespeicherten Versionen
-  (die übrigen Werte bleiben), mit gestoppter app, danach `docker compose up -d ems-app`:
+  (die übrigen Werte bleiben), mit gestoppter app, danach `docker compose up -d --no-deps ems-app`:
 
   ```bash
   docker compose stop ems-app
@@ -533,7 +533,7 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     print("Datenbank auf Stand 0012")'
     ```
 
-    Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d ems-app`. Verloren
+    Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d --no-deps ems-app`. Verloren
     gehen nur die Daten von Plan 5a: die Registry der Modelle, das Wetterarchiv, die Schatten im
     Archiv der Prognosen (`load_profile`, `load_model`) samt ihrer Güte und der Abschnitt
     „Lastmodell“ der Einstellungen (Schalter und Sensoren); alle anderen Einstellungen bleiben, die
@@ -2311,7 +2311,7 @@ Der core hält jede Entscheidung zu einem Befehl fest (Spec 7.10):
 zurückgestellter Stopp kurz nach einem zurückgestellten Start erscheint also beide Male.
 
 Ein Eintrag lautet etwa (so schreibt ihn der core; die UI ersetzt `EVCS „evcs“` durch den Namen der
-Wallbox aus den Einstellungen, Abschnitt „Namen der Ladestationen“):
+Wallbox aus den Einstellungen, Abschnitt „Namen der Ladestationen“, ohne Namen durch den Typnamen „EVCS“):
 `EVCS „evcs“ (sicherer Zustand): Strom 6 A – gesendet und bestätigt.`
 Die Laderegelung nennt ihre Gründe in Klammern, etwa
 `EVCS „evcs“ (PV-Überschuss, Überschuss): Strom 8 A – Dry-Run, nicht gesendet.` (alle Gründe und
@@ -4979,7 +4979,7 @@ entscheidet dabei der Schattenbetrieb, nicht der Backtest.
    Eine ältere app startet mit der Migration `0013` nicht (Abschnitt 4, „Rollback auf einen Stand vor
    Plan 5a“).
 2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
-   `cd /opt/bindaems && docker compose pull ems-app && docker compose up -d ems-app`. Der core
+   `cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`. Der core
    bleibt und der Regelbetrieb bleibt an. Rollst du 4b und 6a gleichzeitig aus, genügt deren
    `docker compose pull && docker compose up -d`; ist 5a dann schon auf `main`, bringt dieser Pull 5a
    und die Migration `0013` mit, die Sicherung aus Schritt 1 gehört dann davor.

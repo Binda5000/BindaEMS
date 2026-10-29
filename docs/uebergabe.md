@@ -1931,7 +1931,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       1. **Datenbank kopieren** (empfohlen): `/backup/vor-plan-5a.sqlite3`; eine ältere app startet
          mit der Migration `0013` nicht (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5a“).
       2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
-         `docker compose pull ems-app && docker compose up -d ems-app`. Der core bleibt, der Regelbetrieb
+         `docker compose pull ems-app && docker compose up -d --no-deps ems-app`. Der core bleibt, der Regelbetrieb
          bleibt an. Das Image ist rund 130 MB größer (LightGBM und `libgomp1`).
       3. **Beim Start:** Die Migration `0013` läuft (`weather_slot`, `model_registry`), die Temperatur-Historie
          (92 Tage von Open-Meteo) wird einmal geholt, und das erste Training läuft gleich danach. Hat die
@@ -2070,7 +2070,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Ausrollen zeigen die alten Sätze ohne „bis“ und den ersten Block mit dem SOC am Ende seines ersten Slots, bis der nächste Plan gerechnet ist
       (spätestens nach 15 min). Dazu **Laden** (Tasten „Ziel speichern“ und „Vorschlag übernehmen“, „Details“), **Prognosen** (Satz und drei Spalten
       der Prognosegüte), **System** (deutsche Komponentennamen, „x von n in Ordnung“), **Statistik** (Kopf in zwei Zeilen, zwei große und drei kleine
-      Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Ist ein Wallbox-Name gesetzt, steht er in „Warum?“, in der
+      Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Der Name der Wallbox (aus den Einstellungen, sonst der Typname wie „EVCS“) steht in „Warum?“, in der
       Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
