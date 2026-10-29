@@ -79,7 +79,7 @@ export function reviewOption(
 		.map((slot) => epoch(slot.start));
 	const from = Math.min(...starts);
 	const to = Math.max(...starts) + SLOT_MS;
-	const base = baseOption(palette) as { xAxis: object };
+	const base = baseOption(palette) as { xAxis: object; tooltip: object };
 	const planned = palette.series[2] ?? palette.importPrice;
 	const actual = palette.series[4] ?? palette.feedIn;
 	const series: LineSeriesOption[] = [
@@ -105,9 +105,10 @@ export function reviewOption(
 		}
 	];
 	return {
-		...baseOption(palette),
+		...base,
 		xAxis: { ...base.xAxis, min: from, max: to },
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip({ 'Geplanter SOC': formatSoc, 'Ist-SOC': formatSoc })
 		},
