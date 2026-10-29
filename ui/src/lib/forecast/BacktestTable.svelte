@@ -17,7 +17,7 @@
 <Card title="Backtest">
 	{#if view && view.weeks.length > 0}
 		<div class="scroll">
-			<table>
+			<table class="stack">
 				<thead>
 					<tr>
 						<th scope="col">Woche ab</th>
@@ -32,22 +32,22 @@
 					{#each view.weeks as week (week.key)}
 						<tr>
 							<td>{week.origin}</td>
-							<td>{week.horizon}</td>
-							<td class="num">{week.slots}</td>
-							<td class="num">{week.model}</td>
-							<td class="num">{week.profile}</td>
-							<td class="num">{week.better}</td>
+							<td data-label="Vorlauf">{week.horizon}</td>
+							<td class="num" data-label="Slots">{week.slots}</td>
+							<td class="num" data-label="Modell">{week.model}</td>
+							<td class="num" data-label="Profil">{week.profile}</td>
+							<td class="num" data-label="besser">{week.better}</td>
 						</tr>
 					{/each}
 				</tbody>
 				<tfoot>
 					<tr>
 						<th scope="row">Gesamt</th>
-						<td>{DASH}</td>
-						<td class="num">{view.total.slots}</td>
-						<td class="num">{view.total.model}</td>
-						<td class="num">{view.total.profile}</td>
-						<td class="num">{view.total.better}</td>
+						<td data-label="Vorlauf">{DASH}</td>
+						<td class="num" data-label="Slots">{view.total.slots}</td>
+						<td class="num" data-label="Modell">{view.total.model}</td>
+						<td class="num" data-label="Profil">{view.total.profile}</td>
+						<td class="num" data-label="besser">{view.total.better}</td>
 					</tr>
 				</tfoot>
 			</table>
@@ -67,5 +67,10 @@
 	tfoot th,
 	tfoot td {
 		font-weight: 600;
+	}
+
+	/* am Handy bleibt die Beschriftung normal, nur der Wert ist fett */
+	tfoot td::before {
+		font-weight: 400;
 	}
 </style>

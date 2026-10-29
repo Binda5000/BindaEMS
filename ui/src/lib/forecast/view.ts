@@ -167,3 +167,32 @@ export function backtestRows(backtest: Backtest): BacktestView {
 		}
 	};
 }
+
+/**
+ * Aufeinanderfolgende Tage mit gleichen Zellen werden eine Zeile. Beschriftung: ein Tag sein Label,
+ * zwei „Sa, So“, drei oder mehr „Mo bis Fr“.
+ */
+export function groupDays<T>(
+	days: readonly T[],
+	label: (day: T) => string,
+	cells: (day: T) => string[]
+): { label: string; cells: string[] }[] {
+	const runs: { labels: string[]; cells: string[] }[] = [];
+	for (const day of days) {
+		const values = cells(day);
+		const last = runs.at(-1);
+		if (
+			last &&
+			last.cells.length === values.length &&
+			last.cells.every((c, i) => c === values[i])
+		) {
+			last.labels.push(label(day));
+		} else {
+			runs.push({ labels: [label(day)], cells: values });
+		}
+	}
+	return runs.map(({ labels, cells: values }) => ({
+		label: labels.length >= 3 ? `${labels[0]} bis ${labels[labels.length - 1]}` : labels.join(', '),
+		cells: values
+	}));
+}

@@ -31,6 +31,13 @@ function cells(row: HTMLElement): string[] {
 		.map((cell) => cell.textContent?.replace(/\s+/g, ' ').trim() ?? '');
 }
 
+/** Schaltet bei allen Autos auf „Tage einzeln“ (Standard ist gruppiert) */
+async function individually(): Promise<void> {
+	for (const toggle of screen.getAllByRole('button', { name: 'Tage einzeln' })) {
+		await fireEvent.click(toggle);
+	}
+}
+
 const TESLA = 'Tesla Model 3 · Quelle: Tessie · 56 Tage';
 const EGOLF = 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage';
 
@@ -41,8 +48,9 @@ it('zeigt je Auto den Kopf mit Quelle und Tagen', () => {
 	expect(screen.getByRole('heading', { name: EGOLF })).toBeVisible();
 });
 
-it('zeigt je Wochentag Abfahrt, Ziel und Konfidenz', () => {
+it('zeigt je Wochentag Abfahrt, Ziel und Konfidenz', async () => {
 	show();
+	await individually();
 	const tesla = table(TESLA);
 	expect(
 		within(tesla)
@@ -72,8 +80,9 @@ it('zeigt je Wochentag Abfahrt, Ziel und Konfidenz', () => {
 	expect(within(rows[4]!).getByRole('rowheader')).toHaveTextContent('Fr');
 });
 
-it('zeigt „keine Fahrt erwartet“ und „(aus Mo–Fr)“', () => {
+it('zeigt „keine Fahrt erwartet“ und „(aus Mo–Fr)“', async () => {
 	show();
+	await individually();
 	const tesla = within(table(TESLA)).getAllByRole('row').slice(1);
 	// Samstag und Sonntag des Tesla: keine Fahrt, Werte als Strich
 	expect(cells(tesla[5]!)).toEqual(['0 (0 %)', 'keine Fahrt erwartet', '–', '–', '–', '–', '–']);
@@ -85,23 +94,25 @@ it('zeigt „keine Fahrt erwartet“ und „(aus Mo–Fr)“', () => {
 	expect(cells(egolf[0]!)[6]).toBe('niedrig');
 });
 
-it('hängt die Gruppen Sa und So/Feiertag an', () => {
+it('hängt die Gruppen Sa und So/Feiertag an', async () => {
 	const car = drivingVehicle('egolf');
 	const weekdays = car.weekdays.map((day) =>
 		day.weekday >= 5 ? { ...day, basis: 'group' as const } : day
 	);
 	show({ data: driving({ vehicles: [{ ...car, weekdays }] }) });
+	await individually();
 	const rows = within(table(EGOLF)).getAllByRole('row').slice(1);
 	expect(within(rows[5]!).getByRole('rowheader')).toHaveTextContent('Sa (aus Sa)');
 	expect(within(rows[6]!).getByRole('rowheader')).toHaveTextContent('So (aus So/Feiertag)');
 });
 
-it('zeigt „(begrenzt)“ nur bei geklemmtem Ziel', () => {
+it('zeigt „(begrenzt)“ nur bei geklemmtem Ziel', async () => {
 	const car = drivingVehicle('tesla');
 	const weekdays = car.weekdays.map((day) =>
 		day.weekday === 1 ? { ...day, target_clamped: false, target_soc_pct: 65 } : day
 	);
 	show({ data: driving({ vehicles: [{ ...car, weekdays }] }) });
+	await individually();
 	const rows = within(table(TESLA)).getAllByRole('row').slice(1);
 	expect(cells(rows[0]!)[5]).toBe('50 % (begrenzt)');
 	expect(cells(rows[1]!)[5]).toBe('65 %');
@@ -218,7 +229,7 @@ it('zeigt „Jetzt neu berechnen“ nur Admins und startet die Berechnung', asyn
 
 it('zeigt Nicht-Admins keine Taste', () => {
 	show({ admin: false });
-	expect(screen.queryByRole('button')).toBeNull();
+	expect(screen.queryByRole('button', { name: /neu berechnen|Berechnung/ })).toBeNull();
 });
 
 it('zeigt „Berechnung läuft …“ während des Laufs und sperrt die Taste', () => {
@@ -243,7 +254,7 @@ it('zeigt „Berechnung läuft …“ auch beim Start und Nicht-Admins als Satz'
 		onRecompute: vi.fn()
 	});
 	expect(screen.getByText('Berechnung läuft …')).toBeVisible();
-	expect(screen.queryByRole('button')).toBeNull();
+	expect(screen.queryByRole('button', { name: /neu berechnen|Berechnung/ })).toBeNull();
 });
 
 it('zeigt den Fehler der Abfrage', () => {
@@ -260,4 +271,46 @@ it('zeigt eine Meldung zur Taste', () => {
 it('zeigt „Lädt …“, solange weder Antwort noch Fehler da sind', () => {
 	show({ data: undefined });
 	expect(screen.getByText('Lädt …')).toBeVisible();
+});
+
+it('fasst gleiche Tage zu einer Zeile zusammen, „Tage einzeln“ zeigt wieder alle sieben', async () => {
+	show();
+	const tesla = table(TESLA);
+	const rows = within(tesla).getAllByRole('row').slice(1);
+	expect(rows).toHaveLength(2);
+	expect(within(rows[0]!).getByRole('rowheader')).toHaveTextContent(/^Mo bis Fr$/);
+	expect(within(rows[1]!).getByRole('rowheader')).toHaveTextContent(/^Sa, So$/);
+	expect(cells(rows[1]!)).toEqual(['0 (0 %)', 'keine Fahrt erwartet', '–', '–', '–', '–', '–']);
+	const toggle = screen.getAllByRole('button', { name: 'Tage einzeln' })[0]!;
+	expect(toggle).toHaveAttribute('aria-pressed', 'false');
+	await fireEvent.click(toggle);
+	expect(toggle).toHaveAttribute('aria-pressed', 'true');
+	expect(within(table(TESLA)).getAllByRole('row').slice(1)).toHaveLength(7);
+	await fireEvent.click(toggle);
+	expect(within(table(TESLA)).getAllByRole('row').slice(1)).toHaveLength(2);
+});
+
+it('behält bei gruppierten Tagen den Hinweis „(aus Mo–Fr)“', () => {
+	show();
+	const rows = within(table(EGOLF)).getAllByRole('row').slice(1);
+	expect(within(rows[0]!).getByRole('rowheader')).toHaveTextContent('Mo bis Fr (aus Mo–Fr)');
+});
+
+it('beschriftet die Zellen mit den Spaltenköpfen', () => {
+	show();
+	const row = within(table(TESLA)).getAllByRole('row')[1]!;
+	expect(
+		within(row)
+			.getAllByRole('cell')
+			.map((cell) => cell.getAttribute('data-label'))
+	).toEqual([
+		'Fahrten',
+		'Abfahrt',
+		'Ankunft',
+		'Ladestand bei Ankunft',
+		'Verbrauch',
+		'Vorschlag Ziel',
+		'Konfidenz'
+	]);
+	expect(table(TESLA)).toHaveClass('stack');
 });

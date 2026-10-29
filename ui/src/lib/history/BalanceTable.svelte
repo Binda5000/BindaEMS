@@ -12,7 +12,7 @@
 	Tageswerte der Zähler für den Abgleich mit VRM: je Tag unter „Zähler“ aufklappen.
 </p>
 <div class="scroll">
-	<table>
+	<table class="stack">
 		<thead>
 			<tr>
 				<th scope="col">Tag</th>
@@ -27,9 +27,9 @@
 				<tr>
 					<td class="day">{row.day}</td>
 					{#each BALANCE_COLUMNS as column (column.key)}
-						<td class="num">{row.cells[column.key]}</td>
+						<td class="num" data-label={column.label}>{row.cells[column.key]}</td>
 					{/each}
-					<td>
+					<td class="counters" data-label="Zähler">
 						{#if row.counters.length > 0}
 							<details>
 								<summary>Tageswerte</summary>
@@ -87,5 +87,21 @@
 		margin: 0;
 		text-align: right;
 		white-space: nowrap;
+	}
+
+	/* am Handy steht „Tageswerte“ links über der ganzen Kartenbreite (ohne eigene Beschriftung) */
+	@media (max-width: 40rem) {
+		.scroll table.stack td.counters {
+			display: block;
+			text-align: left;
+		}
+
+		.scroll table.stack td.counters::before {
+			display: none;
+		}
+
+		dl {
+			grid-template-columns: 1fr auto;
+		}
 	}
 </style>

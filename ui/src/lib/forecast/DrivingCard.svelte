@@ -15,6 +15,7 @@
 		weakestConfidence,
 		weekdayGroup
 	} from '$lib/format';
+	import { groupDays } from './view';
 
 	interface Props {
 		data: DrivingStatus | undefined;
@@ -49,6 +50,44 @@
 				? ''
 				: ` · Quelle: ${drivingSourceText(car.source, presenceEntities[car.key])}`;
 		return `${car.name}${source} · ${car.days} Tage`;
+	}
+
+	/** Autos, deren Tabelle jeden Tag einzeln zeigt (Standard: gleiche Tage in einer Zeile) */
+	let single = $state<Record<string, boolean>>({});
+
+	/** Die Zellen eines Tages ohne die Tagesspalte; Abfahrt und „meist“ stehen getrennt, der Rest ist
+	 *  der Hinweis, aus welcher Gruppe das Profil rechnet (leer bei eigenen Tagen) */
+	function dayCells(day: DrivingWeekday): string[] {
+		return [
+			`${day.trips}${NBSP}(${day.trip_pct}${NBSP}%)`,
+			day.departure ?? 'keine Fahrt erwartet',
+			day.departure !== null && day.departure_p50 !== null ? `meist ${day.departure_p50}` : '',
+			day.arrival_p50 ?? DASH,
+			formatSoc(day.arrival_soc_p50),
+			percent(day.consumption_p80_pp),
+			target(day),
+			confidence(day),
+			day.basis === 'group' ? weekdayGroup(day.weekday) : ''
+		];
+	}
+
+	interface DayRow {
+		label: string;
+		cells: string[];
+	}
+
+	/** Zeilen der Tabelle: je Tag oder gleiche aufeinanderfolgende Tage zusammen („Mo bis Fr“) */
+	function dayRows(car: DrivingVehicle): DayRow[] {
+		if (single[car.key]) {
+			return car.weekdays.map((day) => ({ label: dayLabel(day), cells: dayCells(day) }));
+		}
+		// die Gruppe steht als letzte Zelle, damit nur Tage mit gleicher Grundlage zusammenfallen
+		return groupDays(car.weekdays, (day) => WEEKDAY_LABELS[day.weekday] ?? DASH, dayCells).map(
+			(row) => {
+				const group = row.cells[row.cells.length - 1];
+				return { label: group ? `${row.label} (aus ${group})` : row.label, cells: row.cells };
+			}
+		);
 	}
 
 	/** „Mo“, bei zu wenigen Tagen des Wochentags „Mo (aus Mo–Fr)“ */
@@ -119,7 +158,7 @@
 					<p class="muted">Noch keine Daten für dieses Auto.</p>
 				{:else}
 					<div class="scroll">
-						<table aria-labelledby="{uid}-{car.key}">
+						<table class="stack" aria-labelledby="{uid}-{car.key}">
 							<thead>
 								<tr>
 									<th scope="col">Tag</th>
@@ -133,30 +172,36 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each car.weekdays as day (day.weekday)}
+								{#each dayRows(car) as row (row.label)}
 									<tr>
-										<th scope="row">{dayLabel(day)}</th>
-										<td>{day.trips}{NBSP}({day.trip_pct}{NBSP}%)</td>
-										<td>
-											{#if day.departure === null}
-												keine Fahrt erwartet
-											{:else}
-												<span>{day.departure}</span>
-												{#if day.departure_p50 !== null}
-													<span class="muted usual">meist {day.departure_p50}</span>
+										<th scope="row">{row.label}</th>
+										<td data-label="Fahrten">{row.cells[0]}</td>
+										<td data-label="Abfahrt">
+											<span class="times">
+												<span>{row.cells[1]}</span>
+												{#if row.cells[2]}
+													<span class="muted usual">{row.cells[2]}</span>
 												{/if}
-											{/if}
+											</span>
 										</td>
-										<td>{day.arrival_p50 ?? DASH}</td>
-										<td>{formatSoc(day.arrival_soc_p50)}</td>
-										<td>{percent(day.consumption_p80_pp)}</td>
-										<td>{target(day)}</td>
-										<td>{confidence(day)}</td>
+										<td data-label="Ankunft">{row.cells[3]}</td>
+										<td data-label="Ladestand bei Ankunft">{row.cells[4]}</td>
+										<td data-label="Verbrauch">{row.cells[5]}</td>
+										<td data-label="Vorschlag Ziel">{row.cells[6]}</td>
+										<td data-label="Konfidenz">{row.cells[7]}</td>
 									</tr>
 								{/each}
 							</tbody>
 						</table>
 					</div>
+					<button
+						type="button"
+						class="days"
+						aria-pressed={single[car.key] ?? false}
+						onclick={() => (single[car.key] = !single[car.key])}
+					>
+						Tage einzeln
+					</button>
 					<p class="muted quality">{quality(car)}</p>
 				{/if}
 			</div>
@@ -196,6 +241,21 @@
 	.usual {
 		display: block;
 		font-size: 0.8125rem;
+	}
+
+	/* am Handy rechtsbündig unter dem Wert */
+	.times {
+		display: block;
+	}
+
+	.days {
+		margin-top: 0.5rem;
+	}
+
+	.days[aria-pressed='true'] {
+		background: var(--accent);
+		color: var(--accent-text);
+		border-color: var(--accent);
 	}
 
 	.quality {

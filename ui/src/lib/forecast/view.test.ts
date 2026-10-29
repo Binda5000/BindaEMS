@@ -3,6 +3,7 @@ import { formatNumber } from '$lib/format';
 import type { QualityDailyRow, QualityRow } from '$lib/api/schemas';
 import {
 	backtestRows,
+	groupDays,
 	dailySeries,
 	dataRange,
 	featureRows,
@@ -149,4 +150,38 @@ it('ordnet den Backtest nach Woche und Vorlauf und zählt die Slots zusammen', (
 		profile: '200\u00a0W',
 		better: '+10\u00a0%'
 	});
+});
+
+const DAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+function group(cells: string[][]) {
+	return groupDays(
+		cells.map((values, index) => ({ name: DAY_NAMES[index]!, values })),
+		(day) => day.name,
+		(day) => day.values
+	);
+}
+
+it('groupDays fasst gleiche Tage hintereinander zu einer Zeile zusammen', () => {
+	const werktag = ['07:15', '41 %'];
+	const wochenende = ['–', '–'];
+	expect(group([werktag, werktag, werktag, werktag, werktag, wochenende, wochenende])).toEqual([
+		{ label: 'Mo bis Fr', cells: werktag },
+		{ label: 'Sa, So', cells: wochenende }
+	]);
+});
+
+it('groupDays lässt verschiedene Tage einzeln', () => {
+	expect(group([['a'], ['b']])).toEqual([
+		{ label: 'Mo', cells: ['a'] },
+		{ label: 'Di', cells: ['b'] }
+	]);
+});
+
+it('groupDays fasst nur aufeinanderfolgende Tage zusammen', () => {
+	expect(group([['a'], ['b'], ['a']]).map((row) => row.label)).toEqual(['Mo', 'Di', 'Mi']);
+});
+
+it('groupDays gibt für keine Tage keine Zeilen', () => {
+	expect(group([])).toEqual([]);
 });

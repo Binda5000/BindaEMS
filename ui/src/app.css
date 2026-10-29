@@ -224,6 +224,7 @@ th.num {
 
 	table.stack,
 	table.stack tbody,
+	table.stack tfoot,
 	table.stack tr {
 		display: block;
 	}
@@ -242,9 +243,18 @@ th.num {
 		overflow-wrap: anywhere;
 	}
 
-	.scroll table.stack td:first-child {
+	.scroll table.stack td:first-child,
+	.scroll table.stack th[scope='row'] {
 		font-weight: 600;
 		text-align: left;
+	}
+
+	/* Zeilenkopf als Kartentitel (statt erster td) */
+	.scroll table.stack th[scope='row'] {
+		display: block;
+		padding: 0.125rem 0;
+		border: 0;
+		white-space: normal;
 	}
 
 	.scroll table.stack td[data-label] {
