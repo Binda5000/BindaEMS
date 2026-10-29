@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Card from '$lib/components/Card.svelte';
-	import { NBSP, formatNumber, formatTime } from '$lib/format';
-	import { blockLabel, type PlanBlock } from './model';
+	import { NBSP, formatTime } from '$lib/format';
+	import { blockLabel, socRange, type PlanBlock } from './model';
 
 	interface Props {
 		blocks: PlanBlock[];
@@ -17,9 +17,7 @@
 				<p class="head">
 					<span class="time">{formatTime(block.start)}–{formatTime(block.end)}</span>
 					<strong>{blockLabel(block)}</strong>
-					<span class="soc muted"
-						>SOC {formatNumber(block.socFrom, 0)} → {formatNumber(block.socTo, 0)}{NBSP}%</span
-					>
+					<span class="soc muted">SOC {socRange(block.socFrom, block.socTo)}{NBSP}%</span>
 				</p>
 				<p class="text">{block.text}</p>
 				{#each block.expected as label (label)}

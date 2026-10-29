@@ -220,6 +220,9 @@ class Plan(_Model):
     grid_charge_allowed: bool
     reserve_pct: Finite
     soc_max_pct: Finite
+    # Akku-SOC zu Beginn des Plans (gemessen); alte Pläne laden mit ``None`` und die Anzeige nimmt
+    # dann das Ende des ersten Slots
+    soc_start_pct: Finite | None = None
     month_peak_kw: Finite | None
     power_price: bool
     expected_cost_ct: Finite

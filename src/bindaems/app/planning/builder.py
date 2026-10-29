@@ -331,6 +331,7 @@ def build_plan(
         grid_charge_allowed=inputs.planning.grid_charge_allowed,
         reserve_pct=inputs.battery.reserve_pct,
         soc_max_pct=inputs.battery.soc_max_pct,
+        soc_start_pct=inputs.battery.soc_pct,
         month_peak_kw=inputs.month_peak_kw,
         power_price=bool(inputs.peak_months),
         expected_cost_ct=sum(item.cost_ct for item in steps),

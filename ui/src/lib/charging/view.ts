@@ -465,7 +465,7 @@ function plannedText(
 			return `${goal} nicht erreichbar, voraussichtlich ${formatSoc(car.expected_soc_pct)}.`;
 		}
 		if (car.finish_at !== null) return `Fertig um ${dayTime(car.finish_at, now)} · ${goal}`;
-		if (!car.soc_assumed && car.soc_start_pct >= car.target_soc_pct) {
+		if (!car.soc_assumed && (car.reached || car.soc_start_pct >= car.target_soc_pct)) {
 			return `Ziel erreicht (${formatSoc(car.soc_start_pct)}).`;
 		}
 		return null; // der Plan lädt das Auto in seinem Horizont nicht

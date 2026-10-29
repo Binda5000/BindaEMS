@@ -17,6 +17,7 @@
     "horizon_end": "2026-10-09T22:00:00+00:00",
     "reserve_pct": 20.0,
     "soc_max_pct": 100.0,
+    "soc_start_pct": 55.0,
     "month_peak_kw": 5.4992,
     "power_price": true,
     "expected_cost_eur": 9.46,

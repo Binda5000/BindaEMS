@@ -53,3 +53,13 @@ it('zeigt den Satz zum Grundcode AUTO_ERWARTET wörtlich vom Server', () => {
 	render(PlanBlocks, { blocks });
 	expect(screen.getByText(text)).toBeVisible();
 });
+
+it('zeigt eine kleine SOC-Änderung mit einer Nachkommastelle', () => {
+	const blocks = planBlocks(
+		[slot('10:00', 'NETZLADEN', 2300, 'NETZLADEN_GUENSTIG', { soc_pct: 19.9 })],
+		[],
+		19.2
+	);
+	render(PlanBlocks, { blocks });
+	expect(screen.getByText('SOC 19,2 → 19,9 %')).toBeTruthy();
+});

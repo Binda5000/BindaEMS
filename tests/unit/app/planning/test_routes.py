@@ -121,6 +121,7 @@ async def test_get_plan_shape(client_as, planning):
         "horizon_end",
         "reserve_pct",
         "soc_max_pct",
+        "soc_start_pct",
         "month_peak_kw",
         "power_price",
         "expected_cost_eur",
@@ -131,6 +132,7 @@ async def test_get_plan_shape(client_as, planning):
         "slots",
     }
     assert plan["vehicles"] == [] and plan["slots"][0]["ev_w"] == {}
+    assert plan["soc_start_pct"] is not None
     # ohne Klimaanlage: kein Block, keine Verschiebung in den Slots
     assert plan["thermal"] is None
     assert (plan["slots"][0]["thermal_w"], plan["slots"][0]["thermal_steps"]) == (0.0, None)

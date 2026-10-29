@@ -492,6 +492,7 @@ describe('Geplant', () => {
 		expected_soc_pct: 80,
 		finish_at: '2026-10-10T03:45:00+00:00',
 		reachable: true,
+		reached: false,
 		expected: false,
 		arrival_at: null,
 		...changes
@@ -554,6 +555,18 @@ describe('Geplant', () => {
 		expect(plannedLine({ mode: 'planned', vehicle: health(), car: later, target: 80 })?.text).toBe(
 			null
 		);
+	});
+
+	it('meldet ein Auto, das der core als erreicht hält, auch knapp unter dem Ziel', () => {
+		const held = car({ reached: true, soc_start_pct: 49, target_soc_pct: 50, finish_at: null });
+		expect(plannedLine({ mode: 'planned', vehicle: null, car: held, target: 50 })?.text).toBe(
+			`Ziel erreicht (49${NB}%).`
+		);
+		// angenommener Ladestand bleibt unbekannt, auch wenn der core „erreicht“ meldet
+		const assumed = car({ ...held, soc_assumed: true });
+		expect(
+			plannedLine({ mode: 'planned', vehicle: null, car: assumed, target: 50 })?.text
+		).toBeNull();
 	});
 
 	it('nennt die Quelle des Ladestands, angenommen nie als gemessen', () => {

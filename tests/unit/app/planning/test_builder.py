@@ -277,6 +277,16 @@ def test_header_and_slot_fields_come_from_the_inputs() -> None:
     assert first.soc_start_pct == pytest.approx(40.0)
     assert first.soc_end_pct > first.soc_start_pct  # PV-Überschuss lädt
     assert first.charge_pv_w == pytest.approx(500.0)
+    # der Start-SOC des Plans ist der gemessene SOC, nicht das Ende des ersten Slots
+    assert plan.soc_start_pct == inputs.battery.soc_pct == 40.0
+
+
+def test_an_old_plan_without_the_start_soc_loads_with_none() -> None:
+    inputs = scenario(prices=[20.0] * 2, pv=[0.0] * 2, load=[500.0] * 2, soc_pct=40.0)
+    plan = build_plan(inputs, [EV] * 2, source="optimizer", solver_status="optimal", issues=[])
+    data = plan.model_dump(mode="json")
+    del data["soc_start_pct"]
+    assert Plan.model_validate(data).soc_start_pct is None
 
 
 def test_intent_count_must_match() -> None:

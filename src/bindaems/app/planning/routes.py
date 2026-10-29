@@ -113,6 +113,7 @@ def plan_json(plan: Plan, *, valid: bool, thermal_enabled: bool) -> dict[str, An
         "horizon_end": plan.horizon_end.isoformat(),
         "reserve_pct": plan.reserve_pct,
         "soc_max_pct": plan.soc_max_pct,
+        "soc_start_pct": plan.soc_start_pct,
         "month_peak_kw": plan.month_peak_kw,
         "power_price": plan.power_price,
         "expected_cost_eur": _euro(plan.expected_cost_ct),

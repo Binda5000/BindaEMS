@@ -1550,6 +1550,8 @@ export const PlanVehicleSchema = v.object({
 	/** Ende des letzten Slots mit Laden, `null` ohne Laden */
 	finish_at: v.nullable(Iso),
 	reachable: v.boolean(),
+	/** der core hält das Ziel für erreicht; der Plan lädt dann nichts; ältere Pläne ohne das Feld */
+	reached: v.optional(v.boolean(), false),
 	/** erwartetes Auto (Plan 5b): noch nicht angesteckt, die Anwesenheitsprognose erwartet es ab `arrival_at` */
 	expected: v.boolean(),
 	arrival_at: v.nullable(Iso)
@@ -1571,6 +1573,8 @@ export const PlanSchema = v.object({
 	horizon_end: Iso,
 	reserve_pct: v.number(),
 	soc_max_pct: v.number(),
+	/** Akku-SOC zu Beginn des Plans in %; `null` bei älteren Plänen */
+	soc_start_pct: v.optional(v.nullable(v.number()), null),
 	month_peak_kw: NullableNumber,
 	/** gilt im Horizont ein Leistungspreis? */
 	power_price: v.boolean(),

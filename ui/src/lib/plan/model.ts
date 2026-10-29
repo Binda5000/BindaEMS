@@ -6,7 +6,7 @@ import type {
 	PlanTrigger,
 	PlanVehicle
 } from '$lib/api/schemas';
-import { expectedLabel, formatNumberMax } from '$lib/format';
+import { expectedLabel, formatNumber, formatNumberMax } from '$lib/format';
 import { parseIso } from '$lib/time';
 
 export const INTENT_LABELS: Record<BatteryIntentKind, string> = {
@@ -40,7 +40,7 @@ export interface PlanBlock {
 	end: string;
 	intent: PlanSlot['intent'];
 	gridChargeW: number;
-	/** SOC am Ende des Slots vor dem Block, beim ersten Block der erste Wert */
+	/** SOC am Ende des Slots vor dem Block, beim ersten Block der Start-SOC des Plans (sonst das Ende des ersten Slots) */
 	socFrom: number;
 	socTo: number;
 	text: string;
@@ -67,7 +67,11 @@ function endOf(slot: PlanSlot): string {
  * erwartetes Auto (Plan 5b) hängt am Block seiner Ankunft, eine Ankunft vor dem Plan am ersten Block;
  * liegt die Ankunft hinter dem Plan, bleibt es weg.
  */
-export function planBlocks(slots: PlanSlot[], vehicles: PlanVehicle[] = []): PlanBlock[] {
+export function planBlocks(
+	slots: PlanSlot[],
+	vehicles: PlanVehicle[] = [],
+	socStartPct: number | null = null
+): PlanBlock[] {
 	const blocks: PlanBlock[] = [];
 	let key = '';
 	slots.forEach((slot, index) => {
@@ -84,7 +88,7 @@ export function planBlocks(slots: PlanSlot[], vehicles: PlanVehicle[] = []): Pla
 			end: endOf(slot),
 			intent: slot.intent,
 			gridChargeW: slot.grid_charge_w,
-			socFrom: (index > 0 ? slots[index - 1] : slot).soc_pct,
+			socFrom: index > 0 ? slots[index - 1]!.soc_pct : (socStartPct ?? slot.soc_pct),
 			socTo: slot.soc_pct,
 			text: slot.text,
 			expected: []
@@ -100,6 +104,20 @@ export function planBlocks(slots: PlanSlot[], vehicles: PlanVehicle[] = []): Pla
 		block?.expected.push(expectedLabel(car.name, car.arrival_at!));
 	}
 	return blocks;
+}
+
+/** Ab dieser Änderung in % zeigt `socRange` eine Nachkommastelle (darunter ist es Rauschen) */
+const SOC_DECIMAL_MIN_PCT = 0.05;
+
+/**
+ * „19 → 20“: ganzzahlig. Ändert sich der SOC im Block um weniger als einen Prozentpunkt (aber
+ * merklich), würde die Rundung die Änderung verschlucken oder verzerren („19 → 19“): dann mit einer
+ * Nachkommastelle („19,2 → 19,9“).
+ */
+export function socRange(from: number, to: number): string {
+	const change = Math.abs(to - from);
+	const digits = change >= SOC_DECIMAL_MIN_PCT - 1e-9 && change < 1 ? 1 : 0;
+	return `${formatNumber(from, digits)} → ${formatNumber(to, digits)}`;
 }
 
 /** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ (die kW nur beim Netzladen mit Leistung) */

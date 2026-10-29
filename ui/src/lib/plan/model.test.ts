@@ -1,5 +1,12 @@
 import { expect, it } from 'vitest';
-import { INTENT_LABELS, SOURCE_LABELS, TRIGGER_LABELS, blockLabel, planBlocks } from './model';
+import {
+	INTENT_LABELS,
+	SOURCE_LABELS,
+	TRIGGER_LABELS,
+	blockLabel,
+	planBlocks,
+	socRange
+} from './model';
 import type { PlanVehicle } from '$lib/api/schemas';
 import { PLAN, iso, slot } from '$lib/testing/plan';
 
@@ -114,4 +121,25 @@ it('legt eine Ankunft vor dem ersten Slot in den ersten Block', () => {
 	const slots = [slot('10:00', 'EIGENVERBRAUCH', 0, 'EIGENVERBRAUCH')];
 	const blocks = planBlocks(slots, [expectedCar({ arrival_at: iso('09:00') })]);
 	expect(blocks[0]?.expected).toEqual(['Tesla Model 3 erwartet ab 09:00']);
+});
+
+it('startet den ersten Block beim Start-SOC des Plans statt am Ende des ersten Slots', () => {
+	const slots = [
+		slot('10:00', 'HALTEN', 0, 'HALTEN_RESTWERT', { soc_pct: 20 }),
+		slot('10:15', 'NETZLADEN', 2300, 'NETZLADEN_GUENSTIG', { soc_pct: 25 })
+	];
+	expect(planBlocks(slots, [], 17.4).map((b) => [b.socFrom, b.socTo])).toEqual([
+		[17.4, 20],
+		[20, 25]
+	]);
+	// ohne Start-SOC wie bisher
+	expect(planBlocks(slots).map((b) => b.socFrom)).toEqual([20, 20]);
+	expect(planBlocks(slots, [], null).map((b) => b.socFrom)).toEqual([20, 20]);
+});
+
+it('socRange: ganzzahlig, bei gleicher Rundung mit einer Nachkommastelle', () => {
+	expect(socRange(19.2, 19.9)).toBe('19,2 → 19,9');
+	expect(socRange(19, 20.4)).toBe('19 → 20');
+	expect(socRange(17, 17)).toBe('17 → 17');
+	expect(socRange(17.01, 17.03)).toBe('17 → 17');
 });
