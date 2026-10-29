@@ -135,11 +135,14 @@ export function isWarnResult(result: DecisionResult): boolean {
 
 // `{ (Gründe)}: {Befehl} – {Ergebnis}.{ Befunde}` nach dem Namen (`decision_text` in shared/decisions.py)
 const BODY = /^(?:\((.+?)\))?: (.+?) – (.*)$/s;
+// Ergebnisse mit Detail: „Fehler: …“, „nicht gesendet: …“, „von außen geändert: …“
+const RESULT_DETAIL = /^(?:Fehler|nicht gesendet|von außen geändert): (.+)$/s;
 
 /**
  * Der Satz einer Entscheidung für die Karte „Warum?“: ohne Namen am Anfang und ohne Ergebnis,
- * `{Gründe}: {Befehl}` (ohne Gründe nur `{Befehl}`), Befunde dahinter mit „ · “. Folgt der Text
- * dem Muster nicht, bleibt der Rest nach dem Namen (oder der ganze Text) unverändert.
+ * `{Gründe}: {Befehl}` (ohne Gründe nur `{Befehl}`), das Detail eines Ergebnisses („Fehler: X“)
+ * und Befunde dahinter mit „ · “. Das Ergebnis ohne Detail zeigt das Etikett der Karte. Folgt der
+ * Text dem Muster nicht, bleibt der Rest nach dem Namen (oder der ganze Text) unverändert.
  */
 export function whyBody(text: string, name: string): string {
 	const rest = splitName(text, name);
@@ -149,7 +152,9 @@ export function whyBody(text: string, name: string): string {
 	const [, reasons, command, tail = ''] = match;
 	// Das Ergebnis endet am ersten Punkt mit Leerzeichen; was folgt, sind die Befunde
 	const end = tail.indexOf('. ');
+	const result = (end === -1 ? tail : tail.slice(0, end)).replace(/\.$/, '');
 	const findings = end === -1 ? '' : tail.slice(end + 2).trim();
 	const body = reasons ? `${reasons}: ${command}` : (command ?? '');
-	return findings === '' ? body : `${body} · ${findings}`;
+	const detail = RESULT_DETAIL.exec(result)?.[1];
+	return [body, detail, findings].filter((part) => part).join(' · ');
 }

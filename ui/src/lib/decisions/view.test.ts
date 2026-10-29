@@ -152,6 +152,36 @@ it('whyBody hängt Befunde mit „ · “ an', () => {
 	).toBe('Min+PV: Strom 20 A · Grenze 16 A.');
 });
 
+it('whyBody zeigt das Detail von Fehler, nicht gesendet und von außen geändert hinter dem Befehl', () => {
+	expect(
+		whyBody('Victron (ESS): Netz-Sollwert 50 W – Fehler: Modbus-Timeout.', 'Victron (ESS)')
+	).toBe('Netz-Sollwert 50 W · Modbus-Timeout');
+	expect(
+		whyBody('EVCS „evcs“ (Überschuss): Strom 8 A – nicht gesendet: evcc ist aktiv.', 'EVCS „evcs“')
+	).toBe('Überschuss: Strom 8 A · evcc ist aktiv');
+	expect(
+		whyBody(
+			'EVCS „evcs“ (Änderung von außen): Strom 10 A – von außen geändert: erwartet 8 A.',
+			'EVCS „evcs“'
+		)
+	).toBe('Änderung von außen: Strom 10 A · erwartet 8 A');
+});
+
+it('whyBody stellt das Detail vor die Befunde', () => {
+	expect(
+		whyBody(
+			'Victron (ESS): Netz-Sollwert 50 W – Fehler: Modbus-Timeout. Grenze 16 A.',
+			'Victron (ESS)'
+		)
+	).toBe('Netz-Sollwert 50 W · Modbus-Timeout · Grenze 16 A.');
+});
+
+it('whyBody lässt das Ergebnis ohne Detail weg (das Etikett zeigt es)', () => {
+	expect(whyBody('Victron (ESS): Netz-Sollwert 50 W – Fehler.', 'Victron (ESS)')).toBe(
+		'Netz-Sollwert 50 W'
+	);
+});
+
 it('whyBody lässt Texte unverändert, die nicht dem Muster folgen', () => {
 	expect(whyBody('Klimaanlage wurde von außen geändert', 'Klimaanlage')).toBe(
 		'wurde von außen geändert'
