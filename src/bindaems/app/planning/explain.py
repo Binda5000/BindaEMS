@@ -21,7 +21,6 @@ from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
     MENTION_W,
     R1_TOL_KWH,
-    USED_ABOVE_W,
     charged_window_end,
     export_while_charged_kwh,
     pays_off,
@@ -214,7 +213,7 @@ def _budget_peak(
 def _first_paying_discharge(
     inputs: PlanInputs, steps: Sequence[SimStep], index: int
 ) -> tuple[int, float] | None:
-    """Erster späterer Slot mit Entladung über ``USED_ABOVE_W``, für den die Spread-Regel mit dem
+    """Erster späterer Slot mit Entladung ab ``MENTION_W``, für den die Spread-Regel mit dem
     Preis von ``index`` gilt, und sein Bezugspreis; ``None``, wenn es keinen gibt.
 
     Das Netzladen im Slot ``index`` dient der nächsten solchen Entladung, nicht der teuersten im
@@ -223,9 +222,7 @@ def _first_paying_discharge(
     now_ct = inputs.slots[index].import_ct
     for later in range(index + 1, len(steps)):
         later_ct = inputs.slots[later].import_ct
-        if steps[later].discharge_w > USED_ABOVE_W and spread_pays(
-            inputs.planning, now_ct, later_ct
-        ):
+        if steps[later].discharge_w >= MENTION_W and spread_pays(inputs.planning, now_ct, later_ct):
             return later, later_ct
     return None
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, get_args
 
@@ -18,6 +19,7 @@ from tests.plan_helpers import (
 from bindaems.app.planning.builder import build_plan
 from bindaems.app.planning.explain import reasons_for, sentence, slot_text
 from bindaems.app.planning.inputs import PlanInputs
+from bindaems.app.planning.plausibility import MENTION_W
 from bindaems.app.planning.vehicles import PlanVehicleInput
 from bindaems.shared.plan import (
     BatteryIntent,
@@ -248,6 +250,27 @@ def test_grid_charge_names_the_first_paying_discharge() -> None:
     assert first.code == "NETZLADEN_GUENSTIG"
     assert first.params["um"] == "02:15" and first.params["ct_spaeter"] == 40.0
     assert sentence(first).endswith("um 02:15 Uhr 40,0 ct.")
+
+
+def test_grid_charge_skips_a_tiny_discharge_and_names_the_real_block() -> None:
+    # Eine Entladung unter 100 W zu einem Preis, für den sich das Laden lohnt, zählt nicht als
+    # „um“: Genannt wird der erste Slot mit Entladung ab ``MENTION_W``.
+    inputs = scenario(
+        prices=[20.0, 40.0, 60.0, 60.0],
+        pv=[0.0] * 4,
+        load=[1000.0] * 4,
+        soc_pct=20.0,
+        grid_charge=True,
+        battery=small_battery(),
+    )
+    intents = [charge(5000.0), EV, EV, EV]
+    steps = resimulate(inputs, intents)
+    steps[1] = replace(steps[1], discharge_w=50.0)
+    assert steps[2].discharge_w >= MENTION_W
+    first = reasons_for(inputs, intents, steps, [None] * 4, fallback=False)[0][0]
+    assert first.code == "NETZLADEN_GUENSTIG"
+    assert first.params["um"] == "02:30" and first.params["ct_spaeter"] == 60.0
+    assert sentence(first).endswith("um 02:30 Uhr 60,0 ct.")
 
 
 def test_hold_for_expensive_block_beats_budget_and_remaining_value() -> None:

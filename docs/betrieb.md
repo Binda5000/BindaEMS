@@ -5917,7 +5917,7 @@ Zahlen:
 
 | Code | Beispiel | Wann |
 |---|---|---|
-| `NETZLADEN_GUENSTIG` | Akku lädt 4,0 kW aus dem Netz: jetzt 12,3 ct, um 18:00 Uhr 31,5 ct. | Absicht `Netzladen`; „um“ ist der erste spätere Slot mit Entladung, für den sich das Laden auszahlt (gibt es keinen, der teuerste spätere Slot) |
+| `NETZLADEN_GUENSTIG` | Akku lädt 4,0 kW aus dem Netz: jetzt 12,3 ct, um 18:00 Uhr 31,5 ct. | Absicht `Netzladen`; „um“ ist der erste spätere Slot mit Entladung ab 100 W, für den sich das Laden auszahlt (gibt es keinen, der teuerste spätere Slot) |
 | `HALTEN_FUER_SPITZE` | Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden. | Absicht `Halten`; später folgt ein Block teurerer Slots mit Entladung |
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |
 | `HALTEN_RESTWERT` | Akku hält 40 % für die Zeit nach 10:00 Uhr. | Absicht `Halten` aus keinem der beiden Gründe; „nach“ ist das Horizontende |
