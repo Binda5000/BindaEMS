@@ -5,12 +5,15 @@ import {
 	actuatorModeLabel,
 	actuatorNotes,
 	ageText,
+	componentLabel,
+	componentMessage,
 	heartbeatLabel,
 	liveConditions,
 	needsEvccConfirmation,
 	modeLabel,
 	selfcheckLabel,
 	signalRows,
+	sortComponents,
 	vatText,
 	watchdogStateLabel,
 	watchdogVersionText
@@ -18,8 +21,38 @@ import {
 
 it('benennt Selbstprüfungen deutsch', () => {
 	expect(
-		['dess', 'multi_mode', 'import_limit', 'evcs_mode.twc', 'neu'].map(selfcheckLabel)
-	).toEqual(['Dynamic ESS', 'Multi-Modus', 'Importlimit', 'EVCS-Modus twc', 'neu']);
+		['dess', 'multi_mode', 'import_limit', 'evcs_mode.twc', 'neu'].map((id) => selfcheckLabel(id))
+	).toEqual(['Dynamic ESS', 'Multi-Modus', 'Importlimit', 'EVCS-Modus: twc', 'neu']);
+});
+
+it('nennt die Wallbox in der Selbstprüfung beim Namen aus den Einstellungen', () => {
+	expect(selfcheckLabel('evcs_mode.evcs', { evcs: 'EVCS' })).toBe('EVCS-Modus: EVCS');
+	expect(selfcheckLabel('evcs_mode.twc', { evcs: 'EVCS' })).toBe('EVCS-Modus: twc');
+});
+
+it('benennt die Lern- und Planungskomponenten deutsch', () => {
+	expect(
+		['load-model', 'driving', 'thermal_model', 'planning'].map((name) => componentLabel(name))
+	).toEqual(['Lastmodell', 'Fahrverhalten', 'Wärmemodell', 'Planer']);
+	expect(componentLabel('neu')).toBe('neu');
+});
+
+it('componentMessage lässt den Namen am Anfang der Meldung weg', () => {
+	expect(componentMessage('Preise', 'Preise bis 09.10. 23:45')).toBe('bis 09.10. 23:45');
+	expect(componentMessage('InfluxDB', 'InfluxDB: alles übertragen')).toBe('alles übertragen');
+	expect(componentMessage('Planer', 'Plan von 10:00 Uhr')).toBe('Plan von 10:00 Uhr');
+	expect(componentMessage('Preise', 'Preise')).toBe('Preise');
+});
+
+it('sortComponents stellt gestörte nach vorn und behält sonst die Reihenfolge', () => {
+	const list = [
+		{ name: 'a', ok: true },
+		{ name: 'b', ok: false },
+		{ name: 'c', ok: true },
+		{ name: 'd', ok: false }
+	];
+	expect(sortComponents(list).map((c) => c.name)).toEqual(['b', 'd', 'a', 'c']);
+	expect(list.map((c) => c.name)).toEqual(['a', 'b', 'c', 'd']);
 });
 
 it('listet Signale mit Wert, Qualität und Alter', () => {

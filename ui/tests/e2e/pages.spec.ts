@@ -126,6 +126,22 @@ test('Übersicht: Hinweise aufklappen, bei 390 px eine Zeile', async ({ page }) 
 	await expect(bar.getByRole('button', { name: 'Anzeigen' })).toBeVisible();
 });
 
+test('System zählt die Komponenten und zeigt die gestörte zuerst, Wallboxen beim Namen', async ({
+	page
+}) => {
+	await login(page, 'gast');
+	await page.goto('/system');
+	const components = page.locator('section', {
+		has: page.getByRole('heading', { name: 'Komponenten' })
+	});
+	await expect(components.getByText('10 von 11 in Ordnung')).toBeVisible();
+	const first = components.getByRole('listitem').first();
+	await expect(first).toContainText('Home Assistant');
+	await expect(first).toContainText('MQTT noch nicht verbunden');
+	expect((await first.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+	await expect(page.getByText('EVCS-Modus: EVCS')).toBeVisible();
+});
+
 test('System zeigt die Karte Klimaanlage ohne Werte', async ({ page }) => {
 	await login(page, 'gast');
 	await page.goto('/system');

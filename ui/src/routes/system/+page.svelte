@@ -7,6 +7,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
+	import { wallboxLabels } from '$lib/dashboard/flow';
 	import { DASH, formatDateTime, formatDay, formatEnergy, formatNumber, NBSP } from '$lib/format';
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
@@ -21,10 +22,12 @@
 		actuatorModeLabel,
 		actuatorNotes,
 		componentLabel,
+		componentMessage,
 		heartbeatLabel,
 		modeLabel,
 		selfcheckLabel,
 		signalRows,
+		sortComponents,
 		vatText,
 		watchdogStateLabel,
 		watchdogVersionText
@@ -39,13 +42,14 @@
 	const quality = new Resource((o) => api.forecastQuality(14, o), { intervalMs: 300_000 });
 	const appHealth = new Resource((o) => api.health(o));
 	const control = new Resource((o) => api.control(o), { intervalMs: 15_000 });
+	const limits = new Resource((o) => api.limits(o), { intervalMs: 300_000 });
 
 	let nowMs = $state(Date.now()); // Alter der Signale zählt jede Sekunde weiter
 	let filter = $state('');
 	let followUp: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, prices, forecast, loadForecast, quality, appHealth, control].map(
+		const stops = [system, prices, forecast, loadForecast, quality, appHealth, control, limits].map(
 			(resource) => resource.start()
 		);
 		const clock = setInterval(() => (nowMs = Date.now()), 1000);
@@ -59,6 +63,9 @@
 	const admin = $derived(hasRole(page.data.user, 'admin'));
 	const operate = $derived(canOperate(page.data.user));
 	const health = $derived(system.data?.core.health ?? null);
+	const wallboxNames = $derived(wallboxLabels(limits.data));
+	const components = $derived(sortComponents(system.data?.components ?? []));
+	const componentsOk = $derived(components.filter((component) => component.ok).length);
 	const signals = $derived(signalRows(live.state, nowMs, filter));
 	const forecastDays = $derived(
 		(forecast.data?.days ?? []).filter((day) => day.date >= todayVienna()).slice(0, 3)
@@ -129,19 +136,31 @@
 	{/if}
 
 	<Card title="Komponenten">
+		{#snippet aside()}
+			{#if system.data}
+				<span class="count" class:bad={componentsOk < components.length}>
+					{componentsOk} von {components.length} in Ordnung
+				</span>
+			{/if}
+		{/snippet}
 		{#if system.data}
 			<ul class="components">
-				{#each system.data.components as component (component.name)}
+				{#each components as component (component.name)}
+					{@const name = componentLabel(component.name)}
 					<li>
 						<StatusDot
 							state={component.ok ? 'ok' : 'error'}
 							label={component.ok ? 'in Ordnung' : 'gestört'}
 						/>
-						<span class="label">{componentLabel(component.name)}</span>
-						<span class="message">{component.message}</span>
-						{#if component.since}
-							<span class="since muted">{since(component.since)}</span>
-						{/if}
+						<span class="label">{name}</span>
+						<span class="detail">
+							<span class="message" class:bad={!component.ok}
+								>{componentMessage(name, component.message)}</span
+							>
+							{#if component.since}
+								<span class="since">{since(component.since)}</span>
+							{/if}
+						</span>
 					</li>
 				{/each}
 			</ul>
@@ -246,7 +265,7 @@
 				{#each health.selfcheck as check (check.id)}
 					<li>
 						<StatusDot state={SELFCHECK_STATE[check.status]} label={SELFCHECK_TEXT[check.status]} />
-						<span class="label">{selfcheckLabel(check.id)}</span>
+						<span class="label">{selfcheckLabel(check.id, wallboxNames)}</span>
 						<span class="message">{check.message}</span>
 					</li>
 				{/each}
@@ -486,7 +505,6 @@
 		gap: 0.5rem;
 	}
 
-	.components li,
 	.checks li {
 		display: grid;
 		grid-template-columns: auto minmax(7rem, auto) 1fr;
@@ -494,9 +512,49 @@
 		gap: 0.25rem 0.75rem;
 	}
 
+	/* eine Zeile je Komponente: Punkt, Name, Meldung rechts (gedämpft, bei Störung rot) */
+	.components {
+		gap: 0;
+	}
+
+	.components li {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: 2.75rem;
+		padding: 0.25rem 0;
+	}
+
+	.components li + li {
+		border-top: 1px solid var(--border);
+	}
+
+	.components .detail {
+		flex: 1;
+		min-width: 0;
+		display: grid;
+		justify-items: end;
+		text-align: right;
+		overflow-wrap: anywhere;
+		color: var(--muted);
+	}
+
 	.components .since {
-		grid-column: 3;
+		font-size: 0.8125rem;
+	}
+
+	.bad {
+		color: var(--error);
+	}
+
+	.count {
+		color: var(--muted);
 		font-size: 0.875rem;
+		white-space: nowrap;
+	}
+
+	.count.bad {
+		color: var(--error);
 	}
 
 	.label {
@@ -556,14 +614,11 @@
 	}
 
 	@media (max-width: 40rem) {
-		.components li,
 		.checks li {
 			grid-template-columns: auto 1fr;
 		}
 
-		.components .message,
-		.checks .message,
-		.components .since {
+		.checks .message {
 			grid-column: 2;
 		}
 

@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import { DaySummarySchema } from '$lib/api/schemas';
 import { daySummary } from '$lib/testing/fixtures';
-import { balanceRows } from './balance';
+import { balanceRows, counterLabel } from './balance';
 
 it('formatiert eine Tageszeile', () => {
 	const [row] = balanceRows([
@@ -72,4 +72,14 @@ it('Abdeckung am laufenden Tag zählt nur die vergangenen Viertelstunden', () =>
 		daySummary({ slots: 40, expected_slots: 40, complete: false, coverage: 0.9996 })
 	]);
 	expect(row.cells.coverage).toBe('40 von 40 bis jetzt · 99,9\u00a0%');
+});
+
+it('nennt die Wallbox im Zähler beim Namen aus den Einstellungen', () => {
+	expect(counterLabel('wallbox.evcs.total_kwh', { evcs: 'EVCS' })).toBe('Wallbox EVCS');
+	expect(counterLabel('wallbox.twc.total_kwh', { evcs: 'EVCS' })).toBe('Wallbox twc');
+	expect(counterLabel('wallbox.twc.total_kwh')).toBe('Wallbox twc');
+	const [row] = balanceRows([daySummary({ counter_kwh: { 'wallbox.evcs.total_kwh': 12.5 } })], {
+		evcs: 'EVCS'
+	});
+	expect(row.counters.map((counter) => counter.name)).toEqual(['Wallbox EVCS']);
 });

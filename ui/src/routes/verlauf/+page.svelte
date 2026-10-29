@@ -9,6 +9,7 @@
 	import { readPalette } from '$lib/charts/palette';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
+	import { wallboxLabels } from '$lib/dashboard/flow';
 	import BalanceTable from '$lib/history/BalanceTable.svelte';
 	import { balanceRows } from '$lib/history/balance';
 	import {
@@ -27,6 +28,7 @@
 	import { Resource } from '$lib/resource.svelte';
 	import { theme } from '$lib/theme.svelte';
 	import { todayVienna } from '$lib/time';
+	import { seriesLabel } from '$lib/wallboxes';
 
 	const POLL_MS = 60_000;
 
@@ -35,15 +37,16 @@
 	let last = $state(presetDays('heute', new Date()).last);
 
 	const catalog = new Resource((o) => api.historyCatalog(o));
+	const limits = new Resource((o) => api.limits(o));
 
 	// Wiener Datum, jede Minute neu: eine Voreinstellung (Heute, 7 Tage …) rückt um Mitternacht
 	// nach, sonst zeigte eine über Nacht offene Seite den Vortag als „Heute“
 	let today = $state(todayVienna());
 	onMount(() => {
-		const stop = catalog.start();
+		const stops = [catalog.start(), limits.start()];
 		const clock = setInterval(() => (today = todayVienna()), 60_000);
 		return () => {
-			stop();
+			stops.forEach((stop) => stop());
 			clearInterval(clock);
 		};
 	});
@@ -119,11 +122,30 @@
 		void theme.dark;
 		return readPalette();
 	});
-	const chartOption = $derived(history?.data ? historyOption(history.data, palette) : null);
-	const rows = $derived(ledger?.data ? balanceRows(ledger.data) : []);
+	// Wallboxen heißen überall wie in den Einstellungen, nicht „Wallbox evcs“
+	const wallboxNames = $derived(wallboxLabels(limits.data));
+	const catalogEntries = $derived(
+		catalog.data?.map((entry) => ({
+			...entry,
+			label: seriesLabel(entry.id, entry.label, wallboxNames)
+		}))
+	);
+	const historyData = $derived.by(() => {
+		const data = history?.data;
+		if (!data) return null;
+		const series = Object.fromEntries(
+			Object.entries(data.series).map(([id, entry]) => [
+				id,
+				{ ...entry, label: seriesLabel(id, entry.label, wallboxNames) }
+			])
+		);
+		return { ...data, series };
+	});
+	const chartOption = $derived(historyData ? historyOption(historyData, palette) : null);
+	const rows = $derived(ledger?.data ? balanceRows(ledger.data, wallboxNames) : []);
 	const chartLabel = $derived(
 		`Verlauf von ${first} bis ${last}: ${
-			catalog.data
+			catalogEntries
 				?.filter((entry) => selected.includes(entry.id))
 				.map((entry) => entry.label)
 				.join(', ') ?? ''
@@ -160,8 +182,8 @@
 		{#if rangeError}
 			<p class="error" role="alert">{rangeError}</p>
 		{/if}
-		{#if catalog.data}
-			<SeriesPicker catalog={catalog.data} {selected} onchange={selectSeries} />
+		{#if catalogEntries}
+			<SeriesPicker catalog={catalogEntries} {selected} onchange={selectSeries} />
 		{:else if catalog.error}
 			<Notice level="error">{catalog.error.detail}</Notice>
 		{/if}

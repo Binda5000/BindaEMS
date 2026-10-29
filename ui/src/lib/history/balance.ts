@@ -9,6 +9,7 @@ import {
 	formatNumber,
 	formatRatio
 } from '$lib/format';
+import { wallboxDisplay } from '$lib/wallboxes';
 
 export type BalanceColumn =
 	| 'coverage'
@@ -48,18 +49,19 @@ export interface BalanceRow {
 	counters: { name: string; value: string }[];
 }
 
-const COUNTERS: [RegExp, (match: RegExpMatchArray) => string][] = [
+const COUNTERS: [RegExp, (match: RegExpMatchArray, names: Record<string, string>) => string][] = [
 	[/^grid\.energy_import_kwh$/, () => 'Netz Bezug'],
 	[/^grid\.energy_export_kwh$/, () => 'Netz Einspeisung'],
 	[/^pv\.([^.]+)\.energy_kwh$/, (m) => `PV ${m[1]}`],
 	[/^load\.([^.]+)\.energy_kwh$/, (m) => `Last ${m[1]}`],
-	[/^wallbox\.([^.]+)\.total_kwh$/, (m) => `Wallbox ${m[1]}`]
+	[/^wallbox\.([^.]+)\.total_kwh$/, (m, names) => `Wallbox ${wallboxDisplay(m[1] ?? '', names)}`]
 ];
 
-export function counterLabel(key: string): string {
+/** `names`: Schlüssel der Wallbox → Anzeigename (`wallboxLabels`) */
+export function counterLabel(key: string, names: Record<string, string> = {}): string {
 	for (const [pattern, label] of COUNTERS) {
 		const match = key.match(pattern);
-		if (match) return label(match);
+		if (match) return label(match, names);
 	}
 	return key;
 }
@@ -75,7 +77,10 @@ function coverageText(day: DaySummary): string {
 	return `${day.slots} von ${day.expected_slots}${until} · ${percent}${NBSP}%`;
 }
 
-export function balanceRows(days: DaySummary[]): BalanceRow[] {
+export function balanceRows(
+	days: DaySummary[],
+	wallboxNames: Record<string, string> = {}
+): BalanceRow[] {
 	return days.map((day) => {
 		const row: BalanceRow = {
 			date: day.date,
@@ -96,7 +101,7 @@ export function balanceRows(days: DaySummary[]): BalanceRow[] {
 				selfConsumption: formatRatio(day.self_consumption)
 			},
 			counters: Object.entries(day.counter_kwh).map(([key, kwh]) => ({
-				name: counterLabel(key),
+				name: counterLabel(key, wallboxNames),
 				value: formatEnergy(kwh)
 			}))
 		};

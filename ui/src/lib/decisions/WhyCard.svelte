@@ -4,18 +4,21 @@
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { ageText } from '$lib/system/view';
+	import { actuatorDisplay } from '$lib/wallboxes';
 	import { decisionAgeS, isWarnResult, resultLabel, whyBody } from './view';
 
 	interface Props {
 		/** je Aktor die jüngste Entscheidung der letzten 24 h; `undefined`: noch nicht geladen */
 		decisions: Decision[] | undefined;
 		error: ApiError | null;
-		/** Aktor-ID → Anzeigename */
+		/** Aktor-ID → Bezeichnung des core (der Text der Entscheidung beginnt damit) */
 		names: Record<string, string>;
+		/** Schlüssel der Wallbox → Name aus den Einstellungen */
+		wallboxNames?: Record<string, string>;
 		nowMs: number;
 	}
 
-	let { decisions, error, names, nowMs }: Props = $props();
+	let { decisions, error, names, wallboxNames = {}, nowMs }: Props = $props();
 </script>
 
 <Card title="Warum?">
@@ -31,14 +34,14 @@
 	{:else}
 		<ul>
 			{#each decisions as decision (decision.id)}
-				{@const name = names[decision.actuator] ?? decision.actuator}
+				{@const label = names[decision.actuator] ?? decision.actuator}
 				<li>
 					<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">
 						<span class="head">
-							<span class="name">{name}</span>
+							<span class="name">{actuatorDisplay(decision.actuator, label, wallboxNames)}</span>
 							<span class="age muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
 						</span>
-						<span class="body">{whyBody(decision.text, name)}</span>
+						<span class="body">{whyBody(decision.text, label)}</span>
 						<span class="result" class:warn={isWarnResult(decision.result)}
 							>{resultLabel(decision.result)}</span
 						>

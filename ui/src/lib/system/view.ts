@@ -2,6 +2,7 @@
 import type { CoreHealth, CoreState, Intent, PriceStatus, Reading } from '$lib/api/schemas';
 import { DASH, formatNumber } from '$lib/format';
 import { parseIso } from '$lib/time';
+import { wallboxDisplay } from '$lib/wallboxes';
 
 /** Aktoren, die nie an evcc hängen: Victron und jede Klimaanlage (`thermal_actuator` in `shared/control.py`) */
 const VICTRON = 'victron';
@@ -15,6 +16,10 @@ const COMPONENTS: Record<string, string> = {
 	prices: 'Preise',
 	forecast: 'PV-Prognose',
 	'load-forecast': 'Lastprognose',
+	'load-model': 'Lastmodell',
+	driving: 'Fahrverhalten',
+	thermal_model: 'Wärmemodell',
+	planning: 'Planer',
 	ledger: 'Abrechnung',
 	influx: 'InfluxDB',
 	ha: 'Home Assistant'
@@ -65,8 +70,27 @@ export function componentLabel(name: string): string {
 	return COMPONENTS[name] ?? name;
 }
 
-export function selfcheckLabel(id: string): string {
-	if (id.startsWith('evcs_mode.')) return `EVCS-Modus ${id.slice('evcs_mode.'.length)}`;
+/** Die Meldung ohne den Namen der Komponente am Anfang (er steht schon in der Zeile) */
+export function componentMessage(label: string, message: string): string {
+	for (const separator of [' ', ': ']) {
+		const start = label + separator;
+		if (message.startsWith(start) && message.length > start.length) {
+			return message.slice(start.length);
+		}
+	}
+	return message;
+}
+
+/** Gestörte Komponenten zuerst, sonst die Reihenfolge des Servers */
+export function sortComponents<T extends { ok: boolean }>(list: readonly T[]): T[] {
+	return [...list.filter((item) => !item.ok), ...list.filter((item) => item.ok)];
+}
+
+/** `names`: Schlüssel der Wallbox → Anzeigename (`wallboxLabels`) */
+export function selfcheckLabel(id: string, names: Record<string, string> = {}): string {
+	if (id.startsWith('evcs_mode.')) {
+		return `EVCS-Modus: ${wallboxDisplay(id.slice('evcs_mode.'.length), names)}`;
+	}
 	return SELFCHECKS[id] ?? id;
 }
 

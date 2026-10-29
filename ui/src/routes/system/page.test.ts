@@ -13,7 +13,7 @@ import {
 	type Role,
 	type SystemResponse
 } from '$lib/api/schemas';
-import { system } from '$lib/testing/fixtures';
+import { limits, system } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
 const { api, user } = vi.hoisted(() => ({
@@ -23,6 +23,7 @@ const { api, user } = vi.hoisted(() => ({
 		forecast: vi.fn(),
 		loadForecast: vi.fn(),
 		forecastQuality: vi.fn(),
+		limits: vi.fn(),
 		health: vi.fn(),
 		refreshPrices: vi.fn(),
 		control: vi.fn(),
@@ -63,6 +64,7 @@ beforeEach(() => {
 	// die Prognose-Karten warten, solange ein Test sie nicht füllt
 	api.loadForecast.mockReturnValue(new Promise(() => {}));
 	api.forecastQuality.mockReturnValue(new Promise(() => {}));
+	api.limits.mockReturnValue(new Promise(() => {}));
 	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
 });
 
@@ -87,6 +89,44 @@ it('zeigt die Karten Lastprognose und Prognosegüte', async () => {
 	expect(screen.getByRole('heading', { level: 2, name: 'Prognosegüte' })).toBeInTheDocument();
 	expect(api.loadForecast).toHaveBeenCalledTimes(1);
 	expect(api.forecastQuality).toHaveBeenCalledWith(14, expect.anything());
+});
+
+// --- Komponenten und Selbstprüfung ---------------------------------------------------------
+
+it('zählt die Komponenten in der Kopfzeile und stellt die gestörte nach vorn', async () => {
+	showSystem(system());
+	const components = card('Komponenten');
+	expect(await within(components).findByText('10 von 11 in Ordnung')).toBeInTheDocument();
+	const rows = within(components).getAllByRole('listitem');
+	expect(rows).toHaveLength(11);
+	expect(within(rows[0]!).getByText('Home Assistant')).toBeInTheDocument();
+	expect(within(rows[0]!).getByRole('img', { name: 'gestört' })).toBeInTheDocument();
+	expect(rows[1]).toHaveTextContent(/^\s*core\s*verbunden\s*$/);
+});
+
+it('benennt Komponenten deutsch und wiederholt den Namen nicht in der Meldung', async () => {
+	showSystem(system());
+	const components = card('Komponenten');
+	const row = (name: string) => {
+		const label = within(components).getByText(name, { selector: '.label' });
+		return label.closest('li') as HTMLElement;
+	};
+	await within(components).findByText('Planer', { selector: '.label' });
+	for (const name of ['Lastmodell', 'Fahrverhalten', 'Wärmemodell', 'Planer']) {
+		expect(row(name)).toBeInTheDocument();
+	}
+	expect(within(row('Preise')).getByText('bis 09.10. 23:45')).toBeInTheDocument();
+	expect(within(row('InfluxDB')).getByText('alles übertragen')).toBeInTheDocument();
+	expect(within(row('Planer')).getByText('Plan von 10:00 Uhr')).toBeInTheDocument();
+	expect(within(row('Home Assistant')).getByText('MQTT noch nicht verbunden')).toHaveClass('bad');
+	expect(within(row('Preise')).getByText('bis 09.10. 23:45')).not.toHaveClass('bad');
+});
+
+it('nennt die Wallbox in der Selbstprüfung beim Namen aus den Einstellungen', async () => {
+	api.limits.mockResolvedValue(limits());
+	showSystem(system());
+	const checks = card('core');
+	expect(await within(checks).findByText('EVCS-Modus: EVCS')).toBeInTheDocument();
 });
 
 // --- Betriebszustand, Aktoren und Watchdog -------------------------------------------------

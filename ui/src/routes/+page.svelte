@@ -183,6 +183,7 @@
 		decisions={decisions.data?.decisions}
 		error={decisions.error}
 		names={actuatorNames}
+		{wallboxNames}
 		{nowMs}
 	/>
 </div>

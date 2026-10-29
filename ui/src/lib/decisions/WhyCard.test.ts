@@ -79,3 +79,36 @@ it('lässt das Etikett bei Dry-Run gedämpft', () => {
 	const item = renderItem('Victron (ESS): Netz-Sollwert 0 W – Dry-Run, nicht gesendet.');
 	expect(within(item).getByText('Dry-Run')).not.toHaveClass('warn');
 });
+
+it('zeigt die Wallbox mit dem Namen aus den Einstellungen und streicht die Bezeichnung des core', () => {
+	const decision = {
+		...withText('EVCS „evcs“ (PV-Überschuss): Strom 8 A – Dry-Run, nicht gesendet.'),
+		actuator: 'wallbox.evcs'
+	};
+	render(WhyCard, {
+		decisions: [decision],
+		error: null,
+		names: { 'wallbox.evcs': 'EVCS „evcs“' },
+		wallboxNames: { evcs: 'EVCS' },
+		nowMs: Date.parse(decision.ts)
+	});
+	const item = screen.getByRole('listitem');
+	expect(within(item).getByText('EVCS')).toBeInTheDocument();
+	expect(within(item).getByText('PV-Überschuss: Strom 8 A')).toBeInTheDocument();
+	expect(within(item).queryByText(/„evcs“/)).not.toBeInTheDocument();
+});
+
+it('zeigt das Detail eines Fehlers hinter dem Befehl', () => {
+	const decision = {
+		...withText('Victron (ESS): Netz-Sollwert 50 W – Fehler: Modbus-Timeout.'),
+		result: 'error' as const
+	};
+	render(WhyCard, {
+		decisions: [decision],
+		error: null,
+		names: { victron_ess: 'Victron (ESS)' },
+		nowMs: Date.parse(decision.ts)
+	});
+	expect(screen.getByText('Netz-Sollwert 50 W · Modbus-Timeout')).toBeInTheDocument();
+	expect(screen.getByText('Fehler')).toBeInTheDocument();
+});
