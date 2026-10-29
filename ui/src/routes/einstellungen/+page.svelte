@@ -199,7 +199,7 @@
 		<Card title="Versionen">
 			{#if versions?.data}
 				<div class="scroll">
-					<table>
+					<table class="stack">
 						<thead>
 							<tr>
 								<th scope="col" class="num">Version</th>
@@ -213,10 +213,10 @@
 							{#each versions.data as version (version.version)}
 								<tr>
 									<td class="num">{version.version}</td>
-									<td>{formatDateTime(version.created_at)}</td>
-									<td>{version.actor}</td>
-									<td>{SOURCES[version.source]}</td>
-									<td>{version.comment ?? DASH}</td>
+									<td data-label="Zeit">{formatDateTime(version.created_at)}</td>
+									<td data-label="Wer">{version.actor}</td>
+									<td data-label="Quelle">{SOURCES[version.source]}</td>
+									<td data-label="Kommentar">{version.comment ?? DASH}</td>
 								</tr>
 							{/each}
 						</tbody>

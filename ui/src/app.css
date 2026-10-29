@@ -204,6 +204,67 @@ th.num {
 	white-space: nowrap;
 }
 
+/* Tabellen mit Klasse „stack“ werden am Handy zu Karten: je Zeile eine Karte, die erste Zelle als
+   Titel, die übrigen als „Beschriftung links, Wert rechts“. Die Beschriftung steht je Zelle in
+   data-label (= Spaltenkopf); die Kopfzeile bleibt nur für Screenreader. */
+@media (max-width: 40rem) {
+	/* doppelt, damit es auch gegen `table:not(.x)` in Komponenten gewinnt */
+	.scroll table.stack.stack {
+		min-width: 0;
+	}
+
+	table.stack thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+	}
+
+	table.stack,
+	table.stack tbody,
+	table.stack tr {
+		display: block;
+	}
+
+	table.stack tr {
+		padding: 0.5rem 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.scroll table.stack td {
+		display: block;
+		padding: 0.125rem 0;
+		border: 0;
+		text-align: right;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.scroll table.stack td:first-child {
+		font-weight: 600;
+		text-align: left;
+	}
+
+	.scroll table.stack td[data-label] {
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+
+	table.stack td[data-label]::before {
+		content: attr(data-label);
+		flex: none;
+		color: var(--muted);
+		text-align: left;
+	}
+
+	.scroll table.stack td:empty {
+		display: none;
+	}
+}
+
 /* Kennzahlen als Liste „Beschriftung – Wert“; die Beschriftung nimmt höchstens die halbe Breite */
 .facts {
 	display: grid;

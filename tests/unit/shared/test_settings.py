@@ -80,12 +80,9 @@ def test_feed_in_months_and_values_validated(monthly: dict[str, float]) -> None:
 
 def test_warnings_list_missing_values() -> None:
     assert settings_warnings(RuntimeSettings()) == [
-        "Tarifbestandteil „Netznutzungsentgelt Arbeitspreis (Netzebene 7)“ hat noch keinen Wert.",
-        "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
-        "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
-        "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
-        "Tarifbestandteil „Leistungspreis (ElWG)“ hat noch keinen Wert.",
-        "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert.",
+        "6 Tarifbestandteile haben noch keinen Wert: „Netznutzungsentgelt Arbeitspreis "
+        "(Netzebene 7)“, „Netzverlustentgelt“, „Elektrizitätsabgabe“, "
+        "„Erneuerbaren-Förderbeitrag“, „Leistungspreis (ElWG)“, „Grundgebühr Netz“.",
         "Noch kein OeMAG-Monatswert eingetragen.",
     ]
 

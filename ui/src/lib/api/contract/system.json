@@ -385,9 +385,7 @@
     }
   ],
   "warnings": [
-    "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
-    "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
-    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
+    "3 Tarifbestandteile haben noch keinen Wert: „Netzverlustentgelt“, „Elektrizitätsabgabe“, „Erneuerbaren-Förderbeitrag“.",
     "Admin „admin“ hat keine Zwei-Faktor-Anmeldung (TOTP)."
   ]
 }

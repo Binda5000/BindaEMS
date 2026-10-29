@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import { settingsCurrent } from '$lib/testing/fixtures';
 import TariffView from './TariffView.svelte';
 
-it('zeigt Leistungspreis und Gebühr ohne Wert als fehlend', () => {
+it('zeigt Leistungspreis und Gebühr ohne Wert als „kein Wert“', () => {
 	const settings = settingsCurrent().settings;
 	// die Demo hat einen Leistungspreis und eine Grundgebühr mit Satz; hier fehlt der Satz: beim
 	// Leistungspreis gilt er erst ab 2027
@@ -18,10 +18,10 @@ it('zeigt Leistungspreis und Gebühr ohne Wert als fehlend', () => {
 	const power = screen.getByText('Leistungspreis (ElWG)').closest('tr');
 	const fee = screen.getByText('Grundgebühr Netz').closest('tr');
 	expect(power).toHaveTextContent('Leistungspreis');
-	expect(power).toHaveTextContent('fehlt');
+	expect(power).toHaveTextContent('kein Wert');
 	expect(power).toHaveTextContent('ab 01.01.2027');
 	expect(fee).toHaveTextContent('Gebühr');
-	expect(fee).toHaveTextContent('fehlt');
+	expect(fee).toHaveTextContent('kein Wert');
 });
 
 it('zeigt Werte mit Einheit', () => {
@@ -88,4 +88,16 @@ it('nennt die Art mit denselben Bezeichnungen wie der Editor', () => {
 	expect(screen.getByText('Grundgebühr Netz').closest('tr')).toHaveTextContent(
 		'Monatliche Gebühr (€/Monat)'
 	);
+});
+
+it('ist eine Kartentabelle: Klasse stack, jede Zelle außer der ersten mit data-label', () => {
+	render(TariffView, { settings: settingsCurrent().settings });
+	const table = screen.getByRole('table');
+	expect(table).toHaveClass('stack');
+	const heads = screen.getAllByRole('columnheader').map((cell) => cell.textContent);
+	for (const row of table.querySelectorAll('tbody tr')) {
+		const cells = [...row.querySelectorAll('td')];
+		expect(cells[0]).not.toHaveAttribute('data-label');
+		expect(cells.slice(1).map((cell) => cell.getAttribute('data-label'))).toEqual(heads.slice(1));
+	}
 });

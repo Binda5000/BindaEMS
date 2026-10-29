@@ -23,7 +23,7 @@
 <Card title="Abgleich mit den Zählern">
 	{#if checked && rows.length > 0}
 		<div class="scroll wide">
-			<table aria-label="Abgleich mit den Zählern">
+			<table class="stack" aria-label="Abgleich mit den Zählern">
 				<thead>
 					<tr>
 						<th scope="col">Größe</th>
@@ -36,9 +36,9 @@
 					{#each rows as row (row.signal)}
 						<tr>
 							<td>{row.label}</td>
-							<td class="num">{row.ledger}</td>
-							<td class="num">{row.counter}</td>
-							<td class="num">{row.deviation}</td>
+							<td class="num" data-label="Abrechnung">{row.ledger}</td>
+							<td class="num" data-label="Zähler">{row.counter}</td>
+							<td class="num" data-label="Abweichung">{row.deviation}</td>
 						</tr>
 					{/each}
 				</tbody>

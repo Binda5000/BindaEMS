@@ -261,6 +261,7 @@ describe('Karte Ladesessions', () => {
 		expect(row.vehicle).toBe('Tesla Model 3');
 		expect(row.energy).toBe(formatEnergy(18.63));
 		expect(row.split).toBe('11,7 / 6,9 / 0,0\u00a0kWh');
+		expect([row.pv_kwh, row.battery_kwh, row.grid_kwh]).toEqual([11.729, 6.901, 0]);
 		expect(row.cost).toBe(formatEur(0.458));
 	});
 

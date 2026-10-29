@@ -120,7 +120,7 @@ test('Statistik hat bei 360 px keine waagrechte Scrollleiste', async ({ page }) 
 	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
 	await expect(page.getByRole('cell', { name: 'Grundgebühren' })).toBeVisible();
 	await expect(page.locator('canvas').first()).toBeVisible();
-	// breite Tabellen scrollen in ihrer Karte, nicht die Seite
+	// breite Tabellen werden am Handy zu Karten: weder die Seite noch ihr Rahmen scrollt
 	const sessions = page.getByRole('table', { name: 'Ladesessions' });
 	await expect(sessions).toBeVisible();
 	const wide = await sessions.evaluate((table) => {
@@ -130,7 +130,7 @@ test('Statistik hat bei 360 px keine waagrechte Scrollleiste', async ({ page }) 
 			overflowX: getComputedStyle(box).overflowX
 		};
 	});
-	expect(wide).toEqual({ scrolls: true, overflowX: 'auto' });
+	expect(wide).toEqual({ scrolls: false, overflowX: 'auto' });
 	const overflow = await page.evaluate(
 		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
 	);

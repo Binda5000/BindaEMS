@@ -37,7 +37,7 @@
 </script>
 
 <div class="scroll">
-	<table>
+	<table class="stack">
 		<thead>
 			<tr>
 				<th scope="col">Bestandteil</th>
@@ -53,25 +53,25 @@
 				{@const value = valueText(component)}
 				<tr>
 					<td>{component.name}</td>
-					<td>
+					<td data-label="Quelle">
 						{#if isEnergy(component)}
 							{component.source === 'spot' ? 'Börse' : 'fest'}
 						{:else}
 							{KIND_LABEL[component.kind]}
 						{/if}
 					</td>
-					<td class="num">
+					<td class="num" data-label="Wert netto">
 						{#if isEnergy(component) && component.source === 'spot'}
 							{DASH}
 						{:else if value === null}
-							<span class="missing">fehlt</span>
+							<span class="missing">kein Wert</span>
 						{:else}
 							{value}
 						{/if}
 					</td>
-					<td>{component.vat ? 'ja' : 'nein'}</td>
-					<td>{validityText(component)}</td>
-					<td>
+					<td data-label="USt">{component.vat ? 'ja' : 'nein'}</td>
+					<td data-label="Gültig">{validityText(component)}</td>
+					<td data-label="Zeitfenster">
 						{#if windowsOf(component).length > 0}
 							{#each windowsOf(component) as window, index (index)}
 								<span class="window">{describeWindow(window)}</span>
@@ -110,13 +110,24 @@
 		color: var(--muted);
 	}
 
+	/* Etikett statt bloßem Wort: fällt in der Karte am Handy auf */
 	.missing {
-		color: var(--warn);
+		padding: 0 0.5rem;
+		border-radius: 999px;
+		background: var(--warn);
+		color: var(--bg);
 		font-weight: 600;
+		white-space: nowrap;
 	}
 
 	.window {
 		display: block;
 		white-space: nowrap;
+	}
+
+	@media (max-width: 40rem) {
+		.window {
+			white-space: normal;
+		}
 	}
 </style>

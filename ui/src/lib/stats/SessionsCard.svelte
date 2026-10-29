@@ -3,6 +3,7 @@
 	import type { ChargingSession } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
+	import SplitBar from '$lib/components/SplitBar.svelte';
 	import { SESSIONS_PAGE, sessionRows, sessionsCsv } from './view';
 
 	interface Props {
@@ -58,7 +59,7 @@
 			<p class="muted">Keine Ladesessions im Zeitraum.</p>
 		{:else}
 			<div class="scroll wide">
-				<table aria-label="Ladesessions">
+				<table class="stack" aria-label="Ladesessions">
 					<thead>
 						<tr>
 							<th scope="col">Beginn</th>
@@ -74,12 +75,17 @@
 						{#each rows.slice(0, shown) as row (row.id)}
 							<tr>
 								<td>{row.start}</td>
-								<td>{row.end}</td>
-								<td>{row.wallbox}</td>
-								<td>{row.vehicle}</td>
-								<td class="num">{row.energy}</td>
-								<td class="num">{row.split}</td>
-								<td class="num">{row.cost}</td>
+								<td data-label="Ende">{row.end}</td>
+								<td data-label="Wallbox">{row.wallbox}</td>
+								<td data-label="Auto">{row.vehicle}</td>
+								<td class="num" data-label="Energie">{row.energy}</td>
+								<td class="num" data-label="PV / Akku / Netz">
+									<span class="split">
+										<SplitBar pv={row.pv_kwh} battery={row.battery_kwh} grid={row.grid_kwh} />
+										<span>{row.split}</span>
+									</span>
+								</td>
+								<td class="num" data-label="Kosten">{row.cost}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -110,6 +116,14 @@
 
 	.sessions.stale {
 		opacity: 0.5;
+	}
+
+	/* Balken über dem Text; rechtsbündig wie die Zahlenspalten */
+	.split {
+		display: grid;
+		justify-items: end;
+		gap: 0.25rem;
+		width: 100%;
 	}
 
 	.limit,

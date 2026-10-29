@@ -63,7 +63,7 @@
 
 <h3>Wallboxen</h3>
 <div class="scroll">
-	<table>
+	<table class="stack">
 		<thead>
 			<tr>
 				<th scope="col">Name</th>
@@ -78,17 +78,21 @@
 			{#each Object.entries(limits.wallboxes) as [name, wallbox] (name)}
 				<tr>
 					<td>{wallboxName(name, wallbox)}</td>
-					<td>{name}</td>
-					<td>{wallbox.type === 'victron_evcs_ns' ? 'Victron EVCS NS' : 'Tesla Wall Connector'}</td>
-					<td>
+					<td data-label="Schlüssel">{name}</td>
+					<td data-label="Typ"
+						>{wallbox.type === 'victron_evcs_ns' ? 'Victron EVCS NS' : 'Tesla Wall Connector'}</td
+					>
+					<td data-label="Strom">
 						{#if wallbox.type === 'victron_evcs_ns'}
 							{wallbox.min_a}–{wallbox.max_a}{NBSP}A (sicher {wallbox.safe_a}{NBSP}A)
 						{:else}
 							bis {wallbox.max_a}{NBSP}A
 						{/if}
 					</td>
-					<td>{wallbox.phase_map.join(', ')}</td>
-					<td>{wallbox.type === 'victron_evcs_ns' ? yesNo(wallbox.live_allowed) : '–'}</td>
+					<td data-label="Phasen">{wallbox.phase_map.join(', ')}</td>
+					<td data-label="Live-Steuerung"
+						>{wallbox.type === 'victron_evcs_ns' ? yesNo(wallbox.live_allowed) : '–'}</td
+					>
 				</tr>
 			{/each}
 		</tbody>
@@ -97,7 +101,7 @@
 
 <h3>Fahrzeuge</h3>
 <div class="scroll">
-	<table>
+	<table class="stack">
 		<thead>
 			<tr>
 				<th scope="col">Fahrzeug</th>
@@ -112,13 +116,13 @@
 			{#each Object.entries(limits.vehicles) as [key, vehicle] (key)}
 				<tr>
 					<td>{vehicle.name}</td>
-					<td>{n(vehicle.usable_kwh, 'kWh', 1)}</td>
-					<td>{vehicle.phases}</td>
-					<td>{vehicle.min_a}–{vehicle.max_a}{NBSP}A</td>
-					<td>
+					<td data-label="Akku">{n(vehicle.usable_kwh, 'kWh', 1)}</td>
+					<td data-label="Phasen">{vehicle.phases}</td>
+					<td data-label="Strom">{vehicle.min_a}–{vehicle.max_a}{NBSP}A</td>
+					<td data-label="Wallbox">
 						{wallboxName(vehicle.default_wallbox, limits.wallboxes[vehicle.default_wallbox])}
 					</td>
-					<td>{yesNo(vehicle.live_allowed)}</td>
+					<td data-label="Live-Steuerung">{yesNo(vehicle.live_allowed)}</td>
 				</tr>
 			{/each}
 		</tbody>

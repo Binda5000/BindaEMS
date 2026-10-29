@@ -16,7 +16,7 @@
 {#if rows.length > 0}
 	<Card title="Monatsspitzen">
 		<div class="scroll wide">
-			<table aria-label="Monatsspitzen">
+			<table class="stack" aria-label="Monatsspitzen">
 				<thead>
 					<tr>
 						<th scope="col">Monat</th>
@@ -29,9 +29,9 @@
 					{#each rows as row (row.month)}
 						<tr>
 							<td>{row.month}</td>
-							<td class="num">{row.peak}</td>
-							<td>{row.at}</td>
-							<td class="num">{row.price}</td>
+							<td class="num" data-label="Spitze">{row.peak}</td>
+							<td data-label="Zeitpunkt">{row.at}</td>
+							<td class="num" data-label="Leistungspreis">{row.price}</td>
 						</tr>
 					{/each}
 				</tbody>

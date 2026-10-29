@@ -317,11 +317,13 @@ class RuntimeSettings(_Model):
 
 def settings_warnings(settings: RuntimeSettings) -> list[str]:
     """Hinweise auf noch fehlende Werte (Inbetriebnahme)."""
-    warnings = [
-        f"Tarifbestandteil „{component.name}“ hat noch keinen Wert."
-        for component in settings.tariff.components
-        if _missing_value(component)
-    ]
+    warnings: list[str] = []
+    missing = [c.name for c in settings.tariff.components if _missing_value(c)]
+    if len(missing) == 1:
+        warnings.append(f"Tarifbestandteil „{missing[0]}“ hat noch keinen Wert.")
+    elif missing:
+        names = ", ".join(f"„{name}“" for name in missing)
+        warnings.append(f"{len(missing)} Tarifbestandteile haben noch keinen Wert: {names}.")
     if not any(isinstance(c, PowerComponent) for c in settings.tariff.components):
         warnings.append("Kein Leistungspreis eingetragen; nach ElWG gilt er ab 1. 1. 2027.")
     if not settings.feed_in.monthly_ct:

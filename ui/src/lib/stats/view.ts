@@ -186,6 +186,10 @@ export interface SessionRow {
 	energy: string;
 	/** „PV / Akku / Netz“ in kWh */
 	split: string;
+	/** Rohwerte der Aufteilung (kWh) für den Balken */
+	pv_kwh: number;
+	battery_kwh: number;
+	grid_kwh: number;
 	cost: string;
 }
 
@@ -215,6 +219,9 @@ export function sessionRows(sessions: ChargingSession[]): SessionRow[] {
 		split: `${[session.pv_kwh, session.battery_kwh, session.grid_kwh]
 			.map((kwh) => formatNumber(kwh, 1))
 			.join(' / ')}${NBSP}kWh`,
+		pv_kwh: session.pv_kwh,
+		battery_kwh: session.battery_kwh,
+		grid_kwh: session.grid_kwh,
 		cost: formatEur(session.cost_eur)
 	}));
 }

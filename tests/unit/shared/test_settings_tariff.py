@@ -123,12 +123,14 @@ def test_missing_power_price_warns() -> None:
 
 
 def test_power_price_without_value_warns() -> None:
-    assert "Tarifbestandteil „Leistungspreis (ElWG)“ hat noch keinen Wert." in (
-        settings_warnings(RuntimeSettings())
+    warnings = settings_warnings(RuntimeSettings())
+    assert any(
+        w.startswith("6 Tarifbestandteile haben noch keinen Wert: ")
+        and "„Leistungspreis (ElWG)“" in w
+        and w.endswith("„Grundgebühr Netz“.")
+        for w in warnings
     )
-    assert "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert." in (
-        settings_warnings(RuntimeSettings())
-    )
+    assert not any(w.startswith("Tarifbestandteil „") for w in warnings)
 
 
 def test_feed_in_without_value_warns_and_spot_does_not() -> None:
