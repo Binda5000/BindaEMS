@@ -54,6 +54,11 @@
 		border-left: 1px solid var(--border);
 	}
 
+	/* der Rahmen der Gruppe schneidet den Fokusring sonst ab */
+	button:focus-visible {
+		outline-offset: -3px;
+	}
+
 	button.active {
 		background: var(--accent);
 		color: var(--accent-text);
