@@ -4,7 +4,7 @@ import type { Decision } from '$lib/api/schemas';
 import { latestDecisions } from '$lib/testing/fixtures';
 import WhyCard from './WhyCard.svelte';
 
-it('zeigt Name als Verweis und Text in derselben Zeile, rechts das Alter', () => {
+it('macht die ganze Zeile zum Verweis mit Name, Text, Alter und Etikett', () => {
 	const decision = latestDecisions().decisions[0];
 	if (!decision) throw new Error('Demo ohne Entscheidung');
 	const nowMs = Date.parse(decision.ts) + 3 * 60_000;
@@ -15,13 +15,15 @@ it('zeigt Name als Verweis und Text in derselben Zeile, rechts das Alter', () =>
 		nowMs
 	});
 	const item = screen.getByRole('listitem');
-	const link = within(item).getByRole('link', { name: 'Victron (ESS)' });
+	const link = within(item).getByRole('link');
 	expect(link).toHaveAttribute(
 		'href',
 		`/entscheidungen?actuator=${encodeURIComponent(decision.actuator)}`
 	);
-	expect(item).toHaveTextContent(decision.text);
-	expect(within(item).getByText('vor 3 min')).toBeInTheDocument();
+	expect(within(link).getByText('Victron (ESS)')).toBeInTheDocument();
+	expect(within(link).getByText('Überschuss: Netz-Sollwert 50 W')).toBeInTheDocument();
+	expect(within(link).getByText('vor 3 min')).toBeInTheDocument();
+	expect(within(link).getByText('Dry-Run')).toBeInTheDocument();
 });
 
 it('sagt, wenn es nichts zu erklären gibt', () => {
@@ -46,25 +48,34 @@ function renderItem(text: string): HTMLElement {
 	return screen.getByRole('listitem');
 }
 
-it('nennt den Namen nur einmal, wenn der Text mit ihm beginnt', () => {
+it('nennt den Namen nur einmal und zeigt Gründe und Befehl ohne Ergebnis', () => {
 	const item = renderItem('Victron (ESS) (Plan: Netzladen): Netz-Sollwert 6070 W – Dry-Run.');
 	expect(within(item).getAllByText(/Victron \(ESS\)/)).toHaveLength(1);
-	expect(within(item).getByRole('link', { name: 'Victron (ESS)' })).toBeInTheDocument();
-	expect(item).not.toHaveTextContent('·');
-	expect(item.querySelector('.line')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
-		'Victron (ESS) (Plan: Netzladen): Netz-Sollwert 6070 W – Dry-Run.'
-	);
+	expect(within(item).getByText('Plan: Netzladen: Netz-Sollwert 6070 W')).toBeInTheDocument();
+	expect(within(item).getByText('Dry-Run')).toBeInTheDocument();
 });
 
-it('setzt den Doppelpunkt ohne Leerzeichen an den Namen', () => {
+it('zeigt ohne Gründe nur den Befehl', () => {
 	const item = renderItem('Victron (ESS): Netz-Sollwert 0 W – gesendet.');
-	expect(item.querySelector('.line')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
-		'Victron (ESS): Netz-Sollwert 0 W – gesendet.'
-	);
+	expect(within(item).getByText('Netz-Sollwert 0 W')).toBeInTheDocument();
 });
 
-it('behält „Name · Text“, wenn der Text anders beginnt', () => {
+it('zeigt den ganzen Text, wenn er anders beginnt als der Name', () => {
 	const item = renderItem('EVCS alt: Laden aus.');
-	expect(within(item).getByRole('link', { name: 'Victron (ESS)' })).toBeInTheDocument();
-	expect(item).toHaveTextContent('Victron (ESS) · EVCS alt: Laden aus.');
+	expect(within(item).getByText('Victron (ESS)')).toBeInTheDocument();
+	expect(within(item).getByText('EVCS alt: Laden aus.')).toBeInTheDocument();
+});
+
+it('tönt das Etikett bei zurückgestellten und abgelehnten Entscheidungen mit der Warnfarbe', () => {
+	const decision = {
+		...withText('Tesla: Strom 7 A – zurückgestellt.'),
+		result: 'deferred' as const
+	};
+	render(WhyCard, { decisions: [decision], error: null, names: {}, nowMs: 0 });
+	expect(screen.getByText('zurückgestellt')).toHaveClass('warn');
+});
+
+it('lässt das Etikett bei Dry-Run gedämpft', () => {
+	const item = renderItem('Victron (ESS): Netz-Sollwert 0 W – Dry-Run, nicht gesendet.');
+	expect(within(item).getByText('Dry-Run')).not.toHaveClass('warn');
 });

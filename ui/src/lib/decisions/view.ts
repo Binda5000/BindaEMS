@@ -118,3 +118,38 @@ export function splitName(text: string, name: string): string | null {
 	if (rest.startsWith(' ')) return rest.trimStart();
 	return rest.startsWith('(') || rest.startsWith(':') ? rest : null;
 }
+
+/** Ergebnisse, die die Karte „Warum?“ mit der Warnfarbe zeigt */
+const WARN_RESULTS: readonly DecisionResult[] = [
+	'deferred',
+	'rejected',
+	'error',
+	'timeout',
+	'not_sent',
+	'foreign'
+];
+
+export function isWarnResult(result: DecisionResult): boolean {
+	return WARN_RESULTS.includes(result);
+}
+
+// `{ (Gründe)}: {Befehl} – {Ergebnis}.{ Befunde}` nach dem Namen (`decision_text` in shared/decisions.py)
+const BODY = /^(?:\((.+?)\))?: (.+?) – (.*)$/s;
+
+/**
+ * Der Satz einer Entscheidung für die Karte „Warum?“: ohne Namen am Anfang und ohne Ergebnis,
+ * `{Gründe}: {Befehl}` (ohne Gründe nur `{Befehl}`), Befunde dahinter mit „ · “. Folgt der Text
+ * dem Muster nicht, bleibt der Rest nach dem Namen (oder der ganze Text) unverändert.
+ */
+export function whyBody(text: string, name: string): string {
+	const rest = splitName(text, name);
+	if (rest === null) return text;
+	const match = BODY.exec(rest);
+	if (match === null) return rest;
+	const [, reasons, command, tail = ''] = match;
+	// Das Ergebnis endet am ersten Punkt mit Leerzeichen; was folgt, sind die Befunde
+	const end = tail.indexOf('. ');
+	const findings = end === -1 ? '' : tail.slice(end + 2).trim();
+	const body = reasons ? `${reasons}: ${command}` : (command ?? '');
+	return findings === '' ? body : `${body} · ${findings}`;
+}

@@ -69,18 +69,20 @@ it('Warum? nennt je Aktor die jüngste Entscheidung', async () => {
 	api.latestDecisions.mockResolvedValue({ decisions: decisions.slice(0, 2) });
 	render(Page);
 	const card = within(why());
-	// Der Eintrag zeigt Name und Text; der Name steht dabei nur einmal
+	// Der Eintrag zeigt Name, Gründe mit Befehl und das Ergebnis als Etikett
 	const items = await card.findAllByRole('listitem');
 	expect(items).toHaveLength(2);
-	const line = (index: number) => items[index]?.querySelector('.line')?.textContent;
-	expect(line(0)?.replace(/\s+/g, ' ').trim()).toBe(decisions[0]!.text);
-	expect(line(1)).toContain('Strom 8 A – Dry-Run, nicht gesendet.');
-	expect(card.queryByText(decisions[2]!.text)).not.toBeInTheDocument();
-	// Aktor mit Namen aus Health, Verweis auf die gefilterte Liste
-	expect(await card.findByRole('link', { name: 'Victron (ESS)' })).toHaveAttribute(
+	expect(items[0]).toHaveTextContent('Überschuss: Netz-Sollwert 50 W');
+	expect(items[1]).toHaveTextContent('Strom 8 A');
+	expect(items[1]).not.toHaveTextContent('nicht gesendet');
+	expect(within(items[0]!).getByText('Dry-Run')).toBeInTheDocument();
+	expect(card.queryByText(/zurückgestellt/)).not.toBeInTheDocument();
+	// Aktor mit Namen aus Health, die ganze Zeile verweist auf die gefilterte Liste
+	expect(within(items[0]!).getByRole('link')).toHaveAttribute(
 		'href',
 		'/entscheidungen?actuator=victron'
 	);
+	expect(await card.findByText('Victron (ESS)')).toBeInTheDocument();
 	expect(card.getByRole('link', { name: 'Alle Entscheidungen' })).toHaveAttribute(
 		'href',
 		'/entscheidungen'

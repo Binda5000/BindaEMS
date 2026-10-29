@@ -6,7 +6,8 @@ import {
 	filtersToParams,
 	rangeQuery,
 	resultLabel,
-	splitName
+	splitName,
+	whyBody
 } from './view';
 
 it('heute beginnt um 0 Uhr Wiener Zeit', () => {
@@ -131,4 +132,29 @@ it('splitName gibt den Rest nach dem Namen am Anfang zurück', () => {
 it('splitName gibt null, wenn der Text nicht mit dem Namen beginnt oder das Wort weitergeht', () => {
 	expect(splitName('EVCS alt: Laden aus.', 'EVCS „evcs“')).toBeNull();
 	expect(splitName('Victron2: x', 'Victron')).toBeNull();
+});
+
+it('whyBody macht aus dem Satz „Gründe: Befehl“ und lässt Ergebnis und Namen weg', () => {
+	expect(
+		whyBody(
+			'Victron (ESS) (Überschuss): Netz-Sollwert 50 W – Dry-Run, nicht gesendet.',
+			'Victron (ESS)'
+		)
+	).toBe('Überschuss: Netz-Sollwert 50 W');
+	expect(whyBody('EVCS „evcs“: Strom 8 A – Dry-Run, nicht gesendet.', 'EVCS „evcs“')).toBe(
+		'Strom 8 A'
+	);
+});
+
+it('whyBody hängt Befunde mit „ · “ an', () => {
+	expect(
+		whyBody('Tesla Model 3 (Min+PV): Strom 20 A – abgelehnt. Grenze 16 A.', 'Tesla Model 3')
+	).toBe('Min+PV: Strom 20 A · Grenze 16 A.');
+});
+
+it('whyBody lässt Texte unverändert, die nicht dem Muster folgen', () => {
+	expect(whyBody('Klimaanlage wurde von außen geändert', 'Klimaanlage')).toBe(
+		'wurde von außen geändert'
+	);
+	expect(whyBody('EVCS alt: Laden aus.', 'Victron (ESS)')).toBe('EVCS alt: Laden aus.');
 });

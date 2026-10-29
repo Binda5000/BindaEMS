@@ -4,7 +4,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { ageText } from '$lib/system/view';
-	import { decisionAgeS, splitName } from './view';
+	import { decisionAgeS, isWarnResult, resultLabel, whyBody } from './view';
 
 	interface Props {
 		/** je Aktor die jüngste Entscheidung der letzten 24 h; `undefined`: noch nicht geladen */
@@ -14,9 +14,6 @@
 		names: Record<string, string>;
 		nowMs: number;
 	}
-
-	/** Trenner zwischen Name und Text, wenn der Text nicht mit dem Namen beginnt */
-	const SEP = ' · ';
 
 	let { decisions, error, names, nowMs }: Props = $props();
 </script>
@@ -35,19 +32,17 @@
 		<ul>
 			{#each decisions as decision (decision.id)}
 				{@const name = names[decision.actuator] ?? decision.actuator}
-				{@const rest = splitName(decision.text, name)}
 				<li>
-					<span class="line">
-						<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">{name}</a
-						>{#if rest === null}
-							<span class="sep" aria-hidden="true">{SEP}</span><span class="text"
-								>{decision.text}</span
-							>
-						{:else}
-							<span class="text">{rest.startsWith(':') ? '' : ' '}{rest}</span>
-						{/if}
-					</span>
-					<span class="age muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
+					<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">
+						<span class="head">
+							<span class="name">{name}</span>
+							<span class="age muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
+						</span>
+						<span class="body">{whyBody(decision.text, name)}</span>
+						<span class="result" class:warn={isWarnResult(decision.result)}
+							>{resultLabel(decision.result)}</span
+						>
+					</a>
 				</li>
 			{/each}
 		</ul>
@@ -60,41 +55,70 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
-		display: grid;
-		gap: 0.25rem;
 	}
 
-	li {
+	/* Trennlinien statt Abstand */
+	li + li {
+		border-top: 1px solid var(--border);
+	}
+
+	/* die ganze Zeile ist der Verweis, mindestens 44 px hoch */
+	li a {
 		display: flex;
-		flex-wrap: wrap;
+		flex-direction: column;
+		gap: 0.125rem;
+		justify-content: center;
+		min-height: 2.75rem;
+		padding: 0.5rem 0;
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.head {
+		display: flex;
 		justify-content: space-between;
 		align-items: baseline;
 		gap: 0 0.75rem;
 	}
 
-	.line {
-		flex: 1 1 16rem;
+	.name {
 		min-width: 0;
+		font-weight: 600;
 		overflow-wrap: anywhere;
 	}
 
-	.line a {
-		font-weight: 600;
-	}
-
 	.age {
+		flex: none;
+		font-size: 0.8125rem;
 		white-space: nowrap;
 	}
 
-	/* Verweise mindestens 44 px hoch */
-	li a,
-	.more a {
-		display: inline-flex;
-		align-items: center;
-		min-height: 2.75rem;
+	.body {
+		overflow-wrap: anywhere;
+	}
+
+	/* Ergebnis als kleines, gedämpftes Etikett */
+	.result {
+		align-self: flex-start;
+		padding: 0 0.5rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 0.8125rem;
+	}
+
+	.result.warn {
+		border-color: var(--warn);
+		color: var(--warn);
 	}
 
 	.more {
 		margin: 0.5rem 0 0;
+	}
+
+	.more a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 2.75rem;
 	}
 </style>
