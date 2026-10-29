@@ -243,6 +243,19 @@ Standard-Lademodus: als YAML exportieren, `planning.car_battery_allowed` lösche
 `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“). Betrieb: `docs/betrieb.md`, „Akku und Spitzen“,
 „Akku-Sollwert“, und „Planung“, „Akku ins Auto, wenn übrig“.
 
+**Plan Diagramme und Plantexte ist umgesetzt** (`docs/superpowers/plans/2026-10-29-diagramme-und-plantexte.md`, 7 Tasks, Freigabe des
+Betreibers am 29.10.2026 für G1 bis G4, T1 bis T6 und R1, nicht R2): Branch `claude/project-thread-ja1izu`, **noch nicht auf `main`**, **nicht ausgerollt**.
+Die Diagramme haben die Legende in einer Zeile (blättert bei Platzmangel), „jetzt“ senkrecht an der Linie und Tooltips, die im Diagramm bleiben;
+das Akku-Diagramm des Zeitplans hat keine Beschriftung je Fenster mehr, dafür „Netzladen“ und „Halten“ in der Legende und im Tooltip die Zeile
+„Akku 14:15–14:30: Netzladen 6,7 kW“. „Warum?“ nennt den Aktor nur einmal. Die Erklärungen nennen für das Netzladen die erste Entladung, für die es sich
+lohnt, haben den neuen Code `AKKU_AN_UNTERGRENZE`, und `AUTO_WARTET_AUF_PV` steht nur einmal je Wartezeit und sagt „bis {um} Uhr“. Der Planer übernimmt
+„Ziel erreicht“ vom core (`PlanVehicle.reached`, kein Restladen mehr für ein solches Auto); `Plan.soc_start_pct` ist der Start-SOC, der erste Block des
+Ablaufs beginnt damit, und kleine SOC-Änderungen (0,05 bis unter 1 Prozentpunkt) zeigen eine Nachkommastelle. Beide neuen Felder sind optional, alte Pläne
+laden weiter. **Nur app und UI, nur `ems-app` neu**; der core, `shared`-Verträge zum core, die Datenbank und die Absicht bleiben gleich (**keine
+Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**). **Ausgerollt wird mit dem nächsten Sammel-Pull von `ems-app`; wann, entscheidet der
+Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image; es überspringt die Pläne mit den neuen Feldern als unlesbar (`extra="forbid"`, `code=plan_row_unreadable`), bis es einen neuen gerechnet hat (bei Bedarf „Neu planen“). Betrieb: `docs/betrieb.md`, „Zeitplan“,
+„Planung“ und „Erklärungen“; Spec: „Stand Plan Diagramme und Plantexte (29.10.2026)“ in 9.6.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2026,6 +2039,11 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Einstellungen vor dem Rollback als YAML exportieren, `planning.car_battery_allowed` löschen und danach importieren
       (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“; zusammen mit dem Rollback vor dem
       Standard-Lademodus beide Schlüssel löschen).
+  18. **Diagramme und Plantexte (Plan Diagramme und Plantexte) ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
+      keine Änderung an `config.yaml`**), mit dem nächsten Sammel-Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`);
+      wann, entscheidet der Betreiber. Danach auf **Übersicht** und **Zeitplan** am Handy ansehen: Legende in einer Zeile, „jetzt“ an der
+      Linie, im Akku-Diagramm die Zeile „Akku HH:MM–HH:MM: …“ im Tooltip; Pläne von vor dem Ausrollen zeigen die alten Sätze ohne „bis“
+      und den ersten Block mit dem SOC am Ende seines ersten Slots, bis der nächste Plan gerechnet ist (spätestens nach 15 min).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

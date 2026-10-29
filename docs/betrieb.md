@@ -1589,7 +1589,7 @@ gilt für diesen Browser.
 
 | Seite | Inhalt |
 |---|---|
-| Übersicht | von oben nach unten: die Hinweis-Leiste (ohne Hinweise unsichtbar; eine Zeile, eine lange Vorschau endet mit „…“; „Anzeigen“ klappt die Liste auf, dann entfällt die Vorschau), die Kachelreihe mit dem Hausakku (doppelt breit: SOC, kWh, Reserve, Netzladen, Planausblick „Plan: sinkt bis 25 % um 06:00“, nach Mitternacht „morgen um 06:00“), PV, Haus und Netz (je mit 2-h-Linie und Tageswert) und dem Strompreis (jetzt, nächste 3 h, günstigste Viertelstunde), die Karte „Woher kommt der Strom – wohin geht er?“ (zwei Balken, darunter die Verbraucher im Haus; ist ein Zweig unbekannt, steht er als „PV –“ in der Liste und die Summe der Seite als „–“) neben „Autos“ (je Auto „{Wallbox} · lädt …“, „{Wallbox} · angesteckt“, „nicht angesteckt“ oder „Stand unbekannt“, wenn der Bericht des core fehlt oder der Steckerstatus unbekannt ist), das Diagramm „Preise, PV und Akku heute/morgen“ (Preis je Viertelstunde im Tooltip, Akku-SOC und Akku-Plan) und „Warum?“ (unten). Das Alter steht als „vor 45 s“, „vor 12 min“, „vor 3 h“ oder „vor 2 Tagen“. Scheitert die Abfrage des Plans, des Verlaufs oder der Tageswerte, fehlt nur ihr Teil (Planzeile, Linie, Tageswert); das gilt bis zur ersten erfolgreichen Antwort, danach bleiben bei einem gescheiterten Neuabruf die letzten Werte stehen |
+| Übersicht | von oben nach unten: die Hinweis-Leiste (ohne Hinweise unsichtbar; eine Zeile, eine lange Vorschau endet mit „…“; „Anzeigen“ klappt die Liste auf, dann entfällt die Vorschau), die Kachelreihe mit dem Hausakku (doppelt breit: SOC, kWh, Reserve, Netzladen, Planausblick „Plan: sinkt bis 25 % um 06:00“, nach Mitternacht „morgen um 06:00“), PV, Haus und Netz (je mit 2-h-Linie und Tageswert) und dem Strompreis (jetzt, nächste 3 h, günstigste Viertelstunde), die Karte „Woher kommt der Strom – wohin geht er?“ (zwei Balken, darunter die Verbraucher im Haus; ist ein Zweig unbekannt, steht er als „PV –“ in der Liste und die Summe der Seite als „–“) neben „Autos“ (je Auto „{Wallbox} · lädt …“, „{Wallbox} · angesteckt“, „nicht angesteckt“ oder „Stand unbekannt“, wenn der Bericht des core fehlt oder der Steckerstatus unbekannt ist), das Diagramm „Preise, PV und Akku heute/morgen“ (Preis je Viertelstunde im Tooltip, Akku-SOC und Akku-Plan; Legende in einer Zeile, „jetzt“ senkrecht an der Linie, Tooltip im Diagramm) und „Warum?“ (unten). Das Alter steht als „vor 45 s“, „vor 12 min“, „vor 3 h“ oder „vor 2 Tagen“. Scheitert die Abfrage des Plans, des Verlaufs oder der Tageswerte, fehlt nur ihr Teil (Planzeile, Linie, Tageswert); das gilt bis zur ersten erfolgreichen Antwort, danach bleiben bei einem gescheiterten Neuabruf die letzten Werte stehen |
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; in „Geplant“ mit Ziel-SOC, Abfahrt und „Fertig um“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz, seit Plan 5c mit Klimaanlage die Karte „Vorheizen und Vorkühlen“; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (Profil und Modell) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Merkmale“ (Abschnitt „Lastmodell (Phase 5a)“), seit Plan 5c mit Klimaanlage die Karte „Wärmemodell“ (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“) |
@@ -1832,7 +1832,9 @@ Ohne Treffer steht dort „Keine Entscheidungen im Zeitraum.“. Die Seite sehen
 **Warum?** steht auf der **Übersicht**: je Aktor die jüngste Entscheidung der letzten 24 h mit ihrem
 Alter und ein Verweis „Alle Entscheidungen“; ein Klick auf den Aktor öffnet die Seite mit diesem
 Filter. Gab es nichts, steht dort „Keine Entscheidungen in den letzten 24 h.“. Die Begründung des
-Plan-Slots zeigt „Warum?“ noch nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“).
+Plan-Slots zeigt „Warum?“ noch nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“). Beginnt der Satz
+des core mit dem Namen des Aktors, steht der Name nur einmal (als Verweis, dahinter der Rest des
+Satzes); sonst trennt ein Punkt Name und Satz.
 
 ### Namen der Ladestationen
 
@@ -5462,10 +5464,19 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   Browsers zählt nicht: Eine falsche Uhr am Handy zeigt so nie dauerhaft „Plan abgelaufen“.
 - **Diagramme:** „Preise und Prognosen“ mit den Reihen „Bezugspreis“, „Bezugspreis geschätzt“,
   „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ und den Fenstern
-  „Netzladen“ und „Halten“.
+  „Netzladen“ und „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
+  auf dem Handy): Die Legende nennt „Netzladen“ und „Halten“, aber nur, was der Plan hat, und der
+  Tooltip eines Punktes nennt die Absicht des Slots, dessen Ergebnis der Punkt ist („Akku
+  14:15–14:30: Netzladen 6,7 kW“; der SOC gilt am Ende des Slots). Alle Diagramme haben die Legende in
+  einer Zeile (bei Platzmangel blätterst du mit den Pfeilen, sie bricht nicht um und überdeckt das
+  Diagramm nicht), die Beschriftung „jetzt“ senkrecht an der Linie und einen Tooltip, der im
+  Diagramm bleibt, auch am Rand eines schmalen Handys.
 - **Ablauf:** Aufeinanderfolgende Slots mit gleicher Absicht, gleicher Netzladeleistung und gleichem
   Hauptcode bilden einen Block: „HH:MM–HH:MM“, die Absicht („Eigenverbrauch“, „Halten“,
-  „Netzladen {kW} kW“), „SOC a → b %“ und der Satz der Erklärung (unten).
+  „Netzladen {kW} kW“), „SOC a → b %“ und der Satz der Erklärung (unten). Der erste Block beginnt
+  mit dem gemessenen SOC zu Beginn des Plans (`soc_start_pct`; bei einem alten Plan ohne das Feld mit
+  dem Ende des ersten Slots). Ändert sich der SOC im Block um mindestens 0,05 und weniger als einen
+  Prozentpunkt, steht eine Nachkommastelle („19,2 → 19,9 %“), sonst ganze Zahlen.
 - **Plan gegen Ist (heute):** die vergangenen Viertelstunden des Tages, Plan neben Abrechnung
   (unten, „Plan gegen Ist“).
 
@@ -5987,7 +5998,11 @@ Für Skripte, mit Sitzung und Rolle wie das UI:
   Plan ist `plan` leer. Je Slot nennt `ev_w` die geplante Ladeleistung je Auto (Schlüssel aus
   `config.yaml`, in W, nur Autos mit Leistung über 0); `plan.vehicles` fasst jedes geplante Auto
   zusammen (Ziel, Abfahrt, Ladestand zu Beginn und „angenommen“, geplante Energie, erwarteter
-  Ladestand, `finish_at` und `reachable`), leer ohne Auto im Modus „Geplant“.
+  Ladestand, `finish_at` und `reachable`), leer ohne Auto im Modus „Geplant“. Das Feld
+  `soc_start_pct` im Plan ist der gemessene Akku-SOC zu Beginn des Plans (bei alten Plänen `null`),
+  und `reached` je Auto sagt, dass der core das Ziel für erreicht hält (Health `planned.state`
+  „reached“, mit seiner Hysterese): Der Planer rechnet dann ohne Bedarf und das UI zeigt „Ziel
+  erreicht“, auch wenn der Ladestand knapp unter dem Ziel liegt (alte Pläne: `false`).
   Seit Plan 5c kommen je Slot `thermal_w`, `thermal_grid_w` und `thermal_steps` und im Plan
   `thermal` dazu (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“, „API für das Wärmemodell“). Seit
   Akku ins Auto nennt jeder Slot `ev_battery_w` (der Teil von `ev_w` aus dem Akku, je Auto in W, oft
