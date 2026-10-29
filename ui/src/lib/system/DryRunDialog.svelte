@@ -3,16 +3,19 @@
 	import { ApiError } from '$lib/api/errors';
 	import type { ActuatorMode, ControlReply, CoreHealth } from '$lib/api/schemas';
 	import Dialog from '$lib/components/Dialog.svelte';
+	import { actuatorDisplay } from '$lib/wallboxes';
 
 	interface Props {
 		open: boolean;
 		health: CoreHealth;
+		/** Schlüssel der Wallbox → Name aus den Einstellungen */
+		wallboxNames?: Record<string, string>;
 		onDone: (reply: ControlReply) => Promise<void>;
 	}
 
 	const DRY_RUN: ActuatorMode = 'dry_run';
 
-	let { open = $bindable(false), health, onDone }: Props = $props();
+	let { open = $bindable(false), health, wallboxNames = {}, onDone }: Props = $props();
 
 	/** Abgewählte Aktoren; jedes Öffnen beginnt mit allen gewählt. */
 	let skipped = $state<Record<string, boolean>>({});
@@ -62,7 +65,7 @@
 							disabled={busy}
 							onchange={(event) => (skipped[actuator.id] = !event.currentTarget.checked)}
 						/>
-						{actuator.label}
+						{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
 					</label>
 				</li>
 			{/each}

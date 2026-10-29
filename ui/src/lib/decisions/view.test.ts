@@ -6,6 +6,7 @@ import {
 	filtersToParams,
 	rangeQuery,
 	resultLabel,
+	displayText,
 	splitName,
 	whyBody
 } from './view';
@@ -132,6 +133,18 @@ it('splitName gibt den Rest nach dem Namen am Anfang zurück', () => {
 it('splitName gibt null, wenn der Text nicht mit dem Namen beginnt oder das Wort weitergeht', () => {
 	expect(splitName('EVCS alt: Laden aus.', 'EVCS „evcs“')).toBeNull();
 	expect(splitName('Victron2: x', 'Victron')).toBeNull();
+});
+
+it('displayText ersetzt die Bezeichnung des core am Anfang durch den Anzeigenamen', () => {
+	const text = 'EVCS „evcs“ (PV-Überschuss): Strom 8 A – Dry-Run, nicht gesendet.';
+	expect(displayText(text, 'EVCS „evcs“', 'EVCS')).toBe(
+		'EVCS (PV-Überschuss): Strom 8 A – Dry-Run, nicht gesendet.'
+	);
+	expect(displayText('EVCS „evcs“ wurde geändert', 'EVCS „evcs“', 'EVCS')).toBe(
+		'EVCS wurde geändert'
+	);
+	expect(displayText('EVCS alt: Laden aus.', 'EVCS „evcs“', 'EVCS')).toBe('EVCS alt: Laden aus.');
+	expect(displayText(text, 'EVCS „evcs“', 'EVCS „evcs“')).toBe(text);
 });
 
 it('whyBody macht aus dem Satz „Gründe: Befehl“ und lässt Ergebnis und Namen weg', () => {

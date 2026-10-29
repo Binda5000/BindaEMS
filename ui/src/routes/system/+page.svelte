@@ -33,6 +33,7 @@
 		watchdogVersionText
 	} from '$lib/system/view';
 	import { todayVienna } from '$lib/time';
+	import { actuatorDisplay } from '$lib/wallboxes';
 
 	const uid = $props.id();
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
@@ -294,6 +295,7 @@
 			intent={control.data?.intent ?? null}
 			{operate}
 			{admin}
+			{wallboxNames}
 			onChanged={changed}
 		/>
 	{/if}
@@ -315,7 +317,9 @@
 						{#each health.actuators as actuator (actuator.id)}
 							{@const notes = actuatorNotes(actuator)}
 							<tr>
-								<td id="{uid}-{actuator.id}">{actuator.label}</td>
+								<td id="{uid}-{actuator.id}">
+									{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
+								</td>
 								<td>{actuatorModeLabel(actuator.requested)}</td>
 								<td>{actuatorModeLabel(actuator.effective)}</td>
 								<td>{actuator.live_allowed ? 'ja' : 'nein'}</td>

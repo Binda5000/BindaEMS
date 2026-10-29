@@ -13,11 +13,13 @@
 		intent: Intent | null;
 		operate: boolean;
 		admin: boolean;
+		/** Schlüssel der Wallbox → Name aus den Einstellungen */
+		wallboxNames?: Record<string, string>;
 		/** lädt Absicht und Health nach einer Änderung neu */
 		onChanged: () => Promise<void>;
 	}
 
-	let { health, intent, operate, admin, onChanged }: Props = $props();
+	let { health, intent, operate, admin, wallboxNames = {}, onChanged }: Props = $props();
 
 	let busy = $state(false);
 	let notice = $state<{ level: 'error' | 'warning'; text: string } | null>(null);
@@ -93,9 +95,9 @@
 </Card>
 
 {#if admin}
-	<LiveDialog bind:open={liveOpen} {health} {intent} onDone={changed} />
+	<LiveDialog bind:open={liveOpen} {health} {intent} {wallboxNames} onDone={changed} />
 
-	<DryRunDialog bind:open={dryRunOpen} {health} onDone={changed} />
+	<DryRunDialog bind:open={dryRunOpen} {health} {wallboxNames} onDone={changed} />
 {/if}
 
 <style>

@@ -129,6 +129,14 @@ it('nennt die Wallbox in der Selbstprüfung beim Namen aus den Einstellungen', a
 	expect(await within(checks).findByText('EVCS-Modus: EVCS')).toBeInTheDocument();
 });
 
+it('nennt die Wallbox in der Aktorenliste beim Namen aus den Einstellungen', async () => {
+	api.limits.mockResolvedValue(limits());
+	showSystem(system());
+	const table = card('Aktoren');
+	expect(await within(table).findByRole('cell', { name: 'EVCS' })).toBeInTheDocument();
+	expect(within(table).queryByText(EVCS)).toBeNull();
+});
+
 // --- Betriebszustand, Aktoren und Watchdog -------------------------------------------------
 
 /** Rendert die Seite mit dieser Antwort von /api/system; die übrigen Abfragen bleiben offen. */
@@ -650,6 +658,21 @@ it('Begrenzung durch den core steht nach dem Schalten als Warnung an der Karte',
 	expect(
 		await within(card('Bedienung')).findByText('Victron (ESS) bleibt Dry-Run: nicht freigegeben.')
 	).toBeInTheDocument();
+});
+
+it('Live- und Dry-Run-Dialog nennen die Wallbox beim Namen aus den Einstellungen', async () => {
+	api.limits.mockResolvedValue(limits());
+	show({
+		actuators: actuatorsWith({ 'wallbox.evcs': { requested: 'live', effective: 'live' } })
+	});
+	await waitFor(() => expect(api.limits).toHaveBeenCalled());
+	const live = await openLive();
+	expect(await live.findByRole('checkbox', { name: 'EVCS' })).toBeInTheDocument();
+	expect(live.queryByRole('checkbox', { name: EVCS })).toBeNull();
+	await fireEvent.click(live.getByRole('button', { name: 'Abbrechen' }));
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	await fireEvent.click(await screen.findByRole('button', { name: 'Auf Dry-Run…' }));
+	expect(await within(dialog()).findByRole('checkbox', { name: 'EVCS' })).toBeInTheDocument();
 });
 
 it('Admin stellt die gewählten Live-Aktoren nach Bestätigung auf Dry-Run', async () => {

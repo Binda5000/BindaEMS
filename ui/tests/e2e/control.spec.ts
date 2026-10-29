@@ -372,7 +372,7 @@ test('Entscheidungen filtern', async ({ page }) => {
 
 	await page.getByLabel('Ergebnis').selectOption({ label: 'von außen geändert' });
 	await expect(rows).toHaveCount(1);
-	await expect(rows.first()).toContainText('EVCS „evcs“ (Änderung von außen)');
+	await expect(rows.first()).toContainText('EVCS (Änderung von außen)');
 	await expect(rows.first()).toContainText('von außen geändert: erwartet 8 A');
 	await expect(rows.first().getByRole('cell').last()).toHaveText('von außen geändert');
 });

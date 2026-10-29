@@ -23,10 +23,13 @@ export function wallboxDisplay(key: string, names: Record<string, string>): stri
 /** `wallbox.<key>`: Aktor-ID und Reihen-ID im Verlauf */
 const WALLBOX_ID = /^wallbox\.([^.]+)$/;
 
-/** Anzeigename eines Aktors: für `wallbox.<key>` der Name der Wallbox, sonst die Bezeichnung des core */
+/**
+ * Anzeigename eines Aktors: für `wallbox.<key>` der Name der Wallbox (solange die Namen noch
+ * fehlen, die Bezeichnung des core), sonst die Bezeichnung des core
+ */
 export function actuatorDisplay(id: string, label: string, names: Record<string, string>): string {
 	const key = WALLBOX_ID.exec(id)?.[1];
-	return key === undefined ? label : wallboxDisplay(key, names);
+	return key === undefined || !(key in names) ? label : wallboxDisplay(key, names);
 }
 
 /** Bezeichnung einer Reihe im Verlauf: `wallbox.<key>` mit dem Namen der Wallbox, sofern bekannt */

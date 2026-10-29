@@ -8,9 +8,10 @@ it('wallboxDisplay nimmt den Namen aus den Einstellungen, sonst den Schlüssel',
 	expect(wallboxDisplay('neu', names)).toBe('neu');
 });
 
-it('actuatorDisplay ersetzt nur die Bezeichnung einer Wallbox', () => {
+it('actuatorDisplay ersetzt nur die Bezeichnung einer bekannten Wallbox', () => {
 	expect(actuatorDisplay('wallbox.evcs', 'EVCS „evcs“', names)).toBe('EVCS');
-	expect(actuatorDisplay('wallbox.neu', 'Neu „neu“', names)).toBe('neu');
+	expect(actuatorDisplay('wallbox.neu', 'Neu „neu“', names)).toBe('Neu „neu“');
+	expect(actuatorDisplay('wallbox.evcs', 'EVCS „evcs“', {})).toBe('EVCS „evcs“');
 	expect(actuatorDisplay('victron', 'Victron (ESS)', names)).toBe('Victron (ESS)');
 	expect(actuatorDisplay('vehicle.tesla', 'Tesla Model 3', names)).toBe('Tesla Model 3');
 });

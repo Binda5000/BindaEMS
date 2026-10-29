@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { page } from '$app/state';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { decisions, system } from '$lib/testing/fixtures';
+import { decisions, limits, system } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
 const { api, goto } = vi.hoisted(() => ({
-	api: { system: vi.fn(), decisions: vi.fn() },
+	api: { system: vi.fn(), decisions: vi.fn(), limits: vi.fn() },
 	goto: vi.fn()
 }));
 vi.mock('$lib/api/endpoints', async (original) => ({
@@ -28,6 +28,7 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	navigate('');
 	api.system.mockResolvedValue(system());
+	api.limits.mockReturnValue(new Promise(() => {}));
 });
 
 /** Letzte Abfrage von `api.decisions` */
@@ -129,6 +130,18 @@ it('zeigt Spalten, Aktornamen und Ergebnisse', async () => {
 	const tesla = screen.getByText(/Min\+PV, Überschuss/).closest('tr')!;
 	expect(within(tesla).getByText('Tesla Model 3', { selector: 'td' })).toBeInTheDocument();
 	expect(within(tesla).getByText('zurückgestellt')).toBeInTheDocument();
+});
+
+it('nennt die Wallbox in Auswahl, Spalte und Text beim Namen aus den Einstellungen', async () => {
+	api.limits.mockResolvedValue(limits());
+	api.decisions.mockResolvedValue(decisions());
+	render(Page);
+	expect(await screen.findByRole('option', { name: 'EVCS' })).toBeInTheDocument();
+	const row = (await screen.findAllByText(/^EVCS \(PV-Überschuss, Überschuss\)/))[0]!.closest(
+		'tr'
+	)!;
+	expect(within(row).getByText('EVCS', { selector: 'td' })).toBeInTheDocument();
+	expect(screen.queryByText(/„evcs“/)).not.toBeInTheDocument();
 });
 
 it('meldet einen Fehler des Servers', async () => {

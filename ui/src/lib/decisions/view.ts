@@ -119,6 +119,13 @@ export function splitName(text: string, name: string): string | null {
 	return rest.startsWith('(') || rest.startsWith(':') ? rest : null;
 }
 
+/** Der Text mit `display` statt der Bezeichnung `label` des core am Anfang; sonst unverändert */
+export function displayText(text: string, label: string, display: string): string {
+	return display === label || splitName(text, label) === null
+		? text
+		: display + text.slice(label.length);
+}
+
 /** Ergebnisse, die die Karte „Warum?“ mit der Warnfarbe zeigt */
 const WARN_RESULTS: readonly DecisionResult[] = [
 	'deferred',

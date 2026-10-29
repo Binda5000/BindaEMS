@@ -7,6 +7,7 @@
 	import type { Decision, DecisionQuery } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
+	import { wallboxLabels } from '$lib/dashboard/flow';
 	import DecisionTable from '$lib/decisions/DecisionTable.svelte';
 	import {
 		RANGES,
@@ -20,6 +21,7 @@
 	} from '$lib/decisions/view';
 	import { Resource } from '$lib/resource.svelte';
 	import { todayVienna } from '$lib/time';
+	import { actuatorDisplay } from '$lib/wallboxes';
 
 	// Die Filter stehen in der URL (Links aus „Warum?“ öffnen gefiltert): Die Seite liest sie beim
 	// Öffnen und bei jeder Änderung der URL von außen (Navigation, Zurück/Vor) und schreibt jede
@@ -38,7 +40,12 @@
 	let written: string[] = []; // Suchteile, die die Seite selbst in die URL schrieb und noch erwartet
 
 	const system = new Resource((o) => api.system(o), { retryMs: 30_000 });
-	onMount(() => system.start());
+	const limits = new Resource((o) => api.limits(o), { retryMs: 30_000 });
+	onMount(() => {
+		const stops = [system.start(), limits.start()];
+		return () => stops.forEach((stop) => stop());
+	});
+	const wallboxNames = $derived(wallboxLabels(limits.data));
 
 	const actuators = $derived(system.data?.core.health?.actuators ?? []);
 	const names = $derived(Object.fromEntries(actuators.map((a) => [a.id, a.label])));
@@ -173,7 +180,9 @@
 				<select bind:value={filters.actuator}>
 					<option value="">Alle</option>
 					{#each actuatorOptions as actuator (actuator.id)}
-						<option value={actuator.id}>{actuator.label}</option>
+						<option value={actuator.id}>
+							{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
+						</option>
 					{/each}
 				</select>
 			</label>
@@ -209,7 +218,7 @@
 				<p class="muted" role="status">Lädt …</p>
 			{/if}
 			<div class="rows" class:reloading={loading}>
-				<DecisionTable decisions={rows} {names} />
+				<DecisionTable decisions={rows} {names} {wallboxNames} />
 			</div>
 		{:else if loading}
 			<p class="muted">Lädt …</p>

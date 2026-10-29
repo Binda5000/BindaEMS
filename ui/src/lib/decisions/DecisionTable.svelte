@@ -1,15 +1,18 @@
 <script lang="ts">
 	import type { Decision } from '$lib/api/schemas';
 	import { formatDateTime } from '$lib/format';
-	import { resultLabel } from './view';
+	import { actuatorDisplay } from '$lib/wallboxes';
+	import { displayText, resultLabel } from './view';
 
 	interface Props {
 		decisions: Decision[];
-		/** Aktor-ID → Anzeigename */
+		/** Aktor-ID → Bezeichnung des core */
 		names: Record<string, string>;
+		/** Schlüssel der Wallbox → Name aus den Einstellungen */
+		wallboxNames?: Record<string, string>;
 	}
 
-	let { decisions, names }: Props = $props();
+	let { decisions, names, wallboxNames = {} }: Props = $props();
 </script>
 
 <div class="scroll">
@@ -24,10 +27,12 @@
 		</thead>
 		<tbody>
 			{#each decisions as decision (decision.id)}
+				{@const label = names[decision.actuator] ?? decision.actuator}
+				{@const display = actuatorDisplay(decision.actuator, label, wallboxNames)}
 				<tr>
 					<td class="time">{formatDateTime(decision.ts)}</td>
-					<td>{names[decision.actuator] ?? decision.actuator}</td>
-					<td class="text">{decision.text}</td>
+					<td>{display}</td>
+					<td class="text">{displayText(decision.text, label, display)}</td>
 					<td>{resultLabel(decision.result)}</td>
 				</tr>
 			{/each}
