@@ -1,4 +1,4 @@
-// Fahrverhalten auf der Seite „Laden“: Vorschlag, „Übernehmen“ und der Schalter der Automatik. Die
+// Fahrverhalten auf der Seite „Laden“: Vorschlag, „Vorschlag übernehmen“ und der Schalter der Automatik. Die
 // Demo-Welt (tests/ui_world.py) hat den Tesla mit Pendelprofil und pausierter Automatik, den e-Golf
 // mit wenig Daten und ausgeschalteter Automatik. Das Demo-Backend ist ein gemeinsamer Zustand, auf
 // dem control.spec.ts den Tesla (Geplant, 60 %, 17:30) voraussetzt: Die Bedienungen hier werden
@@ -64,7 +64,9 @@ test('Bedienen sieht Vorschlag, Zustand und Schalter der Automatik', async ({ pa
 	await expect(egolf.getByText('Automatik aus.')).toBeVisible();
 });
 
-test('Übernehmen sendet Ziel, Abfahrt und Abfahrtstag des Vorschlags', async ({ page }) => {
+test('„Vorschlag übernehmen“ sendet Ziel, Abfahrt und Abfahrtstag des Vorschlags', async ({
+	page
+}) => {
 	await login(page, 'bedienen');
 	let sent: unknown = null;
 	await page.route('**/api/control/vehicles/egolf/target', async (route) => {
@@ -75,7 +77,7 @@ test('Übernehmen sendet Ziel, Abfahrt und Abfahrtstag des Vorschlags', async ({
 	const egolf = carCard(page, 'e-Golf');
 	await egolf
 		.getByRole('group', { name: 'Vorschlag' })
-		.getByRole('button', { name: 'Übernehmen' })
+		.getByRole('button', { name: 'Vorschlag übernehmen' })
 		.click();
 	await expect
 		.poll(() => sent)
@@ -111,12 +113,14 @@ test('Der Schalter der Automatik sendet „an“ für den e-Golf', async ({ page
 	await expect.poll(() => sent).toEqual({ on: true });
 });
 
-test('Gast sieht den Vorschlag, aber Schalter gesperrt und ohne Übernehmen', async ({ page }) => {
+test('Gast sieht den Vorschlag, aber Schalter gesperrt und ohne „Vorschlag übernehmen“', async ({
+	page
+}) => {
 	await login(page, 'gast');
 	await page.goto('/laden');
 	const egolf = carCard(page, 'e-Golf');
 	await expect(egolf.getByText('Vorschlag: Mo 08:00 · 50 % (Konfidenz niedrig)')).toBeVisible();
 	await expect(egolf.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' })).toBeDisabled();
 	await expect(egolf.getByText('Automatik aus.')).toBeVisible();
-	await expect(egolf.getByRole('button', { name: 'Übernehmen' })).toHaveCount(0);
+	await expect(egolf.getByRole('button', { name: 'Vorschlag übernehmen' })).toHaveCount(0);
 });

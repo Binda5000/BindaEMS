@@ -22,7 +22,10 @@
 		nowLimitText,
 		parseTarget,
 		reasonLabel,
+		SOC_ASSUMED_NOTE,
 		SOC_ESTIMATED_NOTE,
+		staleSocNote,
+		vehicleStatus,
 		type BoostInfo,
 		type CardNotice,
 		type NowLimitSetup,
@@ -112,9 +115,31 @@
 	// Ein geschätzter Ladestand (Health) sagt mehr als der zuletzt gemessene Wert des Signals
 	const estimated = $derived(vehicle.soc_source === 'estimated' && vehicle.soc_pct !== null);
 
-	// „geschätzt“ steht neben dem Ladestand: der Zusatz von „Geplant“ wiederholt es nicht
+	// Ein Ladestand, der da, aber zu alt ist (der Plan rechnet ab 0 %)
+	const staleSoc = $derived(!estimated && soc?.quality === 'stale' ? (soc.pct ?? null) : null);
+	const socPct = $derived(estimated ? vehicle.soc_pct : (soc?.pct ?? null));
+	const status = $derived(vehicleStatus(vehicle));
+	const subtitle = $derived(
+		[
+			wallbox === null ? null : `${wallbox} (${assignmentLabel(vehicle.assignment)})`,
+			modeLabel(vehicle.mode)
+		]
+			.filter((part) => part !== null)
+			.join(' · ')
+	);
+	const barLabel = $derived(
+		`Ladestand ${formatSoc(socPct)}` +
+			(mode === 'planned' ? `, Ziel ${formatSoc(goal.target_soc_pct)}` : '')
+	);
+
+	// „geschätzt“ steht neben dem Ladestand: der Zusatz von „Geplant“ wiederholt es nicht. Bei einem
+	// veralteten Ladestand erklärt `staleSocNote` den Satz „Ladestand unbekannt …“
 	const notes = $derived(
-		(planned?.notes ?? []).filter((note) => !(estimated && note === SOC_ESTIMATED_NOTE))
+		(planned?.notes ?? [])
+			.filter((note) => !(estimated && note === SOC_ESTIMATED_NOTE))
+			.map((note) =>
+				note === SOC_ASSUMED_NOTE && staleSoc !== null ? staleSocNote(staleSoc) : note
+			)
 	);
 
 	const costText = $derived(boostCostText(boostCost, vehicle.id));
@@ -125,6 +150,14 @@
 			? nowLimitText(nowLimit.max_a, nowLimit.range, nowLimit.voltage)
 			: null
 	);
+
+	const showPlan = $derived(
+		planned !== null || nowLimitLine !== null || sessionLine !== null || boost.active
+	);
+
+	function clampPct(pct: number): number {
+		return Math.min(100, Math.max(0, pct));
+	}
 
 	function yesNo(value: boolean | null): string {
 		return value === null ? DASH : value ? 'ja' : 'nein';
@@ -176,88 +209,55 @@
 	}
 </script>
 
-<Card title={vehicle.name}>
-	<dl class="facts">
-		<dt>Ladestand</dt>
-		<dd>
-			{#if estimated}
-				{formatSoc(vehicle.soc_pct)} <span class="muted">geschätzt</span>
-			{:else}
-				{formatSoc(soc?.pct)}
-				{#if soc?.quality === 'stale'}<span class="muted">veraltet</span>{/if}
-			{/if}
-		</dd>
-		<dt>Modus</dt>
-		<dd>{modeLabel(vehicle.mode)}</dd>
-		{#if boost.active && boost.until !== null}
-			<dt>Boost</dt>
-			<dd>
-				<span>bis {formatTime(boost.until)}</span>
-				{#if boost.pending}<span class="muted">wartet auf Anstecken</span>{/if}
-			</dd>
-		{/if}
-		<dt>Wallbox</dt>
-		<dd>
-			{#if wallbox === null}
-				{DASH}
-			{:else}
-				{wallbox} ({assignmentLabel(vehicle.assignment)})
-			{/if}
-		</dd>
-		<dt>Angesteckt</dt>
-		<dd>{yesNo(vehicle.plugged)}</dd>
-		<dt>Lädt</dt>
-		<dd>{yesNo(vehicle.charging)}</dd>
-		<dt>Grenze</dt>
-		<dd>{vehicle.limit_a === null ? DASH : `${formatNumber(vehicle.limit_a, 0)}${NBSP}A`}</dd>
-		<dt>Letzter Grund</dt>
-		<dd>{reasonLabel(vehicle.reason)}</dd>
-		{#if vehicle.commands_hour !== null}
-			<dt>Befehle letzte Stunde</dt>
-			<dd>{vehicle.commands_hour}</dd>
-		{/if}
-	</dl>
-	{#if planned}
-		<div class="planned">
-			{#if planned.text !== null}<p>{planned.text}</p>{/if}
-			{#each notes as note (note)}<p class="muted">{note}</p>{/each}
-		</div>
-	{/if}
-	{#if nowLimitLine !== null}
-		<p class="session">{nowLimitLine}</p>
-	{/if}
-	{#if sessionLine !== null}
-		<p class="session">{sessionLine}</p>
-	{/if}
+<Card title={vehicle.name} {subtitle}>
+	{#snippet aside()}
+		<span class="status" class:ok={status.tone === 'ok'}>{status.text}</span>
+	{/snippet}
 
-	{#if driving}
-		<div class="driving" role="group" aria-label="Vorschlag">
-			{#if driving.next_trip}
-				<p>{suggestionText(driving.next_trip)}</p>
-				{#if operate}
-					<button type="button" disabled={busy} onclick={adopt}>Übernehmen</button>
+	<div class="soc">
+		<p class="soc-line">
+			<span class="soc-value">
+				{#if estimated}
+					<strong>{formatSoc(vehicle.soc_pct)}</strong> <span class="tag">geschätzt</span>
+				{:else}
+					<strong>{formatSoc(soc?.pct)}</strong>
+					{#if soc?.quality === 'stale'}<span class="tag warn">veraltet</span>{/if}
 				{/if}
-			{:else}
-				<p class="muted">Kein Vorschlag (zu wenig Daten).</p>
+			</span>
+			{#if mode === 'planned'}
+				<span class="target-label">Ziel {formatSoc(goal.target_soc_pct)}</span>
 			{/if}
-		</div>
-		<div class="automation">
-			<label class="switch">
-				<input
-					type="checkbox"
-					role="switch"
-					checked={driving.automation.enabled}
-					disabled={!operate || busy}
-					aria-describedby="{uid}-automation"
-					onchange={toggleAutomation}
-				/>
-				Ziel und Abfahrt automatisch
-			</label>
-			<p id="{uid}-automation" class="muted">{driving.automation.text}</p>
+		</p>
+		{#if socPct !== null}
+			<div class="bar" role="img" aria-label={barLabel}>
+				<div class="fill" style:width="{clampPct(socPct)}%"></div>
+				{#if mode === 'planned'}
+					<div class="mark" style:left="{clampPct(goal.target_soc_pct)}%"></div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+
+	{#if showPlan}
+		<div class="plan">
+			{#if boost.active && boost.until !== null}
+				<p>
+					<strong>Boost</strong>
+					<span>bis {formatTime(boost.until)}</span>
+					{#if boost.pending}<span class="muted">wartet auf Anstecken</span>{/if}
+				</p>
+			{/if}
+			{#if planned}
+				{#if planned.text !== null}<p>{planned.text}</p>{/if}
+				{#each notes as note (note)}<p class="muted">{note}</p>{/each}
+			{/if}
+			{#if nowLimitLine !== null}<p>{nowLimitLine}</p>{/if}
+			{#if sessionLine !== null}<p>{sessionLine}</p>{/if}
 		</div>
 	{/if}
 
 	{#if operate}
+		<h3>Laden einstellen</h3>
 		<div class="controls">
 			<label>
 				Lademodus
@@ -308,7 +308,9 @@
 						{/if}
 					</div>
 				</div>
-				<button type="button" disabled={busy} onclick={applyTarget}>Übernehmen</button>
+				<button type="button" class="primary save" disabled={busy} onclick={applyTarget}>
+					Ziel speichern
+				</button>
 			</div>
 			{#if problem}
 				<div class="note"><Notice level="error">{problem}</Notice></div>
@@ -319,18 +321,157 @@
 		{/if}
 	{/if}
 
+	{#if driving}
+		<h3>Vorschlag aus dem Fahrverhalten</h3>
+		<div class="driving" role="group" aria-label="Vorschlag">
+			{#if driving.next_trip}
+				<p>{suggestionText(driving.next_trip)}</p>
+				{#if operate}
+					<button type="button" disabled={busy} onclick={adopt}>Vorschlag übernehmen</button>
+				{/if}
+			{:else}
+				<p class="muted">Kein Vorschlag (zu wenig Daten).</p>
+			{/if}
+		</div>
+		<div class="automation">
+			<label class="switch">
+				<input
+					type="checkbox"
+					role="switch"
+					checked={driving.automation.enabled}
+					disabled={!operate || busy}
+					aria-describedby="{uid}-automation"
+					onchange={toggleAutomation}
+				/>
+				Ziel und Abfahrt automatisch
+			</label>
+			<p id="{uid}-automation" class="muted">{driving.automation.text}</p>
+		</div>
+	{/if}
+
+	<details>
+		<summary>Details</summary>
+		<dl class="facts">
+			<dt>Angesteckt</dt>
+			<dd>{yesNo(vehicle.plugged)}</dd>
+			<dt>Lädt</dt>
+			<dd>{yesNo(vehicle.charging)}</dd>
+			<dt>Grenze</dt>
+			<dd>{vehicle.limit_a === null ? DASH : `${formatNumber(vehicle.limit_a, 0)}${NBSP}A`}</dd>
+			<dt>Letzter Grund</dt>
+			<dd>{reasonLabel(vehicle.reason)}</dd>
+			{#if vehicle.commands_hour !== null}
+				<dt>Befehle letzte Stunde</dt>
+				<dd>{vehicle.commands_hour}</dd>
+			{/if}
+		</dl>
+	</details>
+
 	{#if notice}
 		<div class="note"><Notice level={notice.level}>{notice.text}</Notice></div>
 	{/if}
 </Card>
 
 <style>
+	.status {
+		flex: none;
+		padding: 0.125rem 0.625rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 0.8125rem;
+		white-space: nowrap;
+	}
+
+	.status.ok {
+		border-color: var(--ok);
+		color: var(--ok);
+	}
+
+	.soc-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.25rem 0.75rem;
+		margin: 0 0 0.375rem;
+	}
+
+	.soc-value strong {
+		font-size: 1.75rem;
+		font-weight: 700;
+		line-height: 1.2;
+	}
+
+	.target-label {
+		color: var(--muted);
+	}
+
+	.tag {
+		display: inline-block;
+		padding: 0 0.5rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 0.8125rem;
+		vertical-align: middle;
+	}
+
+	.tag.warn {
+		border-color: var(--warn);
+	}
+
+	.bar {
+		position: relative;
+		height: 0.625rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--surface-2);
+		overflow: hidden;
+	}
+
+	.fill {
+		height: 100%;
+		background: var(--accent);
+	}
+
+	.mark {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 2px;
+		margin-left: -1px;
+		background: var(--text);
+	}
+
+	.plan {
+		margin-top: 0.75rem;
+		padding: 0.625rem 0.75rem;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--surface-2);
+		overflow-wrap: anywhere;
+	}
+
+	.plan p {
+		margin: 0;
+	}
+
+	.plan p + p {
+		margin-top: 0.25rem;
+	}
+
+	h3 {
+		margin: 1.25rem 0 0.5rem;
+		font-size: 0.9375rem;
+		font-weight: 600;
+	}
+
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: end;
 		gap: 0.75rem;
-		margin-top: 1rem;
 	}
 
 	label {
@@ -345,11 +486,17 @@
 	}
 
 	.target {
-		display: flex;
-		flex-wrap: wrap;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, auto));
+		justify-content: start;
 		align-items: end;
-		gap: 0.75rem;
+		gap: 0.75rem 1rem;
 		margin-top: 0.75rem;
+	}
+
+	.save {
+		grid-column: 1 / -1;
+		width: 100%;
 	}
 
 	.field {
@@ -377,20 +524,6 @@
 		max-width: 100%;
 	}
 
-	.planned {
-		margin: 0.75rem 0 0;
-		overflow-wrap: anywhere;
-	}
-
-	.planned p {
-		margin: 0;
-	}
-
-	.session {
-		margin: 0.75rem 0 0;
-		overflow-wrap: anywhere;
-	}
-
 	.cost {
 		margin: 0.5rem 0 0;
 	}
@@ -400,7 +533,6 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.5rem 0.75rem;
-		margin-top: 0.75rem;
 	}
 
 	.driving p,
@@ -423,6 +555,15 @@
 
 	.switch input {
 		flex: none;
+	}
+
+	details {
+		margin-top: 1rem;
+		border-top: 1px solid var(--border);
+	}
+
+	details .facts {
+		padding-bottom: 0.5rem;
 	}
 
 	.note {

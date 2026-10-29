@@ -25,9 +25,12 @@ import {
 	plannedLine,
 	priorityOrder,
 	reasonLabel,
+	SOC_ASSUMED_NOTE,
 	sessionLine,
+	staleSocNote,
 	supportHint,
-	surplusLabel
+	surplusLabel,
+	vehicleStatus
 } from './view';
 
 const names = { tesla: 'Tesla Model 3', egolf: 'e-Golf' };
@@ -792,5 +795,37 @@ describe('Höchststrom in „Sofort“', () => {
 		const { twc } = limits().wallboxes;
 		expect(guestCurrentRange({ twc: twc! })).toBeNull();
 		expect(guestCurrentRange({})).toBeNull();
+	});
+});
+
+describe('Fahrzeugkarte', () => {
+	const NB = '\u00a0';
+	it('benennt den Stand des Fahrzeugs im Etikett', () => {
+		expect(vehicleStatus(vehicle({ plugged: true, charging: true }))).toEqual({
+			text: 'lädt',
+			tone: 'ok'
+		});
+		expect(vehicleStatus(vehicle({ plugged: true, charging: false }))).toEqual({
+			text: 'angesteckt',
+			tone: 'muted'
+		});
+		expect(vehicleStatus(vehicle({ plugged: false, charging: false }))).toEqual({
+			text: 'nicht angesteckt',
+			tone: 'muted'
+		});
+		expect(vehicleStatus(vehicle({ plugged: null }))).toEqual({
+			text: 'Stand unbekannt',
+			tone: 'muted'
+		});
+	});
+
+	it('erklärt einen veralteten Ladestand', () => {
+		expect(staleSocNote(70)).toBe(
+			`Der letzte Ladestand (70${NB}%) ist zu alt. Der Plan rechnet deshalb vorsichtig ab 0${NB}%.`
+		);
+	});
+
+	it('hält den Satz zum unbekannten Ladestand als Konstante', () => {
+		expect(SOC_ASSUMED_NOTE).toBe(`Ladestand unbekannt, gerechnet ab 0${NB}%.`);
 	});
 });

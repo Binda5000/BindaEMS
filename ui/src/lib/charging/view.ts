@@ -445,6 +445,15 @@ function dayTime(iso: string, now: Date): string {
 	return ms === null ? DASH : formatDayTime(new Date(ms), now);
 }
 
+/** Etikett oben rechts an der Fahrzeugkarte: lädt, angesteckt, nicht angesteckt oder unbekannt */
+export function vehicleStatus(vehicle: VehicleHealth): { text: string; tone: 'ok' | 'muted' } {
+	if (vehicle.plugged === null) return { text: 'Stand unbekannt', tone: 'muted' };
+	if (!vehicle.plugged) return { text: 'nicht angesteckt', tone: 'muted' };
+	return vehicle.charging === true
+		? { text: 'lädt', tone: 'ok' }
+		: { text: 'angesteckt', tone: 'muted' };
+}
+
 /** Die Zeile, die zuerst zutrifft (Texte von Plan 4b); `null`, wenn keine zutrifft */
 function plannedText(
 	vehicle: VehicleHealth | null,
@@ -478,6 +487,14 @@ function plannedText(
 
 /** Zusatz zu „Geplant“, wenn der Ladestand geschätzt ist */
 export const SOC_ESTIMATED_NOTE = 'Ladestand geschätzt';
+
+/** Zusatz zu „Geplant“, wenn es keinen Ladestand gibt und der Plan bei 0 % beginnt */
+export const SOC_ASSUMED_NOTE = `Ladestand unbekannt, gerechnet ab ${formatSoc(0)}.`;
+
+/** Ersetzt `SOC_ASSUMED_NOTE`, wenn der Ladestand da, aber zu alt ist: der Plan rechnet ab 0 % */
+export function staleSocNote(pct: number): string {
+	return `Der letzte Ladestand (${formatSoc(pct)}) ist zu alt. Der Plan rechnet deshalb vorsichtig ab ${formatSoc(0)}.`;
+}
 
 /** So weit dürfen das wirksame Ziel in Health und im Plan auseinanderliegen (Rundung) in % */
 const TARGET_TOLERANCE_PCT = 0.05;
@@ -515,7 +532,7 @@ export function plannedLine({
 	const source = vehicle?.soc_source ?? (car?.soc_assumed ? 'assumed' : null);
 	const notes: string[] = [];
 	if (source === 'estimated') notes.push(SOC_ESTIMATED_NOTE);
-	if (source === 'assumed') notes.push(`Ladestand unbekannt, gerechnet ab ${formatSoc(0)}.`);
+	if (source === 'assumed') notes.push(SOC_ASSUMED_NOTE);
 	// ohne Angleichen rechnen Plan und core mit dem Limit als Ziel: das wirksame Ziel liegt darunter
 	const limit = vehicle?.charge_limit_pct ?? car?.limit_pct ?? null;
 	const effective = vehicle?.planned?.target_soc_pct ?? car?.target_soc_pct ?? null;

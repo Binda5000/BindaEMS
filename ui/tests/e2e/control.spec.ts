@@ -153,18 +153,18 @@ async function restoreNowLimits(page: Page): Promise<void> {
 	}
 }
 
-/** Setzt Ziel-SOC und Abfahrt des Tesla über „Übernehmen“ und wartet auf die Antwort */
+/** Setzt Ziel-SOC und Abfahrt des Tesla über „Ziel speichern“ und wartet auf die Antwort */
 async function setTarget(page: Page, soc: string, departure: string): Promise<void> {
 	const card = teslaCard(page);
-	// Die Karte hat daneben die Taste „Übernehmen“ des Vorschlags (Gruppe „Vorschlag“)
+	// Die Karte hat daneben die Taste „Vorschlag übernehmen“ (Gruppe „Vorschlag“)
 	const manual = card.getByRole('group', { name: 'Von Hand' });
-	await expect(manual.getByRole('button', { name: 'Übernehmen' })).toBeEnabled();
+	await expect(manual.getByRole('button', { name: 'Ziel speichern' })).toBeEnabled();
 	await card.getByRole('spinbutton', { name: 'Ziel-SOC' }).fill(soc);
 	await card.getByLabel('Abfahrt', { exact: true }).fill(departure);
 	const reply = page.waitForResponse((response) =>
 		response.url().endsWith('/api/control/vehicles/tesla/target')
 	);
-	await manual.getByRole('button', { name: 'Übernehmen' }).click();
+	await manual.getByRole('button', { name: 'Ziel speichern' }).click();
 	expect((await reply).status()).toBe(200);
 }
 
@@ -180,7 +180,12 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 	await expect(modeSelect(page)).toHaveValue('planned');
 	const card = teslaCard(page);
 	await expect(card.getByText(/^Fertig um \d\d:\d\d · Ziel 60\s%\sbis 17:30$/)).toBeVisible();
-	await expect(card.getByText(/^Ladestand unbekannt, gerechnet ab 0\s%\.$/)).toBeVisible();
+	// der Ladestand (70 %) ist veraltet: die Karte erklärt, dass der Plan ab 0 % rechnet
+	await expect(
+		card.getByText(
+			/^Der letzte Ladestand \(70\s%\) ist zu alt\. Der Plan rechnet deshalb vorsichtig ab 0\s%\.$/
+		)
+	).toBeVisible();
 	let passed = false;
 	try {
 		await setTarget(page, '80', '07:00');
@@ -218,7 +223,7 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 
 /**
  * Stellt den Demo-Stand des Tesla (60 %, 17:30) über die API zurück, mit Zeitlimit. Über die Karte
- * hinge das, wenn sie schon 60 %/17:30 zeigt („Übernehmen“ schickt dann nichts), und der Fehler
+ * hinge das, wenn sie schon 60 %/17:30 zeigt („Ziel speichern“ schickt dann nichts), und der Fehler
  * des Tests ginge in einer Zeitüberschreitung unter. `strict`: Der Test ist bis hier gelungen,
  * ein Fehler beim Zurückstellen lässt ihn scheitern; sonst steht er nur im Log, damit der Fehler
  * des Tests nicht von ihm ersetzt wird.

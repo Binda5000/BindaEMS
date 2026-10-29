@@ -175,7 +175,9 @@ it('zeigt die Fakten eines Fahrzeugs', async () => {
 	);
 	const tesla = within(card('Tesla Model 3'));
 	const fact = (label: string) => tesla.getByText(label, { selector: 'dt' }).nextElementSibling;
-	expect(fact('Wallbox')).toHaveTextContent('Garage (erkannt)');
+	expect(tesla.getByText('Garage (erkannt) · Geplant')).toBeInTheDocument();
+	// die übrigen Fakten stehen in „Details“
+	expect(tesla.getByText('Grenze').closest('details')).not.toHaveAttribute('open');
 	expect(fact('Angesteckt')).toHaveTextContent('ja');
 	expect(fact('Lädt')).toHaveTextContent('ja');
 	expect(fact('Grenze')).toHaveTextContent('10 A');
@@ -279,7 +281,7 @@ it('Lesen sieht keine Bedienelemente, aber die Werte', async () => {
 	expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
 	expect(screen.queryByRole('button')).not.toBeInTheDocument();
 	const tesla = within(card('Tesla Model 3'));
-	expect(tesla.getByText('Boost', { selector: 'dd' })).toBeInTheDocument();
+	expect(tesla.getByText('Boost', { selector: 'strong' })).toBeInTheDocument();
 	expect(tesla.getByText('bis 14:00')).toBeInTheDocument();
 	expect(screen.getByText(/Regelbetrieb ist aus\./)).toBeInTheDocument();
 });
@@ -425,7 +427,7 @@ it('nennt ohne gültigen Plan die späteste Startzeit aus Health', async () => {
 	).toBeInTheDocument();
 });
 
-it('Bedienen übernimmt Ziel-SOC und Abfahrt', async () => {
+it('Bedienen speichert Ziel-SOC und Abfahrt', async () => {
 	await show();
 	api.setTarget.mockResolvedValue(reply());
 	const tesla = card('Tesla Model 3');
@@ -433,11 +435,11 @@ it('Bedienen übernimmt Ziel-SOC und Abfahrt', async () => {
 		target: { value: '80' }
 	});
 	await fireEvent.input(within(tesla).getByLabelText('Abfahrt'), { target: { value: '07:00' } });
-	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Ziel speichern' }));
 	await waitFor(() => expect(api.setTarget).toHaveBeenCalledWith('tesla', 80, '07:00'));
 });
 
-it('nach Übernehmen holt die Seite den Plan neu', async () => {
+it('nach „Ziel speichern“ holt die Seite den Plan neu', async () => {
 	// Der neue Plan kommt erst nach dem nächsten Health; die Zeile „Fertig um …“ soll nicht bis
 	// zur nächsten Minute das alte Ziel zeigen.
 	await show();
@@ -448,7 +450,7 @@ it('nach Übernehmen holt die Seite den Plan neu', async () => {
 	await fireEvent.input(within(tesla).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
 		target: { value: '80' }
 	});
-	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Ziel speichern' }));
 	await vi.advanceTimersByTimeAsync(1900);
 	expect(api.plan).toHaveBeenCalledTimes(loaded);
 	await vi.advanceTimersByTimeAsync(200);
@@ -456,7 +458,7 @@ it('nach Übernehmen holt die Seite den Plan neu', async () => {
 });
 
 it('zeigt „Fertig um“ erst wieder, wenn der Plan zu Ziel und Abfahrt in Health passt', async () => {
-	// Health meldet nach „Übernehmen“ das neue Ziel 80 %, der Plan rechnet noch mit 60 %: Die
+	// Health meldet nach „Ziel speichern“ das neue Ziel 80 %, der Plan rechnet noch mit 60 %: Die
 	// Zeile „Fertig um …“ fehlt, bis die app neu geplant hat; die Seite fragt höchstens alle 10 s.
 	vi.useFakeTimers({ toFake: ['Date'] });
 	vi.setSystemTime(new Date('2026-10-09T08:00:00Z')); // der Tag des Demo-Plans
@@ -475,7 +477,7 @@ it('zeigt „Fertig um“ erst wieder, wenn der Plan zu Ziel und Abfahrt in Heal
 	await fireEvent.input(within(tesla).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
 		target: { value: '80' }
 	});
-	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Ziel speichern' }));
 	await vi.advanceTimersByTimeAsync(2100);
 	expect(within(tesla).queryByText(/Fertig um/)).toBeNull();
 	expect(within(tesla).getByText('Ladestand unbekannt, gerechnet ab 0 %.')).toBeInTheDocument();
@@ -503,7 +505,7 @@ it('zeigt die Ablehnung des Ziels an der Karte', async () => {
 	);
 	const tesla = card('Tesla Model 3');
 	await fireEvent.input(within(tesla).getByLabelText('Abfahrt'), { target: { value: '07:00' } });
-	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Ziel speichern' }));
 	expect(
 		await within(tesla).findByText('Ziel-SOC „101“ liegt außerhalb von 20–100 %.')
 	).toBeInTheDocument();
@@ -955,25 +957,29 @@ describe('Fahrverhalten an den Fahrzeugkarten', () => {
 		expect(within(card('e-Golf')).getByText('Automatik aus.')).toBeVisible();
 	});
 
-	it('Übernehmen sendet Ziel, Abfahrt und Abfahrtstag und lädt das Fahrverhalten neu', async () => {
+	it('„Vorschlag übernehmen“ sendet Ziel, Abfahrt und Abfahrtstag und lädt das Fahrverhalten neu', async () => {
 		api.drivingStatus.mockResolvedValue(driving());
 		await show();
 		api.setTarget.mockResolvedValue(reply());
 		await waitFor(() => expect(suggestion('e-Golf').getByRole('button')).toBeEnabled());
 		const loaded = api.drivingStatus.mock.calls.length;
-		await fireEvent.click(suggestion('e-Golf').getByRole('button', { name: 'Übernehmen' }));
+		await fireEvent.click(
+			suggestion('e-Golf').getByRole('button', { name: 'Vorschlag übernehmen' })
+		);
 		await waitFor(() =>
 			expect(api.setTarget).toHaveBeenCalledWith('egolf', 50, '08:00', '2026-10-12')
 		);
 		await waitFor(() => expect(api.drivingStatus.mock.calls.length).toBeGreaterThan(loaded));
 	});
 
-	it('Übernehmen am Tesla in „Geplant“ ist vom Übernehmen der Felder getrennt', async () => {
+	it('„Vorschlag übernehmen“ am Tesla in „Geplant“ ist von „Ziel speichern“ getrennt', async () => {
 		api.drivingStatus.mockResolvedValue(driving());
 		await show();
 		api.setTarget.mockResolvedValue(reply());
 		await waitFor(() => expect(suggestion('Tesla Model 3').getByRole('button')).toBeEnabled());
-		await fireEvent.click(suggestion('Tesla Model 3').getByRole('button', { name: 'Übernehmen' }));
+		await fireEvent.click(
+			suggestion('Tesla Model 3').getByRole('button', { name: 'Vorschlag übernehmen' })
+		);
 		await waitFor(() =>
 			expect(api.setTarget).toHaveBeenCalledWith('tesla', 50, '07:15', '2026-10-12')
 		);
@@ -1043,7 +1049,9 @@ describe('Fahrverhalten an den Fahrzeugkarten', () => {
 			name: 'Ziel und Abfahrt automatisch'
 		});
 		expect(toggle).toBeDisabled();
-		expect(within(card('e-Golf')).queryByRole('button', { name: 'Übernehmen' })).toBeNull();
+		expect(
+			within(card('e-Golf')).queryByRole('button', { name: 'Vorschlag übernehmen' })
+		).toBeNull();
 		expect(within(card('e-Golf')).getByText('Automatik aus.')).toBeVisible();
 	});
 

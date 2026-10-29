@@ -82,17 +82,17 @@ it('zeigt in „Geplant“ die Zeile und ihre Zusätze, auch Lesenden', () => {
 	expect(screen.queryByRole('spinbutton', { name: 'Ziel-SOC' })).toBeNull();
 });
 
-it('bietet in „Geplant“ Ziel-SOC, Abfahrt und „Übernehmen“', () => {
+it('bietet in „Geplant“ Ziel-SOC, Abfahrt und „Ziel speichern“', () => {
 	show({ mode: 'planned', planned: PLANNED });
 	expect(screen.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue(60);
 	expect(screen.getByLabelText('Abfahrt')).toHaveValue('17:30');
-	expect(screen.getByRole('button', { name: 'Übernehmen' })).toBeEnabled();
+	expect(screen.getByRole('button', { name: 'Ziel speichern' })).toBeEnabled();
 });
 
 it('zeigt die Felder nur in „Geplant“', () => {
 	show({ mode: 'pv' });
 	expect(screen.queryByRole('spinbutton', { name: 'Ziel-SOC' })).toBeNull();
-	expect(screen.queryByRole('button', { name: 'Übernehmen' })).toBeNull();
+	expect(screen.queryByRole('button', { name: 'Ziel speichern' })).toBeNull();
 });
 
 it('schickt nur die geänderten Felder', async () => {
@@ -100,16 +100,16 @@ it('schickt nur die geänderten Felder', async () => {
 	await fireEvent.input(screen.getByRole('spinbutton', { name: 'Ziel-SOC' }), {
 		target: { value: '80' }
 	});
-	await fireEvent.click(screen.getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Ziel speichern' }));
 	expect(props.onTarget).toHaveBeenCalledWith(80, null);
 	await fireEvent.input(screen.getByLabelText('Abfahrt'), { target: { value: '07:00' } });
-	await fireEvent.click(screen.getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Ziel speichern' }));
 	expect(props.onTarget).toHaveBeenLastCalledWith(null, '07:00');
 });
 
 it('schickt nichts ohne Änderung', async () => {
 	const props = show({ mode: 'planned', planned: PLANNED });
-	await fireEvent.click(screen.getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Ziel speichern' }));
 	expect(props.onTarget).not.toHaveBeenCalled();
 });
 
@@ -118,7 +118,7 @@ it('meldet ein ungültiges Ziel mit dem Satz der app und schickt nichts', async 
 	await fireEvent.input(screen.getByRole('spinbutton', { name: 'Ziel-SOC' }), {
 		target: { value: '101' }
 	});
-	await fireEvent.click(screen.getByRole('button', { name: 'Übernehmen' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Ziel speichern' }));
 	expect(screen.getByText('Ziel-SOC „101“ liegt außerhalb von 20–100 %.')).toBeVisible();
 	expect(props.onTarget).not.toHaveBeenCalled();
 });
@@ -169,13 +169,15 @@ describe('Fahrverhalten', () => {
 		).toBeVisible();
 	});
 
-	it('Übernehmen sendet Ziel, Abfahrt und Abfahrtstag des Vorschlags', async () => {
+	it('„Vorschlag übernehmen“ sendet Ziel, Abfahrt und Abfahrtstag des Vorschlags', async () => {
 		const props = show({ driving: tesla() });
-		await fireEvent.click(within(suggestion()).getByRole('button', { name: 'Übernehmen' }));
+		await fireEvent.click(
+			within(suggestion()).getByRole('button', { name: 'Vorschlag übernehmen' })
+		);
 		expect(props.onAdopt).toHaveBeenCalledWith(50, '07:15', '2026-10-12');
 	});
 
-	it('Übernehmen sendet ohne Ziel nur Abfahrt und Abfahrtstag', async () => {
+	it('„Vorschlag übernehmen“ sendet ohne Ziel nur Abfahrt und Abfahrtstag', async () => {
 		const car = tesla();
 		const props = show({
 			driving: {
@@ -184,7 +186,9 @@ describe('Fahrverhalten', () => {
 			}
 		});
 		expect(within(suggestion()).getByText('Vorschlag: Mo 07:15 (Konfidenz hoch)')).toBeVisible();
-		await fireEvent.click(within(suggestion()).getByRole('button', { name: 'Übernehmen' }));
+		await fireEvent.click(
+			within(suggestion()).getByRole('button', { name: 'Vorschlag übernehmen' })
+		);
 		expect(props.onAdopt).toHaveBeenCalledWith(null, '07:15', '2026-10-12');
 	});
 
@@ -197,7 +201,7 @@ describe('Fahrverhalten', () => {
 	it('zeigt Lesenden den Vorschlag ohne Taste', () => {
 		show({ driving: tesla(), operate: false });
 		expect(screen.getByText('Vorschlag: Mo 07:15 · 50 % (Konfidenz hoch)')).toBeVisible();
-		expect(screen.queryByRole('button', { name: 'Übernehmen' })).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Vorschlag übernehmen' })).toBeNull();
 	});
 
 	it('zeigt ohne Antwort zum Fahrverhalten weder Vorschlag noch Schalter', () => {
@@ -260,7 +264,7 @@ describe('Fahrverhalten', () => {
 		await fireEvent.input(within(manual).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
 			target: { value: '80' }
 		});
-		await fireEvent.click(within(manual).getByRole('button', { name: 'Übernehmen' }));
+		await fireEvent.click(within(manual).getByRole('button', { name: 'Ziel speichern' }));
 		expect(props.onTarget).toHaveBeenCalledWith(80, null);
 		expect(props.onAdopt).not.toHaveBeenCalled();
 	});
@@ -386,5 +390,96 @@ describe('Höchststrom in „Sofort“', () => {
 			notice: { level: 'error', text: 'Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.' }
 		});
 		expect(screen.getByText('Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.')).toBeVisible();
+	});
+});
+
+describe('Aufbau der Karte', () => {
+	const NB = ' ';
+	const ASSUMED_PLANNED = {
+		text: `Fertig um 16:30 · Ziel 60${NB}% bis 17:30`,
+		notes: [`Ladestand unbekannt, gerechnet ab 0${NB}%.`]
+	};
+	const STALE = { id: 'tesla', label: 'Tesla Model 3', pct: 70, quality: 'stale' as const };
+
+	function vehicleWith(changes: Partial<Props['vehicle']>): Props['vehicle'] {
+		return { ...system().core.health!.vehicles.find((item) => item.id === 'tesla')!, ...changes };
+	}
+
+	it('hat genau die beiden eindeutigen Knöpfe und keinen „Übernehmen“', () => {
+		show({ mode: 'planned', planned: PLANNED, driving: drivingVehicle('tesla') });
+		expect(screen.getByRole('button', { name: 'Ziel speichern' })).toBeEnabled();
+		expect(screen.getByRole('button', { name: 'Vorschlag übernehmen' })).toBeEnabled();
+		expect(screen.queryByRole('button', { name: 'Übernehmen' })).toBeNull();
+	});
+
+	it('nennt Wallbox, Zuordnung und Modus unter dem Namen', () => {
+		show({ vehicle: vehicleWith({ mode: 'planned', assignment: 'detected' }) });
+		expect(screen.getByText('Garage (erkannt) · Geplant')).toBeVisible();
+	});
+
+	it('zeigt den Stand des Fahrzeugs als Etikett', () => {
+		show({ vehicle: vehicleWith({ plugged: true, charging: true }) });
+		expect(screen.getByText('lädt')).toBeVisible();
+		cleanup();
+		show({ vehicle: vehicleWith({ plugged: false, charging: false }) });
+		expect(screen.getByText('nicht angesteckt')).toBeVisible();
+		cleanup();
+		show({ vehicle: vehicleWith({ plugged: null, charging: null }) });
+		expect(screen.getByText('Stand unbekannt')).toBeVisible();
+	});
+
+	it('hält Angesteckt, Lädt, Grenze, Grund und Befehle in einem geschlossenen „Details“', () => {
+		show({
+			vehicle: vehicleWith({ plugged: true, charging: false, limit_a: 10, commands_hour: 3 })
+		});
+		const details = screen.getByText('Grenze').closest('details');
+		expect(details).not.toBeNull();
+		expect(details).not.toHaveAttribute('open');
+		expect(within(details!).getByText('Details')).toBeInTheDocument();
+		for (const label of [
+			'Angesteckt',
+			'Lädt',
+			'Grenze',
+			'Letzter Grund',
+			'Befehle letzte Stunde'
+		]) {
+			expect(within(details!).getByText(label)).toBeInTheDocument();
+		}
+	});
+
+	it('zeigt den Ladestand groß mit Balken und Ziel in „Geplant“', () => {
+		show({
+			mode: 'planned',
+			planned: PLANNED,
+			soc: { id: 'tesla', label: 'Tesla Model 3', pct: 45, quality: 'ok' }
+		});
+		expect(screen.getByText('45 %')).toBeVisible();
+		expect(screen.getByText('Ziel 60 %')).toBeVisible();
+		expect(
+			screen.getByRole('img', { name: `Ladestand 45${NB}%, Ziel 60${NB}%` })
+		).toBeInTheDocument();
+	});
+
+	it('zeigt außerhalb von „Geplant“ kein Ziel im Balken', () => {
+		show({ mode: 'pv', soc: { id: 'tesla', label: 'Tesla Model 3', pct: 45, quality: 'ok' } });
+		expect(screen.queryByText(/^Ziel /)).toBeNull();
+		expect(screen.getByRole('img', { name: `Ladestand 45${NB}%` })).toBeInTheDocument();
+	});
+
+	it('erklärt einen veralteten Ladestand statt „Ladestand unbekannt …“', () => {
+		show({ mode: 'planned', planned: ASSUMED_PLANNED, soc: STALE });
+		expect(screen.getByText('veraltet')).toBeVisible();
+		expect(
+			screen.getByText(
+				'Der letzte Ladestand (70 %) ist zu alt. Der Plan rechnet deshalb vorsichtig ab 0 %.'
+			)
+		).toBeVisible();
+		expect(screen.queryByText(/Ladestand unbekannt/)).toBeNull();
+	});
+
+	it('behält ohne Ladestand den Satz „Ladestand unbekannt, gerechnet ab 0 %.“', () => {
+		show({ mode: 'planned', planned: ASSUMED_PLANNED, soc: undefined });
+		expect(screen.getByText('Ladestand unbekannt, gerechnet ab 0 %.')).toBeVisible();
+		expect(screen.queryByText(/ist zu alt/)).toBeNull();
 	});
 });

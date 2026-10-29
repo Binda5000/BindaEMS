@@ -50,19 +50,25 @@
 				{#if operate}
 					<button
 						type="button"
+						class="icon"
 						aria-label="{names[key] ?? key} nach oben"
 						disabled={busy || index === 0}
 						onclick={() => onChange(moveUp(order, key), surplus)}
 					>
-						nach oben
+						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+							<path d="M12 19V5M5 12l7-7 7 7" />
+						</svg>
 					</button>
 					<button
 						type="button"
+						class="icon"
 						aria-label="{names[key] ?? key} nach unten"
 						disabled={busy || index === order.length - 1}
 						onclick={() => onChange(moveDown(order, key), surplus)}
 					>
-						nach unten
+						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+							<path d="M12 5v14M5 12l7 7 7-7" />
+						</svg>
 					</button>
 				{/if}
 			</li>
@@ -136,6 +142,26 @@
 		flex: 1 1 8rem;
 		font-weight: 600;
 		min-width: 0;
+	}
+
+	/* Pfeil-Knopf, 44 × 44 px */
+	button.icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.75rem;
+		height: 2.75rem;
+		padding: 0;
+	}
+
+	button.icon svg {
+		width: 1.25rem;
+		height: 1.25rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.surplus {
