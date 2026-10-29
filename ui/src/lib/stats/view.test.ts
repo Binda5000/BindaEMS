@@ -32,9 +32,10 @@ describe('Kacheln', () => {
 			'Autarkie',
 			'Eigenverbrauch',
 			'Kosten',
-			'Ersparnis',
-			'Einspeiseerlös'
+			'Ersparnis*',
+			'Erlös'
 		]);
+		expect(result.map((tile) => tile.size)).toEqual(['large', 'large', 'small', 'small', 'small']);
 		expect(result.map((tile) => tile.value)).toEqual([
 			formatRatio(0.655),
 			formatRatio(0.814),
@@ -42,10 +43,7 @@ describe('Kacheln', () => {
 			formatEur(59.126),
 			formatEur(2.444)
 		]);
-		expect(result.find((tile) => tile.label === 'Ersparnis')?.subtitle).toBe(
-			'gegenüber Fixtarif ohne Anlage'
-		);
-		expect(result.filter((tile) => tile.subtitle !== undefined)).toHaveLength(1);
+		expect(result.filter((tile) => tile.subtitle !== undefined)).toHaveLength(0);
 	});
 
 	it('shows unknown values as –', () => {

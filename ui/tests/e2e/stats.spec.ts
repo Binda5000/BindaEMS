@@ -137,3 +137,39 @@ test('Statistik hat bei 360 px keine waagrechte Scrollleiste', async ({ page }) 
 	);
 	expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test('Statistik hält Heute und den Titel bei 390 px in einer Zeile', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await login(page, 'gast');
+	await page.clock.setFixedTime(T_DEMO);
+	await page.goto('/statistik?zeitraum=woche&datum=2026-10-02');
+	const title = page.getByRole('heading', { name: /^KW 40/ });
+	await expect(title).toBeVisible();
+	const middle = async (locator: typeof title) => {
+		const box = await locator.boundingBox();
+		return box ? box.y + box.height / 2 : Number.NaN;
+	};
+	const titleY = await middle(title);
+	for (const name of ['Zurück', 'Weiter', 'Heute']) {
+		const button = page.getByRole('button', { name });
+		expect(Math.abs((await middle(button)) - titleY)).toBeLessThanOrEqual(8);
+		expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+	}
+	for (const name of ['Zurück', 'Weiter']) {
+		const box = await page.getByRole('button', { name }).boundingBox();
+		expect(box?.width).toBeGreaterThanOrEqual(44);
+	}
+	// zwei große Kacheln oben, drei kleine darunter
+	const tiles = page.getByTestId('tile');
+	await expect(tiles).toHaveCount(5);
+	const tops = await tiles.evaluateAll((items) =>
+		items.map((item) => item.getBoundingClientRect().top)
+	);
+	expect(Math.abs(tops[0] - tops[1])).toBeLessThanOrEqual(1);
+	expect(Math.abs(tops[2] - tops[4])).toBeLessThanOrEqual(1);
+	expect(tops[2]).toBeGreaterThan(tops[0] + 20);
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+	);
+	expect(overflow).toBeLessThanOrEqual(0);
+});

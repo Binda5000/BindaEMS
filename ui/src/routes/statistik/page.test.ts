@@ -141,6 +141,24 @@ it('zeigt Kacheln, Hinweise, Diagramm und Kosten', async () => {
 	expect(screen.getByRole('cell', { name: 'Grundgebühren' })).toBeInTheDocument();
 });
 
+it('hält Zurück, Weiter, Heute und den Titel in einer Zeile', async () => {
+	render(Page);
+	const row = screen.getByRole('heading', { name: 'Fr., 09.10.2026' }).parentElement;
+	for (const name of ['Zurück', 'Weiter', 'Heute']) {
+		expect(screen.getByRole('button', { name }).parentElement).toBe(row);
+	}
+	// der Zeitraum ist die Segment-Leiste, nicht Teil dieser Zeile
+	expect(screen.getByRole('group', { name: 'Zeitraum wählen' })).not.toBe(row);
+	expect(row).not.toContainElement(screen.getByRole('button', { name: 'Tag' }));
+});
+
+it('zeigt unter den Kacheln die Fußnote', async () => {
+	render(Page);
+	expect(
+		await screen.findByText('* gegenüber Fixtarif ohne Anlage. „Erlös“ ist der Einspeiseerlös.')
+	).toBeVisible();
+});
+
 it('sagt bei einem vergangenen Zeitraum nicht „bis jetzt“', async () => {
 	navigate('?zeitraum=monat&datum=2026-09-15');
 	render(Page);

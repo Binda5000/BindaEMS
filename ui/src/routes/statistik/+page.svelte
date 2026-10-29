@@ -9,6 +9,7 @@
 	import { readPalette } from '$lib/charts/palette';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
+	import Segmented from '$lib/components/Segmented.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import ChecksCard from '$lib/stats/ChecksCard.svelte';
 	import ConsumersCard from '$lib/stats/ConsumersCard.svelte';
@@ -183,34 +184,30 @@
 
 <div class="stats">
 	<Card>
-		<div class="switch" role="group" aria-label="Zeitraum wählen">
-			{#each PERIODS as item (item.id)}
-				<button
-					type="button"
-					class:active={period === item.id}
-					aria-pressed={period === item.id}
-					onclick={() => open(item.id, day)}
-				>
-					{item.label}
-				</button>
-			{/each}
-		</div>
+		<Segmented
+			options={PERIODS}
+			value={period}
+			label="Zeitraum wählen"
+			onSelect={(id) => open(id as Period, day)}
+		/>
 		<div class="paging">
 			<button
 				type="button"
+				class="step"
 				aria-label="Zurück"
 				onclick={() => open(period, shift(period, day, -1))}
 			>
-				←
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
 			</button>
 			<h2>{title}</h2>
 			<button
 				type="button"
+				class="step"
 				aria-label="Weiter"
 				disabled={range.last >= today}
 				onclick={() => open(period, shift(period, day, 1))}
 			>
-				→
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
 			</button>
 			<button type="button" disabled={running} onclick={() => open(period, today)}>Heute</button>
 		</div>
@@ -287,33 +284,43 @@
 		opacity: 1;
 	}
 
-	.switch {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		margin-bottom: 0.75rem;
-	}
-
-	.switch .active {
-		border-color: var(--accent);
-		color: var(--accent);
-		font-weight: 600;
-	}
-
 	.paging {
 		display: flex;
-		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.5rem;
+		margin-top: 0.75rem;
 	}
 
 	.paging h2 {
-		flex: 1 1 10rem;
+		flex: 1 1 0;
 		min-width: 0;
 		margin: 0;
 		font-size: 1.125rem;
 		font-weight: 600;
 		text-align: center;
+		overflow-wrap: anywhere;
+	}
+
+	/* Pfeile quadratisch 44 × 44 px; „Heute“ behält seine Breite */
+	.paging button {
+		flex: none;
+	}
+
+	.step {
+		display: grid;
+		place-items: center;
+		width: 2.75rem;
+		padding: 0;
+	}
+
+	.step svg {
+		width: 1.25rem;
+		height: 1.25rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.hints {

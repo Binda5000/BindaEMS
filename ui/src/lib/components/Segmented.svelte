@@ -2,7 +2,7 @@
 	type Id = string | number;
 
 	interface Props {
-		options: { id: Id; label: string }[];
+		options: readonly { id: Id; label: string }[];
 		/** Kennung der gewählten Option */
 		value: Id;
 		/** Name der Gruppe für Screenreader */

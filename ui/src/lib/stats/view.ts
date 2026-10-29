@@ -21,6 +21,8 @@ export interface Tile {
 	/** fertig formatiert, „–“ wenn unbekannt */
 	value: string;
 	subtitle?: string;
+	/** `large`: Autarkie und Eigenverbrauch, `small`: die drei Geldkacheln */
+	size: 'large' | 'small';
 }
 
 export interface Row {
@@ -31,23 +33,27 @@ export interface Row {
 	strong?: boolean;
 }
 
-/** Autarkie, Eigenverbrauch, Kosten (mit Grundgebühren und Leistungspreis), Ersparnis, Einspeiseerlös */
+/**
+ * Autarkie, Eigenverbrauch, Kosten (mit Grundgebühren und Leistungspreis), Ersparnis, Einspeiseerlös.
+ * Der Stern an „Ersparnis“ und das Kürzel „Erlös“ erklärt die Fußnote unter den Kacheln.
+ */
 export function tiles(stats: Stats): Tile[] {
 	return [
-		{ id: 'autarky', label: 'Autarkie', value: formatRatio(stats.ratios.autarky) },
+		{ id: 'autarky', label: 'Autarkie', value: formatRatio(stats.ratios.autarky), size: 'large' },
 		{
 			id: 'self_consumption',
 			label: 'Eigenverbrauch',
-			value: formatRatio(stats.ratios.self_consumption)
+			value: formatRatio(stats.ratios.self_consumption),
+			size: 'large'
 		},
-		{ id: 'cost', label: 'Kosten', value: formatEur(stats.money.total_eur) },
+		{ id: 'cost', label: 'Kosten', value: formatEur(stats.money.total_eur), size: 'small' },
 		{
 			id: 'savings',
-			label: 'Ersparnis',
+			label: 'Ersparnis*',
 			value: formatEur(stats.money.savings_no_plant_eur),
-			subtitle: 'gegenüber Fixtarif ohne Anlage'
+			size: 'small'
 		},
-		{ id: 'revenue', label: 'Einspeiseerlös', value: formatEur(stats.money.revenue_eur) }
+		{ id: 'revenue', label: 'Erlös', value: formatEur(stats.money.revenue_eur), size: 'small' }
 	];
 }
 
