@@ -76,7 +76,7 @@ it('shows no windows when the plan only covers own consumption', () => {
 	expect(soc.series[0].markArea?.data ?? []).toEqual([]);
 });
 
-it('draws the windows with real ECharts (legend entries in the SVG)', async () => {
+it('draws the windows with real ECharts, the legend only as chips outside the SVG', async () => {
 	// jsdom kann kein Canvas; ECharts misst Text dann näherungsweise
 	vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 	const core = await import('echarts/core');
@@ -95,8 +95,10 @@ it('draws the windows with real ECharts (legend entries in the SVG)', async () =
 	try {
 		chart.setOption(planSocOption(planWithWindows(), NOW, palette));
 		const svg = chart.renderToSVGString();
-		expect(svg).toContain('Netzladen');
-		expect(svg).toContain('Halten');
+		// die Flächen sind gemalt (Farbe des Netzladens), ihre Namen stehen nicht im Diagramm
+		expect(svg).toContain(palette.importPrice);
+		expect(svg).not.toContain('Netzladen');
+		expect(svg).not.toContain('Halten');
 	} finally {
 		chart.dispose();
 		vi.restoreAllMocks();
@@ -171,16 +173,15 @@ it('starts at the first slot while now is before it', () => {
 	expect(option.xAxis.min).toBe(Date.parse(PLAN.slots[0].start));
 });
 
-it('hält in den Plan-Diagrammen den Tooltip im Diagramm und die Legende in einer Zeile (Preise, Autos)', () => {
-	type Chrome = { legend: { type: string }; tooltip: { confine: boolean } };
+it('hält in den Plan-Diagrammen den Tooltip im Diagramm und zeichnet die Legende nicht selbst', () => {
+	type Chrome = { legend: { show: boolean }; tooltip: { confine: boolean } };
 	for (const option of [
 		planPriceOption(PLAN, NOW, palette),
 		planVehiclesOption(PLAN, NOW, palette)
 	] as Chrome[]) {
-		expect(option.legend.type).toBe('scroll');
+		expect(option.legend.show).toBe(false);
 		expect(option.tooltip.confine).toBe(true);
 	}
-	// das Akku-Diagramm hat höchstens vier kurze Einträge: Umbruch statt Blättern
 	expect((planSocOption(PLAN, NOW, palette) as Chrome).tooltip.confine).toBe(true);
 });
 
@@ -197,7 +198,7 @@ it('zeichnet „jetzt“ nicht, wenn es außerhalb des Horizonts liegt', () => {
 
 type SocOption = {
 	grid: { top: number };
-	legend: { type: string; data: (string | { name: string; icon: string })[] };
+	legend: { show: boolean; data: (string | { name: string; icon: string })[] };
 	series: (LineSeriesOption & {
 		id: string;
 		itemStyle?: { color: string };
@@ -211,9 +212,9 @@ it('beschriftet die Flächen im Akku-Diagramm nicht, die Legende nennt die Absic
 	const pairs = option.series[0].markArea?.data ?? [];
 	expect(pairs).toHaveLength(2);
 	for (const pair of pairs) expect(pair[0].label?.show).toBe(false);
-	// Umbruch statt Blättern, mit Platz für zwei Zeilen über dem Diagramm; Flächen als Vierecke
-	expect(option.legend.type).toBe('plain');
-	expect(option.grid.top).toBeGreaterThanOrEqual(72);
+	// die Chips stehen unter dem Diagramm, oben nur Platz für den Achsentitel; Flächen als Vierecke
+	expect(option.legend.show).toBe(false);
+	expect(option.grid.top).toBe(28);
 	expect(option.legend.data).toEqual([
 		'Geplanter SOC',
 		'Reserve',

@@ -1,8 +1,11 @@
 <script lang="ts">
 	import type { EChartsCoreOption, EChartsType } from 'echarts/core';
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { viennaTicks } from '$lib/time';
+	import ChartLegend from './ChartLegend.svelte';
 	import { loadECharts } from './echarts';
+	import { legendItems, withSelection } from './legend';
 
 	interface Props {
 		option: EChartsCoreOption;
@@ -15,6 +18,12 @@
 	let element = $state<HTMLDivElement>();
 	let chart = $state.raw<EChartsType | null>(null);
 	let zoom: [number, number] = [0, 100]; // sichtbarer Teil der Zeitachse in Prozent
+	const hidden = new SvelteSet<string>(); // über die Chips ausgeblendete Reihen
+	const items = $derived(legendItems(option));
+
+	function toggle(name: string): void {
+		if (!hidden.delete(name)) hidden.add(name);
+	}
 
 	interface TimeAxis {
 		type?: string;
@@ -114,11 +123,11 @@
 		);
 	}
 
-	// neue Werte einarbeiten: Zoom und ausgeblendete Reihen bleiben, Reihen und y-Achsen werden
-	// ersetzt (abgewählte verschwinden); bei prefers-reduced-motion ohne Animation
+	// neue Werte einarbeiten: Zoom bleibt, die Auswahl der Chips wird jedes Mal mitgegeben, Reihen
+	// und y-Achsen werden ersetzt (abgewählte verschwinden); bei prefers-reduced-motion ohne Animation
 	$effect(() => {
 		if (!chart) return;
-		const prepared = withTicks(option, ticksFor(chart));
+		const prepared = withSelection(withTicks(option, ticksFor(chart)), hidden);
 		chart.setOption(reducedMotion() ? { ...prepared, animation: false } : prepared, {
 			replaceMerge: ['series', 'yAxis']
 		});
@@ -126,6 +135,9 @@
 </script>
 
 <div bind:this={element} class="chart" role="img" aria-label={label} style:height></div>
+{#if items.length > 0}
+	<ChartLegend {items} {hidden} onToggle={toggle} />
+{/if}
 
 <style>
 	.chart {

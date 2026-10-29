@@ -167,13 +167,13 @@ describe('reviewOption', () => {
 		expect(result.map((s) => s.name)).toEqual(['Geplanter SOC', 'Ist-SOC']);
 	});
 
-	it('keeps the tooltip and legend inside the chart', () => {
+	it('keeps the tooltip inside the chart and draws no legend of its own', () => {
 		const option = reviewOption(BOTH, SOC, palette) as {
 			tooltip: { confine: boolean };
-			legend: { type: string };
+			legend: { show: boolean };
 		};
 		expect(option.tooltip.confine).toBe(true);
-		expect(option.legend.type).toBe('scroll');
+		expect(option.legend.show).toBe(false);
 	});
 
 	it('puts the planned SOC at the end of each quarter-hour and breaks the line at gaps', () => {

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { formatPower, formatSoc } from '$lib/format';
 import { live } from '$lib/live.svelte';
@@ -128,6 +128,20 @@ it('das Diagramm bleibt, wenn die Lastprognose scheitert, und nennt den Fehler',
 	if (chart === null) throw new Error('Karte „Preise, PV und Akku heute/morgen“ fehlt');
 	expect(await within(chart).findByText('Lastprognose nicht erreichbar.')).toBeInTheDocument();
 	expect(within(chart).getByRole('img', { name: /^Diagramm:/ })).toBeInTheDocument();
+});
+
+it('das Diagramm führt seine Reihen als Chips darunter, ein Tipp blendet sie aus', async () => {
+	api.latestDecisions.mockResolvedValue({ decisions: [] });
+	render(Page);
+	const chart = screen
+		.getByRole('heading', { level: 2, name: 'Preise, PV und Akku heute/morgen' })
+		.closest('section');
+	if (chart === null) throw new Error('Karte „Preise, PV und Akku heute/morgen“ fehlt');
+	const group = await within(chart).findByRole('group', { name: 'Reihen ein- und ausblenden' });
+	const price = within(group).getByRole('button', { name: 'Preis' });
+	expect(price).toHaveAttribute('aria-pressed', 'true');
+	await fireEvent.click(price);
+	expect(price).toHaveAttribute('aria-pressed', 'false');
 });
 
 // --- Kennzahlen-Leiste ----------------------------------------------------------------------

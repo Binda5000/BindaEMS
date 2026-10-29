@@ -50,7 +50,7 @@ describe('Preise und Prognose', () => {
 			palette
 		);
 		const series = option.series as LineSeriesOption[];
-		expect(series.map((s) => s.name)).toEqual(['Bezugspreis', 'Einspeisung']);
+		expect(series.map((s) => s.name)).toEqual(['Preis', 'Einspeisung']);
 		expect([series[0].step, series[0].yAxisIndex]).toEqual(['end', 0]);
 		expect(series[0].data).toEqual([
 			[at(0), 13.44],
@@ -80,13 +80,8 @@ describe('Preise und Prognose', () => {
 			palette
 		);
 		const series = option.series as LineSeriesOption[];
-		expect(series.map((s) => s.name)).toEqual([
-			'Bezugspreis',
-			'PV P25',
-			'PV P25–P75',
-			'PV-Prognose'
-		]);
-		const pv = series.find((s) => s.name === 'PV-Prognose');
+		expect(series.map((s) => s.name)).toEqual(['Preis', 'PV P25', 'PV-Spanne', 'PV']);
+		const pv = series.find((s) => s.name === 'PV');
 		expect([pv?.yAxisIndex, pv?.data]).toEqual([1, [[at(0), 2.5]]]);
 		expect((option.yAxis as YAXisComponentOption[]).map((axis) => axis.name)).toEqual([
 			'ct/kWh',
@@ -116,12 +111,10 @@ describe('Preise und Prognose', () => {
 	it('zeichnet das PV-Band und die Lastprognose', () => {
 		const option = priceForecastOption(PRICES, FORECAST, LOAD, NOW, palette);
 		const series = option.series as LineSeriesOption[];
-		expect(series.map((s) => s.name)).toEqual(
-			expect.arrayContaining(['PV-Prognose', 'PV P25–P75', 'Lastprognose'])
-		);
+		expect(series.map((s) => s.name)).toEqual(expect.arrayContaining(['PV', 'PV-Spanne', 'Haus']));
 		const base = series.find((s) => s.name === 'PV P25');
-		const band = series.find((s) => s.name === 'PV P25–P75');
-		const load = series.find((s) => s.name === 'Lastprognose');
+		const band = series.find((s) => s.name === 'PV-Spanne');
+		const load = series.find((s) => s.name === 'Haus');
 		// gestapelt: unsichtbarer Sockel P25, darüber P75 − P25 (dritter Wert: P75 für den Tooltip)
 		expect(base?.stack).toBe(band?.stack);
 		expect(base?.data).toEqual([
@@ -145,14 +138,14 @@ describe('Preise und Prognose', () => {
 	it('funktioniert ohne Lastprognose', () => {
 		const option = priceForecastOption(PRICES, FORECAST, null, NOW, palette);
 		const series = option.series as LineSeriesOption[];
-		expect(series.some((s) => s.name === 'Lastprognose')).toBe(false);
+		expect(series.some((s) => s.name === 'Haus')).toBe(false);
 	});
 
 	it('zeigt die Lastprognose auch ohne PV-Prognose auf der kW-Achse', () => {
 		const option = priceForecastOption(PRICES, [], LOAD, NOW, palette);
 		const axes = option.yAxis as { show: boolean }[];
 		expect(axes[1].show).toBe(true);
-		expect((option.series as LineSeriesOption[]).some((s) => s.name === 'PV P25–P75')).toBe(false);
+		expect((option.series as LineSeriesOption[]).some((s) => s.name === 'PV-Spanne')).toBe(false);
 	});
 
 	it('führt im Tooltip P25 und P75 des Bandes, nicht die Differenz, und blendet den Sockel aus', () => {
@@ -160,14 +153,14 @@ describe('Preise und Prognose', () => {
 		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
 		const text = formatter([
 			{ seriesName: 'PV P25', value: [at(0), 1.75] },
-			{ seriesName: 'PV P25–P75', value: [at(0), 1.25, 3] },
-			{ seriesName: 'PV-Prognose', value: [at(0), 2.5] }
+			{ seriesName: 'PV-Spanne', value: [at(0), 1.25, 3] },
+			{ seriesName: 'PV', value: [at(0), 2.5] }
 		]);
 		expect(text).toContain('1,75');
 		expect(text).toContain('3,00');
 		expect(text).not.toContain('1,25');
 		expect(text).not.toContain('PV P25:');
-		expect(text).toContain('PV-Prognose');
+		expect(text).toContain('PV: <b>');
 	});
 });
 
@@ -194,7 +187,7 @@ describe('Preise und Prognose mit Akku', () => {
 		const option = run({ measured: MEASURED, plan });
 		const soc = find(option, 'soc') as LineSeriesOption;
 		const planned = find(option, 'soc_plan') as LineSeriesOption;
-		expect([soc.name, soc.yAxisIndex, soc.data]).toEqual(['Akku-SOC', 2, MEASURED]);
+		expect([soc.name, soc.yAxisIndex, soc.data]).toEqual(['Akku', 2, MEASURED]);
 		expect([planned.name, planned.yAxisIndex]).toEqual(['Akku-Plan', 2]);
 		expect(soc.lineStyle).toMatchObject({ color: palette.text, width: 2 });
 		expect(planned.lineStyle).toMatchObject({ color: palette.text, type: 'dashed' });
@@ -226,14 +219,14 @@ describe('Preise und Prognose mit Akku', () => {
 		}
 	});
 
-	it('nimmt die Legende und den Tooltip mit Akku-SOC und Akku-Plan', () => {
+	it('nimmt die Chips und den Tooltip mit Akku und Akku-Plan', () => {
 		const option = run({ measured: MEASURED, plan });
 		expect((option.legend as { data: string[] }).data).toEqual(
-			expect.arrayContaining(['Akku-SOC', 'Akku-Plan'])
+			expect.arrayContaining(['Akku', 'Akku-Plan'])
 		);
 		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
 		const text = formatter([
-			{ seriesName: 'Akku-SOC', value: [at(0), 41.6] },
+			{ seriesName: 'Akku', value: [at(0), 41.6] },
 			{ seriesName: 'Akku-Plan', value: [at(0), 55] }
 		]);
 		expect(text).toContain(formatSoc(41.6));
@@ -243,7 +236,7 @@ describe('Preise und Prognose mit Akku', () => {
 	it('zeigt ohne Messwerte und ohne Plan keine Akku-Reihen', () => {
 		const option = run({ measured: [], plan: null });
 		expect((option.series as LineSeriesOption[]).map((s) => s.id)).toEqual(['import', 'feed_in']);
-		expect((option.legend as { data: string[] }).data).not.toContain('Akku-SOC');
+		expect((option.legend as { data: string[] }).data).not.toContain('Akku');
 	});
 });
 
@@ -603,11 +596,12 @@ describe('Laden je Auto', () => {
 });
 
 describe('Legende, „jetzt“ und Tooltip', () => {
-	type Chrome = { legend: { type: string }; tooltip: { confine: boolean } };
+	type Chrome = { legend: { show: boolean }; tooltip: { confine: boolean } };
 
-	it('legt die Legende in eine Zeile und hält Tooltips im Diagramm', () => {
-		const option = baseOption(palette) as Chrome;
-		expect(option.legend.type).toBe('scroll');
+	it('zeichnet die Legende nicht selbst (Chips) und hält Tooltips im Diagramm', () => {
+		const option = baseOption(palette) as Chrome & { grid: { top: number } };
+		expect(option.legend.show).toBe(false);
+		expect(option.grid.top).toBe(28);
 		expect(option.tooltip.confine).toBe(true);
 	});
 
@@ -620,7 +614,7 @@ describe('Legende, „jetzt“ und Tooltip', () => {
 		expect(nowMarkLine(null, palette)).toBeUndefined();
 	});
 
-	it('hält in jeder Option Legende in einer Zeile und Tooltip im Diagramm', () => {
+	it('zeichnet in keiner Option die Legende selbst und hält den Tooltip im Diagramm', () => {
 		const options: [string, Chrome][] = [
 			[
 				'priceForecastOption',
@@ -655,7 +649,7 @@ describe('Legende, „jetzt“ und Tooltip', () => {
 		];
 		for (const [name, option] of options) {
 			expect(option.tooltip.confine, name).toBe(true);
-			expect(option.legend.type, name).toBe('scroll');
+			expect(option.legend.show, name).toBe(false);
 		}
 	});
 });

@@ -175,7 +175,7 @@
 		{/if}
 		<EChart
 			option={chartOption}
-			label="Diagramm: Bezugspreis, Einspeisung, PV-Prognose mit Band, Lastprognose, gemessener und geplanter Akku-SOC für heute und morgen"
+			label="Diagramm: Preis, Einspeisung, PV mit Spanne, Haus, gemessener und geplanter Akku-Ladestand für heute und morgen"
 		/>
 	</Card>
 

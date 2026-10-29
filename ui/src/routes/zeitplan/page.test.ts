@@ -214,8 +214,8 @@ it('zeigt erwartete Autos im Ablauf gestrichelt mit „erwartet ab“', async ()
 	await screen.findByText('Plan von 10:00 Uhr');
 	const blocks = screen.getByRole('heading', { name: 'Ablauf' }).closest('section')!;
 	expect(within(blocks).getByText('e-Golf erwartet ab 17:30')).toHaveClass('expected');
-	// auch im Kopf des Plans steht das Auto als erwartet
-	expect(screen.getAllByText('e-Golf erwartet ab 17:30')).toHaveLength(2);
+	// auch im Kopf des Plans und als Chip unter dem Autos-Diagramm steht das Auto als erwartet
+	expect(screen.getAllByText('e-Golf erwartet ab 17:30')).toHaveLength(3);
 });
 
 const NO_PLAN = 'Kein neuer Plan nach 40 s. Die Seite zeigt den letzten.';

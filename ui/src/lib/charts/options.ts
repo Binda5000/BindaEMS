@@ -95,16 +95,10 @@ export function baseOption(palette: Palette): EChartsCoreOption {
 	return {
 		backgroundColor: 'transparent',
 		textStyle: { color: palette.text },
-		grid: { left: 8, right: 8, top: 40, bottom: 8, containLabel: true },
-		// eine Zeile, bei Platzmangel blättern statt umbrechen (und das Diagramm zu überdecken)
-		legend: {
-			type: 'scroll',
-			top: 0,
-			textStyle: { color: palette.text },
-			pageTextStyle: { color: palette.muted },
-			pageIconColor: palette.text,
-			pageIconInactiveColor: palette.muted
-		},
+		// oben Platz für den Achsentitel
+		grid: { left: 8, right: 8, top: 28, bottom: 8, containLabel: true },
+		// die Legende zeichnet EChart.svelte als Chips unter dem Diagramm; hier bleibt nur die Auswahl
+		legend: { show: false },
 		// der Tooltip bleibt im Diagramm, auch am Rand eines schmalen Handys
 		tooltip: { confine: true },
 		xAxis: {
@@ -173,7 +167,7 @@ export function priceForecastOption(
 	const series: LineSeriesOption[] = [
 		{
 			id: 'import',
-			name: 'Bezugspreis',
+			name: 'Preis',
 			type: 'line',
 			step: 'end',
 			yAxisIndex: 0,
@@ -216,7 +210,7 @@ export function priceForecastOption(
 			},
 			{
 				id: 'pv_band',
-				name: 'PV P25–P75',
+				name: 'PV-Spanne',
 				type: 'line',
 				yAxisIndex: 1,
 				stack: 'pv_band',
@@ -233,7 +227,7 @@ export function priceForecastOption(
 			},
 			{
 				id: 'pv',
-				name: 'PV-Prognose',
+				name: 'PV',
 				type: 'line',
 				yAxisIndex: 1,
 				smooth: true,
@@ -247,7 +241,7 @@ export function priceForecastOption(
 	if (loadSlots.length > 0) {
 		series.push({
 			id: 'load',
-			name: 'Lastprognose',
+			name: 'Haus',
 			type: 'line',
 			yAxisIndex: 1,
 			smooth: true,
@@ -260,7 +254,7 @@ export function priceForecastOption(
 	if (battery && battery.measured.length > 0) {
 		series.push({
 			id: 'soc',
-			name: 'Akku-SOC',
+			name: 'Akku',
 			type: 'line',
 			yAxisIndex: 2,
 			showSymbol: false,
@@ -288,7 +282,7 @@ export function priceForecastOption(
 	const base = baseOption(palette) as { legend: object; tooltip: object };
 	return {
 		...base,
-		// der Sockel des Bandes gehört nicht in die Legende
+		// der Sockel des Bandes gehört nicht zu den Chips
 		legend: {
 			...base.legend,
 			data: series.map((s) => s.name).filter((name) => name !== 'PV P25')
@@ -297,13 +291,13 @@ export function priceForecastOption(
 			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip({
-				Bezugspreis: formatCt,
+				Preis: formatCt,
 				Einspeisung: formatCt,
 				'PV P25': null,
-				'PV P25–P75': bandFormat,
-				'PV-Prognose': kw,
-				Lastprognose: kw,
-				'Akku-SOC': formatSoc,
+				'PV-Spanne': bandFormat,
+				PV: kw,
+				Haus: kw,
+				Akku: formatSoc,
 				'Akku-Plan': formatSoc
 			})
 		},
@@ -371,7 +365,7 @@ export function historyOption(data: HistoryResponse, palette: Palette): EChartsC
 	const base = baseOption(palette) as { tooltip: object };
 	return {
 		...base,
-		grid: { left: 8, right: 8, top: 40, bottom: 44, containLabel: true },
+		grid: { left: 8, right: 8, top: 28, bottom: 44, containLabel: true },
 		tooltip: { ...base.tooltip, trigger: 'axis', formatter: axisTooltip(formats) },
 		dataZoom: [
 			{ type: 'inside' },

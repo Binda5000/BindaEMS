@@ -1,5 +1,5 @@
-import { render } from '@testing-library/svelte';
-import type { EChartsType } from 'echarts/core';
+import { fireEvent, render, screen } from '@testing-library/svelte';
+import type { EChartsCoreOption, EChartsType } from 'echarts/core';
 import * as v from 'valibot';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import historyJson from '$lib/api/contract/history.json';
@@ -66,6 +66,25 @@ async function drawn(): Promise<EChartsType> {
 	return charts[0];
 }
 
+/** Option mit den Reihen PV und Haus und den Chips dazu (wie baseOption: Legende selbst unsichtbar) */
+function pvOption(factor = 1): EChartsCoreOption {
+	const line = (name: string, color: string, value: number) => ({
+		name,
+		type: 'line',
+		data: [
+			[0, value * factor],
+			[3_600_000, 2 * value * factor]
+		],
+		lineStyle: { color }
+	});
+	return {
+		legend: { show: false },
+		xAxis: { type: 'time' },
+		yAxis: {},
+		series: [line('PV', '#fa0', 1), line('Haus', '#80f', 2)]
+	};
+}
+
 beforeEach(() => {
 	// jsdom kann kein Canvas; ECharts misst Text dann näherungsweise
 	vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
@@ -84,11 +103,49 @@ it('behält Zoom und ausgeblendete Reihen, wenn neue Daten kommen', async () => 
 	});
 	const chart = await drawn();
 	chart.dispatchAction({ type: 'dataZoom', start: 20, end: 40 });
-	chart.dispatchAction({ type: 'legendUnSelect', name: 'Netz' });
+	await fireEvent.click(screen.getByRole('button', { name: 'Netz' }));
 	await rerender({ option: historyOption(scaled(history, 2), palette) });
 	const option = shown(chart);
 	expect([option.dataZoom?.[0].start, option.dataZoom?.[0].end]).toEqual([20, 40]);
 	expect(option.legend?.[0].selected?.Netz).toBe(false);
+	expect(screen.getByRole('button', { name: 'Netz' })).toHaveAttribute('aria-pressed', 'false');
+});
+
+it('zeigt die Reihen als Chips, ein Tipp blendet sie aus und wieder ein', async () => {
+	render(EChart, { option: pvOption(), label: 'Verlauf' });
+	const chart = await drawn();
+	const group = screen.getByRole('group', { name: 'Reihen ein- und ausblenden' });
+	const chips = Array.from(group.querySelectorAll('button')).map((button) => button.textContent);
+	expect(chips.map((text) => text?.trim())).toEqual(['PV', 'Haus']);
+	const pv = screen.getByRole('button', { name: 'PV' });
+	expect(pv).toHaveAttribute('aria-pressed', 'true');
+	const setOption = vi.spyOn(chart, 'setOption');
+	await fireEvent.click(pv);
+	expect(pv).toHaveAttribute('aria-pressed', 'false');
+	const last = setOption.mock.calls.at(-1)?.[0] as ShownOption;
+	expect((last.legend as unknown as { selected: Record<string, boolean> }).selected.PV).toBe(false);
+	await fireEvent.click(pv);
+	expect(pv).toHaveAttribute('aria-pressed', 'true');
+	expect(shown(chart).legend?.[0].selected?.PV).toBe(true);
+});
+
+it('PV bleibt ausgeblendet, nachdem eine neue option kommt', async () => {
+	const { rerender } = render(EChart, { option: pvOption(1), label: 'Verlauf' });
+	const chart = await drawn();
+	await fireEvent.click(screen.getByRole('button', { name: 'PV' }));
+	await rerender({ option: pvOption(2) });
+	expect(screen.getByRole('button', { name: 'PV' })).toHaveAttribute('aria-pressed', 'false');
+	expect(shown(chart).legend?.[0].selected?.PV).toBe(false);
+	expect(shown(chart).legend?.[0].selected?.Haus).toBe(true);
+});
+
+it('zeigt keine Chips, wenn die Option keine Legende hat', async () => {
+	render(EChart, {
+		option: { xAxis: { type: 'time' }, yAxis: {}, series: [{ type: 'line', data: [[0, 1]] }] },
+		label: 'Verlauf'
+	});
+	await drawn();
+	expect(screen.queryByRole('group', { name: 'Reihen ein- und ausblenden' })).toBeNull();
 });
 
 it('entfernt Reihen, die nicht mehr gewählt sind', async () => {

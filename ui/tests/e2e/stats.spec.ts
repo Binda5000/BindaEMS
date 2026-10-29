@@ -67,7 +67,8 @@ test('Statistik filtert die Ladesessions nach Auto und zeigt den Verlauf', async
 	await expect(card.getByRole('heading', { name: 'Laden je Auto', level: 2 })).toBeVisible();
 	await expect(card.locator('canvas')).toBeVisible();
 
-	await card.getByRole('button', { name: 'Tesla Model 3' }).click();
+	// die Auswahl der Autos, nicht der gleichnamige Chip der Legende unter dem Diagramm
+	await card.getByLabel('Auto wählen').getByRole('button', { name: 'Tesla Model 3' }).click();
 	await expect(page).toHaveURL(/auto=tesla/);
 	const rows = page.getByRole('table', { name: 'Ladesessions' }).locator('tbody tr');
 	// erst die gefilterte Liste abwarten: solange stehen noch die Zeilen aller Autos da
