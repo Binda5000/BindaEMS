@@ -253,7 +253,7 @@ lohnt, haben den neuen Code `AKKU_AN_UNTERGRENZE`, und `AUTO_WARTET_AUF_PV` steh
 Ablaufs beginnt damit, und kleine SOC-Änderungen (0,05 bis unter 1 Prozentpunkt) zeigen eine Nachkommastelle. Beide neuen Felder sind optional, alte Pläne
 laden weiter. **Nur app und UI, nur `ems-app` neu**; der core, `shared`-Verträge zum core, die Datenbank und die Absicht bleiben gleich (**keine
 Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**). **Ausgerollt wird mit dem nächsten Sammel-Pull von `ems-app`; wann, entscheidet der
-Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image; es überspringt die Pläne mit den neuen Feldern als unlesbar (`extra="forbid"`, `code=plan_row_unreadable`), bis es einen neuen gerechnet hat (bei Bedarf „Neu planen“). Betrieb: `docs/betrieb.md`, „Zeitplan“,
+Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image; es überspringt die Pläne mit den neuen Feldern als unlesbar (`extra="forbid"`, `code=plan_row_unreadable`), und zwar **bis sie nach 30 Tagen aufgeräumt werden**, nicht nur bis zum nächsten Plan: Verlauf und „Plan gegen Ist“ (`GET /api/plan/review`) verlieren den Zeitraum zwischen Ausrollen und Rollback; zudem nimmt der erste Lauf danach den letzten Plan von vor dem Ausrollen als vorigen, `grid_in_battery_at_start` kann dann `false` sein, obwohl das neue Image aus dem Netz geladen hat (bis der Akku das nächste Mal leer ist; geringes Risiko, nichts live). Der Rückweg steht in `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Diagramme und Plantexte“. Betrieb: `docs/betrieb.md`, „Zeitplan“,
 „Planung“ und „Erklärungen“; Spec: „Stand Plan Diagramme und Plantexte (29.10.2026)“ in 9.6.
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.

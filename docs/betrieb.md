@@ -226,6 +226,28 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Rollback auf einen Stand vor Diagramme und Plantexte:** Nur `ems-app` geht zurück
+  (`BINDAEMS_VERSION` setzen, `docker compose up -d ems-app`); der core, die Datenbank und die Absicht
+  sind unberührt, es gibt keine Migration und nichts zu exportieren. Das neue Image schreibt in
+  **jeden** Plan `soc_start_pct` und in jedes Auto `vehicles[].reached` (auch mit `null` und `false`),
+  und die Modelle der älteren app lehnen unbekannte Felder ab (`extra="forbid"`). Das hat zwei Folgen,
+  an denen du nichts tun musst:
+  - **Die Pläne seit dem Ausrollen sind für das ältere Image unlesbar.** Es überspringt sie (im Log
+    „Plan-Zeile nicht lesbar“, `code=plan_row_unreadable`): `PlanStore.latest` und die Pläne für den
+    Verlauf und den Vergleich Plan gegen Ist lesen nur lesbare Zeilen. Auch ein neuer Plan der
+    älteren app ändert daran nichts: Die Zeilen bleiben, bis das Aufräumen sie nach **30 Tagen**
+    (Aufbewahrung der Pläne) löscht. So lange fehlt der Zeitraum **zwischen Ausrollen und Rollback**
+    im Verlauf und im Vergleich Plan gegen Ist (`GET /api/plan/review`); was die ältere app danach
+    plant, steht wieder darin. Wer wieder auf das neue Image geht, liest die Zeilen wieder (die
+    Pläne der älteren app laden mit `soc_start_pct: null` und `reached: false`).
+  - **Der erste Lauf nach dem Rollback nimmt als vorigen Plan den letzten Plan von vor dem
+    Ausrollen.** Hat das neue Image in der Zwischenzeit aus dem Netz geladen, kennt dieser Plan das
+    nicht; die Eingangsdaten des Laufs führen „Netzenergie im Akku zu Beginn“ dann mit `false` statt
+    `true`. Folge: Akku ins Auto und Einspeisung sind dann nicht gesperrt, obwohl Netzenergie darin
+    sein kann, und zwar bis der Akku das nächste Mal leer ist. Das Risiko ist gering: Der Schalter
+    „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
+    geschaltet.
+
 - **Update mit Akku ins Auto:** Der Plan „Akku ins Auto, wenn er übrig ist“ ändert core und app; beide
   rollen **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose
   up -d`). Jeder Slot des Plans in der Absicht hat zwei neue Felder (`ev_battery_w`, `now_battery`),
