@@ -8,6 +8,7 @@ import {
 	axisTooltip,
 	baseOption,
 	kw,
+	nowMarkLine,
 	slotEndSocPoints,
 	valueAxis,
 	type ValueFormat
@@ -50,18 +51,6 @@ function timeAxis(plan: Plan, nowIso: string, palette: Palette) {
 	};
 }
 
-function nowLine(now: number | null, palette: Palette) {
-	return now === null
-		? undefined
-		: {
-				symbol: 'none',
-				silent: true,
-				lineStyle: { color: palette.muted, type: 'solid' as const },
-				label: { formatter: 'jetzt', color: palette.muted },
-				data: [{ xAxis: now }]
-			};
-}
-
 export function planPriceOption(plan: Plan, nowIso: string, palette: Palette): EChartsCoreOption {
 	const { xAxis, now } = timeAxis(plan, nowIso, palette);
 	const slots = plan.slots;
@@ -76,7 +65,7 @@ export function planPriceOption(plan: Plan, nowIso: string, palette: Palette): E
 			data: steps(slots, (slot) => (slot.estimated ? null : slot.import_ct)),
 			lineStyle: { color: palette.importPrice, width: 2 },
 			itemStyle: { color: palette.importPrice },
-			markLine: nowLine(now, palette)
+			markLine: nowMarkLine(now, palette)
 		},
 		{
 			id: 'import_estimated',
@@ -113,9 +102,9 @@ export function planPriceOption(plan: Plan, nowIso: string, palette: Palette): E
 			itemStyle: { color: palette.load }
 		}
 	];
-	const base = baseOption(palette) as { legend: object };
+	const base = baseOption(palette) as { legend: object; tooltip: object };
 	return {
-		...baseOption(palette),
+		...base,
 		xAxis,
 		legend: {
 			...base.legend,
@@ -125,6 +114,7 @@ export function planPriceOption(plan: Plan, nowIso: string, palette: Palette): E
 				.filter((name) => name !== 'Bezugspreis geschätzt' || slots.some((s) => s.estimated))
 		},
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip({
 				Bezugspreis: formatCt,
@@ -186,7 +176,7 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			lineStyle: { color: palette.series[2] ?? palette.importPrice, width: 2 },
 			itemStyle: { color: palette.series[2] ?? palette.importPrice },
 			markArea: { silent: true, data: areas } as LineSeriesOption['markArea'],
-			markLine: nowLine(now, palette)
+			markLine: nowMarkLine(now, palette)
 		},
 		{
 			id: 'reserve',
@@ -203,10 +193,12 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			itemStyle: { color: palette.muted }
 		}
 	];
+	const base = baseOption(palette) as { tooltip: object };
 	return {
-		...baseOption(palette),
+		...base,
 		xAxis,
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip({ 'Geplanter SOC': socFormat, Reserve: socFormat })
 		},
@@ -252,13 +244,15 @@ export function planVehiclesOption(
 			lineStyle: car.expected ? { color, width: 2, type: 'dashed' } : { color, width: 2 },
 			itemStyle: { color },
 			areaStyle: car.expected ? undefined : { color, opacity: 0.15 },
-			markLine: index === 0 ? nowLine(now, palette) : undefined
+			markLine: index === 0 ? nowMarkLine(now, palette) : undefined
 		};
 	});
+	const base = baseOption(palette) as { tooltip: object };
 	return {
-		...baseOption(palette),
+		...base,
 		xAxis,
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip(Object.fromEntries(plan.vehicles.map((car) => [carName(car), kw])))
 		},

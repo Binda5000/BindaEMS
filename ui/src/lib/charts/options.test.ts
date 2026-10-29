@@ -6,7 +6,9 @@ import { stats } from '$lib/testing/fixtures';
 import { PLAN } from '$lib/testing/plan';
 import {
 	axisTooltip,
+	baseOption,
 	historyOption,
+	nowMarkLine,
 	presenceOption,
 	priceForecastOption,
 	qualityDailyOption,
@@ -597,5 +599,63 @@ describe('Laden je Auto', () => {
 		const text = formatter([{ name: 'Mo., 05.10.', seriesName: 'Kosten', value: 0.3, marker: '' }]);
 		expect(text).toContain('Kosten: <b>0,30');
 		expect(text).not.toContain('Summe');
+	});
+});
+
+describe('Legende, „jetzt“ und Tooltip', () => {
+	type Chrome = { legend: { type: string }; tooltip: { confine: boolean } };
+
+	it('legt die Legende in eine Zeile und hält Tooltips im Diagramm', () => {
+		const option = baseOption(palette) as Chrome;
+		expect(option.legend.type).toBe('scroll');
+		expect(option.tooltip.confine).toBe(true);
+	});
+
+	it('setzt „jetzt“ senkrecht an die Linie innerhalb des Diagramms', () => {
+		expect(nowMarkLine(1000, palette)?.label).toMatchObject({
+			formatter: 'jetzt',
+			position: 'insideEndTop'
+		});
+		expect(nowMarkLine(1000, palette)?.data).toEqual([{ xAxis: 1000 }]);
+		expect(nowMarkLine(null, palette)).toBeUndefined();
+	});
+
+	it('hält in jeder Option Legende in einer Zeile und Tooltip im Diagramm', () => {
+		const options: [string, Chrome][] = [
+			[
+				'priceForecastOption',
+				priceForecastOption(
+					[slot('2026-10-09T08:00:00+00:00', 13.44)],
+					[],
+					null,
+					'2026-10-09T08:05:00+00:00',
+					palette
+				) as Chrome
+			],
+			[
+				'historyOption',
+				historyOption(
+					{ rp: 'raw', step_s: 60, series: { a: { label: 'A', unit: 'W', points: [[0, 1]] } } },
+					palette
+				) as Chrome
+			],
+			['statsEnergyOption', statsEnergyOption(stats({ period: 'month' }), palette) as Chrome],
+			[
+				'vehicleTrendOption',
+				vehicleTrendOption(
+					stats({ period: 'week' }),
+					null,
+					'kwh',
+					() => '#123456',
+					palette
+				) as Chrome
+			],
+			['qualityDailyOption', qualityDailyOption({ profile: [], model: [] }, palette) as Chrome],
+			['presenceOption', presenceOption([], palette) as Chrome]
+		];
+		for (const [name, option] of options) {
+			expect(option.tooltip.confine, name).toBe(true);
+			expect(option.legend.type, name).toBe('scroll');
+		}
 	});
 });

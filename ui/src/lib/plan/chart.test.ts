@@ -170,3 +170,26 @@ it('starts at the first slot while now is before it', () => {
 	const option = planPriceOption(PLAN, NOW, palette) as { xAxis: { min: number } };
 	expect(option.xAxis.min).toBe(Date.parse(PLAN.slots[0].start));
 });
+
+it('hält in allen Plan-Diagrammen die Legende in einer Zeile und den Tooltip im Diagramm', () => {
+	type Chrome = { legend: { type: string }; tooltip: { confine: boolean } };
+	for (const option of [
+		planPriceOption(PLAN, NOW, palette),
+		planSocOption(PLAN, NOW, palette),
+		planVehiclesOption(PLAN, NOW, palette)
+	] as Chrome[]) {
+		expect(option.legend.type).toBe('scroll');
+		expect(option.tooltip.confine).toBe(true);
+	}
+});
+
+it('zeichnet „jetzt“ nicht, wenn es außerhalb des Horizonts liegt', () => {
+	const later = new Date(Date.parse(PLAN.horizon_end) + 3_600_000).toISOString();
+	for (const option of [
+		planPriceOption(PLAN, later, palette),
+		planSocOption(PLAN, later, palette),
+		planVehiclesOption(PLAN, later, palette)
+	] as { series: { markLine?: unknown }[] }[]) {
+		expect(option.series.every((s) => s.markLine === undefined)).toBe(true);
+	}
+});

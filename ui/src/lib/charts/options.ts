@@ -96,7 +96,17 @@ export function baseOption(palette: Palette): EChartsCoreOption {
 		backgroundColor: 'transparent',
 		textStyle: { color: palette.text },
 		grid: { left: 8, right: 8, top: 40, bottom: 8, containLabel: true },
-		legend: { top: 0, textStyle: { color: palette.text } },
+		// eine Zeile, bei Platzmangel blättern statt umbrechen (und das Diagramm zu überdecken)
+		legend: {
+			type: 'scroll',
+			top: 0,
+			textStyle: { color: palette.text },
+			pageTextStyle: { color: palette.muted },
+			pageIconColor: palette.text,
+			pageIconInactiveColor: palette.muted
+		},
+		// der Tooltip bleibt im Diagramm, auch am Rand eines schmalen Handys
+		tooltip: { confine: true },
 		xAxis: {
 			type: 'time',
 			axisLabel: { color: palette.muted, formatter: timeLabel, hideOverlap: true },
@@ -104,6 +114,22 @@ export function baseOption(palette: Palette): EChartsCoreOption {
 			splitLine: { show: false }
 		}
 	};
+}
+
+/**
+ * Linie „jetzt“; die Beschriftung sitzt senkrecht innen am oberen Ende der Linie und stößt so
+ * nicht an die Achsentitel. Ohne Zeitpunkt keine Linie.
+ */
+export function nowMarkLine(now: number | null, palette: Palette) {
+	return now === null
+		? undefined
+		: {
+				symbol: 'none',
+				silent: true,
+				lineStyle: { color: palette.muted, type: 'solid' as const },
+				label: { formatter: 'jetzt', color: palette.muted, position: 'insideEndTop' as const },
+				data: [{ xAxis: now }]
+			};
 }
 
 export function valueAxis(name: string, palette: Palette, show = true) {
@@ -153,16 +179,7 @@ export function priceForecastOption(
 			data: steps(prices, (slot) => slot.import_gross_ct),
 			lineStyle: { color: palette.importPrice, width: 2 },
 			itemStyle: { color: palette.importPrice },
-			markLine:
-				now === null
-					? undefined
-					: {
-							symbol: 'none',
-							silent: true,
-							lineStyle: { color: palette.muted, type: 'solid' },
-							label: { formatter: 'jetzt', color: palette.muted },
-							data: [{ xAxis: now }]
-						}
+			markLine: nowMarkLine(now, palette)
 		}
 	];
 	if (prices.some((slot) => slot.feed_in_ct !== null)) {
@@ -266,7 +283,7 @@ export function priceForecastOption(
 		});
 	}
 	const hasSoc = series.some((s) => s.yAxisIndex === 2);
-	const base = baseOption(palette) as { legend: object };
+	const base = baseOption(palette) as { legend: object; tooltip: object };
 	return {
 		...base,
 		// der Sockel des Bandes gehört nicht in die Legende
@@ -275,6 +292,7 @@ export function priceForecastOption(
 			data: series.map((s) => s.name).filter((name) => name !== 'PV P25')
 		},
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip({
 				Bezugspreis: formatCt,
@@ -348,10 +366,11 @@ export function historyOption(data: HistoryResponse, palette: Palette): EChartsC
 			itemStyle: { color }
 		};
 	});
+	const base = baseOption(palette) as { tooltip: object };
 	return {
-		...baseOption(palette),
+		...base,
 		grid: { left: 8, right: 8, top: 40, bottom: 44, containLabel: true },
-		tooltip: { trigger: 'axis', formatter: axisTooltip(formats) },
+		tooltip: { ...base.tooltip, trigger: 'axis', formatter: axisTooltip(formats) },
 		dataZoom: [
 			{ type: 'inside' },
 			{ type: 'slider', height: 20, bottom: 8, textStyle: { color: palette.muted } }
@@ -429,9 +448,10 @@ export function statsEnergyOption(stats: Stats, palette: Palette): EChartsCoreOp
 			itemStyle: { color: colors.use }
 		}
 	];
+	const base = baseOption(palette) as { tooltip: object };
 	return {
-		...baseOption(palette),
-		tooltip: { trigger: 'axis', formatter: statsTooltip },
+		...base,
+		tooltip: { ...base.tooltip, trigger: 'axis', formatter: statsTooltip },
 		xAxis: {
 			type: 'category',
 			data: labels,
@@ -526,9 +546,11 @@ export function vehicleTrendOption(
 	} else {
 		series = [bars('Kosten', colorOf(vehicle), (entry) => entry.cost_eur, vehicle)];
 	}
+	const base = baseOption(palette) as { tooltip: object };
 	return {
-		...baseOption(palette),
+		...base,
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: vehicleTrendTooltip(unit === 'kwh' ? formatEnergy : formatEur)
 		},
@@ -581,10 +603,10 @@ export function qualityDailyOption(
 			itemStyle: { color }
 		};
 	};
-	const base = baseOption(palette) as { legend: object };
+	const base = baseOption(palette) as { legend: object; tooltip: object };
 	return {
 		...base,
-		tooltip: { trigger: 'axis', formatter: dailyTooltip },
+		tooltip: { ...base.tooltip, trigger: 'axis', formatter: dailyTooltip },
 		legend: { ...base.legend, data: ['Profil', 'Modell'] },
 		xAxis: {
 			type: 'category',
@@ -630,9 +652,11 @@ export function presenceOption(
 			itemStyle: { color }
 		};
 	});
+	const base = baseOption(palette) as { tooltip: object };
 	return {
-		...baseOption(palette),
+		...base,
 		tooltip: {
+			...base.tooltip,
 			trigger: 'axis',
 			formatter: axisTooltip(Object.fromEntries(shown.map((car) => [car.name, percentFormat])))
 		},
