@@ -5,7 +5,8 @@ import {
 	filtersFromParams,
 	filtersToParams,
 	rangeQuery,
-	resultLabel
+	resultLabel,
+	splitName
 } from './view';
 
 it('heute beginnt um 0 Uhr Wiener Zeit', () => {
@@ -113,4 +114,21 @@ it('das Alter einer Entscheidung ist nie negativ', () => {
 	expect(decisionAgeS('2026-10-09T07:57:00+00:00', now)).toBe(180);
 	expect(decisionAgeS('2026-10-09T08:00:05+00:00', now)).toBe(0);
 	expect(decisionAgeS('kaputt', now)).toBeNull();
+});
+
+it('splitName gibt den Rest nach dem Namen am Anfang zurück', () => {
+	expect(
+		splitName(
+			'Victron (ESS) (Plan: Netzladen): Netz-Sollwert 6070 W – Dry-Run, nicht gesendet.',
+			'Victron (ESS)'
+		)
+	).toBe('(Plan: Netzladen): Netz-Sollwert 6070 W – Dry-Run, nicht gesendet.');
+	expect(splitName('Victron (ESS): Netz-Sollwert 0 W – gesendet.', 'Victron (ESS)')).toBe(
+		': Netz-Sollwert 0 W – gesendet.'
+	);
+});
+
+it('splitName gibt null, wenn der Text nicht mit dem Namen beginnt oder das Wort weitergeht', () => {
+	expect(splitName('EVCS alt: Laden aus.', 'EVCS „evcs“')).toBeNull();
+	expect(splitName('Victron2: x', 'Victron')).toBeNull();
 });

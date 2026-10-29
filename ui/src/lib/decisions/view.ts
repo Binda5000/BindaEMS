@@ -107,3 +107,14 @@ export function decisionAgeS(ts: string, nowMs: number): number | null {
 	const ms = parseIso(ts);
 	return ms === null ? null : Math.max(0, Math.round((nowMs - ms) / 1000));
 }
+
+/**
+ * Der Rest von `text` ohne den Namen am Anfang, wenn der Text mit `name` beginnt und danach ein
+ * Leerzeichen, `(` oder `:` folgt (ohne führendes Leerzeichen); sonst `null`.
+ */
+export function splitName(text: string, name: string): string | null {
+	if (name === '' || !text.startsWith(name)) return null;
+	const rest = text.slice(name.length);
+	if (rest.startsWith(' ')) return rest.trimStart();
+	return rest.startsWith('(') || rest.startsWith(':') ? rest : null;
+}

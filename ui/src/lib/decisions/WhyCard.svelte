@@ -4,7 +4,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { ageText } from '$lib/system/view';
-	import { decisionAgeS } from './view';
+	import { decisionAgeS, splitName } from './view';
 
 	interface Props {
 		/** je Aktor die jüngste Entscheidung der letzten 24 h; `undefined`: noch nicht geladen */
@@ -14,6 +14,9 @@
 		names: Record<string, string>;
 		nowMs: number;
 	}
+
+	/** Trenner zwischen Name und Text, wenn der Text nicht mit dem Namen beginnt */
+	const SEP = ' · ';
 
 	let { decisions, error, names, nowMs }: Props = $props();
 </script>
@@ -31,13 +34,18 @@
 	{:else}
 		<ul>
 			{#each decisions as decision (decision.id)}
+				{@const name = names[decision.actuator] ?? decision.actuator}
+				{@const rest = splitName(decision.text, name)}
 				<li>
 					<span class="line">
-						<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">
-							{names[decision.actuator] ?? decision.actuator}
-						</a>
-						<span class="sep" aria-hidden="true">·</span>
-						<span class="text">{decision.text}</span>
+						<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">{name}</a
+						>{#if rest === null}
+							<span class="sep" aria-hidden="true">{SEP}</span><span class="text"
+								>{decision.text}</span
+							>
+						{:else}
+							<span class="text">{rest.startsWith(':') ? '' : ' '}{rest}</span>
+						{/if}
 					</span>
 					<span class="age muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
 				</li>

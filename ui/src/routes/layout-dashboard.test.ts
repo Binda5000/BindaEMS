@@ -69,8 +69,12 @@ it('Warum? nennt je Aktor die jüngste Entscheidung', async () => {
 	api.latestDecisions.mockResolvedValue({ decisions: decisions.slice(0, 2) });
 	render(Page);
 	const card = within(why());
-	expect(await card.findByText(decisions[0]!.text)).toBeInTheDocument();
-	expect(card.getByText(decisions[1]!.text)).toBeInTheDocument();
+	// Der Eintrag zeigt Name und Text; der Name steht dabei nur einmal
+	const items = await card.findAllByRole('listitem');
+	expect(items).toHaveLength(2);
+	const line = (index: number) => items[index]?.querySelector('.line')?.textContent;
+	expect(line(0)?.replace(/\s+/g, ' ').trim()).toBe(decisions[0]!.text);
+	expect(line(1)).toContain('Strom 8 A – Dry-Run, nicht gesendet.');
 	expect(card.queryByText(decisions[2]!.text)).not.toBeInTheDocument();
 	// Aktor mit Namen aus Health, Verweis auf die gefilterte Liste
 	expect(await card.findByRole('link', { name: 'Victron (ESS)' })).toHaveAttribute(
