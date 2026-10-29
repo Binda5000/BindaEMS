@@ -1,7 +1,9 @@
 import type { LineSeriesOption } from 'echarts/charts';
 import { expect, it, vi } from 'vitest';
 import type { Palette } from '$lib/charts/palette';
-import { intentAt, planPriceOption, planSocOption, planVehiclesOption } from './chart';
+import { intentEndingAt, planPriceOption, planSocOption, planVehiclesOption } from './chart';
+import { slotEndSocPoints } from '$lib/charts/options';
+import { formatTime } from '$lib/format';
 import { NOW, PLAN, planWithWindows } from '$lib/testing/plan';
 
 const palette: Palette = {
@@ -228,40 +230,56 @@ it('nennt in der Legende nur Absichten, die der Plan hat', () => {
 	expect(none.legend.data).toEqual(['Geplanter SOC', 'Reserve']);
 });
 
-it('intentAt nennt die Absicht des Slots, der die Zeit enthält', () => {
+it('intentEndingAt nennt die Absicht des Slots, der an der Zeit endet, mit seiner Zeitspanne', () => {
 	const base = PLAN.slots[0]!;
 	const start = Date.parse(base.start);
 	const slots = [
 		{ ...base, intent: 'NETZLADEN' as const, grid_charge_w: 6700 },
 		{ ...base, start: new Date(start + 900_000).toISOString(), intent: 'HALTEN' as const }
 	];
-	expect(intentAt(slots, start)).toBe('Netzladen 6,7 kW');
-	expect(intentAt(slots, start + 899_999)).toBe('Netzladen 6,7 kW');
-	expect(intentAt(slots, start + 900_000)).toBe('Halten');
-	expect(intentAt(slots, start + 1_800_000)).toBeNull();
-	expect(intentAt(slots, start - 1)).toBeNull();
+	const first = intentEndingAt(slots, start + 900_000);
+	expect(first?.label).toBe('Netzladen 6,7 kW');
+	expect(first?.from).toBe(new Date(start).toISOString());
+	expect(first?.to).toBe(new Date(start + 900_000).toISOString());
+	expect(intentEndingAt(slots, start + 1_800_000)?.label).toBe('Halten');
+	// der Slot selbst endet nicht am Anfang, und zwischen zwei Enden ist keiner
+	expect(intentEndingAt(slots, start)).toBeNull();
+	expect(intentEndingAt(slots, start + 300_000)).toBeNull();
+	expect(intentEndingAt(slots, start + 2_700_000)).toBeNull();
 });
 
-it('zeigt im Tooltip die Absicht des Akkus nach den Werten', () => {
+it('zeigt im Tooltip die Absicht des Slots, dessen Ergebnis der SOC-Punkt ist, mit Zeitspanne', () => {
 	const plan = planWithWindows();
 	const option = planSocOption(plan, NOW, palette) as SocOption;
-	const charging = plan.slots[6]!;
-	const time = Date.parse(charging.start) + 300_000;
-	const html = option.tooltip.formatter([
-		{ seriesName: 'Geplanter SOC', value: [time, 55] },
-		{ seriesName: 'Reserve', value: [time, 20] }
-	]);
-	const lines = html.split('<br>');
-	expect(lines.at(-1)).toBe('Akku: <b>Netzladen 2,3 kW</b>');
-	expect(html).toContain('Geplanter SOC: <b>55');
-	expect(html.indexOf('Reserve')).toBeLessThan(html.indexOf('Akku:'));
+	const points = slotEndSocPoints(plan.slots);
+	const hover = (index: number) =>
+		option.tooltip.formatter([
+			{ seriesName: 'Geplanter SOC', value: points[index] },
+			{ seriesName: 'Reserve', value: [points[index]![0], 20] }
+		]);
+	const span = (index: number) => {
+		const from = formatTime(plan.slots[index]!.start);
+		const to = formatTime(new Date(points[index]![0]).toISOString());
+		return `${from}\u2013${to}`;
+	};
+	// der erste Punkt gehört zum Slot 0
+	expect(plan.slots[0]!.intent).toBe('EIGENVERBRAUCH');
+	expect(hover(0).split('<br>').at(-1)).toBe(`Akku ${span(0)}: <b>Eigenverbrauch</b>`);
+	// Halten (Slot 4 und 5) und Netzladen (Slot 6 und 7): der Punkt am Ende von Slot 6
+	expect(hover(4).split('<br>').at(-1)).toBe(`Akku ${span(4)}: <b>Halten</b>`);
+	const charging = hover(6);
+	expect(charging.split('<br>').at(-1)).toBe(`Akku ${span(6)}: <b>Netzladen 2,3 kW</b>`);
+	expect(charging.indexOf('Reserve')).toBeLessThan(charging.indexOf('Akku'));
+	expect(charging).toContain('Geplanter SOC: <b>');
 	// Legendenreihen ohne Daten erscheinen nicht als Zeile
 	const withLegend = option.tooltip.formatter([
-		{ seriesName: 'Geplanter SOC', value: [time, 55] },
-		{ seriesName: 'Netzladen', value: [time, null] }
+		{ seriesName: 'Geplanter SOC', value: points[6] },
+		{ seriesName: 'Netzladen', value: [points[6]![0], null] }
 	]);
 	expect(withLegend).not.toContain('Netzladen:');
-	// ohne Slot zur Zeit keine Zeile
-	const outside = option.tooltip.formatter([{ seriesName: 'Geplanter SOC', value: [0, 55] }]);
-	expect(outside).not.toContain('Akku:');
+	// ein Zeitpunkt, an dem kein Slot endet, hat keine Zeile
+	const between = option.tooltip.formatter([
+		{ seriesName: 'Geplanter SOC', value: [points[6]![0] + 300_000, 55] }
+	]);
+	expect(between).not.toContain('Akku');
 });

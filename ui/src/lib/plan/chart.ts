@@ -15,9 +15,9 @@ import {
 	type ValueFormat
 } from '$lib/charts/options';
 import type { Palette } from '$lib/charts/palette';
-import { NBSP, expectedLabel, formatCt, formatNumber } from '$lib/format';
+import { NBSP, expectedLabel, formatCt, formatNumber, formatTime } from '$lib/format';
 import { parseIso } from '$lib/time';
-import { intentLabel } from './model';
+import { INTENT_LABELS, intentLabel } from './model';
 
 type Point = [number, number | null];
 
@@ -151,15 +151,22 @@ function windows(slots: PlanSlot[]): Window[] {
 const socFormat: ValueFormat = (value) => `${formatNumber(value, 0)}${NBSP}%`;
 
 /**
- * Beschriftung der Absicht des Slots, der `time` enthält (`start ≤ time < start + 15 min`), sonst
- * `null`
+ * Der Slot, der genau bei `time` endet, mit Beschriftung seiner Absicht und Zeitspanne (ISO),
+ * sonst `null`. Der geplante SOC gilt am Ende des Slots (`slotEndSocPoints`): der Punkt dort ist
+ * das Ergebnis dieses Slots.
  */
-export function intentAt(slots: PlanSlot[], time: number): string | null {
-	const slot = slots.find((item) => {
-		const start = epoch(item.start);
-		return start <= time && time < start + SLOT_MS;
-	});
-	return slot ? intentLabel(slot.intent, slot.grid_charge_w) : null;
+export function intentEndingAt(
+	slots: PlanSlot[],
+	time: number
+): { from: string; to: string; label: string } | null {
+	const slot = slots.find((item) => epoch(item.start) + SLOT_MS === time);
+	return slot
+		? {
+				from: new Date(epoch(slot.start)).toISOString(),
+				to: new Date(time).toISOString(),
+				label: intentLabel(slot.intent, slot.grid_charge_w)
+			}
+		: null;
 }
 
 export function planSocOption(plan: Plan, nowIso: string, palette: Palette): EChartsCoreOption {
@@ -208,10 +215,10 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 		}
 	];
 	// Legendeneinträge für die Flächen: Reihen ohne Daten, nur für Absichten, die der Plan hat
-	// (ein Klick darauf blendet die Fläche nicht aus, sie hängt an der SOC-Reihe)
+	// (das Muster in der Legende zeigt nur den Farbton; ein Klick darauf blendet die Fläche nicht aus, sie hängt an der SOC-Reihe)
 	for (const intent of ['NETZLADEN', 'HALTEN'] as const) {
 		if (!plan.slots.some((slot) => slot.intent === intent)) continue;
-		const name = intent === 'NETZLADEN' ? 'Netzladen' : 'Halten';
+		const name = INTENT_LABELS[intent];
 		series.push({
 			id: `legend_${name.toLowerCase()}`,
 			name,
@@ -245,8 +252,10 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 				}[];
 				const item = items.find((i) => i.seriesName === 'Geplanter SOC') ?? items[0];
 				const point = item && Array.isArray(item.value) ? item.value[0] : undefined;
-				const intent = typeof point === 'number' ? intentAt(plan.slots, point) : null;
-				return intent === null ? html : `${html}<br>Akku: <b>${escapeHtml(intent)}</b>`;
+				const slot = typeof point === 'number' ? intentEndingAt(plan.slots, point) : null;
+				return slot === null
+					? html
+					: `${html}<br>Akku ${formatTime(slot.from)}\u2013${formatTime(slot.to)}: <b>${escapeHtml(slot.label)}</b>`;
 			}
 		},
 		yAxis: [
