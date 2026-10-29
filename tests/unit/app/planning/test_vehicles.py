@@ -244,6 +244,63 @@ def test_planned_vehicles_carry_horizon_need_and_allowance(cfg: Config) -> None:
     assert tesla.grid_allowed_kwh == pytest.approx(expected)
 
 
+def test_reached_state_matches_the_charging_module() -> None:
+    from bindaems.app.charging import planned
+    from bindaems.app.planning import vehicles
+
+    assert vehicles.REACHED_STATE == planned.REACHED_STATE
+
+
+def test_reached_car_has_no_need(cfg: Config) -> None:
+    # Der core hält „Ziel erreicht“ bis 3 Punkte unter dem Ziel (Hysterese): 49 % bei Ziel 50 %
+    # lädt er nicht; der Planer übernimmt das und plant das fehlende Prozent nicht.
+    entry = vehicle_health("tesla", soc_pct=49.0, target=50.0, state="reached")
+    [tesla] = planned_vehicles(cfg, planned_health(entry), _intent(), now=NOW, slots=_slots())
+    assert (tesla.need_kwh, tesla.horizon_need_kwh, tesla.grid_allowed_kwh) == (0.0, 0.0, 0.0)
+    assert tesla.reached is True
+    assert (tesla.soc_pct, tesla.target_soc_pct) == (49.0, 50.0)
+    entry = vehicle_health("tesla", soc_pct=49.0, target=50.0, state="plan")
+    [tesla] = planned_vehicles(cfg, planned_health(entry), _intent(), now=NOW, slots=_slots())
+    assert tesla.need_kwh > 0 and tesla.horizon_need_kwh > 0
+    assert tesla.reached is False
+
+
+def test_reached_car_leaves_the_surplus_to_the_lower_priority_car(cfg: Config) -> None:
+    # 3 kW Überschuss je Slot, acht Slots, Abfahrt nach zwei Stunden: 6 kWh. Der e-Golf braucht
+    # 10 % von 38,6 kWh (4,3 kWh) und steht in der Priorität hinter dem Tesla.
+    slots = _slots(8, pv_p25=[3500.0] * 8)
+    departure = (at(START) + 2 * HOUR).isoformat()
+
+    def allowed(tesla_state: str) -> dict[str, float]:
+        health = planned_health(
+            vehicle_health(
+                "tesla", soc_pct=49.0, target=80.0, state=tesla_state, departure_at=departure
+            ),
+            vehicle_health("egolf", soc_pct=10.0, target=20.0, departure_at=departure),
+        )
+        cars = planned_vehicles(cfg, health, _intent(), now=NOW, slots=slots)
+        return {car.key: car.grid_allowed_kwh for car in cars}
+
+    # Der Tesla nimmt den Überschuss, solange er lädt: der e-Golf muss ihn aus dem Netz holen
+    assert allowed("plan")["egolf"] == pytest.approx(10 / 100 * 38.6 / 0.9)
+    # Ein erreichter Tesla nimmt nichts; der Überschuss deckt den ganzen Bedarf des e-Golf
+    assert allowed("reached") == pytest.approx({"tesla": 0.0, "egolf": 0.0})
+
+
+def test_reached_car_takes_no_surplus_in_grid_allowed() -> None:
+    slots = _slots(8, pv_p25=[3500.0] * 8)
+    departure = at(START) + 2 * HOUR
+    reached = planned_car(
+        key="tesla", reached=True, need_kwh=0.0, horizon_need_kwh=0.0, departure_at=departure
+    )
+    egolf = planned_car(key="egolf", horizon_need_kwh=4.0, departure_at=departure)
+    allowed = grid_allowed([reached, egolf], slots, ["tesla", "egolf"])
+    assert allowed == pytest.approx({"tesla": 0.0, "egolf": 0.0})  # 6 kWh Überschuss, 4 gebraucht
+    tesla = planned_car(key="tesla", horizon_need_kwh=10.0, departure_at=departure)
+    allowed = grid_allowed([tesla, egolf], slots, ["tesla", "egolf"])
+    assert allowed["egolf"] == pytest.approx(4.0)  # ohne „erreicht“ nimmt der Tesla alles
+
+
 def test_infeasible_target_stays_in_the_inputs_with_its_full_need(cfg: Config) -> None:
     # Review Focus 5: zu spät angesteckt, 40 kWh in zwei Slots gehen nicht; das Auto bleibt mit
     # dem ganzen Bedarf drin, der Optimierer weist die Fehlmenge aus

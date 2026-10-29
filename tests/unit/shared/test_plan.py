@@ -248,6 +248,16 @@ def test_plan_vehicle_roundtrips_in_a_plan() -> None:
     assert again.slots[0].ev_w == {"tesla": 7000.0}
 
 
+def test_old_plan_vehicle_without_reached_loads_with_false() -> None:
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"])
+    plan = plan.model_copy(update={"vehicles": [_vehicle(reached=True)]})
+    raw = plan.model_dump(mode="json")
+    assert raw["vehicles"][0]["reached"] is True
+    del raw["vehicles"][0]["reached"]
+    assert Plan.model_validate(raw).vehicles[0].reached is False
+    assert _vehicle().reached is False
+
+
 def test_plan_vehicle_rejects_unknown_fields_and_naive_times() -> None:
     with pytest.raises(ValidationError):
         _vehicle(extra=1)

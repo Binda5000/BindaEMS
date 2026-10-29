@@ -463,6 +463,34 @@ def test_plan_summary_per_car() -> None:
     assert (plan.slots[2].import_w, plan.slots[2].discharge_w) == (6000.0, 500.0)
 
 
+def test_reached_car_is_summarised_as_reached() -> None:
+    # Der core hält das Ziel für erreicht (49 % bei Ziel 50 %): kein Bedarf, kein Laden, kein
+    # Warten auf PV und keine Abfahrtsziel-Gründe in den Slots
+    reached = planned_car(
+        soc_pct=49.0,
+        target_soc_pct=50.0,
+        reached=True,
+        need_kwh=0.0,
+        horizon_need_kwh=0.0,
+        grid_allowed_kwh=0.0,
+        departure_at=at(SCENARIO_START) + 6 * SLOT,
+    )
+    inputs = scenario(
+        prices=[20.0] * 8,
+        pv=[0.0, 0.0, 4000.0, 4000.0, 0.0, 0.0, 0.0, 0.0],
+        load=[500.0] * 8,
+        vehicles=[reached],
+    )
+    plan = build_plan(inputs, [EV] * 8, source="optimizer", solver_status="optimal", ev_w=[{}] * 8)
+    (car,) = plan.vehicles
+    assert car.reached is True
+    assert car.reachable is True and car.finish_at is None
+    assert (car.need_kwh, car.planned_kwh, car.shortfall_kwh) == (0.0, 0.0, 0.0)
+    assert (car.soc_start_pct, car.target_soc_pct) == (49.0, 50.0)
+    codes = {reason.code for slot in plan.slots for reason in slot.reasons}
+    assert not codes & {"AUTO_WARTET_AUF_PV", "ZIEL_SOC_ABFAHRT"}
+
+
 def test_reachable_allows_a_tenth_of_a_kwh_and_computes_a_missing_shortfall() -> None:
     ev_w = [{}, {}, {"tesla": 6000.0}, {"tesla": 6000.0}, {}, {}, {}, {}]
     close = _car_plan(ev_w, soc_pct=76.0, target_soc_pct=80.0, need_kwh=3.1)

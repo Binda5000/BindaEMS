@@ -177,6 +177,7 @@ async def test_get_plan_shows_the_planned_cars(client_as, planning, live):
         "expected_soc_pct": source.expected_soc_pct,
         "finish_at": source.finish_at.isoformat() if source.finish_at else None,
         "reachable": source.reachable,
+        "reached": False,
         "expected": False,
         "arrival_at": None,
     }

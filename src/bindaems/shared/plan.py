@@ -151,6 +151,9 @@ class PlanVehicle(_Model):
     - ``expected_soc_pct``: Ladestand an der Abfahrt, wenn der Plan so läuft
     - ``finish_at``: Ende des letzten Slots mit Laden, ``None`` ohne Laden
     - ``reachable``: erreicht der Plan das Ziel (Fehlmenge höchstens 0,1 kWh)?
+    - ``reached``: der core hält das Ziel für erreicht (Health ``planned.state == "reached"``, mit
+      seiner Hysterese); der Plan lädt dann nichts und ``reachable`` ist wahr. Pläne ohne das
+      Feld laden mit ``False``.
     - ``expected``: ein erwartetes Auto (Plan 5b, Präzisierung 10), noch nicht angesteckt und ab
       ``arrival_at`` laut Anwesenheitsprognose da; ``soc_start_pct`` ist dann der gelernte
       Ladestand bei der Ankunft. Es steht nur im Plan: Die Absicht (``intent_plan``), HA und die
@@ -172,6 +175,7 @@ class PlanVehicle(_Model):
     expected_soc_pct: Finite
     finish_at: AwareDatetime | None
     reachable: bool
+    reached: bool = False
     expected: bool = False
     arrival_at: AwareDatetime | None = None
 

@@ -132,6 +132,7 @@ def vehicle_summary(
                 expected_soc_pct=min(100.0, expected),
                 finish_at=finish_at,
                 reachable=shortfall <= REACHABLE_TOL_KWH + KWH_EPS,
+                reached=car.reached,
                 expected=car.expected,
                 arrival_at=car.arrival_at,
             )

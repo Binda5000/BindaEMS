@@ -39,6 +39,10 @@ from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 if TYPE_CHECKING:  # ``inputs`` importiert dieses Modul für ``PlanInputs.vehicles``
     from bindaems.app.planning.inputs import SlotInput
 
+# ``planned.state`` in Health, wenn der core das Ziel hält (``app.charging.planned.REACHED_STATE``;
+# das importiert dieses Modul, darum steht der Wert hier, ein Test vergleicht beide)
+REACHED_STATE: Final = "reached"
+
 LATEST_START_MARGIN: Final = 1.1  # Zuschlag auf die Ladedauer bei voller Leistung (wie im core)
 LATEST_START_BUFFER: Final = timedelta(minutes=15)  # Puffer vor der Abfahrt (wie im core)
 
@@ -66,6 +70,9 @@ class PlanVehicleInput(_Model):
     - ``need_kwh``: der Bedarf bis zum Ziel aus der Wallbox (``need_kwh``)
     - ``horizon_need_kwh``: der Teil davon, der im Horizont geladen werden muss (``horizon_need``)
     - ``grid_allowed_kwh``: so viel davon darf bis zur Abfahrt aus dem Netz kommen (Regel R2)
+    - ``reached``: der core hält das Ziel für erreicht (Health ``planned.state == "reached"``, bis
+      der Ladestand um ``TARGET_RESTART_PP`` unter das Ziel fällt); die app rechnet keine eigene
+      Hysterese. Dann sind die drei Energien 0, auch wenn der Ladestand knapp unter dem Ziel liegt.
     - ``expected``: das Auto ist noch nicht angesteckt und wird ab ``arrival_at`` (Beginn der
       ersten Viertelstunde mit Anwesenheit ab 50 %, UTC) erwartet; ``soc_pct`` ist dann der
       gelernte Ladestand bei der Ankunft. Angesteckte Autos: ``False`` und ``None``; gespeicherte
@@ -91,6 +98,7 @@ class PlanVehicleInput(_Model):
     need_kwh: NonNegativeFinite
     horizon_need_kwh: NonNegativeFinite
     grid_allowed_kwh: NonNegativeFinite
+    reached: bool = False
     expected: bool = False
     arrival_at: AwareDatetime | None = None
 
@@ -249,15 +257,17 @@ def _car_input(
     departure_at: datetime,
     horizon_end: datetime,
     arrival_at: datetime | None = None,
+    reached: bool = False,
 ) -> PlanVehicleInput:
     """Das Auto ``key`` an der Wallbox ``wallbox_key`` als Eingangsdatum; ``arrival_at`` macht
-    es zum erwarteten Auto. ``grid_allowed_kwh`` ist noch der Bedarf im Horizont (R2 folgt)."""
+    es zum erwarteten Auto. ``grid_allowed_kwh`` ist noch der Bedarf im Horizont (R2 folgt).
+    ``reached``: der core hält das Ziel für erreicht, dann ist der Bedarf 0."""
     vehicle = cfg.vehicles[key]
     wallbox = cfg.wallboxes[wallbox_key]
     volts = cfg.grid.voltage_nominal_v
     efficiency = vehicle.charge_efficiency_pct / 100
     max_w = full_power_w(vehicle, wallbox, volts)
-    need = need_kwh(soc_pct, target_soc_pct, vehicle.usable_kwh, efficiency)
+    need = 0.0 if reached else need_kwh(soc_pct, target_soc_pct, vehicle.usable_kwh, efficiency)
     within = horizon_need(need, max_w, departure_at, horizon_end)
     return PlanVehicleInput(
         key=key,
@@ -275,6 +285,7 @@ def _car_input(
         need_kwh=need,
         horizon_need_kwh=within,
         grid_allowed_kwh=within,
+        reached=reached,
         expected=arrival_at is not None,
         arrival_at=arrival_at,
     )
@@ -296,7 +307,9 @@ def planned_vehicles(
     dem Ende des aktuellen Slots (``slots[0]``) liegt. Ein unbekannter Ladestand rechnet mit 0 %
     (``soc_assumed``). Ist die Abfahrt aus Health schon vorbei (Health ist bis zu einer Abfrage
     alt), gilt die nächste nach ``now`` (``next_departure``), wie im nächsten Zyklus des core.
-    ``grid_allowed_kwh`` verteilt den Überschuss in der Reihenfolge der Priorität. Nicht
+    ``grid_allowed_kwh`` verteilt den Überschuss in der Reihenfolge der Priorität. Nennt Health
+    ``planned.state`` „reached“, hält der core das Ziel für erreicht (mit seiner Hysterese): Das
+    Auto hat Bedarf 0 und ``reached``, der Überschuss bleibt für die Autos danach. Nicht
     angesteckte Autos nennt ``expected_vehicles``.
     """
     if intent is None or not slots or not trusted(intent.version, health):
@@ -337,6 +350,7 @@ def planned_vehicles(
                 limit_pct=finite_number(entry.get("charge_limit_pct")),
                 departure_at=departure_at,
                 horizon_end=horizon_end,
+                reached=planned.get("state") == REACHED_STATE,
             )
         )
     allowed = grid_allowed(cars, slots, [car.key for car in cars])

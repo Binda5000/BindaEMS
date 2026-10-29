@@ -531,10 +531,11 @@ PLANNED_DEPARTURE = "2026-10-17T05:00:00+00:00"  # 07:00 Ortszeit
 def vehicle_health(key: str = "tesla", **changes: Any) -> dict[str, Any]:
     """Eintrag eines Fahrzeugs in Health wie ``ChargeController.health`` (Werte erfunden): in
     „Geplant“, angesteckt, Tesla am Wall Connector, e-Golf an der EVCS, 40 % gemessen, Ziel 80 %
-    bis ``PLANNED_DEPARTURE``. ``target`` und ``departure_at`` ändern den Teil ``planned``, die
-    übrigen Schlüssel den Eintrag."""
+    bis ``PLANNED_DEPARTURE``. ``target``, ``departure_at`` und ``state`` ändern den Teil
+    ``planned``, die übrigen Schlüssel den Eintrag; ``state`` ist der Zustand in ``planned``
+    (Standard „surplus“, „reached“ heißt: der core hält das Ziel für erreicht)."""
     planned = {
-        "state": "surplus",
+        "state": changes.pop("state", "surplus"),
         "target_soc_pct": changes.pop("target", 80.0),
         "departure_at": changes.pop("departure_at", PLANNED_DEPARTURE),
         "need_kwh": 0.0,
