@@ -18,11 +18,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from bindaems.app.planning.battery_model import SimStep, params_of
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import (
+    EMPTY_TOL_KWH,
     MENTION_W,
     R1_TOL_KWH,
+    USED_ABOVE_W,
     charged_window_end,
     export_while_charged_kwh,
     pays_off,
+    spread_pays,
 )
 from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import EV_ON_W, KWH_EPS, charge_window
@@ -51,6 +54,15 @@ def _num(params: Params, key: str) -> float:
 
 def _txt(params: Params, key: str) -> str:
     return str(params[key])
+
+
+def _auto_wartet(params: Params) -> str:
+    # Pläne vor der Uhrzeit „bis“ tragen nur den Namen und behalten ihren Satz.
+    if "um" not in params:
+        return f"{_txt(params, 'name')} wartet auf PV-Überschuss (Regel R)."
+    return (
+        f"{_txt(params, 'name')} wartet bis {_txt(params, 'um')} Uhr auf PV-Überschuss (Regel R)."
+    )
 
 
 def _klima_mehr(params: Params) -> str:
@@ -94,6 +106,10 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
         f"Netzladen würde sich lohnen (jetzt {_de(_num(p, 'ct'), 1)} ct, um {_txt(p, 'um')} Uhr "
         f"{_de(_num(p, 'ct_spaeter'), 1)} ct), ist aber ausgeschaltet."
     ),
+    "AKKU_AN_UNTERGRENZE": lambda p: (
+        f"Akku steht an der Untergrenze ({_de(_num(p, 'soc'), 0)} %), "
+        "das Haus bezieht aus dem Netz."
+    ),
     "EIGENVERBRAUCH": lambda _: "Akku deckt den Eigenverbrauch.",
     "UNTERSTUETZUNG_RESERVIERT": lambda p: (
         f"Akku-Unterstützung fürs Auto erst ab {_de(_num(p, 'soc'), 0)} %, weil der Plan den "
@@ -105,7 +121,7 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
         f"{_txt(p, 'name')} lädt {_de(_num(p, 'kw'), 1)} kW, damit es um {_txt(p, 'um')} Uhr "
         f"{_de(_num(p, 'soc'), 0)} % hat."
     ),
-    "AUTO_WARTET_AUF_PV": lambda p: f"{_txt(p, 'name')} wartet auf PV-Überschuss (Regel R).",
+    "AUTO_WARTET_AUF_PV": _auto_wartet,
     "ZIEL_SOC_UNERREICHBAR": lambda p: (
         f"{_txt(p, 'name')} erreicht bis {_txt(p, 'um')} Uhr voraussichtlich nur "
         f"{_de(_num(p, 'soc'), 0)} %."
@@ -195,6 +211,36 @@ def _budget_peak(
     )
 
 
+def _first_paying_discharge(
+    inputs: PlanInputs, steps: Sequence[SimStep], index: int
+) -> tuple[int, float] | None:
+    """Erster späterer Slot mit Entladung über ``USED_ABOVE_W``, für den die Spread-Regel mit dem
+    Preis von ``index`` gilt, und sein Bezugspreis; ``None``, wenn es keinen gibt.
+
+    Das Netzladen im Slot ``index`` dient der nächsten solchen Entladung, nicht der teuersten im
+    Horizont (die ``pays_off`` für Plausibilität und Absichten sucht).
+    """
+    now_ct = inputs.slots[index].import_ct
+    for later in range(index + 1, len(steps)):
+        later_ct = inputs.slots[later].import_ct
+        if steps[later].discharge_w > USED_ABOVE_W and spread_pays(
+            inputs.planning, now_ct, later_ct
+        ):
+            return later, later_ct
+    return None
+
+
+def _at_floor(inputs: PlanInputs, item: SimStep) -> bool:
+    """Der Akku steht an der Untergrenze: er entlädt weniger als ``MENTION_W``, das Haus bezieht
+    mindestens ``MENTION_W`` aus dem Netz (ohne die Autos), und der SOC am Slotbeginn liegt
+    höchstens ``EMPTY_TOL_KWH`` über ``lo_kwh``."""
+    return (
+        item.discharge_w < MENTION_W
+        and item.import_w - item.ev_grid_w >= MENTION_W
+        and item.soc_start_kwh <= params_of(inputs).lo_kwh + EMPTY_TOL_KWH
+    )
+
+
 def _main_reason(
     inputs: PlanInputs,
     intents: Sequence[BatteryIntent],
@@ -202,6 +248,19 @@ def _main_reason(
     budgets: Sequence[float | None],
     index: int,
 ) -> Reason:
+    """Hauptcode des Slots ``index``; die erste passende Regel gilt, in dieser Reihenfolge
+    (wie die Tabelle in docs/betrieb.md, „Planung“):
+
+    1. ``NETZLADEN_GUENSTIG`` bei Absicht ``NETZLADEN``; „um“ ist die erste spätere Entladung, für
+       die sich das Laden auszahlt (``_first_paying_discharge``), sonst der teuerste spätere Slot.
+    2. ``HALTEN_FUER_SPITZE``, ``BUDGET_SPITZE`` oder ``HALTEN_RESTWERT`` bei Absicht ``HALTEN``.
+    3. ``PV_LADEN``, wenn der Akku mindestens ``MENTION_W`` aus PV lädt.
+    4. ``REGEL_R_BLOCKIERT_NETZLADEN`` bzw. ``NETZLADEN_AUS``, wenn sich Netzladen lohnen würde.
+    5. ``PV_UEBERSCHUSS_ERWARTET``, wenn der Akku entlädt und später die PV ihn lädt.
+    6. ``AKKU_AN_UNTERGRENZE``, wenn der Akku an der Untergrenze steht und das Haus aus dem Netz
+       bezieht (``_at_floor``); ``soc`` ist ``lo_kwh`` in % der Kapazität.
+    7. ``EIGENVERBRAUCH`` sonst.
+    """
     slots = inputs.slots
     count = len(slots)
     horizon_end = _hhmm(slots[-1].start + SLOT)
@@ -210,7 +269,7 @@ def _main_reason(
     item = steps[index]
 
     if intent.kind is BatteryIntentKind.NETZLADEN:
-        hit = pays_off(inputs, steps, index, by="discharge")
+        hit = _first_paying_discharge(inputs, steps, index)
         if hit is not None:
             later, later_ct = hit
         elif index + 1 < count:
@@ -280,6 +339,12 @@ def _main_reason(
         )
         if refill is not None:
             return Reason(code="PV_UEBERSCHUSS_ERWARTET", params={"um": _hhmm(slots[refill].start)})
+    if _at_floor(inputs, item):
+        params = params_of(inputs)
+        return Reason(
+            code="AKKU_AN_UNTERGRENZE",
+            params={"soc": params.lo_kwh / params.capacity_kwh * 100},
+        )
     return Reason(code="EIGENVERBRAUCH")
 
 
@@ -301,9 +366,10 @@ def _car_reasons(
       wenn es erreichbar ist, sonst der erwartete Ladestand.
     - ``AUTO_AUS_AKKU`` in Slots, in denen das Auto mindestens ``MENTION_W`` aus dem Akku lädt, nach
       ``ZIEL_SOC_ABFAHRT`` desselben Autos; ``kw`` ist der Akkuanteil.
-    - ``AUTO_WARTET_AUF_PV`` in Slots vor der Abfahrt ohne Laden (ein erwartetes Auto erst ab
-      seiner Ankunft), wenn Regel R2 bindet (``grid_allowed_kwh < horizon_need_kwh``) und ein
-      späterer Slot davor das Auto mit mindestens ``MENTION_W`` aus PV lädt.
+    - ``AUTO_WARTET_AUF_PV`` im ersten Slot jeder zusammenhängenden Folge von Slots vor der Abfahrt
+      ohne Laden (ein erwartetes Auto erst ab seiner Ankunft), in denen Regel R2 bindet
+      (``grid_allowed_kwh < horizon_need_kwh``) und ein späterer Slot davor das Auto mit mindestens
+      ``MENTION_W`` aus PV lädt; ``um`` ist der Beginn des ersten solchen späteren Slots.
     - ``ZIEL_SOC_UNERREICHBAR`` im ersten Slot, wenn der Plan das Ziel nicht erreicht; nicht für
       erwartete Autos (Plan 5b).
     - ``AUTO_ERWARTET`` im Slot der Ankunft eines erwarteten Autos mit Name, Ankunft und dem
@@ -340,6 +406,7 @@ def _car_reasons(
                 )
             )
         binds = car.grid_allowed_kwh < car.horizon_need_kwh - KWH_EPS
+        waiting = False  # der vorige Slot gehört schon zur Wartezeit
         for index in range(count):
             from_grid = watts[index] - from_pv[index] - from_battery[index]
             if from_grid >= MENTION_W:
@@ -354,13 +421,25 @@ def _car_reasons(
                         },
                     )
                 )
-            elif (
-                binds
-                and index in window
-                and watts[index] < EV_ON_W
-                and any(from_pv[later] >= MENTION_W for later in range(index + 1, window.stop))
-            ):
-                result[index].append(Reason(code="AUTO_WARTET_AUF_PV", params={"name": car.name}))
+            # erster späterer Slot im Fenster, in dem das wartende Auto aus PV lädt
+            pv_slot: int | None = None
+            if from_grid < MENTION_W and binds and index in window and watts[index] < EV_ON_W:
+                pv_slot = next(
+                    (
+                        later
+                        for later in range(index + 1, window.stop)
+                        if from_pv[later] >= MENTION_W
+                    ),
+                    None,
+                )
+            if pv_slot is not None and not waiting:
+                result[index].append(
+                    Reason(
+                        code="AUTO_WARTET_AUF_PV",
+                        params={"name": car.name, "um": _hhmm(inputs.slots[pv_slot].start)},
+                    )
+                )
+            waiting = pv_slot is not None
             if from_battery[index] >= MENTION_W:
                 result[index].append(
                     Reason(

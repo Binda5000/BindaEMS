@@ -47,12 +47,13 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "PV_UEBERSCHUSS_ERWARTET": {"um": "09:30"},
     "REGEL_R_BLOCKIERT_NETZLADEN": {"um": "12:00", "kwh": 7.25},
     "NETZLADEN_AUS": {"ct": 10.0, "um": "18:00", "ct_spaeter": 40.0},
+    "AKKU_AN_UNTERGRENZE": {"soc": 20.0},
     "EIGENVERBRAUCH": {},
     "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "2026-10-16T16:00:00+00:00"},
     "GESCHAETZT": {},
     "ERSATZPLAN": {},
     "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
-    "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
+    "AUTO_WARTET_AUF_PV": {"name": "e-Golf", "um": "09:30"},
     "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.4, "um": "06:30"},
     "AUTO_ERWARTET": {"name": "Tesla Model 3", "um": "17:30", "soc": 40.6},
     "KLIMA_MEHR": {"mode": "heizen", "k": 1.0},
@@ -118,6 +119,9 @@ def test_all_sentences_match_the_texts_exactly() -> None:
             "Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 40,0 ct), "
             "ist aber ausgeschaltet."
         ),
+        "AKKU_AN_UNTERGRENZE": (
+            "Akku steht an der Untergrenze (20 %), das Haus bezieht aus dem Netz."
+        ),
         "EIGENVERBRAUCH": "Akku deckt den Eigenverbrauch.",
         "UNTERSTUETZUNG_RESERVIERT": (
             "Akku-Unterstützung fürs Auto erst ab 70 %, "
@@ -126,7 +130,7 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         "GESCHAETZT": "Preis geschätzt.",
         "ERSATZPLAN": "Ersatzplan.",
         "ZIEL_SOC_ABFAHRT": "Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat.",
-        "AUTO_WARTET_AUF_PV": "e-Golf wartet auf PV-Überschuss (Regel R).",
+        "AUTO_WARTET_AUF_PV": "e-Golf wartet bis 09:30 Uhr auf PV-Überschuss (Regel R).",
         "ZIEL_SOC_UNERREICHBAR": "e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %.",
         "AUTO_ERWARTET": (
             "Tesla Model 3 wird um 17:30 Uhr mit etwa 41 % erwartet (Anwesenheitsprognose)."
@@ -225,6 +229,27 @@ def test_grid_charge_without_payoff_names_the_most_expensive_later_slot() -> Non
     assert first.params["ct_spaeter"] == 30.0 and first.params["um"] == "02:30"
 
 
+def test_grid_charge_names_the_first_paying_discharge() -> None:
+    # Geladen wird für die Entladung gleich danach, nicht für den teuersten Slot im Horizont: der
+    # erste spätere Slot mit Entladung, für den die Spread-Regel gilt, steht im Satz.
+    inputs = scenario(
+        prices=[20.0, 40.0, 40.0, 60.0],
+        pv=[0.0] * 4,
+        load=[1000.0] * 4,
+        soc_pct=20.0,
+        grid_charge=True,
+        battery=small_battery(),
+    )
+    intents = [charge(5000.0), EV, EV, EV]
+    steps = resimulate(inputs, intents)
+    assert all(item.discharge_w > 100.0 for item in steps[1:])
+    reasons = reasons_for(inputs, intents, steps, [None] * 4, fallback=False)
+    first = reasons[0][0]
+    assert first.code == "NETZLADEN_GUENSTIG"
+    assert first.params["um"] == "02:15" and first.params["ct_spaeter"] == 40.0
+    assert sentence(first).endswith("um 02:15 Uhr 40,0 ct.")
+
+
 def test_hold_for_expensive_block_beats_budget_and_remaining_value() -> None:
     inputs = scenario(prices=[20.0] * 4 + [38.0] * 8, pv=[0.0] * 12, load=[1000.0] * 12)
     result = codes(inputs, [HOLD] * 4 + [EV] * 8, budgets=[1.0] * 12)
@@ -293,7 +318,8 @@ def test_no_rule_r_reason_when_battery_empties_before_pv() -> None:
     assert sum(item.export_w for item in steps) > 0
     reasons = reasons_for(inputs, intents, steps, [None] * 8, fallback=False)
     assert "REGEL_R_BLOCKIERT_NETZLADEN" not in [r.code for r in reasons[0]]
-    assert reasons[0][0].code == "EIGENVERBRAUCH"
+    # Der Akku startet an der Reserve, das Haus bezieht aus dem Netz
+    assert reasons[0][0].code == "AKKU_AN_UNTERGRENZE"
 
 
 def test_switched_off_grid_charge_is_explained() -> None:
@@ -312,6 +338,32 @@ def test_pv_surplus_expected_after_a_discharging_slot() -> None:
     assert reasons[0][0].code == "PV_UEBERSCHUSS_ERWARTET"
     assert reasons[0][0].params == {"um": "03:00"}
     assert reasons[4][0].code == "PV_LADEN"
+
+
+def test_battery_at_floor_says_so() -> None:
+    # Nachts an der Reserve: der Akku gibt nichts, das Haus läuft aus dem Netz.
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[1000.0] * 4, soc_pct=20.0)
+    steps = resimulate(inputs, [EV] * 4)
+    reasons = reasons_for(inputs, [EV] * 4, steps, [None] * 4, fallback=False)
+    assert [r[0].code for r in reasons] == ["AKKU_AN_UNTERGRENZE"] * 4
+    assert reasons[0][0].params == {"soc": 20.0}
+    assert sentence(reasons[0][0]) == (
+        "Akku steht an der Untergrenze (20 %), das Haus bezieht aus dem Netz."
+    )
+    # derselbe Slot mit 50 %: der Akku deckt das Haus
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[1000.0] * 4, soc_pct=50.0)
+    assert codes(inputs, [EV] * 4) == [["EIGENVERBRAUCH"]] * 4
+    pv = [0.0, 0.0, 4000.0, 4000.0]
+    inputs = scenario(prices=[20.0] * 4, pv=pv, load=[1000.0] * 4, soc_pct=50.0)
+    assert codes(inputs, [EV] * 4)[0] == ["PV_UEBERSCHUSS_ERWARTET"]
+
+
+def test_battery_below_the_reserve_names_its_own_floor() -> None:
+    # Unter der Reserve gestartet (17 % bei 20 % Reserve): die Untergrenze des Laufs ist der SOC.
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[1000.0] * 4, soc_pct=17.0)
+    steps = resimulate(inputs, [EV] * 4)
+    reasons = reasons_for(inputs, [EV] * 4, steps, [None] * 4, fallback=False)
+    assert reasons[0][0] == Reason(code="AKKU_AN_UNTERGRENZE", params={"soc": 17.0})
 
 
 def test_plain_eigenverbrauch_when_nothing_special() -> None:
@@ -423,8 +475,9 @@ def test_car_waits_for_pv_when_rule_r2_binds() -> None:
     ev_w: list[dict[str, float]] = [{}, {}, {"tesla": 5500.0}, {"tesla": 5500.0}]
     plan = _car_plan(ev_w, [car], pv=[0.0, 0.0, 6000.0, 6000.0])
     texts = [slot_text(s) for s in plan.slots]
-    assert texts[0].endswith("Tesla Model 3 wartet auf PV-Überschuss (Regel R).")
-    assert "AUTO_WARTET_AUF_PV" in [r.code for r in plan.slots[1].reasons]
+    assert texts[0].endswith("Tesla Model 3 wartet bis 02:30 Uhr auf PV-Überschuss (Regel R).")
+    # nur im ersten Slot der Wartezeit
+    assert "AUTO_WARTET_AUF_PV" not in [r.code for r in plan.slots[1].reasons]
     # Aus PV geladen: kein Grund zum Netzladen des Autos
     assert [r.code for r in plan.slots[2].reasons] == ["EIGENVERBRAUCH"]
     # Ohne bindende Regel R2 wartet es nicht
@@ -518,6 +571,27 @@ def test_expected_car_waits_for_pv_only_after_arrival() -> None:
     plan = _car_plan(ev_w, [car], pv=[0.0, 0.0, 0.0, 6000.0])
     waits = ["AUTO_WARTET_AUF_PV" in [r.code for r in s.reasons] for s in plan.slots]
     assert waits == [False, False, True, False]
+
+
+def test_waiting_run_restarts_after_charging() -> None:
+    # Warten, ein Slot PV-Laden, wieder warten, dann PV: je eine Nennung am Beginn der Folge
+    car = planned_car(departure_at=_slot(6), need_kwh=2.75, grid_allowed_kwh=0.0)
+    ev_w: list[dict[str, float]] = [{}, {}, {"tesla": 5500.0}, {}, {}, {"tesla": 5500.0}]
+    plan = _car_plan(ev_w, [car], pv=[0.0, 0.0, 6000.0, 0.0, 0.0, 6000.0])
+    waits = [[r.params for r in s.reasons if r.code == "AUTO_WARTET_AUF_PV"] for s in plan.slots]
+    assert waits == [
+        [{"name": "Tesla Model 3", "um": "02:30"}],
+        [],
+        [],
+        [{"name": "Tesla Model 3", "um": "03:15"}],
+        [],
+        [],
+    ]
+
+
+def test_old_waiting_reason_without_time_keeps_its_sentence() -> None:
+    reason = Reason(code="AUTO_WARTET_AUF_PV", params={"name": "e-Golf"})
+    assert sentence(reason) == "e-Golf wartet auf PV-Überschuss (Regel R)."
 
 
 # --- Vorheizen und Vorkühlen (Plan 5c) ------------------------------------------------------
