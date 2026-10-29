@@ -102,10 +102,15 @@ export function planBlocks(slots: PlanSlot[], vehicles: PlanVehicle[] = []): Pla
 	return blocks;
 }
 
+/** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ (die kW nur beim Netzladen mit Leistung) */
+export function intentLabel(intent: BatteryIntentKind, gridChargeW: number): string {
+	const label = INTENT_LABELS[intent];
+	return intent === 'NETZLADEN' && gridChargeW > 0
+		? `${label} ${formatNumberMax(gridChargeW / 1000, 1)} kW`
+		: label;
+}
+
 /** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ */
 export function blockLabel(block: PlanBlock): string {
-	const label = INTENT_LABELS[block.intent];
-	return block.intent === 'NETZLADEN' && block.gridChargeW > 0
-		? `${label} ${formatNumberMax(block.gridChargeW / 1000, 1)} kW`
-		: label;
+	return intentLabel(block.intent, block.gridChargeW);
 }

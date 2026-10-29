@@ -7,6 +7,7 @@ import {
 	SLOT_MS,
 	axisTooltip,
 	baseOption,
+	escapeHtml,
 	kw,
 	nowMarkLine,
 	slotEndSocPoints,
@@ -16,7 +17,7 @@ import {
 import type { Palette } from '$lib/charts/palette';
 import { NBSP, expectedLabel, formatCt, formatNumber } from '$lib/format';
 import { parseIso } from '$lib/time';
-import { INTENT_LABELS } from './model';
+import { intentLabel } from './model';
 
 type Point = [number, number | null];
 
@@ -149,15 +150,28 @@ function windows(slots: PlanSlot[]): Window[] {
 
 const socFormat: ValueFormat = (value) => `${formatNumber(value, 0)}${NBSP}%`;
 
+/**
+ * Beschriftung der Absicht des Slots, der `time` enthält (`start ≤ time < start + 15 min`), sonst
+ * `null`
+ */
+export function intentAt(slots: PlanSlot[], time: number): string | null {
+	const slot = slots.find((item) => {
+		const start = epoch(item.start);
+		return start <= time && time < start + SLOT_MS;
+	});
+	return slot ? intentLabel(slot.intent, slot.grid_charge_w) : null;
+}
+
 export function planSocOption(plan: Plan, nowIso: string, palette: Palette): EChartsCoreOption {
 	const { xAxis, now } = timeAxis(plan, nowIso, palette);
 	const colors = { NETZLADEN: palette.importPrice, HALTEN: palette.pv };
+	// die Flächen tragen keinen Text (kurze Fenster überlagerten sich auf dem Handy); die Legende
+	// und der Tooltip nennen die Absicht
 	const areas = windows(plan.slots).map((window) => [
 		{
-			name: INTENT_LABELS[window.intent],
 			xAxis: window.start,
 			itemStyle: { color: colors[window.intent], opacity: 0.18 },
-			label: { color: palette.text, position: 'insideTop' }
+			label: { show: false }
 		},
 		{ xAxis: window.end }
 	]);
@@ -193,14 +207,47 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			itemStyle: { color: palette.muted }
 		}
 	];
-	const base = baseOption(palette) as { tooltip: object };
+	// Legendeneinträge für die Flächen: Reihen ohne Daten, nur für Absichten, die der Plan hat
+	// (ein Klick darauf blendet die Fläche nicht aus, sie hängt an der SOC-Reihe)
+	for (const intent of ['NETZLADEN', 'HALTEN'] as const) {
+		if (!plan.slots.some((slot) => slot.intent === intent)) continue;
+		const name = intent === 'NETZLADEN' ? 'Netzladen' : 'Halten';
+		series.push({
+			id: `legend_${name.toLowerCase()}`,
+			name,
+			type: 'line',
+			data: [],
+			itemStyle: { color: colors[intent] },
+			lineStyle: { width: 0 },
+			areaStyle: { color: colors[intent], opacity: 0.18 }
+		});
+	}
+	const base = baseOption(palette) as { legend: object; tooltip: object };
+	const format = axisTooltip({
+		'Geplanter SOC': socFormat,
+		Reserve: socFormat,
+		Netzladen: null,
+		Halten: null
+	});
 	return {
 		...base,
 		xAxis,
+		legend: { ...base.legend, data: series.map((s) => s.name) },
 		tooltip: {
 			...base.tooltip,
 			trigger: 'axis',
-			formatter: axisTooltip({ 'Geplanter SOC': socFormat, Reserve: socFormat })
+			formatter: (params: unknown): string => {
+				const html = format(params);
+				// die Zeit des Punktes: die der SOC-Reihe, sonst der ersten Reihe mit Wert
+				const items = (Array.isArray(params) ? params : [params]) as {
+					seriesName?: string;
+					value?: unknown;
+				}[];
+				const item = items.find((i) => i.seriesName === 'Geplanter SOC') ?? items[0];
+				const point = item && Array.isArray(item.value) ? item.value[0] : undefined;
+				const intent = typeof point === 'number' ? intentAt(plan.slots, point) : null;
+				return intent === null ? html : `${html}<br>Akku: <b>${escapeHtml(intent)}</b>`;
+			}
 		},
 		yAxis: [
 			{

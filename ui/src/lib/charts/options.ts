@@ -62,7 +62,7 @@ const HTML_ESCAPES: Record<string, string> = {
 };
 
 /** Text für HTML: der Tooltip ist HTML, Reihennamen kommen aus der Konfiguration */
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
 	return text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
 }
 

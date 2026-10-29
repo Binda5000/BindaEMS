@@ -1,7 +1,7 @@
 import type { LineSeriesOption } from 'echarts/charts';
 import { expect, it, vi } from 'vitest';
 import type { Palette } from '$lib/charts/palette';
-import { planPriceOption, planSocOption, planVehiclesOption } from './chart';
+import { intentAt, planPriceOption, planSocOption, planVehiclesOption } from './chart';
 import { NOW, PLAN, planWithWindows } from '$lib/testing/plan';
 
 const palette: Palette = {
@@ -31,9 +31,7 @@ it('marks estimated prices and intent windows', () => {
 	};
 	expect(soc.series[0].name).toBe('Geplanter SOC');
 	expect(soc.series[1].name).toBe('Reserve');
-	const areas = JSON.stringify(soc.series[0].markArea);
-	expect(areas).toContain('Halten');
-	expect(areas).toContain('Netzladen');
+	// zwei Fenster (Halten, Netzladen) als Flächen, ihre Namen stehen in der Legende
 	expect(soc.series[0].markArea?.data).toHaveLength(2);
 });
 
@@ -76,7 +74,7 @@ it('shows no windows when the plan only covers own consumption', () => {
 	expect(soc.series[0].markArea?.data ?? []).toEqual([]);
 });
 
-it('draws the windows with real ECharts (labels in the SVG)', async () => {
+it('draws the windows with real ECharts (legend entries in the SVG)', async () => {
 	// jsdom kann kein Canvas; ECharts misst Text dann näherungsweise
 	vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 	const core = await import('echarts/core');
@@ -192,4 +190,78 @@ it('zeichnet „jetzt“ nicht, wenn es außerhalb des Horizonts liegt', () => {
 	] as { series: { markLine?: unknown }[] }[]) {
 		expect(option.series.every((s) => s.markLine === undefined)).toBe(true);
 	}
+});
+
+type SocOption = {
+	legend: { type: string; data: string[] };
+	series: (LineSeriesOption & {
+		id: string;
+		itemStyle?: { color: string };
+		markArea?: { data: { label?: { show: boolean } }[][] };
+	})[];
+	tooltip: { formatter: (params: unknown) => string };
+};
+
+it('beschriftet die Flächen im Akku-Diagramm nicht, die Legende nennt die Absichten', () => {
+	const option = planSocOption(planWithWindows(), NOW, palette) as SocOption;
+	const pairs = option.series[0].markArea?.data ?? [];
+	expect(pairs).toHaveLength(2);
+	for (const pair of pairs) expect(pair[0].label?.show).toBe(false);
+	expect(option.legend.type).toBe('scroll');
+	expect(option.legend.data).toEqual(['Geplanter SOC', 'Reserve', 'Netzladen', 'Halten']);
+	const netzladen = option.series.find((s) => s.name === 'Netzladen');
+	const halten = option.series.find((s) => s.name === 'Halten');
+	expect(netzladen?.data).toEqual([]);
+	expect(halten?.data).toEqual([]);
+	expect(netzladen?.itemStyle?.color).toBe(palette.importPrice);
+	expect(halten?.itemStyle?.color).toBe(palette.pv);
+});
+
+it('nennt in der Legende nur Absichten, die der Plan hat', () => {
+	const slots = planWithWindows().slots.map((s) =>
+		s.intent === 'HALTEN' ? { ...s, intent: 'EIGENVERBRAUCH' as const } : s
+	);
+	const option = planSocOption({ ...PLAN, slots }, NOW, palette) as SocOption;
+	expect(option.legend.data).toEqual(['Geplanter SOC', 'Reserve', 'Netzladen']);
+	expect(option.series.map((s) => s.name)).not.toContain('Halten');
+	const none = planSocOption(PLAN, NOW, palette) as SocOption;
+	expect(none.legend.data).toEqual(['Geplanter SOC', 'Reserve']);
+});
+
+it('intentAt nennt die Absicht des Slots, der die Zeit enthält', () => {
+	const base = PLAN.slots[0]!;
+	const start = Date.parse(base.start);
+	const slots = [
+		{ ...base, intent: 'NETZLADEN' as const, grid_charge_w: 6700 },
+		{ ...base, start: new Date(start + 900_000).toISOString(), intent: 'HALTEN' as const }
+	];
+	expect(intentAt(slots, start)).toBe('Netzladen 6,7 kW');
+	expect(intentAt(slots, start + 899_999)).toBe('Netzladen 6,7 kW');
+	expect(intentAt(slots, start + 900_000)).toBe('Halten');
+	expect(intentAt(slots, start + 1_800_000)).toBeNull();
+	expect(intentAt(slots, start - 1)).toBeNull();
+});
+
+it('zeigt im Tooltip die Absicht des Akkus nach den Werten', () => {
+	const plan = planWithWindows();
+	const option = planSocOption(plan, NOW, palette) as SocOption;
+	const charging = plan.slots[6]!;
+	const time = Date.parse(charging.start) + 300_000;
+	const html = option.tooltip.formatter([
+		{ seriesName: 'Geplanter SOC', value: [time, 55] },
+		{ seriesName: 'Reserve', value: [time, 20] }
+	]);
+	const lines = html.split('<br>');
+	expect(lines.at(-1)).toBe('Akku: <b>Netzladen 2,3 kW</b>');
+	expect(html).toContain('Geplanter SOC: <b>55');
+	expect(html.indexOf('Reserve')).toBeLessThan(html.indexOf('Akku:'));
+	// Legendenreihen ohne Daten erscheinen nicht als Zeile
+	const withLegend = option.tooltip.formatter([
+		{ seriesName: 'Geplanter SOC', value: [time, 55] },
+		{ seriesName: 'Netzladen', value: [time, null] }
+	]);
+	expect(withLegend).not.toContain('Netzladen:');
+	// ohne Slot zur Zeit keine Zeile
+	const outside = option.tooltip.formatter([{ seriesName: 'Geplanter SOC', value: [0, 55] }]);
+	expect(outside).not.toContain('Akku:');
 });
