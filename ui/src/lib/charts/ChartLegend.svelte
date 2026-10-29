@@ -49,7 +49,9 @@
 	}
 	.chip.off {
 		color: var(--muted);
-		opacity: 0.6;
+	}
+	.chip.off .mark {
+		opacity: 0.4;
 	}
 	.chip.off .name {
 		text-decoration: line-through;

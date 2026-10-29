@@ -48,7 +48,8 @@ export function legendItems(option: EChartsCoreOption): LegendItem[] {
 	const items: LegendItem[] = [];
 	for (const entry of entries) {
 		const name = typeof entry === 'string' ? entry : entry.name;
-		if (name === undefined) continue;
+		// gleichnamige Reihen teilen sich wie in ECharts einen Eintrag
+		if (name === undefined || items.some((item) => item.name === name)) continue;
 		const found = series.find((item) => item.name === name);
 		items.push({
 			name,

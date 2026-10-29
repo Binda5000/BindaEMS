@@ -110,6 +110,17 @@ describe('legendItems', () => {
 		});
 		expect(items).toEqual([{ name: 'B', color: '#123', mark: 'line' }]);
 	});
+
+	it('führt gleichnamige Reihen nur einmal, wie ECharts', () => {
+		const items = legendItems({
+			legend: { show: false },
+			series: [
+				{ type: 'line', name: 'Tesla', itemStyle: { color: '#123' } },
+				{ type: 'line', name: 'Tesla', itemStyle: { color: '#456' } }
+			]
+		});
+		expect(items).toEqual([{ name: 'Tesla', color: '#123', mark: 'line' }]);
+	});
 });
 
 describe('withSelection', () => {
