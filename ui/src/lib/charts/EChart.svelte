@@ -136,7 +136,7 @@
 
 <div bind:this={element} class="chart" role="img" aria-label={label} style:height></div>
 {#if items.length > 0}
-	<ChartLegend {items} {hidden} onToggle={toggle} />
+	<ChartLegend {items} {hidden} {label} onToggle={toggle} />
 {/if}
 
 <style>

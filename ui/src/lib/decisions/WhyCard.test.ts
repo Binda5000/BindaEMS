@@ -112,3 +112,21 @@ it('zeigt das Detail eines Fehlers hinter dem Befehl', () => {
 	expect(screen.getByText('Netz-Sollwert 50 W · Modbus-Timeout')).toBeInTheDocument();
 	expect(screen.getByText('Fehler')).toBeInTheDocument();
 });
+
+it('nennt zwei gleich benannte Wallboxen mit der Bezeichnung des core', () => {
+	const decision = latestDecisions().decisions[0];
+	if (!decision) throw new Error('Demo ohne Entscheidung');
+	render(WhyCard, {
+		decisions: [
+			{ ...decision, id: 'a1', actuator: 'wallbox.a', text: 'EVCS „a“: Strom 6 A – gesendet.' },
+			{ ...decision, id: 'a2', actuator: 'wallbox.b', text: 'EVCS „b“: Strom 8 A – gesendet.' }
+		],
+		error: null,
+		names: { 'wallbox.a': 'EVCS „a“', 'wallbox.b': 'EVCS „b“' },
+		wallboxNames: { a: 'EVCS', b: 'EVCS' },
+		nowMs: Date.parse(decision.ts)
+	});
+	const [first, second] = screen.getAllByRole('listitem');
+	expect(within(first!).getByText('EVCS „a“')).toBeInTheDocument();
+	expect(within(second!).getByText('EVCS „b“')).toBeInTheDocument();
+});

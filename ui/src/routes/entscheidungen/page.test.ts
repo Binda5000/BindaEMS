@@ -261,3 +261,30 @@ it('behält eine neuere Eingabe, wenn die URL der vorigen erst danach ankommt', 
 	expect(screen.getByLabelText('Ergebnis')).toHaveValue('ok');
 	expect(goto).toHaveBeenCalledTimes(2);
 });
+
+it('Aktor-Auswahl und Tabelle unterscheiden zwei gleich benannte Wallboxen', async () => {
+	const base = limits();
+	const evcs = base.wallboxes['evcs']!;
+	api.limits.mockResolvedValue({ ...base, wallboxes: { evcs, evcs2: evcs } });
+	const health = system();
+	const first = health.core.health!.actuators.find((a) => a.id === 'wallbox.evcs')!;
+	health.core.health!.actuators.push({ ...first, id: 'wallbox.evcs2', label: 'EVCS „evcs2“' });
+	api.system.mockResolvedValue(health);
+	const all = decisions();
+	const one = all.decisions.find((d) => d.actuator === 'wallbox.evcs') ?? all.decisions[0]!;
+	api.decisions.mockResolvedValue({
+		...all,
+		decisions: [
+			{ ...one, id: 9001, actuator: 'wallbox.evcs', text: `${first.label}: Strom 6 A – gesendet.` },
+			{ ...one, id: 9002, actuator: 'wallbox.evcs2', text: 'EVCS „evcs2“: Strom 8 A – gesendet.' }
+		]
+	});
+	render(Page);
+	const select = await screen.findByLabelText('Aktor');
+	expect(await within(select).findByRole('option', { name: 'EVCS „evcs2“' })).toBeInTheDocument();
+	expect(within(select).getByRole('option', { name: first.label })).toBeInTheDocument();
+	expect(within(select).queryByRole('option', { name: 'EVCS' })).toBeNull();
+	const table = await screen.findByRole('table');
+	expect(within(table).getByRole('cell', { name: first.label })).toBeInTheDocument();
+	expect(within(table).getByRole('cell', { name: 'EVCS „evcs2“' })).toBeInTheDocument();
+});

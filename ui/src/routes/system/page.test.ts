@@ -700,6 +700,25 @@ it('Dialoge zeigen bei gleichem Namen zweier Wallboxen die Bezeichnung mit dem S
 	expect(confirm.getByRole('checkbox', { name: 'EVCS „evcs2“' })).toBeInTheDocument();
 });
 
+it('Aktorenliste zeigt bei gleichem Namen zweier Wallboxen die Bezeichnung mit dem Schlüssel', async () => {
+	const base = limits();
+	const evcs = base.wallboxes['evcs']!;
+	api.limits.mockResolvedValue({
+		...base,
+		wallboxes: { evcs, evcs2: evcs, twc: base.wallboxes['twc']! }
+	});
+	const actuators = actuatorsWith({
+		'wallbox.evcs': { locked: ['Dynamic ESS ist aktiv (Modus 1).'] }
+	});
+	const second = { ...actuators.find((a) => a.id === 'wallbox.evcs')!, id: 'wallbox.evcs2' };
+	show({ actuators: [...actuators, { ...second, label: 'EVCS „evcs2“' }] });
+	await waitFor(() => expect(api.limits).toHaveBeenCalled());
+	const table = card('Aktoren');
+	expect(await within(table).findByRole('cell', { name: 'EVCS „evcs“' })).toBeInTheDocument();
+	expect(within(table).getByRole('cell', { name: 'EVCS „evcs2“' })).toBeInTheDocument();
+	expect(within(table).queryByRole('cell', { name: 'EVCS' })).toBeNull();
+});
+
 it('Admin stellt die gewählten Live-Aktoren nach Bestätigung auf Dry-Run', async () => {
 	show({
 		actuators: actuatorsWith({

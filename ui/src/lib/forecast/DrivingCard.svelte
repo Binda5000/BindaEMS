@@ -76,11 +76,8 @@
 		cells: string[];
 	}
 
-	/** Zeilen der Tabelle: je Tag oder gleiche aufeinanderfolgende Tage zusammen („Mo bis Fr“) */
-	function dayRows(car: DrivingVehicle): DayRow[] {
-		if (single[car.key]) {
-			return car.weekdays.map((day) => ({ label: dayLabel(day), cells: dayCells(day) }));
-		}
+	/** Gleiche aufeinanderfolgende Tage zusammen („Mo bis Fr“) */
+	function groupedRows(car: DrivingVehicle): DayRow[] {
 		// die Gruppe steht als letzte Zelle, damit nur Tage mit gleicher Grundlage zusammenfallen
 		return groupDays(car.weekdays, (day) => WEEKDAY_LABELS[day.weekday] ?? DASH, dayCells).map(
 			(row) => {
@@ -88,6 +85,19 @@
 				return { label: group ? `${row.label} (aus ${group})` : row.label, cells: row.cells };
 			}
 		);
+	}
+
+	/** Zeilen der Tabelle: je Tag oder gleiche aufeinanderfolgende Tage zusammen */
+	function dayRows(car: DrivingVehicle): DayRow[] {
+		if (single[car.key]) {
+			return car.weekdays.map((day) => ({ label: dayLabel(day), cells: dayCells(day) }));
+		}
+		return groupedRows(car);
+	}
+
+	/** „Tage einzeln“ lohnt nur, wenn das Zusammenfassen etwas zusammengefasst hat */
+	function canSplit(car: DrivingVehicle): boolean {
+		return groupedRows(car).length < car.weekdays.length;
 	}
 
 	/** „Mo“, bei zu wenigen Tagen des Wochentags „Mo (aus Mo–Fr)“ */
@@ -194,14 +204,16 @@
 							</tbody>
 						</table>
 					</div>
-					<button
-						type="button"
-						class="days"
-						aria-pressed={single[car.key] ?? false}
-						onclick={() => (single[car.key] = !single[car.key])}
-					>
-						Tage einzeln
-					</button>
+					{#if canSplit(car)}
+						<button
+							type="button"
+							class="days"
+							aria-pressed={single[car.key] ?? false}
+							onclick={() => (single[car.key] = !single[car.key])}
+						>
+							Tage einzeln
+						</button>
+					{/if}
 					<p class="muted quality">{quality(car)}</p>
 				{/if}
 			</div>

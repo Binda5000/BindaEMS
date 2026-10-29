@@ -21,7 +21,7 @@
 	} from '$lib/decisions/view';
 	import { Resource } from '$lib/resource.svelte';
 	import { todayVienna } from '$lib/time';
-	import { actuatorDisplay } from '$lib/wallboxes';
+	import { uniqueDisplays } from '$lib/wallboxes';
 
 	// Die Filter stehen in der URL (Links aus „Warum?“ öffnen gefiltert): Die Seite liest sie beim
 	// Öffnen und bei jeder Änderung der URL von außen (Navigation, Zurück/Vor) und schreibt jede
@@ -55,6 +55,7 @@
 			? actuators
 			: [...actuators, { id: filters.actuator, label: filters.actuator }]
 	);
+	const optionNames = $derived(uniqueDisplays(actuatorOptions, wallboxNames));
 	const rangeChoice = $derived(isDate(filters.range) ? 'date' : filters.range);
 	const last = $derived(rows.at(-1));
 
@@ -181,7 +182,7 @@
 					<option value="">Alle</option>
 					{#each actuatorOptions as actuator (actuator.id)}
 						<option value={actuator.id}>
-							{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
+							{optionNames[actuator.id]}
 						</option>
 					{/each}
 				</select>

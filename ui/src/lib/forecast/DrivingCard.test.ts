@@ -314,3 +314,20 @@ it('beschriftet die Zellen mit den Spaltenköpfen', () => {
 	]);
 	expect(table(TESLA)).toHaveClass('stack');
 });
+
+it('zeigt „Tage einzeln“ nur bei einem Auto, dessen Tage zusammengefasst sind', () => {
+	const tesla = drivingVehicle('tesla');
+	// jeder Tag mit eigener Fahrtenzahl: nichts lässt sich zusammenfassen
+	const weekdays = tesla.weekdays.map((day, index) => ({ ...day, trips: index }));
+	show({ data: driving({ vehicles: [{ ...tesla, weekdays }, drivingVehicle('egolf')] }) });
+	expect(within(table(TESLA)).getAllByRole('row').slice(1)).toHaveLength(7);
+	// nur das gruppierte e-Golf-Auto hat die Taste
+	expect(screen.getAllByRole('button', { name: 'Tage einzeln' })).toHaveLength(1);
+});
+
+it('lässt „Tage einzeln“ weg, wenn kein Auto zusammengefasste Tage hat', () => {
+	const tesla = drivingVehicle('tesla');
+	const weekdays = tesla.weekdays.map((day, index) => ({ ...day, trips: index }));
+	show({ data: driving({ vehicles: [{ ...tesla, weekdays }] }) });
+	expect(screen.queryByRole('button', { name: 'Tage einzeln' })).toBeNull();
+});

@@ -114,7 +114,7 @@ it('behält Zoom und ausgeblendete Reihen, wenn neue Daten kommen', async () => 
 it('zeigt die Reihen als Chips, ein Tipp blendet sie aus und wieder ein', async () => {
 	render(EChart, { option: pvOption(), label: 'Verlauf' });
 	const chart = await drawn();
-	const group = screen.getByRole('group', { name: 'Reihen ein- und ausblenden' });
+	const group = screen.getByRole('group', { name: 'Reihen von Verlauf ein- und ausblenden' });
 	const chips = Array.from(group.querySelectorAll('button')).map((button) => button.textContent);
 	expect(chips.map((text) => text?.trim())).toEqual(['PV', 'Haus']);
 	const pv = screen.getByRole('button', { name: 'PV' });
@@ -145,7 +145,7 @@ it('zeigt keine Chips, wenn die Option keine Legende hat', async () => {
 		label: 'Verlauf'
 	});
 	await drawn();
-	expect(screen.queryByRole('group', { name: 'Reihen ein- und ausblenden' })).toBeNull();
+	expect(screen.queryByRole('group', { name: /^Reihen / })).toBeNull();
 });
 
 it('entfernt Reihen, die nicht mehr gewählt sind', async () => {
@@ -195,4 +195,10 @@ it('legt die Zeitachse auf Wiener Stunden und verfeinert sie beim Zoomen', async
 	chart.dispatchAction({ type: 'dataZoom', start: 20, end: 40 });
 	await vi.waitFor(() => expect(step(ticks())).toBeLessThan(step(before)));
 	expect(fullHours(ticks())).toBe(true);
+});
+
+it('benennt die Chip-Gruppe ohne Diagrammnamen allgemein', async () => {
+	render(EChart, { option: pvOption(), label: '' });
+	await drawn();
+	expect(screen.getByRole('group', { name: 'Reihen ein- und ausblenden' })).toBeInTheDocument();
 });

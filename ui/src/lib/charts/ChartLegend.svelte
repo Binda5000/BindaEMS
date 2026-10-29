@@ -5,12 +5,20 @@
 		items: LegendItem[];
 		hidden: ReadonlySet<string>;
 		onToggle: (name: string) => void;
+		/** Name des Diagramms, damit mehrere Chip-Gruppen auf einer Seite unterscheidbar sind */
+		label?: string;
 	}
 
-	let { items, hidden, onToggle }: Props = $props();
+	let { items, hidden, onToggle, label = '' }: Props = $props();
 </script>
 
-<div class="legend" role="group" aria-label="Reihen ein- und ausblenden">
+<div
+	class="legend"
+	role="group"
+	aria-label={label === ''
+		? 'Reihen ein- und ausblenden'
+		: `Reihen von ${label} ein- und ausblenden`}
+>
 	{#each items as item (item.name)}
 		<button
 			type="button"

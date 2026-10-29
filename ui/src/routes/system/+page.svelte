@@ -33,7 +33,7 @@
 		watchdogVersionText
 	} from '$lib/system/view';
 	import { todayVienna } from '$lib/time';
-	import { actuatorDisplay } from '$lib/wallboxes';
+	import { uniqueDisplays } from '$lib/wallboxes';
 
 	const uid = $props.id();
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
@@ -65,6 +65,7 @@
 	const operate = $derived(canOperate(page.data.user));
 	const health = $derived(system.data?.core.health ?? null);
 	const wallboxNames = $derived(wallboxLabels(limits.data));
+	const actuatorNames = $derived(uniqueDisplays(health?.actuators ?? [], wallboxNames));
 	const components = $derived(sortComponents(system.data?.components ?? []));
 	const componentsOk = $derived(components.filter((component) => component.ok).length);
 	const signals = $derived(signalRows(live.state, nowMs, filter));
@@ -318,7 +319,7 @@
 							{@const notes = actuatorNotes(actuator)}
 							<tr>
 								<td id="{uid}-{actuator.id}">
-									{actuatorDisplay(actuator.id, actuator.label, wallboxNames)}
+									{actuatorNames[actuator.id]}
 								</td>
 								<td>{actuatorModeLabel(actuator.requested)}</td>
 								<td>{actuatorModeLabel(actuator.effective)}</td>

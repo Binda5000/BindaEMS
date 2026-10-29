@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Decision } from '$lib/api/schemas';
 	import { formatDateTime } from '$lib/format';
-	import { actuatorDisplay } from '$lib/wallboxes';
+	import { actuatorDisplay, uniqueDisplays } from '$lib/wallboxes';
 	import { displayText, resultLabel } from './view';
 
 	interface Props {
@@ -13,6 +13,14 @@
 	}
 
 	let { decisions, names, wallboxNames = {} }: Props = $props();
+
+	// gleich benannte Wallboxen bleiben unterscheidbar
+	const displays = $derived(
+		uniqueDisplays(
+			Object.entries(names).map(([id, label]) => ({ id, label })),
+			wallboxNames
+		)
+	);
 </script>
 
 <div class="scroll">
@@ -28,7 +36,8 @@
 		<tbody>
 			{#each decisions as decision (decision.id)}
 				{@const label = names[decision.actuator] ?? decision.actuator}
-				{@const display = actuatorDisplay(decision.actuator, label, wallboxNames)}
+				{@const display =
+					displays[decision.actuator] ?? actuatorDisplay(decision.actuator, label, wallboxNames)}
 				<tr>
 					<td class="time">{formatDateTime(decision.ts)}</td>
 					<td>{display}</td>

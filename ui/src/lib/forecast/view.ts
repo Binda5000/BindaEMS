@@ -103,10 +103,10 @@ export function qualitySummary(rows: readonly QualityRow[]): string | null {
 	if (pairs === 0 || profileSum <= 0) return null;
 	const pct = Math.round((1 - modelSum / profileSum) * 100);
 	if (pct > 0) {
-		return `Das Lastmodell lag im Mittel ${formatNumber(pct, 0)} % näher am echten Verbrauch als das Profil.`;
+		return `Das Lastmodell lag im Mittel ${formatNumber(pct, 0)}${NBSP}% näher am echten Verbrauch als das Profil.`;
 	}
 	if (pct < 0) {
-		return `Das Profil lag im Mittel ${formatNumber(-pct, 0)} % näher am echten Verbrauch als das Lastmodell.`;
+		return `Das Profil lag im Mittel ${formatNumber(-pct, 0)}${NBSP}% näher am echten Verbrauch als das Lastmodell.`;
 	}
 	return 'Lastmodell und Profil lagen gleich nah am echten Verbrauch.';
 }
@@ -142,7 +142,7 @@ export function pvRows(rows: readonly QualityRow[]): string[] {
 		const row = pv.get(horizon);
 		return row
 			? [
-					`PV-Prognose, ${HORIZON_LABELS[horizon]}: ${watts(row.mae_w)} (${formatNumber(row.n, 0)} Viertelstunden)`
+					`PV-Prognose, ${HORIZON_LABELS[horizon]}: ${watts(row.mae_w)} (${formatNumber(row.n, 0)} ${row.n === 1 ? 'Viertelstunde' : 'Viertelstunden'})`
 				]
 			: [];
 	});

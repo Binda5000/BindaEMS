@@ -139,7 +139,9 @@ it('das Diagramm führt seine Reihen als Chips darunter, ein Tipp blendet sie au
 		.getByRole('heading', { level: 2, name: 'Preise, PV und Akku heute/morgen' })
 		.closest('section');
 	if (chart === null) throw new Error('Karte „Preise, PV und Akku heute/morgen“ fehlt');
-	const group = await within(chart).findByRole('group', { name: 'Reihen ein- und ausblenden' });
+	const group = await within(chart).findByRole('group', {
+		name: /^Reihen von Diagramm: .* ein- und ausblenden$/
+	});
 	const price = within(group).getByRole('button', { name: 'Preis' });
 	expect(price).toHaveAttribute('aria-pressed', 'true');
 	await fireEvent.click(price);

@@ -198,7 +198,7 @@ const demo = (kind: 'load_profile' | 'load_model', maes: [number, number, number
 it('fasst die Güte in einem Satz zusammen (Demo-Zahlen: 29 % näher)', () => {
 	const rows = [...demo('load_profile', [115, 142, 169]), ...demo('load_model', [82, 101, 120])];
 	expect(qualitySummary(rows)).toBe(
-		'Das Lastmodell lag im Mittel 29 % näher am echten Verbrauch als das Profil.'
+		'Das Lastmodell lag im Mittel 29\u00a0% näher am echten Verbrauch als das Profil.'
 	);
 });
 
@@ -208,7 +208,7 @@ it('nennt im Satz auch das schlechtere Modell und den Gleichstand', () => {
 			...demo('load_profile', [100, 100, 100]),
 			...demo('load_model', [120, 120, 120])
 		])
-	).toBe('Das Profil lag im Mittel 20 % näher am echten Verbrauch als das Lastmodell.');
+	).toBe('Das Profil lag im Mittel 20\u00a0% näher am echten Verbrauch als das Lastmodell.');
 	expect(
 		qualitySummary([
 			...demo('load_profile', [100, 100, 100]),
@@ -225,7 +225,7 @@ it('gewichtet den Satz mit den Viertelstunden und zählt nur Vorläufe mit Profi
 		row({ kind: 'load_profile', horizon: 'h24', n: 900, mae_w: 500 })
 	];
 	expect(qualitySummary(rows)).toBe(
-		'Das Lastmodell lag im Mittel 50 % näher am echten Verbrauch als das Profil.'
+		'Das Lastmodell lag im Mittel 50\u00a0% näher am echten Verbrauch als das Profil.'
 	);
 });
 
@@ -261,6 +261,12 @@ it('schreibt die PV-Zeilen als Satz', () => {
 	).toEqual([
 		'PV-Prognose, bis 6 h: 240\u00a0W (4 Viertelstunden)',
 		'PV-Prognose, über 24 h: 310\u00a0W (12 Viertelstunden)'
+	]);
+});
+
+it('schreibt eine einzelne Viertelstunde in der Einzahl', () => {
+	expect(pvRows([row({ kind: 'pv', horizon: 'h0_6', n: 1, mae_w: 240 })])).toEqual([
+		'PV-Prognose, bis 6 h: 240\u00a0W (1 Viertelstunde)'
 	]);
 });
 

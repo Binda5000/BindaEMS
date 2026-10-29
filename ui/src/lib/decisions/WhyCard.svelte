@@ -4,7 +4,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { ageText } from '$lib/system/view';
-	import { actuatorDisplay } from '$lib/wallboxes';
+	import { actuatorDisplay, uniqueDisplays } from '$lib/wallboxes';
 	import { decisionAgeS, isWarnResult, resultLabel, whyBody } from './view';
 
 	interface Props {
@@ -19,6 +19,14 @@
 	}
 
 	let { decisions, error, names, wallboxNames = {}, nowMs }: Props = $props();
+
+	// gleich benannte Wallboxen bleiben unterscheidbar
+	const displays = $derived(
+		uniqueDisplays(
+			Object.entries(names).map(([id, label]) => ({ id, label })),
+			wallboxNames
+		)
+	);
 </script>
 
 <Card title="Warum?">
@@ -38,7 +46,10 @@
 				<li>
 					<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">
 						<span class="head">
-							<span class="name">{actuatorDisplay(decision.actuator, label, wallboxNames)}</span>
+							<span class="name"
+								>{displays[decision.actuator] ??
+									actuatorDisplay(decision.actuator, label, wallboxNames)}</span
+							>
 							<span class="age muted">{ageText(decisionAgeS(decision.ts, nowMs))}</span>
 						</span>
 						<span class="body">{whyBody(decision.text, label)}</span>

@@ -391,6 +391,23 @@ describe('Höchststrom in „Sofort“', () => {
 		});
 		expect(screen.getByText('Sofort-Höchststrom „3“ liegt außerhalb von 5–16 A.')).toBeVisible();
 	});
+
+	it('zeigt die Meldung gleich unter „Laden einstellen“, vor Vorschlag und Details', () => {
+		show({
+			mode: 'planned',
+			planned: PLANNED,
+			driving: drivingVehicle('tesla'),
+			notice: { level: 'error', text: 'Ziel abgelehnt.' }
+		});
+		const follows = (a: Node, b: Node) =>
+			Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+		const notice = screen.getByText('Ziel abgelehnt.');
+		expect(follows(screen.getByRole('button', { name: 'Ziel speichern' }), notice)).toBe(true);
+		expect(
+			follows(notice, screen.getByRole('heading', { name: 'Vorschlag aus dem Fahrverhalten' }))
+		).toBe(true);
+		expect(follows(notice, screen.getByText('Details'))).toBe(true);
+	});
 });
 
 describe('Aufbau der Karte', () => {

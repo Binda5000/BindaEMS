@@ -31,7 +31,9 @@ test('Gast sieht die fünf Karten der Lastprognose mit den Werten der Demo-Welt'
 
 	const quality = card(page, 'Prognosegüte');
 	await expect(
-		quality.getByText('Das Lastmodell lag im Mittel 29 % näher am echten Verbrauch als das Profil.')
+		quality.getByText(
+			'Das Lastmodell lag im Mittel 29\u00a0% näher am echten Verbrauch als das Profil.'
+		)
 	).toBeVisible();
 	for (const name of ['Vorlauf', 'Profil', 'Modell', 'im Plan']) {
 		await expect(quality.getByRole('columnheader', { name }).first()).toBeVisible();

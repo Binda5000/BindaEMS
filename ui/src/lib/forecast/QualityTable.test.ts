@@ -16,7 +16,12 @@ function show(changes: Partial<Props> = {}) {
 it('sagt in einem Satz, wie viel näher das Modell liegt', () => {
 	show();
 	expect(
-		screen.getByText('Das Lastmodell lag im Mittel 29 % näher am echten Verbrauch als das Profil.')
+		screen.getByText(
+			'Das Lastmodell lag im Mittel 29\u00a0% näher am echten Verbrauch als das Profil.',
+			{
+				normalizer: (text) => text // NBSP vor „%“ nicht zu einem Leerzeichen einebnen
+			}
+		)
 	).toBeInTheDocument();
 });
 

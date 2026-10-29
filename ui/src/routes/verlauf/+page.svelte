@@ -28,7 +28,7 @@
 	import { Resource } from '$lib/resource.svelte';
 	import { theme } from '$lib/theme.svelte';
 	import { todayVienna } from '$lib/time';
-	import { seriesLabel } from '$lib/wallboxes';
+	import { seriesLabel, uniqueDisplays } from '$lib/wallboxes';
 
 	const POLL_MS = 60_000;
 
@@ -124,11 +124,10 @@
 	});
 	// Wallboxen heißen überall wie in den Einstellungen, nicht „Wallbox evcs“
 	const wallboxNames = $derived(wallboxLabels(limits.data));
+	// gleich benannte Wallboxen bleiben als zwei Reihen unterscheidbar
+	const seriesNames = $derived(uniqueDisplays(catalog.data ?? [], wallboxNames));
 	const catalogEntries = $derived(
-		catalog.data?.map((entry) => ({
-			...entry,
-			label: seriesLabel(entry.id, entry.label, wallboxNames)
-		}))
+		catalog.data?.map((entry) => ({ ...entry, label: seriesNames[entry.id] ?? entry.label }))
 	);
 	const historyData = $derived.by(() => {
 		const data = history?.data;
@@ -136,7 +135,7 @@
 		const series = Object.fromEntries(
 			Object.entries(data.series).map(([id, entry]) => [
 				id,
-				{ ...entry, label: seriesLabel(id, entry.label, wallboxNames) }
+				{ ...entry, label: seriesNames[id] ?? seriesLabel(id, entry.label, wallboxNames) }
 			])
 		);
 		return { ...data, series };

@@ -321,6 +321,11 @@
 		{/if}
 	{/if}
 
+	<!-- Antwort auf „Ziel speichern“ und „Vorschlag übernehmen“: gleich unter den Knöpfen -->
+	{#if notice}
+		<div class="note"><Notice level={notice.level}>{notice.text}</Notice></div>
+	{/if}
+
 	{#if driving}
 		<h3>Vorschlag aus dem Fahrverhalten</h3>
 		<div class="driving" role="group" aria-label="Vorschlag">
@@ -366,10 +371,6 @@
 			{/if}
 		</dl>
 	</details>
-
-	{#if notice}
-		<div class="note"><Notice level={notice.level}>{notice.text}</Notice></div>
-	{/if}
 </Card>
 
 <style>
