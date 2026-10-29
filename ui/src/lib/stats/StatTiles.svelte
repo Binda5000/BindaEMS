@@ -104,11 +104,10 @@
 	 */
 	.tile[data-size='small'] {
 		container-type: inline-size;
-		--cap: 1.1875rem;
 	}
 
 	.tile[data-size='small'] .value {
-		font-size: min(var(--cap), calc(100cqi / (var(--chars) * 0.56)));
+		font-size: min(var(--cap, 1.1875rem), calc(100cqi / (var(--chars) * 0.56)));
 	}
 
 	.sub {
