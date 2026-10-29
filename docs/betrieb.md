@@ -226,6 +226,14 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Update und Rollback mit Verständlichkeit und Design:** Die Welle ändert nur `ems-app` (UI und
+  die Texte der app, dazu der eine Tarif-Hinweis); der core, die Datenbank, die Absicht und
+  `config.yaml` bleiben gleich, es gibt keine Migration und keine ACL-Zeile. Ausgerollt wird mit dem
+  nächsten Sammel-Pull (`docker compose pull && docker compose up -d`), nie allein. Danach prüfst du am
+  Handy die Seiten „Laden“, „Prognosen“, „System“, „Statistik“ und die Diagramme (Legenden als Chips,
+  Tabellen als Karten). Der Rückweg ist `BINDAEMS_VERSION` auf den älteren Stand und
+  `docker compose up -d ems-app`; es gibt nichts zu exportieren oder zu löschen, die Anzeige ist wieder
+  die alte.
 - **Rollback auf einen Stand vor Diagramme und Plantexte:** Nur `ems-app` geht zurück
   (`BINDAEMS_VERSION` setzen, `docker compose up -d ems-app`); der core, die Datenbank und die Absicht
   sind unberührt, es gibt keine Migration und nichts zu exportieren. Das neue Image schreibt in
@@ -955,8 +963,10 @@ Aus den Bestandteilen rechnet die app:
 
 Die **Warnungen** auf der Übersicht und der Seite „System“ nennen, was fehlt:
 
-- `Tarifbestandteil „<Name>“ hat noch keinen Wert.` (für jede Art; beim Leistungspreis, wenn der
-  Satz bis zur Stufe fehlt)
+- Fehlt Bestandteilen der Wert (für jede Art; beim Leistungspreis, wenn der Satz bis zur Stufe fehlt),
+  steht dafür **ein** Hinweis, nicht einer je Bestandteil: bei einem Bestandteil
+  `Tarifbestandteil „<Name>“ hat noch keinen Wert.`, bei mehreren
+  `<n> Tarifbestandteile haben noch keinen Wert: „<Name 1>“, „<Name 2>“.`
 - `Kein Leistungspreis eingetragen; nach ElWG gilt er ab 1. 1. 2027.` (kein Bestandteil der Art
   Leistungspreis)
 - `Noch kein OeMAG-Monatswert eingetragen.`
@@ -1611,19 +1621,34 @@ gilt für diesen Browser.
 
 | Seite | Inhalt |
 |---|---|
-| Übersicht | von oben nach unten: die Hinweis-Leiste (ohne Hinweise unsichtbar; eine Zeile, eine lange Vorschau endet mit „…“; „Anzeigen“ klappt die Liste auf, dann entfällt die Vorschau), die Kachelreihe mit dem Hausakku (doppelt breit: SOC, kWh, Reserve, Netzladen, Planausblick „Plan: sinkt bis 25 % um 06:00“, nach Mitternacht „morgen um 06:00“), PV, Haus und Netz (je mit 2-h-Linie und Tageswert) und dem Strompreis (jetzt, nächste 3 h, günstigste Viertelstunde), die Karte „Woher kommt der Strom – wohin geht er?“ (zwei Balken, darunter die Verbraucher im Haus; ist ein Zweig unbekannt, steht er als „PV –“ in der Liste und die Summe der Seite als „–“) neben „Autos“ (je Auto „{Wallbox} · lädt …“, „{Wallbox} · angesteckt“, „nicht angesteckt“ oder „Stand unbekannt“, wenn der Bericht des core fehlt oder der Steckerstatus unbekannt ist), das Diagramm „Preise, PV und Akku heute/morgen“ (Preis je Viertelstunde im Tooltip, Akku-SOC und Akku-Plan; Legende in einer Zeile, „jetzt“ senkrecht an der Linie, Tooltip im Diagramm) und „Warum?“ (unten). Das Alter steht als „vor 45 s“, „vor 12 min“, „vor 3 h“ oder „vor 2 Tagen“. Scheitert die Abfrage des Plans, des Verlaufs oder der Tageswerte, fehlt nur ihr Teil (Planzeile, Linie, Tageswert); das gilt bis zur ersten erfolgreichen Antwort, danach bleiben bei einem gescheiterten Neuabruf die letzten Werte stehen |
-| Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; in „Geplant“ mit Ziel-SOC, Abfahrt und „Fertig um“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
+| Übersicht | von oben nach unten: die Hinweis-Leiste (ohne Hinweise unsichtbar; eine Zeile, eine lange Vorschau endet mit „…“; „Anzeigen“ klappt die Liste auf, dann entfällt die Vorschau), die Kachelreihe mit dem Hausakku (doppelt breit: SOC, kWh, Reserve, Netzladen, Planausblick „Plan: sinkt bis 25 % um 06:00“, nach Mitternacht „morgen um 06:00“), PV, Haus und Netz (je mit 2-h-Linie und Tageswert) und dem Strompreis (jetzt, nächste 3 h, günstigste Viertelstunde), die Karte „Woher kommt der Strom – wohin geht er?“ (zwei Balken, darunter die Verbraucher im Haus; ist ein Zweig unbekannt, steht er als „PV –“ in der Liste und die Summe der Seite als „–“) neben „Autos“ (je Auto „{Wallbox} · lädt …“, „{Wallbox} · angesteckt“, „nicht angesteckt“ oder „Stand unbekannt“, wenn der Bericht des core fehlt oder der Steckerstatus unbekannt ist), das Diagramm „Preise, PV und Akku heute/morgen“ (Reihen „Preis“, „Einspeisung“, „PV-Spanne“, „PV“, „Haus“, „Akku“ und „Akku-Plan“; Preis je Viertelstunde im Tooltip; die Legende sind antippbare Chips unter dem Diagramm, „jetzt“ steht senkrecht an der Linie, der Tooltip im Diagramm) und „Warum?“ (unten). Das Alter steht als „vor 45 s“, „vor 12 min“, „vor 3 h“ oder „vor 2 Tagen“. Scheitert die Abfrage des Plans, des Verlaufs oder der Tageswerte, fehlt nur ihr Teil (Planzeile, Linie, Tageswert); das gilt bis zur ersten erfolgreichen Antwort, danach bleiben bei einem gescheiterten Neuabruf die letzten Werte stehen |
+| Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; die Fahrzeugkarte zeigt oben Ladestand, Zustand und Plan („Fertig um“ in „Geplant“), die Einzelheiten stehen unter „Details“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz, seit Plan 5c mit Klimaanlage die Karte „Vorheizen und Vorkühlen“; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
-| Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (Profil und Modell) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Merkmale“ (Abschnitt „Lastmodell (Phase 5a)“), seit Plan 5c mit Klimaanlage die Karte „Wärmemodell“ (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“) |
+| Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (ein Satz, ob Modell oder Profil näher lag, und der Vergleich nach Vorlauf) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Was das Modell nutzt“ (Abschnitt „Lastmodell (Phase 5a)“), seit Plan 5c mit Klimaanlage die Karte „Wärmemodell“ (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
-| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Einspeiseerlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
+| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Erlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
-| System | Komponenten, Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
+| System | Komponenten (deutsche Namen, gestörte zuerst, dazu „{x} von {n} in Ordnung“), Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
 | Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Lastmodell (Schalter und Sensoren aus Home Assistant), Vorheizen und Vorkühlen (seit Plan 5c), Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
 | Protokoll | nur Admins: Änderungsprotokoll nach Bereich |
 | Konto | eigenes Passwort, Zwei-Faktor-Anmeldung, Abmelden |
+
+### Diagramme und Tabellen am Handy
+
+- **Legenden:** Jedes Diagramm hat seine Legende als Chips unter dem Diagramm (kein Blättern mehr).
+  Ein Chip ist eine Taste von mindestens 44 px Höhe: Tippen blendet die Reihe aus, ein zweites
+  Tippen zeigt sie wieder. Eine ausgeblendete Reihe bleibt aus, auch wenn das Diagramm nach einer
+  Minute neue Daten bekommt; ihr Chip ist gedämpft und durchgestrichen, der Name bleibt lesbar. In
+  „Akku“ auf der Seite „Zeitplan“ blenden „Netzladen“ und „Halten“ ihre Flächen wirklich aus.
+- **Tabellen als Karten:** Bis 40 rem Breite (Handy) werden breite Tabellen zu Karten: Die erste
+  Zelle ist der Titel, jede weitere steht als „Beschriftung – Wert“. Das gilt für Tarif, harte
+  Grenzen und Versionen (Einstellungen), Tagesbilanz (Verlauf), Prognosegüte „Alle Werte“,
+  Backtest und Fahrverhalten (Prognosen) sowie Autos, Ladesessions, Monatsspitzen und Abgleich
+  (Statistik). Lange Namen und Zeitfenster brechen in der Karte um. Die Aufteilung PV, Akku und
+  Netz einer Ladesession steht zusätzlich als Balken da. Ein Tarifbestandteil ohne Wert zeigt das
+  Etikett „kein Wert“. Ab 40 rem bleiben es Tabellen.
 
 ### Laden
 
@@ -1634,11 +1659,15 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
 - **Hinweis oben:** Ist der Regelbetrieb aus, steht dort „Regelbetrieb ist aus. Der core regelt nichts;
   Modi und Boost wirken erst mit Regelbetrieb.“ Ab „Bedienen“ hat der Hinweis die Taste „Regelbetrieb
   einschalten“.
-- **Fahrzeug:** Ladestand, Lademodus, Wallbox und Art der Zuordnung, angesteckt, lädt, die Grenze des
-  Phasenwächters, der letzte Grund, die Session (unten) und, bei einem Fahrzeug mit Tessie, die
-  Befehle der letzten Stunde (`commands_hour`, gegen das Stundenlimit von 20). Schätzt der core den
-  Ladestand aus dem Zähler der Wallbox (Abschnitt „Laderegelung“), steht dieser Wert mit „geschätzt“
-  da. Der Lademodus ist eine Auswahl: PV-Überschuss, Min+PV, Sofort, Aus oder Geplant. Die Taste „Boost“ setzt einen Boost bis zum Abstecken, höchstens 12 h;
+- **Fahrzeug:** Die Karte hat das Wichtige oben: den Namen mit Wallbox, Art der Zuordnung und
+  Lademodus darunter, den Zustand als Etikett („lädt“, „angesteckt“, …), den Ladestand mit Balken
+  (in „Geplant“ mit der Marke für das Ziel), den Plan (die Zeile von „Geplant“, ein laufender Boost,
+  das Sofort-Limit für „Lesen“) und die Session (unten). Schätzt der core den Ladestand aus dem
+  Zähler der Wallbox (Abschnitt „Laderegelung“), steht dieser Wert mit „geschätzt“ da. Unter
+  „Laden einstellen“ (ab „Bedienen“) steht die Auswahl des Lademodus: PV-Überschuss, Min+PV, Sofort,
+  Aus oder Geplant. Die Einzelheiten stehen im aufklappbaren Abschnitt **„Details“** (zu): angesteckt,
+  lädt, die Grenze des Phasenwächters, der letzte Grund und, bei einem Fahrzeug mit Tessie, die
+  Befehle der letzten Stunde (`commands_hour`, gegen das Stundenlimit von 20). Die Taste „Boost“ setzt einen Boost bis zum Abstecken, höchstens 12 h;
   danach steht dort „Boost beenden“ und, solange er gilt, „bis HH:MM“. Gilt ein Boost schon, wartet
   aber auf einen Ansteckvorgang, der noch nicht begonnen hat, steht daneben „wartet auf Anstecken“. Die
   Dauer wählst du nicht. Ab „Bedienen“ steht unter den Bedienelementen, was ein Boost kosten kann:
@@ -1656,7 +1685,7 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   für „Lesen“ fehlt dann), das Limit ruht aber:
   Boost lädt mit voller Leistung, und „Geplant“ rechnet mit voller Leistung (Abschnitt „Laderegelung“, „Lademodi“, „Sofort-Limit“).
 - **Geplant:** Steht das Fahrzeug auf „Geplant“, hat die Karte ab „Bedienen“ die Felder „Ziel-SOC“ (%,
-  ganze Zahl von 20 bis 100) und „Abfahrt“ (tägliche Uhrzeit) mit der Taste „Übernehmen“; sie schickt
+  ganze Zahl von 20 bis 100) und „Abfahrt“ (tägliche Uhrzeit) mit der Taste „Ziel speichern“; sie schickt
   nur, was sich geändert hat (`PUT /api/control/vehicles/{key}/target`). Ein ungültiger Wert steht mit
   dem Satz der app an der Karte („Ziel-SOC „{Wert}“ liegt außerhalb von 20–100 %.“, „Abfahrt „{Wert}“
   ist keine Uhrzeit (HH:MM).“). Darunter steht, auch für „Lesen“, die erste zutreffende Zeile, mit
@@ -1678,7 +1707,7 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   nie „gemessen“) und „Ladelimit im Auto {x} % liegt unter dem Ziel.“ (ohne `charge_limit_sync`). Das
   Ziel ist das wirksame, bei einem Ladelimit darunter also das Limit. Abgesteckt oder in einem anderen
   Modus steht keine Zeile da; scheitert die Abfrage des Plans, fehlen die Zeilen mit Plan und ohne Plan.
-  Die Seite fragt den Plan jede Minute ab und nach jeder Bedienung (auch „Übernehmen“) nach 2 s
+  Die Seite fragt den Plan jede Minute ab und nach jeder Bedienung (auch „Ziel speichern“) nach 2 s
   zusammen mit Health. Ein neues Ziel oder eine neue Abfahrt plant die app erst, wenn Health die
   Absicht bestätigt (Abschnitt „Planung“, Anlass `vehicles`). Meldet Health für ein Auto ein anderes
   Ziel oder eine andere Abfahrt als der Plan, fehlen die Zeilen mit Plan und ohne Plan (die Zusätze
@@ -1772,8 +1801,9 @@ Die Seite **Statistik** (Navigation nach „Verlauf“) zeigt die Abrechnung fü
 Rollen sehen sie, sie hat keine Bedienelemente. Die Daten kommen aus `GET /api/stats`, den Ladesessions
 und dem Abgleich (Abschnitt 8).
 
-- **Zeitraum:** „Tag“, „Woche“ (Montag bis Sonntag), „Monat“ und „Jahr“. Mit den Pfeilen „Zurück“ und
-  „Weiter“ blätterst du, „Heute“ springt zum laufenden Zeitraum. „Weiter“ und „Heute“ sind im laufenden
+- **Zeitraum:** Der Kopf hat zwei Zeilen: oben die Segmentleiste „Tag“, „Woche“ (Montag bis Sonntag),
+  „Monat“ und „Jahr“, darunter eine Zeile mit dem Pfeil „Zurück“ (←), der Überschrift, dem Pfeil
+  „Weiter“ (→) und der Taste „Heute“, die zum laufenden Zeitraum springt. „Weiter“ und „Heute“ sind im laufenden
   Zeitraum gesperrt, wo sie nichts bewirken. Die Überschrift nennt den Zeitraum: „Fr., 09.10.2026“, „KW 41 ·
   05.10.–11.10.2026“, „Oktober 2026“ oder „2026“. Zeitraum und Datum stehen in der Adresse
   (`/statistik?zeitraum=monat&datum=2026-10-09`), du kannst sie als Lesezeichen setzen. Beim Blättern
@@ -1783,10 +1813,11 @@ und dem Abgleich (Abschnitt 8).
 - **Hinweise im Kopf:** „Abdeckung {pct} %“ (Anteil der Zeit mit aufgezeichneter Abrechnung), bei
   geschätzten Viertelstunden „{n} Viertelstunden geschätzt“ (Abschnitt 8, „Lücken nachrechnen“) und bei
   einem laufenden Zeitraum „bis jetzt“.
-- **Kacheln:** „Autarkie“, „Eigenverbrauch“, „Kosten“ (mit Grundgebühren und, in Monat und Jahr, mit
-  Leistungspreis), „Ersparnis“ (Untertitel „gegenüber Fixtarif ohne Anlage“, ohne Grundgebühren und
-  Leistungspreis, denn die fielen auch ohne Anlage an) und „Einspeiseerlös“. Was nicht feststeht, weil
-  etwa ein Preis fehlt, steht als „–“.
+- **Kacheln:** zwei große, „Autarkie“ und „Eigenverbrauch“, und drei kleine: „Kosten“ (mit
+  Grundgebühren und, in Monat und Jahr, mit Leistungspreis), „Ersparnis*“ (gegenüber Fixtarif ohne
+  Anlage, ohne Grundgebühren und Leistungspreis, denn die fielen auch ohne Anlage an) und „Erlös“
+  (der Einspeiseerlös). Die Fußnote darunter erklärt beides: „* gegenüber Fixtarif ohne Anlage.
+  „Erlös“ ist der Einspeiseerlös.“ Was nicht feststeht, weil etwa ein Preis fehlt, steht als „–“.
 - **Diagramm „Energie“:** PV, Bezug und Einspeisung als Balken, Verbrauch als Linie; je Stunde (Tag, mit
   23 oder 25 Stunden an der Zeitumstellung), je Tag (Woche, Monat) oder je Monat (Jahr).
 - **„Kosten“:** die Zeilen „Bezug“, „Einspeiseerlös“, „Netto“, „Grundgebühren“, „Leistungspreis“ (nur
@@ -1834,7 +1865,8 @@ und dem Abgleich (Abschnitt 8).
   Zählerwerte für diesen Zeitraum.“ Wie du eine Abweichung deutest, steht in Abschnitt 8, „Abgleich
   mit den Zählern“.
 
-Auf dem Handy scrollen die breiten Tabellen in ihrer Karte; die Seite selbst scrollt nicht seitlich.
+Am Handy werden die breiten Tabellen zu Karten (siehe „Diagramme und Tabellen am Handy“); die
+Seite scrollt nicht seitlich.
 
 ### Entscheidungen und „Warum?“
 
@@ -1852,18 +1884,38 @@ gesendet, Dry-Run, abgelehnt, zurückgestellt, von außen geändert). Filter:
 Ohne Treffer steht dort „Keine Entscheidungen im Zeitraum.“. Die Seite sehen alle Rollen.
 
 **Warum?** steht auf der **Übersicht**: je Aktor die jüngste Entscheidung der letzten 24 h mit ihrem
-Alter und ein Verweis „Alle Entscheidungen“; ein Klick auf den Aktor öffnet die Seite mit diesem
-Filter. Gab es nichts, steht dort „Keine Entscheidungen in den letzten 24 h.“. Die Begründung des
-Plan-Slots zeigt „Warum?“ noch nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“). Beginnt der Satz
-des core mit dem Namen des Aktors, steht der Name nur einmal (als Verweis, dahinter der Rest des
-Satzes); sonst trennt ein Punkt Name und Satz.
+Alter und ein Verweis „Alle Entscheidungen“. Jeder Aktor ist eine kompakte, antippbare Zeile: oben
+der Name und das Alter („vor 12 min“), darunter der kurze Satz `{Gründe}: {Befehl}` (die Gründe
+kommen aus der Klammer des core, etwa „PV-Überschuss, Überschuss: Strom 8 A“) und ein Etikett mit
+dem Ergebnis („bestätigt“, „Dry-Run“, „abgelehnt“, …). Ein Tipp auf die Zeile öffnet die Seite mit
+dem Filter dieses Aktors. Bei „Fehler“, „nicht gesendet“ und „von außen geändert“ bleibt das Detail
+im Satz stehen („… · Fehler: Zeitüberschreitung“). Folgt ein Satz des core dem Muster
+`Name (Gründe): Befehl – Ergebnis.` nicht (etwa nach einer fremden Änderung oder mit Befunden der
+Safety-Schicht dahinter), zeigt die Zeile den ganzen Satz statt eines leeren. Gab es nichts, steht
+dort „Keine Entscheidungen in den letzten 24 h.“. Die Begründung des Plan-Slots zeigt „Warum?“ noch
+nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“).
+
+### Komponenten auf der Seite „System“
+
+Die Karte **Komponenten** nennt jede Komponente mit deutschem Namen („Preise“, „PV-Prognose“,
+„Lastprognose“, „Lastmodell“, „Fahrverhalten“, „Wärmemodell“, „Planer“, „Abrechnung“, „InfluxDB“,
+„Home Assistant“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
+(rot), die übrigen in der Reihenfolge der app. In der Kopfzeile der Karte steht „{x} von {n} in
+Ordnung“. Beginnt die Meldung mit dem Namen der Komponente („Fahrverhalten aktuell“), steht der Name nur
+einmal, die Meldung ohne ihn rechts („aktuell“); jede andere Meldung bleibt unverändert. Die Texte
+der Meldungen in diesem Handbuch („Lastmodell aktiv“, …) sind die ganzen Meldungen der app.
 
 ### Namen der Ladestationen
 
 Unter **Einstellungen** → „Bearbeiten“ → „Ladestationen“ gibt ein Admin jeder Wallbox einen
-eigenen Namen (höchstens 40 Zeichen). Er erscheint in „Woher – Wohin“, im Verlauf und bei den
-harten Grenzen. Ein leeres Feld heißt: der Typname („EVCS“, „Wall Connector“). Der Schlüssel aus
-`config.yaml` (z. B. `evcs`) bleibt unverändert.
+eigenen Namen (höchstens 40 Zeichen). Er erscheint überall, wo die UI eine Wallbox nennt: in
+„Woher – Wohin“, bei „Warum?“, in der Tagesbilanz, im Selbsttest („EVCS-Modus: {Name}“), im Verlauf,
+in der Liste der Aktoren, in den Dialogen „Live schalten…“ und „Auf Dry-Run…“, auf der Seite
+„Entscheidungen“ (Filter, Spalte „Aktor“ und der Satz) und bei den harten Grenzen. Ein leeres Feld
+heißt: der Typname („EVCS“, „Wall Connector“). Der Schlüssel aus `config.yaml` (z. B. `evcs`) bleibt
+unverändert. Tragen zwei Wallboxen denselben Namen, zeigen die beiden Dialoge die Bezeichnung des
+core mit dem Schlüssel, damit du nie zwei gleiche Einträge vor dir hast. Solange die Namen noch laden,
+steht die Bezeichnung des core da.
 
 ### Energie der Verbraucher
 
@@ -2258,7 +2310,9 @@ Der core hält jede Entscheidung zu einem Befehl fest (Spec 7.10):
 „Dieselbe“ heißt: gleicher Aktor, gleiche Art, gleicher angeforderter Wert und gleiche Befunde. Ein
 zurückgestellter Stopp kurz nach einem zurückgestellten Start erscheint also beide Male.
 
-Ein Eintrag lautet etwa: `EVCS „evcs“ (sicherer Zustand): Strom 6 A – gesendet und bestätigt.`
+Ein Eintrag lautet etwa (so schreibt ihn der core; die UI ersetzt `EVCS „evcs“` durch den Namen der
+Wallbox aus den Einstellungen, Abschnitt „Namen der Ladestationen“):
+`EVCS „evcs“ (sicherer Zustand): Strom 6 A – gesendet und bestätigt.`
 Die Laderegelung nennt ihre Gründe in Klammern, etwa
 `EVCS „evcs“ (PV-Überschuss, Überschuss): Strom 8 A – Dry-Run, nicht gesendet.` (alle Gründe und
 Eingaben: Abschnitt „Laderegelung“). Eine erkannte fremde Änderung lautet etwa
@@ -4786,7 +4840,7 @@ lokalen Mitternächte 7, 14, … Tage vor heute. Je Startpunkt lernt ein Modell 
 (höchstens 56 Tage) und sagt die Ausgaben der folgenden 7 Tage voraus; verglichen wird es mit dem
 Profil, das an dem Tag gegolten hätte. So viele Wochen, wie die Daten nach den ersten 14 Tagen
 erlauben, höchstens 8, mindestens 2 (also ab 28 Tagen Daten). Das Ergebnis steht je Woche und
-Vorlaufklasse (0–6 h, 6–24 h, über 24 h) auf der Seite „Prognosen“.
+Vorlaufklasse (bis 6 h, 6 bis 24 h, über 24 h) auf der Seite „Prognosen“.
 
 ### Aktivierung
 
@@ -4837,7 +4891,7 @@ Hysterese.
 | Training scheitert (auch bei voller Platte, die Datei wird dann gar nicht angelegt) oder hat zu wenig Daten | Die bisherige Version bleibt; die Aktivierung wird trotzdem neu bewertet. Die Seite nennt den Grund unter „Lastprognose“. |
 | Modelldatei fehlt oder ist nicht lesbar (etwa nach einer Rücksicherung der Datenbank) | Die Version gilt als unbrauchbar (Warnung „Lastmodell nicht lesbar, die Version wird nicht mehr verwendet“), die Planung nutzt das Profil, und das nächste Training legt eine neue Version an. |
 | Schalter „Lastmodell verwenden“ aus | Sofort Profil: Die Lastprognose gibt gleich neu aus, und die Planung rechnet damit. |
-| Sensor in HA fehlt, ist umbenannt oder nicht numerisch | Das Merkmal ist leer, das Training läuft; die Karte „Merkmale“ zeigt den Sensor als „nicht im Modell“. |
+| Sensor in HA fehlt, ist umbenannt oder nicht numerisch | Das Merkmal ist leer, das Training läuft; die Karte „Was das Modell nutzt“ zeigt den Sensor als „nicht im Modell“. |
 | Auswahl der Sensoren ändert sich | Jedes Modell rechnet mit seiner eigenen Merkmalsliste: Ein entfernter Sensor ist leer, ein neuer zählt erst ab dem nächsten Training. |
 
 Die Komponente `load-model` unter **System** → „Komponenten“ nennt den Zustand: „Lastmodell aktiv“,
@@ -4859,21 +4913,21 @@ Unter **Einstellungen** → „Lastmodell“ (Admins bearbeiten, alle anderen se
   gilt für den ganzen Vorlauf; für die Zukunft kennt BindaEMS keine Sensorwerte. Ein gewählter Sensor,
   den die Liste nicht kennt, steht dort mit „nicht in HA gefunden“.
 - Das Modell hat nach dem Training für jedes Merkmal einen Anteil am Gewinn (Seite „Prognosen“, Karte
-  „Merkmale“). Ein gewählter Sensor ohne Anteil (er hatte keine Werte oder keinen Einfluss) steht
-  dort unter der Tabelle als „{Entität}: nicht im Modell“.
+  „Was das Modell nutzt“). Ein gewählter Sensor ohne Anteil (er hatte keine Werte oder keinen Einfluss) steht
+  dort unter der Liste als „{Name}: nicht im Modell“.
 
 ### Die Seite „Prognosen“
 
 Sie steht in der Navigation nach „Zeitplan“ und ist für alle Rollen sichtbar; nur die Taste ist für
-Admins. Zeitraum der Güte und des Verlaufs: „7 Tage“, „14 Tage“, „28 Tage“ oder „60 Tage“.
+Admins. Zeitraum der Güte und des Verlaufs: „7 Tage“, „14 Tage“, „28 Tage“ oder „60 Tage“ (Segmentleiste in der Karte „Prognosegüte“).
 
 | Karte | Inhalt |
 |---|---|
 | Lastprognose | „Verfahren: Profil“ bzw. „Verfahren: Modell“, der Grund der Aktivierung (Tabelle oben), der Zustand von `load-model`, „Modell vom {TT.MM.JJJJ HH:MM}“, „Daten {TT.MM.}–{TT.MM.JJJJ} · {n} Viertelstunden“, das Ergebnis des letzten Trainings („Trainiert am {TT.MM. HH:MM} mit {n} Viertelstunden.“, „Zu wenig Daten: {n} von 28 Tagen.“ oder „Training fehlgeschlagen: {Fehler}“) und die Taste „Jetzt neu trainieren“ (während des Laufs „Training läuft …“). Ohne Modell: „Noch kein Modell trainiert.“ |
-| Prognosegüte | Spalten „Art“, „Vorlauf“, „Slots“, „MAE“, „Bias“, „rel. MAE“ und „besser als Profil“; Arten „PV“, „Last (verwendet)“, „Last Profil“ und „Last Modell“; Vorlauf „0–6 h“, „6–24 h“, „über 24 h“. „besser als Profil“ steht nur bei „Last Modell“. Leer: „Noch keine Werte im Zeitraum.“ |
+| Prognosegüte | oben der Zeitraum als Segmentleiste und ein Satz („Das Lastmodell lag im Mittel {x} % näher am echten Verbrauch als das Profil.“, ebenso für das Profil, oder „… lagen gleich nah …“). Darunter drei Spalten „Vorlauf“, „Profil“, „Modell“ und „im Plan“ mit der mittleren Abweichung je Viertelstunde (kleiner ist besser) für die Vorläufe „bis 6 h“, „6 bis 24 h“ und „über 24 h“, dazu eine Zeile je Vorlauf für die PV-Prognose. Hinter **„Alle Werte“** (zugeklappt) stehen die Spalten „Art“, „Vorlauf“, „Viertelstunden“, „MAE“, „Bias“, „rel. MAE“ und „besser als Profil“ (nur bei „Last Modell“; Arten „PV“, „Last (verwendet)“, „Last Profil“, „Last Modell“); am Handy als Karten. Leer: „Noch keine Werte im Zeitraum.“ |
 | Fehler je Tag | MAE je Tag als Linien „Profil“ und „Modell“, Achse „MAE (W)“ |
 | Backtest | Spalten „Woche ab“, „Vorlauf“, „Slots“, „Modell“, „Profil“ und „besser“, dazu die Zeile „Gesamt“. Leer: „Noch kein Backtest (braucht mindestens 28 Tage Daten).“ |
-| Merkmale | Spalten „Merkmal“ und „Anteil“: der Anteil jedes Merkmals am Gewinn des Modells, absteigend (Vorlauf, Uhrzeit, Temperatur, … bzw. die Entität eines Sensors) |
+| Was das Modell nutzt | der Anteil jedes Merkmals am Gewinn des Modells als Balken und Prozent, absteigend, mit lesbaren Namen (Vorlauf, Uhrzeit, Temperatur, … bzw. ein Sensor als „Wohnzimmer temperatur (Sensor)“); zunächst die ersten 5, „alle {n} Merkmale zeigen“ klappt den Rest auf |
 
 Die Karte „Prognosegüte“ auf der Seite „System“ bleibt und verweist mit „Mehr unter Prognosen“ auf
 die Seite. Die Aufrufe dahinter stehen im Abschnitt „Prognosen“, „API für Lastmodell und
@@ -5489,10 +5543,10 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   „Netzladen“ und „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
   auf dem Handy): Die Legende nennt „Netzladen“ und „Halten“, aber nur, was der Plan hat, und der
   Tooltip eines Punktes nennt die Absicht des Slots, dessen Ergebnis der Punkt ist („Akku
-  14:15–14:30: Netzladen 6,7 kW“; der SOC gilt am Ende des Slots). Alle Diagramme haben die Legende in
-  einer Zeile (bei Platzmangel blätterst du mit den Pfeilen, sie bricht nicht um und überdeckt das
-  Diagramm nicht), die Beschriftung „jetzt“ senkrecht an der Linie und einen Tooltip, der im
-  Diagramm bleibt, auch am Rand eines schmalen Handys.
+  14:15–14:30: Netzladen 6,7 kW“; der SOC gilt am Ende des Slots). Alle Diagramme haben die Legende
+  als antippbare Chips unter dem Diagramm (siehe „Diagramme und Tabellen am Handy“), die
+  Beschriftung „jetzt“ senkrecht an der Linie und einen Tooltip, der im Diagramm bleibt, auch am
+  Rand eines schmalen Handys.
 - **Ablauf:** Aufeinanderfolgende Slots mit gleicher Absicht, gleicher Netzladeleistung und gleichem
   Hauptcode bilden einen Block: „HH:MM–HH:MM“, die Absicht („Eigenverbrauch“, „Halten“,
   „Netzladen {kW} kW“), „SOC a → b %“ und der Satz der Erklärung (unten). Der erste Block beginnt

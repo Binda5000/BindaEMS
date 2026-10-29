@@ -256,6 +256,23 @@ Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**). **Ausgerollt wird 
 Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image; es überspringt die Pläne mit den neuen Feldern als unlesbar (`extra="forbid"`, `code=plan_row_unreadable`), und zwar **bis sie nach 30 Tagen aufgeräumt werden**, nicht nur bis zum nächsten Plan: Verlauf und „Plan gegen Ist“ (`GET /api/plan/review`) verlieren den Zeitraum zwischen Ausrollen und Rollback; zudem nimmt der erste Lauf danach den letzten Plan von vor dem Ausrollen als vorigen, `grid_in_battery_at_start` kann dann `false` sein, obwohl das neue Image aus dem Netz geladen hat (bis der Akku das nächste Mal leer ist; geringes Risiko, nichts live). Der Rückweg steht in `docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Diagramme und Plantexte“. Betrieb: `docs/betrieb.md`, „Zeitplan“,
 „Planung“ und „Erklärungen“; Spec: „Stand Plan Diagramme und Plantexte (29.10.2026)“ in 9.6.
 
+**Die Welle „Verständlichkeit und Design“ (A bis H) ist umgesetzt** (`docs/superpowers/plans/2026-10-29-verstaendlichkeit-und-design.md`, 9 Tasks, je Task
+geprüft; Freigabe der acht Verbesserungen durch den Betreiber am 29.10.2026 nach der Handy-Durchsicht): derselbe Branch `claude/project-thread-ja1izu`,
+**noch nicht auf `main`**, **nicht ausgerollt**. Was sich für den Betreiber ändert: breite Tabellen werden am Handy zu Karten, und die Tarif-Karte zeigt
+statt einer Warnung je Bestandteil einen Hinweis und das Etikett „kein Wert“ (A); die Laden-Karte hat das Wichtige oben, die Tasten „Ziel speichern“ und
+„Vorschlag übernehmen“, die Einzelheiten unter „Details“ und Pfeil-Tasten für die Priorität (B); die Prognosegüte ist ein Satz und die Spalten Vorlauf, Profil,
+Modell und im Plan („bis 6 h“, „6 bis 24 h“, „über 24 h“), „Alle Werte“ ist zugeklappt, „Was das Modell nutzt“ zeigt lesbare Namen (C); die Komponenten auf „System“
+tragen deutsche Namen, gestörte stehen zuerst, dazu „x von n in Ordnung“ (D); die Legenden der Diagramme sind antippbare Chips unter dem Diagramm, „Netzladen“ und
+„Halten“ blenden ihre Flächen wirklich aus, und die Reihen der Übersicht heißen Preis, Einspeisung, PV-Spanne, PV, Haus, Akku und Akku-Plan (E); „Warum?“ sind kompakte,
+tippbare Zeilen mit Ergebnis-Etikett, das Detail von Fehlern bleibt sichtbar (F); der Wallbox-Name aus den Einstellungen steht überall, auch in Aktoren, Dialogen und
+Entscheidungen, und die Dialoge zeigen bei gleichen Namen die Bezeichnung des core mit dem Schlüssel (G); die Statistik hat Segmentleiste und eine Zeile
+← Titel → Heute und zwei große und drei kleine Kacheln („Ersparnis*“, „Erlös“, Fußnote) (H). **Nur app und UI, nur `ems-app` neu**; die einzige Änderung in Python ist der Tarif-Hinweis
+in `shared/settings.py` (`settings_warnings`), den nur die app aufruft; der core, die Datenbank, die Absicht und die API-Felder bleiben gleich (**keine Migration,
+keine ACL-Zeile, kein Schritt an `config.yaml`**). **Ausgerollt wird mit dem nächsten Sammel-Pull von `ems-app`, zusammen mit „Diagramme und Plantexte“, und nie allein; wann,
+entscheidet der Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image und braucht nichts weiter (keine Daten ändern sich). Betrieb: `docs/betrieb.md`,
+„Diagramme und Tabellen am Handy“, „Laden“, „Statistik“, „Entscheidungen und „Warum?““, „Komponenten auf der Seite „System““ und „Die Seite „Prognosen““; Spec: „Stand Verständlichkeit und
+Design (29.10.2026)“ in 9.6. Die Ergebnisse der Prüfungen stehen unter „Stand der Installation beim Betreiber“, „Tests auf dem Branch von Verständlichkeit und Design“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -1039,6 +1056,12 @@ Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image; es überspringt die 
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
+- **Tests auf dem Branch von Verständlichkeit und Design** (29.10.2026, Ende der Welle): 9401 Python-Tests mit `--cov`
+  (in vier Gruppen parallel: 373 Integration, 2144 Property, E2E, `tools`, `shared`, Watchdog und die Tests auf oberster Ebene,
+  2590 `app`, 4294 `core`; die Gruppen laufen je 4 bis 26 Minuten), 1253 UI-Tests (Vitest, 113 Dateien) und 50 E2E-Tests (Playwright), alle grün;
+  ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), `svelte-check`, Prettier und ESLint sauber; Abdeckung 98,28 % insgesamt und
+  99,95 % für `core/safety`, `core/control` und `core/actuators`. In dieser Welle änderte sich nur `shared/settings.py` in Python; die Doku-Tests
+  (`tests/unit/test_docs.py`) prüfen für die Karte „Laden“ jetzt „Ziel speichern“ statt „Übernehmen“.
 - **Tests auf dem Branch von Plan 5a** (20.10.2026): voller Lauf mit `--cov` 8178 Tests in 49 Minuten,
   davon einer rot (siehe unten, behoben), dazu 2 neue Tests der Doku, 754 UI-Tests (Vitest) und 33 E2E-Tests (Playwright) grün; ruff, mypy
   und import-linter (4 Verträge) sauber; Abdeckung 98,14 % insgesamt, 99,94 % für `core/safety`,
@@ -2039,11 +2062,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Einstellungen vor dem Rollback als YAML exportieren, `planning.car_battery_allowed` löschen und danach importieren
       (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“; zusammen mit dem Rollback vor dem
       Standard-Lademodus beide Schlüssel löschen).
-  18. **Diagramme und Plantexte (Plan Diagramme und Plantexte) ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
-      keine Änderung an `config.yaml`**), mit dem nächsten Sammel-Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`);
-      wann, entscheidet der Betreiber. Danach auf **Übersicht** und **Zeitplan** am Handy ansehen: Legende in einer Zeile, „jetzt“ an der
-      Linie, im Akku-Diagramm die Zeile „Akku HH:MM–HH:MM: …“ im Tooltip; Pläne von vor dem Ausrollen zeigen die alten Sätze ohne „bis“
-      und den ersten Block mit dem SOC am Ende seines ersten Slots, bis der nächste Plan gerechnet ist (spätestens nach 15 min).
+  18. **Diagramme und Plantexte sowie Verständlichkeit und Design ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
+      keine Änderung an `config.yaml`**), mit dem nächsten Sammel-Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`),
+      **nie allein** (`ems-app` wird nicht einzeln gezogen); wann, entscheidet der Betreiber. Beide Wellen liegen auf demselben Branch und
+      kommen mit demselben Pull. Danach am Handy ansehen: **Übersicht** und **Zeitplan** (Legende als antippbare Chips unter dem Diagramm, „jetzt“ an
+      der Linie, im Akku-Diagramm die Zeile „Akku HH:MM–HH:MM: …“ im Tooltip, „Netzladen“ und „Halten“ lassen sich ausblenden); Pläne von vor dem
+      Ausrollen zeigen die alten Sätze ohne „bis“ und den ersten Block mit dem SOC am Ende seines ersten Slots, bis der nächste Plan gerechnet ist
+      (spätestens nach 15 min). Dazu **Laden** (Tasten „Ziel speichern“ und „Vorschlag übernehmen“, „Details“), **Prognosen** (Satz und drei Spalten
+      der Prognosegüte), **System** (deutsche Komponentennamen, „x von n in Ordnung“), **Statistik** (Kopf in zwei Zeilen, zwei große und drei kleine
+      Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Ist ein Wallbox-Name gesetzt, steht er in „Warum?“, in der
+      Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
