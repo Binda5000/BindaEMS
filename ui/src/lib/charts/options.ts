@@ -117,8 +117,10 @@ export function baseOption(palette: Palette): EChartsCoreOption {
 }
 
 /**
- * Linie „jetzt“; die Beschriftung sitzt senkrecht innen am oberen Ende der Linie und stößt so
- * nicht an die Achsentitel. Ohne Zeitpunkt keine Linie.
+ * Linie „jetzt“; die Beschriftung sitzt senkrecht innen am oberen Ende der Linie. Die Linie läuft
+ * nach oben, der Text ist gedreht (liest von unten nach oben): `insideEndTop` setzt ihn links der
+ * Linie, auf die Achsenwerte (die Zeitachse beginnt im Zeitplan an der Linie), `insideEndBottom`
+ * rechts davon, ins Diagramm. Ohne Zeitpunkt keine Linie.
  */
 export function nowMarkLine(now: number | null, palette: Palette) {
 	return now === null
@@ -127,7 +129,7 @@ export function nowMarkLine(now: number | null, palette: Palette) {
 				symbol: 'none',
 				silent: true,
 				lineStyle: { color: palette.muted, type: 'solid' as const },
-				label: { formatter: 'jetzt', color: palette.muted, position: 'insideEndTop' as const },
+				label: { formatter: 'jetzt', color: palette.muted, position: 'insideEndBottom' as const },
 				data: [{ xAxis: now }]
 			};
 }

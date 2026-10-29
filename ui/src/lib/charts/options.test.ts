@@ -611,10 +611,10 @@ describe('Legende, „jetzt“ und Tooltip', () => {
 		expect(option.tooltip.confine).toBe(true);
 	});
 
-	it('setzt „jetzt“ senkrecht an die Linie innerhalb des Diagramms', () => {
+	it('setzt „jetzt“ senkrecht rechts neben die Linie, nicht auf die Achsenwerte links', () => {
 		expect(nowMarkLine(1000, palette)?.label).toMatchObject({
 			formatter: 'jetzt',
-			position: 'insideEndTop'
+			position: 'insideEndBottom'
 		});
 		expect(nowMarkLine(1000, palette)?.data).toEqual([{ xAxis: 1000 }]);
 		expect(nowMarkLine(null, palette)).toBeUndefined();
