@@ -21,7 +21,7 @@ it('zeigt Kennzahlen mit deutschen Bezeichnungen', () => {
 		error: null
 	});
 	expect(screen.getByText('PV')).toBeTruthy();
-	expect(screen.getByText('0–6 h')).toBeTruthy();
+	expect(screen.getByText('bis 6 h')).toBeTruthy();
 	expect(screen.getByText('18,3 %')).toBeTruthy();
 	expect(screen.getByText('letzte 14 Tage')).toBeTruthy();
 	expect(screen.getByText('413 W')).toBeTruthy();
@@ -59,7 +59,7 @@ it('benennt Last und die anderen Vorläufe, fehlende relative Abweichung ist ein
 		error: null
 	});
 	expect(screen.getAllByText('Last (verwendet)')).toHaveLength(2);
-	expect(screen.getByText('6–24 h')).toBeTruthy();
+	expect(screen.getByText('6 bis 24 h')).toBeTruthy();
 	expect(screen.getByText('über 24 h')).toBeTruthy();
 	expect(screen.getByText('–')).toBeTruthy();
 	expect(screen.getByText('12,0 %')).toBeTruthy();

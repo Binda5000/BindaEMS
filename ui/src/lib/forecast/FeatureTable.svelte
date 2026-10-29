@@ -1,43 +1,44 @@
 <script lang="ts">
 	import type { LearningStatus } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
-	import { featureRows } from './view';
+	import { featureLabel, featureRows } from './view';
 
 	interface Props {
 		/** `undefined`: der Stand ist noch nicht da */
 		status: LearningStatus | undefined;
 	}
 
+	/** So viele Merkmale stehen zunächst da; der Rest hinter dem Knopf */
+	const SHOWN = 5;
+
 	let { status }: Props = $props();
 
+	let all = $state(false);
 	const rows = $derived(status?.model ? featureRows(status.model.features) : []);
+	const visible = $derived(all ? rows : rows.slice(0, SHOWN));
+	// die Balken zeigen den Anteil im Verhältnis zum größten
+	const top = $derived(Math.max(...rows.map((row) => row.share), 1));
 	const unused = $derived((status?.sensors ?? []).filter((sensor) => !sensor.in_model));
 </script>
 
-<Card title="Merkmale">
+<Card title="Was das Modell nutzt">
 	{#if rows.length > 0}
-		<div class="scroll">
-			<table>
-				<thead>
-					<tr>
-						<th scope="col">Merkmal</th>
-						<th scope="col" class="num">Anteil</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each rows as row (row.name)}
-						<tr>
-							<td>{row.label}</td>
-							<td class="num">
-								<span class="bar" aria-hidden="true" style:width="{Math.min(row.share, 100) * 0.6}%"
-								></span>
-								{row.text}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+		<ul class="features">
+			{#each visible as row (row.name)}
+				<li>
+					<span class="name">{row.label}</span>
+					<span class="track" aria-hidden="true">
+						<span class="bar" style:width="{(Math.min(row.share, 100) / top) * 100}%"></span>
+					</span>
+					<span class="share">{row.text}</span>
+				</li>
+			{/each}
+		</ul>
+		{#if rows.length > SHOWN}
+			<button type="button" class="more" aria-expanded={all} onclick={() => (all = !all)}>
+				{all ? 'weniger zeigen' : `alle ${rows.length} Merkmale zeigen`}
+			</button>
+		{/if}
 	{:else if status}
 		<p class="muted">Noch kein Modell trainiert.</p>
 	{:else}
@@ -46,7 +47,7 @@
 	{#if unused.length > 0}
 		<ul class="unused muted">
 			{#each unused as sensor (sensor.entity_id)}
-				<li>{sensor.entity_id}: nicht im Modell</li>
+				<li>{featureLabel(sensor.entity_id)}: nicht im Modell</li>
 			{/each}
 		</ul>
 	{/if}
@@ -57,13 +58,45 @@
 		margin: 0;
 	}
 
-	.bar {
-		display: inline-block;
+	.features {
+		display: grid;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.features li {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 3.5rem;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.name {
+		overflow-wrap: anywhere;
+	}
+
+	.track {
 		height: 0.5rem;
-		margin-right: 0.5rem;
+		border-radius: 0.25rem;
+		background: var(--surface-2);
+	}
+
+	.bar {
+		display: block;
+		height: 100%;
 		border-radius: 0.25rem;
 		background: var(--accent);
-		vertical-align: baseline;
+	}
+
+	.share {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.more {
+		margin-top: 0.75rem;
 	}
 
 	.unused {

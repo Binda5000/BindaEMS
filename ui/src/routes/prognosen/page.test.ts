@@ -80,14 +80,16 @@ it('zeigt alle acht Karten', async () => {
 		'Prognosegüte',
 		'Fehler je Tag',
 		'Backtest',
-		'Merkmale',
+		'Was das Modell nutzt',
 		'Fahrverhalten',
 		'Anwesenheit',
 		'Wärmemodell'
 	]) {
 		expect(screen.getByRole('heading', { name })).toBeInTheDocument();
 	}
-	await waitFor(() => expect(within(card('Merkmale')).getByText('Temperatur')).toBeInTheDocument());
+	await waitFor(() =>
+		expect(within(card('Was das Modell nutzt')).getByText('Temperatur')).toBeInTheDocument()
+	);
 });
 
 it('zeigt Verfahren und Grund der Aktivierung', async () => {
@@ -129,14 +131,24 @@ it('zeigt das Profil mit dem Grund, wenn es noch kein Modell gibt', async () => 
 		within(model).getByText('Profil aktiv: Es gibt noch kein brauchbares Modell.')
 	).toBeInTheDocument();
 	expect(within(model).getByText('Noch kein Modell trainiert.')).toBeInTheDocument();
-	expect(within(card('Merkmale')).getByText('Noch kein Modell trainiert.')).toBeInTheDocument();
+	expect(
+		within(card('Was das Modell nutzt')).getByText('Noch kein Modell trainiert.')
+	).toBeInTheDocument();
 });
 
 it('zeigt die Güte in der Reihenfolge der Arten mit Verbesserung nur beim Modell', async () => {
 	render(Page);
-	const table = card('Prognosegüte');
+	const table = (await within(card('Prognosegüte')).findByText('Alle Werte')).closest('details')!;
 	await within(table).findAllByText('Last Modell');
-	for (const name of ['Art', 'Vorlauf', 'Slots', 'MAE', 'Bias', 'rel. MAE', 'besser als Profil']) {
+	for (const name of [
+		'Art',
+		'Vorlauf',
+		'Viertelstunden',
+		'MAE',
+		'Bias',
+		'rel. MAE',
+		'besser als Profil'
+	]) {
 		expect(within(table).getByRole('columnheader', { name })).toBeInTheDocument();
 	}
 	const kinds = within(table)
@@ -294,16 +306,15 @@ it('zeigt den Backtest je Woche mit Gesamt', async () => {
 
 it('nennt die Merkmale absteigend und einen Sensor ohne Werte „nicht im Modell“', async () => {
 	render(Page);
-	const features = card('Merkmale');
+	const features = card('Was das Modell nutzt');
 	await within(features).findByText('Temperatur');
 	const labels = within(features)
-		.getAllByRole('row')
-		.slice(1)
-		.map((row) => row.querySelector('td')?.textContent);
+		.getAllByRole('listitem')
+		.map((item) => item.querySelector('.name')?.textContent);
 	expect(labels.slice(0, 3)).toEqual(['Temperatur', 'Profil', 'Last vor einem Tag']);
 	expect(within(features).getByText('28,0 %')).toBeInTheDocument();
 	expect(
-		within(features).getByText('sensor.wohnzimmer_temperatur: nicht im Modell')
+		within(features).getByText('Wohnzimmer temperatur (Sensor): nicht im Modell')
 	).toBeInTheDocument();
 });
 

@@ -3,13 +3,17 @@ import { formatNumber } from '$lib/format';
 import type { QualityDailyRow, QualityRow } from '$lib/api/schemas';
 import {
 	backtestRows,
+	compareRows,
+	featureLabel,
 	groupDays,
 	dailySeries,
 	dataRange,
 	featureRows,
 	improvementText,
 	modelStamp,
-	qualityRows
+	pvRows,
+	qualityRows,
+	qualitySummary
 } from './view';
 
 function row(overrides: Partial<QualityRow>): QualityRow {
@@ -36,12 +40,12 @@ it('ordnet die Arten und Vorläufe wie im Text', () => {
 		row({ kind: 'load', horizon: 'h0_6' })
 	]);
 	expect(rows.map((r) => [r.kind, r.horizon])).toEqual([
-		['PV', '0–6 h'],
+		['PV', 'bis 6 h'],
 		['PV', 'über 24 h'],
-		['Last (verwendet)', '0–6 h'],
-		['Last (verwendet)', '6–24 h'],
-		['Last Profil', '0–6 h'],
-		['Last Modell', '0–6 h'],
+		['Last (verwendet)', 'bis 6 h'],
+		['Last (verwendet)', '6 bis 24 h'],
+		['Last Profil', 'bis 6 h'],
+		['Last Modell', 'bis 6 h'],
 		['Last Modell', 'über 24 h']
 	]);
 	expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
@@ -139,9 +143,9 @@ it('ordnet den Backtest nach Woche und Vorlauf und zählt die Slots zusammen', (
 		total: { model_mae_w: 180, profile_mae_w: 200, improvement_pct: 10 }
 	});
 	expect(view.weeks.map((w) => [w.origin, w.horizon, w.better])).toEqual([
-		['18.09.2026', '0–6 h', '+10\u00a0%'],
+		['18.09.2026', 'bis 6 h', '+10\u00a0%'],
 		['18.09.2026', 'über 24 h', '-5\u00a0%'],
-		['25.09.2026', '0–6 h', '+25\u00a0%']
+		['25.09.2026', 'bis 6 h', '+25\u00a0%']
 	]);
 	expect(view.weeks[0]).toMatchObject({ slots: '840', model: '180\u00a0W', profile: '200\u00a0W' });
 	expect(view.total).toEqual({
@@ -184,4 +188,84 @@ it('groupDays fasst nur aufeinanderfolgende Tage zusammen', () => {
 
 it('groupDays gibt für keine Tage keine Zeilen', () => {
 	expect(group([])).toEqual([]);
+});
+
+const demo = (kind: 'load_profile' | 'load_model', maes: [number, number, number]) =>
+	(['h0_6', 'h6_24', 'h24'] as const).map((horizon, i) =>
+		row({ kind, horizon, n: 96, mae_w: maes[i] ?? 0 })
+	);
+
+it('fasst die Güte in einem Satz zusammen (Demo-Zahlen: 29 % näher)', () => {
+	const rows = [...demo('load_profile', [115, 142, 169]), ...demo('load_model', [82, 101, 120])];
+	expect(qualitySummary(rows)).toBe(
+		'Das Lastmodell lag im Mittel 29 % näher am echten Verbrauch als das Profil.'
+	);
+});
+
+it('nennt im Satz auch das schlechtere Modell und den Gleichstand', () => {
+	expect(
+		qualitySummary([
+			...demo('load_profile', [100, 100, 100]),
+			...demo('load_model', [120, 120, 120])
+		])
+	).toBe('Das Profil lag im Mittel 20 % näher am echten Verbrauch als das Lastmodell.');
+	expect(
+		qualitySummary([
+			...demo('load_profile', [100, 100, 100]),
+			...demo('load_model', [100, 100, 100])
+		])
+	).toBe('Lastmodell und Profil lagen gleich nah am echten Verbrauch.');
+});
+
+it('gewichtet den Satz mit den Viertelstunden und zählt nur Vorläufe mit Profil und Modell', () => {
+	const rows = [
+		row({ kind: 'load_profile', horizon: 'h0_6', n: 100, mae_w: 100 }),
+		row({ kind: 'load_model', horizon: 'h0_6', n: 100, mae_w: 50 }),
+		// ohne Modellzeile: zählt nicht
+		row({ kind: 'load_profile', horizon: 'h24', n: 900, mae_w: 500 })
+	];
+	expect(qualitySummary(rows)).toBe(
+		'Das Lastmodell lag im Mittel 50 % näher am echten Verbrauch als das Profil.'
+	);
+});
+
+it('hat ohne Modellzeilen keinen Satz', () => {
+	expect(qualitySummary([])).toBeNull();
+	expect(qualitySummary(demo('load_profile', [115, 142, 169]))).toBeNull();
+	expect(qualitySummary([row({ kind: 'load_model' })])).toBeNull();
+});
+
+it('stellt Profil, Modell und verwendete Last je Vorlauf nebeneinander', () => {
+	const rows = [
+		row({ kind: 'load_model', horizon: 'h24', mae_w: 120 }),
+		row({ kind: 'load_profile', horizon: 'h24', mae_w: 169 }),
+		row({ kind: 'load', horizon: 'h0_6', mae_w: 113 }),
+		row({ kind: 'load_profile', horizon: 'h0_6', mae_w: 115 }),
+		row({ kind: 'load_model', horizon: 'h0_6', mae_w: 82 }),
+		row({ kind: 'pv', horizon: 'h6_24', mae_w: 300 })
+	];
+	expect(compareRows(rows)).toEqual([
+		{ horizon: 'bis 6 h', profile: '115\u00a0W', model: '82\u00a0W', used: '113\u00a0W' },
+		{ horizon: 'über 24 h', profile: '169\u00a0W', model: '120\u00a0W', used: '–' }
+	]);
+	expect(compareRows([])).toEqual([]);
+});
+
+it('schreibt die PV-Zeilen als Satz', () => {
+	expect(
+		pvRows([
+			row({ kind: 'pv', horizon: 'h24', n: 12, mae_w: 310 }),
+			row({ kind: 'pv', horizon: 'h0_6', n: 4, mae_w: 240 }),
+			row({ kind: 'load', horizon: 'h0_6' })
+		])
+	).toEqual([
+		'PV-Prognose, bis 6 h: 240\u00a0W (4 Viertelstunden)',
+		'PV-Prognose, über 24 h: 310\u00a0W (12 Viertelstunden)'
+	]);
+});
+
+it('macht aus Sensor-Entitäten lesbare Merkmale', () => {
+	expect(featureLabel('sensor.wohnzimmer_temperatur')).toBe('Wohnzimmer temperatur (Sensor)');
+	expect(featureLabel('sensor.aussentemperatur')).toBe('Aussentemperatur (Sensor)');
+	expect(featureLabel('Temperatur')).toBe('Temperatur');
 });

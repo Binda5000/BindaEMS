@@ -17,8 +17,8 @@ export const KIND_LABELS: Record<QualityKind, string> = {
 };
 
 export const HORIZON_LABELS: Record<Horizon, string> = {
-	h0_6: '0–6 h',
-	h6_24: '6–24 h',
+	h0_6: 'bis 6 h',
+	h6_24: '6 bis 24 h',
 	h24: 'über 24 h'
 };
 
@@ -78,6 +78,83 @@ export function qualityRows(rows: readonly QualityRow[]): QualityView[] {
 		}));
 }
 
+/** Zeilen einer Art je Vorlauf */
+function byHorizon(rows: readonly QualityRow[], kind: QualityKind): Map<Horizon, QualityRow> {
+	return new Map(rows.filter((row) => row.kind === kind).map((row) => [row.horizon, row]));
+}
+
+/**
+ * Ein Satz über die Vorläufe, für die Profil und Modell Werte haben: um wie viel näher das Modell
+ * am echten Verbrauch lag (gewichtet mit den Viertelstunden); ohne ein solches Paar `null`.
+ */
+export function qualitySummary(rows: readonly QualityRow[]): string | null {
+	const profiles = byHorizon(rows, 'load_profile');
+	const models = byHorizon(rows, 'load_model');
+	let profileSum = 0;
+	let modelSum = 0;
+	let pairs = 0;
+	for (const [horizon, profile] of profiles) {
+		const model = models.get(horizon);
+		if (!model) continue;
+		profileSum += profile.mae_w * profile.n;
+		modelSum += model.mae_w * model.n;
+		pairs += 1;
+	}
+	if (pairs === 0 || profileSum <= 0) return null;
+	const pct = Math.round((1 - modelSum / profileSum) * 100);
+	if (pct > 0) {
+		return `Das Lastmodell lag im Mittel ${formatNumber(pct, 0)} % näher am echten Verbrauch als das Profil.`;
+	}
+	if (pct < 0) {
+		return `Das Profil lag im Mittel ${formatNumber(-pct, 0)} % näher am echten Verbrauch als das Lastmodell.`;
+	}
+	return 'Lastmodell und Profil lagen gleich nah am echten Verbrauch.';
+}
+
+export interface CompareRow {
+	horizon: string;
+	profile: string;
+	model: string;
+	/** die im Plan verwendete Last */
+	used: string;
+}
+
+/** Profil, Modell und verwendete Last je Vorlauf (nur Vorläufe mit mindestens einem Wert) */
+export function compareRows(rows: readonly QualityRow[]): CompareRow[] {
+	const profiles = byHorizon(rows, 'load_profile');
+	const models = byHorizon(rows, 'load_model');
+	const used = byHorizon(rows, 'load');
+	const text = (row: QualityRow | undefined) => (row ? watts(row.mae_w) : DASH);
+	return HORIZON_ORDER.filter(
+		(horizon) => profiles.has(horizon) || models.has(horizon) || used.has(horizon)
+	).map((horizon) => ({
+		horizon: HORIZON_LABELS[horizon],
+		profile: text(profiles.get(horizon)),
+		model: text(models.get(horizon)),
+		used: text(used.get(horizon))
+	}));
+}
+
+/** „PV-Prognose, bis 6 h: 240 W (4 Viertelstunden)“ je PV-Zeile */
+export function pvRows(rows: readonly QualityRow[]): string[] {
+	const pv = byHorizon(rows, 'pv');
+	return HORIZON_ORDER.flatMap((horizon) => {
+		const row = pv.get(horizon);
+		return row
+			? [
+					`PV-Prognose, ${HORIZON_LABELS[horizon]}: ${watts(row.mae_w)} (${formatNumber(row.n, 0)} Viertelstunden)`
+				]
+			: [];
+	});
+}
+
+/** Sensoren kommen als Entität („sensor.wohnzimmer_temperatur“), lesbar: „Wohnzimmer temperatur (Sensor)“ */
+export function featureLabel(label: string): string {
+	if (!label.startsWith('sensor.')) return label;
+	const name = label.slice('sensor.'.length).replaceAll('_', ' ');
+	return `${name.charAt(0).toUpperCase()}${name.slice(1)} (Sensor)`;
+}
+
 export interface DailyPoint {
 	date: string;
 	mae_w: number;
@@ -109,7 +186,7 @@ export function featureRows(features: readonly ModelFeature[]): FeatureView[] {
 	return features
 		.map((feature) => ({
 			name: feature.name,
-			label: feature.label,
+			label: featureLabel(feature.label),
 			share: Math.round(feature.importance * 100_000) / 1000,
 			text: `${formatNumber(feature.importance * 100, 1)}${NBSP}%`
 		}))
