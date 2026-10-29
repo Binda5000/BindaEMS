@@ -171,16 +171,17 @@ it('starts at the first slot while now is before it', () => {
 	expect(option.xAxis.min).toBe(Date.parse(PLAN.slots[0].start));
 });
 
-it('hält in allen Plan-Diagrammen die Legende in einer Zeile und den Tooltip im Diagramm', () => {
+it('hält in den Plan-Diagrammen den Tooltip im Diagramm und die Legende in einer Zeile (Preise, Autos)', () => {
 	type Chrome = { legend: { type: string }; tooltip: { confine: boolean } };
 	for (const option of [
 		planPriceOption(PLAN, NOW, palette),
-		planSocOption(PLAN, NOW, palette),
 		planVehiclesOption(PLAN, NOW, palette)
 	] as Chrome[]) {
 		expect(option.legend.type).toBe('scroll');
 		expect(option.tooltip.confine).toBe(true);
 	}
+	// das Akku-Diagramm hat höchstens vier kurze Einträge: Umbruch statt Blättern
+	expect((planSocOption(PLAN, NOW, palette) as Chrome).tooltip.confine).toBe(true);
 });
 
 it('zeichnet „jetzt“ nicht, wenn es außerhalb des Horizonts liegt', () => {
@@ -195,7 +196,8 @@ it('zeichnet „jetzt“ nicht, wenn es außerhalb des Horizonts liegt', () => {
 });
 
 type SocOption = {
-	legend: { type: string; data: string[] };
+	grid: { top: number };
+	legend: { type: string; data: (string | { name: string; icon: string })[] };
 	series: (LineSeriesOption & {
 		id: string;
 		itemStyle?: { color: string };
@@ -209,8 +211,15 @@ it('beschriftet die Flächen im Akku-Diagramm nicht, die Legende nennt die Absic
 	const pairs = option.series[0].markArea?.data ?? [];
 	expect(pairs).toHaveLength(2);
 	for (const pair of pairs) expect(pair[0].label?.show).toBe(false);
-	expect(option.legend.type).toBe('scroll');
-	expect(option.legend.data).toEqual(['Geplanter SOC', 'Reserve', 'Netzladen', 'Halten']);
+	// Umbruch statt Blättern, mit Platz für zwei Zeilen über dem Diagramm; Flächen als Vierecke
+	expect(option.legend.type).toBe('plain');
+	expect(option.grid.top).toBeGreaterThanOrEqual(72);
+	expect(option.legend.data).toEqual([
+		'Geplanter SOC',
+		'Reserve',
+		{ name: 'Netzladen', icon: 'rect' },
+		{ name: 'Halten', icon: 'rect' }
+	]);
 	const netzladen = option.series.find((s) => s.name === 'Netzladen');
 	const halten = option.series.find((s) => s.name === 'Halten');
 	expect(netzladen?.data).toEqual([]);
@@ -224,7 +233,11 @@ it('nennt in der Legende nur Absichten, die der Plan hat', () => {
 		s.intent === 'HALTEN' ? { ...s, intent: 'EIGENVERBRAUCH' as const } : s
 	);
 	const option = planSocOption({ ...PLAN, slots }, NOW, palette) as SocOption;
-	expect(option.legend.data).toEqual(['Geplanter SOC', 'Reserve', 'Netzladen']);
+	expect(option.legend.data).toEqual([
+		'Geplanter SOC',
+		'Reserve',
+		{ name: 'Netzladen', icon: 'rect' }
+	]);
 	expect(option.series.map((s) => s.name)).not.toContain('Halten');
 	const none = planSocOption(PLAN, NOW, palette) as SocOption;
 	expect(none.legend.data).toEqual(['Geplanter SOC', 'Reserve']);

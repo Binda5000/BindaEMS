@@ -129,6 +129,9 @@ export function planPriceOption(plan: Plan, nowIso: string, palette: Palette): E
 	};
 }
 
+/** Rand über dem Diagramm „Akku“ für eine Legende in zwei Zeilen und den Achsentitel darunter */
+const LEGEND_TWO_ROWS_TOP = 76;
+
 interface Window {
 	intent: 'NETZLADEN' | 'HALTEN';
 	start: number;
@@ -229,7 +232,7 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			areaStyle: { color: colors[intent], opacity: 0.18 }
 		});
 	}
-	const base = baseOption(palette) as { legend: object; tooltip: object };
+	const base = baseOption(palette) as { grid: object; legend: object; tooltip: object };
 	const format = axisTooltip({
 		'Geplanter SOC': socFormat,
 		Reserve: socFormat,
@@ -239,7 +242,17 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 	return {
 		...base,
 		xAxis,
-		legend: { ...base.legend, data: series.map((s) => s.name) },
+		// höchstens vier kurze Einträge: lieber eine zweite Zeile als Blättern (dort schnitt die
+		// Seitenbreite „Netzladen“ ab); der Rand oben lässt zwei Zeilen frei vom Achsentitel „%“
+		grid: { ...base.grid, top: LEGEND_TWO_ROWS_TOP },
+		legend: {
+			...base.legend,
+			type: 'plain',
+			// die Flächen tragen ein Viereck statt des runden Linien-Symbols, das wie die SOC-Linie aussähe
+			data: series.map((s) =>
+				String(s.id).startsWith('legend_') ? { name: s.name, icon: 'rect' } : s.name
+			)
+		},
 		tooltip: {
 			...base.tooltip,
 			trigger: 'axis',
