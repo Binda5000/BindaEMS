@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fitWidth } from './fit';
 	import type { Tile } from './view';
 
 	interface Props {
@@ -13,7 +14,7 @@
 		{#each tiles as tile (tile.id)}
 			<div class="tile" data-testid="tile" data-size={tile.size} style:--chars={tile.value.length}>
 				<span class="label">{tile.label}</span>
-				<strong class="value">{tile.value}</strong>
+				<strong class="value" use:fitWidth={tile.value}>{tile.value}</strong>
 				{#if tile.subtitle}
 					<span class="sub">{tile.subtitle}</span>
 				{/if}

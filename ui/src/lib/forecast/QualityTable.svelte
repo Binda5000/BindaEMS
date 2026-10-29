@@ -45,7 +45,7 @@
 				{/if}
 				{#if compare.length > 0}
 					<div class="scroll">
-						<table>
+						<table class="compare">
 							<thead>
 								<tr>
 									<th scope="col">Vorlauf</th>
@@ -141,5 +141,15 @@
 
 	details {
 		margin-top: 0.5rem;
+	}
+
+	/* vier Spalten müssen bei 360 px auch mit breiter Systemschrift in die Karte passen */
+	.compare th,
+	.compare td {
+		padding-inline: 0.375rem;
+	}
+
+	.compare th {
+		white-space: normal;
 	}
 </style>
