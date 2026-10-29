@@ -175,7 +175,7 @@ test('Wärmemodell, Vorschau im Zeitplan und Einstellungen passen bei 360 px ohn
 	expect(await overflow()).toBeLessThanOrEqual(0);
 });
 
-/** Bedienelemente unter 44 × 44 px (Global Constraints: Mobil zuerst); Links im Text und Legenden-Chips zählen nicht */
+/** Bedienelemente unter 44 × 44 px (Global Constraints: Mobil zuerst); Links im Text zählen nicht */
 function smallTargets(path: string): string[] {
 	const selector = [
 		'button',
@@ -190,8 +190,6 @@ function smallTargets(path: string): string[] {
 	for (const element of document.querySelectorAll(selector)) {
 		const box = element.getBoundingClientRect();
 		if (box.width === 0 || box.height === 0) continue; // nicht sichtbar (z. B. geschlossener Dialog)
-		// Legenden-Chips: nach dem Entwurf 36 px hoch (2,25 rem), dicht in einer umbrechenden Reihe
-		if (element.closest('[aria-label="Reihen ein- und ausblenden"]')) continue;
 		if (box.width < 44 || box.height < 44) {
 			const name = (element.getAttribute('aria-label') ?? element.textContent ?? '').trim();
 			small.push(

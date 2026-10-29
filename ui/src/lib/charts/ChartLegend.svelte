@@ -29,16 +29,16 @@
 	.legend {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.375rem;
-		margin-top: 0.5rem;
+		gap: 0.25rem 0.375rem;
+		margin-top: 0.25rem;
 	}
 	.chip {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.4rem;
-		min-height: 2.25rem;
+		min-height: 2.75rem;
 		max-width: 100%;
-		padding: 0.25rem 0.75rem;
+		padding: 0 0.75rem;
 		border: 1px solid var(--border);
 		border-radius: 999px;
 		background: var(--surface);

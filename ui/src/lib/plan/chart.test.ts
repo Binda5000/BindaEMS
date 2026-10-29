@@ -33,8 +33,11 @@ it('marks estimated prices and intent windows', () => {
 	};
 	expect(soc.series[0].name).toBe('Geplanter SOC');
 	expect(soc.series[1].name).toBe('Reserve');
-	// zwei Fenster (Halten, Netzladen) als Flächen, ihre Namen stehen in der Legende
-	expect(soc.series[0].markArea?.data).toHaveLength(2);
+	// zwei Fenster (Halten, Netzladen) als Flächen, je an der Reihe ihres Chips
+	const area = (name: string) => soc.series.find((s) => s.name === name)?.markArea?.data;
+	expect(area('Netzladen')).toHaveLength(1);
+	expect(area('Halten')).toHaveLength(1);
+	expect(soc.series[0].markArea).toBeUndefined();
 });
 
 it('draws estimated prices dashed and only over estimated slots', () => {
@@ -73,10 +76,10 @@ it('shows no windows when the plan only covers own consumption', () => {
 	const soc = planSocOption(PLAN, NOW, palette) as {
 		series: { markArea?: { data: unknown[] } }[];
 	};
-	expect(soc.series[0].markArea?.data ?? []).toEqual([]);
+	expect(soc.series.every((s) => s.markArea === undefined)).toBe(true);
 });
 
-it('draws the windows with real ECharts, the legend only as chips outside the SVG', async () => {
+it('blendet die Fläche mit dem Chip aus (echtes ECharts, legend.selected)', async () => {
 	// jsdom kann kein Canvas; ECharts misst Text dann näherungsweise
 	vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 	const core = await import('echarts/core');
@@ -91,14 +94,32 @@ it('draws the windows with real ECharts, the legend only as chips outside the SV
 		components.MarkAreaComponent,
 		SVGRenderer
 	]);
+	// eigene Farben je Fläche, die SOC-Linie hat eine dritte: so ist jede im SVG zu erkennen
+	const colors: Palette = {
+		...palette,
+		importPrice: '#c01010',
+		pv: '#fa1010',
+		series: ['#0000ff', '#00aa00', '#10c0c0']
+	};
+	const option = planSocOption(planWithWindows(), NOW, colors) as {
+		legend: object;
+	};
 	const chart = core.init(null, null, { renderer: 'svg', ssr: true, width: 600, height: 300 });
 	try {
-		chart.setOption(planSocOption(planWithWindows(), NOW, palette));
-		const svg = chart.renderToSVGString();
-		// die Flächen sind gemalt (Farbe des Netzladens), ihre Namen stehen nicht im Diagramm
-		expect(svg).toContain(palette.importPrice);
-		expect(svg).not.toContain('Netzladen');
-		expect(svg).not.toContain('Halten');
+		chart.setOption(option);
+		const shown = chart.renderToSVGString();
+		// die Flächen sind gemalt, ihre Namen stehen nicht im Diagramm (das sind die Chips)
+		expect(shown).toContain('#c01010');
+		expect(shown).toContain('#fa1010');
+		expect(shown).not.toContain('Netzladen');
+		chart.setOption({ legend: { selected: { Netzladen: false, Halten: true } } });
+		const hidden = chart.renderToSVGString();
+		expect(hidden).not.toContain('#c01010');
+		expect(hidden).toContain('#fa1010');
+		chart.setOption({ legend: { selected: { Netzladen: true, Halten: false } } });
+		const other = chart.renderToSVGString();
+		expect(other).toContain('#c01010');
+		expect(other).not.toContain('#fa1010');
 	} finally {
 		chart.dispose();
 		vi.restoreAllMocks();
@@ -209,7 +230,7 @@ type SocOption = {
 
 it('beschriftet die Flächen im Akku-Diagramm nicht, die Legende nennt die Absichten', () => {
 	const option = planSocOption(planWithWindows(), NOW, palette) as SocOption;
-	const pairs = option.series[0].markArea?.data ?? [];
+	const pairs = option.series.flatMap((s) => s.markArea?.data ?? []);
 	expect(pairs).toHaveLength(2);
 	for (const pair of pairs) expect(pair[0].label?.show).toBe(false);
 	// die Chips stehen unter dem Diagramm, oben nur Platz für den Achsentitel; Flächen als Vierecke

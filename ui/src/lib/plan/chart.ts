@@ -172,16 +172,19 @@ export function intentEndingAt(
 export function planSocOption(plan: Plan, nowIso: string, palette: Palette): EChartsCoreOption {
 	const { xAxis, now } = timeAxis(plan, nowIso, palette);
 	const colors = { NETZLADEN: palette.importPrice, HALTEN: palette.pv };
-	// die Flächen tragen keinen Text (kurze Fenster überlagerten sich auf dem Handy); die Legende
+	// die Flächen tragen keinen Text (kurze Fenster überlagerten sich auf dem Handy); die Chips
 	// und der Tooltip nennen die Absicht
-	const areas = windows(plan.slots).map((window) => [
-		{
-			xAxis: window.start,
-			itemStyle: { color: colors[window.intent], opacity: 0.18 },
-			label: { show: false }
-		},
-		{ xAxis: window.end }
-	]);
+	const areas = (intent: Window['intent']) =>
+		windows(plan.slots)
+			.filter((window) => window.intent === intent)
+			.map((window) => [
+				{
+					xAxis: window.start,
+					itemStyle: { color: colors[intent], opacity: 0.18 },
+					label: { show: false }
+				},
+				{ xAxis: window.end }
+			]);
 	const first = plan.slots[0];
 	const from = first ? epoch(first.start) : Number.NaN;
 	const to = parseIso(plan.horizon_end) ?? Number.NaN;
@@ -196,7 +199,6 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			data: slotEndSocPoints(plan.slots),
 			lineStyle: { color: palette.series[2] ?? palette.importPrice, width: 2 },
 			itemStyle: { color: palette.series[2] ?? palette.importPrice },
-			markArea: { silent: true, data: areas } as LineSeriesOption['markArea'],
 			markLine: nowMarkLine(now, palette)
 		},
 		{
@@ -214,8 +216,8 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			itemStyle: { color: palette.muted }
 		}
 	];
-	// Chips für die Flächen: Reihen ohne Daten, nur für Absichten, die der Plan hat (die Marke zeigt
-	// nur den Farbton; ein Klick darauf blendet die Fläche nicht aus, sie hängt an der SOC-Reihe)
+	// Chips für die Flächen: Reihen ohne Daten, nur für Absichten, die der Plan hat; die Flächen
+	// hängen an der Reihe ihres Chips, ein Tipp blendet sie also mit aus
 	for (const intent of ['NETZLADEN', 'HALTEN'] as const) {
 		if (!plan.slots.some((slot) => slot.intent === intent)) continue;
 		const name = INTENT_LABELS[intent];
@@ -226,7 +228,8 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			data: [],
 			itemStyle: { color: colors[intent] },
 			lineStyle: { width: 0 },
-			areaStyle: { color: colors[intent], opacity: 0.18 }
+			areaStyle: { color: colors[intent], opacity: 0.18 },
+			markArea: { silent: true, data: areas(intent) } as LineSeriesOption['markArea']
 		});
 	}
 	const base = baseOption(palette) as { legend: object; tooltip: object };
