@@ -150,6 +150,14 @@ export function energyText(view: BatteryView): string | null {
 	return `≈ ${formatNumberMax(view.kwh, 1)} von ${formatNumberMax(view.usableKwh, 1)}${NBSP}kWh`;
 }
 
+/** „≈ 4,8 kWh über Reserve“, auf oder unter der Reserve „nichts über Reserve“; ohne Werte `null` */
+export function reserveEnergyText(view: BatteryView): string | null {
+	if (view.pct === null || view.reservePct === null || view.usableKwh === null) return null;
+	if (view.pct <= view.reservePct) return 'nichts über Reserve';
+	const kwh = ((view.pct - view.reservePct) * view.usableKwh) / 100;
+	return `≈ ${formatNumberMax(kwh, 1)}${NBSP}kWh über Reserve`;
+}
+
 /** Beschriftung des Batteriesymbols für Screenreader */
 export function batteryLabel(view: BatteryView): string {
 	const level = view.pct === null ? 'ohne Messwert' : formatSoc(view.pct);

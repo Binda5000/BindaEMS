@@ -11,7 +11,9 @@ import {
 	gridChargeText,
 	outlookText,
 	planOutlook,
-	powerText
+	powerText,
+	reserveEnergyText,
+	type BatteryView
 } from './battery';
 
 const NOW = parseIso(iso('12:00')) as number;
@@ -246,5 +248,39 @@ describe('Texte der Akku-Kachel', () => {
 		expect(gridChargeText(true)).toBe('Netzladen erlaubt');
 		expect(gridChargeText(false)).toBe('Netzladen aus');
 		expect(gridChargeText(null)).toBeNull();
+	});
+});
+
+describe('reserveEnergyText', () => {
+	const base: BatteryView = {
+		pct: 25,
+		quality: 'ok',
+		kwh: 24,
+		usableKwh: 96,
+		reservePct: 20,
+		powerW: null,
+		direction: 'unknown',
+		atOrBelowReserve: false,
+		gridChargeAllowed: null,
+		outlook: null
+	};
+
+	it('rechnet die Energie über der Reserve', () => {
+		expect(reserveEnergyText(base)).toMatch(/^≈ 4,8\skWh über Reserve$/);
+	});
+
+	it('rundet einen kleinen Rest auf 0', () => {
+		expect(reserveEnergyText({ ...base, pct: 20.04 })).toMatch(/^≈ 0\skWh über Reserve$/);
+	});
+
+	it('sagt auf und unter der Reserve „nichts über Reserve“', () => {
+		expect(reserveEnergyText({ ...base, pct: 20 })).toBe('nichts über Reserve');
+		expect(reserveEnergyText({ ...base, pct: 15 })).toBe('nichts über Reserve');
+	});
+
+	it('ohne SOC, Reserve oder Kapazität nichts', () => {
+		expect(reserveEnergyText({ ...base, pct: null })).toBeNull();
+		expect(reserveEnergyText({ ...base, reservePct: null })).toBeNull();
+		expect(reserveEnergyText({ ...base, usableKwh: null })).toBeNull();
 	});
 });

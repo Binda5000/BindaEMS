@@ -273,6 +273,11 @@ entscheidet der Betreiber.** Der Rückweg ist ein älteres `ems-app`-Image und b
 „Diagramme und Tabellen am Handy“, „Laden“, „Statistik“, „Entscheidungen und „Warum?““, „Komponenten auf der Seite „System““ und „Die Seite „Prognosen““; Spec: „Stand Verständlichkeit und
 Design (29.10.2026)“ in 9.6. Die Ergebnisse der Prüfungen stehen unter „Stand der Installation beim Betreiber“, „Tests auf dem Branch von Verständlichkeit und Design“.
 
+**Stand Akku-kWh über Reserve (30.10.2026):** Plan `docs/superpowers/plans/2026-10-30-akku-kwh-ueber-reserve.md`, vom Betreiber am 30.10.2026
+freigegeben. Die Hausakku-Kachel der Übersicht zeigt unter „≈ 24 von 96 kWh“ die Energie über der USV-Reserve, „≈ 4,8 kWh über Reserve“
+((SOC − Reserve) × `usable_kwh`), an oder unter der Reserve „nichts über Reserve“. **Nur UI, nur `ems-app` neu, keine Migration, keine ACL-Zeile,
+kein Schritt an `config.yaml`**; ausgerollt wird mit dem nächsten Sammel-Pull, nie allein (Punkt 18 unter „Offen an der Anlage“).
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2062,16 +2067,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Einstellungen vor dem Rollback als YAML exportieren, `planning.car_battery_allowed` löschen und danach importieren
       (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“; zusammen mit dem Rollback vor dem
       Standard-Lademodus beide Schlüssel löschen).
-  18. **Diagramme und Plantexte sowie Verständlichkeit und Design ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
+  18. **Diagramme und Plantexte, Verständlichkeit und Design sowie Akku-kWh über Reserve ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
       keine Änderung an `config.yaml`**), mit dem nächsten Sammel-Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`),
-      **nie allein** (`ems-app` wird nicht einzeln gezogen); wann, entscheidet der Betreiber. Beide Wellen liegen auf demselben Branch und
-      kommen mit demselben Pull. Danach am Handy ansehen: **Übersicht** und **Zeitplan** (Legende als antippbare Chips unter dem Diagramm, „jetzt“ an
+      **nie allein** (`ems-app` wird nicht einzeln gezogen); wann, entscheidet der Betreiber. Alle drei kommen mit demselben Pull. Danach am Handy ansehen: **Übersicht** und **Zeitplan** (Legende als antippbare Chips unter dem Diagramm, „jetzt“ an
       der Linie, im Akku-Diagramm die Zeile „Akku HH:MM–HH:MM: …“ im Tooltip, „Netzladen“ und „Halten“ lassen sich ausblenden); Pläne von vor dem
       Ausrollen zeigen die alten Sätze ohne „bis“ und den ersten Block mit dem SOC am Ende seines ersten Slots, bis der nächste Plan gerechnet ist
       (spätestens nach 15 min). Dazu **Laden** (Tasten „Ziel speichern“ und „Vorschlag übernehmen“, „Details“), **Prognosen** (Satz und drei Spalten
       der Prognosegüte), **System** (deutsche Komponentennamen, „x von n in Ordnung“), **Statistik** (Kopf in zwei Zeilen, zwei große und drei kleine
       Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Der Name der Wallbox (aus den Einstellungen, sonst der Typname wie „EVCS“) steht in „Warum?“, in der
       Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
+      In der Hausakku-Kachel der Übersicht steht unter „≈ … von … kWh“ neu „≈ … kWh über Reserve“ (an oder unter der Reserve „nichts über Reserve“).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

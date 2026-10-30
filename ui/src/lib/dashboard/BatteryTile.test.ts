@@ -25,6 +25,7 @@ it('zeigt SOC, Leistung, Energie, Reserve, Netzladen und Plan', () => {
 	expect(screen.getByTestId('battery-soc')).toHaveTextContent(/^55\s%$/);
 	expect(screen.getByText('lädt 1,00 kW')).toBeInTheDocument();
 	expect(screen.getByText(/^≈ 16,5 von 30\skWh$/)).toBeInTheDocument();
+	expect(screen.getByText(/^≈ 10,5\skWh über Reserve$/)).toBeInTheDocument();
 	expect(screen.getByText(/^Reserve 20\s%$/)).toBeInTheDocument();
 	expect(screen.getByText('Netzladen aus')).toBeInTheDocument();
 	expect(screen.getByText(/^Plan: steigt bis 90\s% um 15:00$/)).toBeInTheDocument();
@@ -66,6 +67,7 @@ it('ohne SOC steht ein Strich und „kein Messwert“', () => {
 	});
 	expect(screen.getByTestId('battery-soc')).toHaveTextContent('–');
 	expect(screen.getByText('kein Messwert')).toBeInTheDocument();
+	expect(screen.queryByText(/über Reserve/)).not.toBeInTheDocument();
 });
 
 it('ohne Plan fehlt die Planzeile', () => {
@@ -103,6 +105,7 @@ it('dämpft und markiert veraltete Werte', () => {
 		nowMs: NOW
 	});
 	expect(screen.getByText('veraltet')).toBeInTheDocument();
+	expect(screen.getByText(/^≈ 10,5\skWh über Reserve$/)).toBeInTheDocument();
 	expect(container.querySelector('.tile')).toHaveClass('stale');
 });
 
@@ -119,6 +122,7 @@ it('färbt die Füllung bei Reserve gelb', () => {
 		nowMs: NOW
 	});
 	expect(container.querySelector('.fill')).toHaveClass('low');
+	expect(screen.getByText('nichts über Reserve')).toBeInTheDocument();
 });
 
 it('baut die Ansicht aus dem Zustand', () => {

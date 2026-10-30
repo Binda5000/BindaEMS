@@ -6,6 +6,7 @@
 		gridChargeText,
 		outlookText,
 		powerText,
+		reserveEnergyText,
 		type BatteryView
 	} from './battery';
 
@@ -25,6 +26,7 @@
 		view.reservePct === null ? null : Math.min(100, Math.max(0, view.reservePct))
 	);
 	const energy = $derived(energyText(view));
+	const reserveEnergy = $derived(reserveEnergyText(view));
 	const gridCharge = $derived(gridChargeText(view.gridChargeAllowed));
 </script>
 
@@ -41,6 +43,7 @@
 				kein Messwert
 			{:else}
 				{#if energy}<span>{energy}</span>{/if}
+				{#if reserveEnergy}<span>{reserveEnergy}</span>{/if}
 				{#if view.quality === 'stale'}<span class="tag">veraltet</span>{/if}
 			{/if}
 		</span>

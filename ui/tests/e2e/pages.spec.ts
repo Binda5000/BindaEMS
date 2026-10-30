@@ -126,6 +126,21 @@ test('Übersicht: Hinweise aufklappen, bei 390 px eine Zeile', async ({ page }) 
 	await expect(bar.getByRole('button', { name: 'Anzeigen' })).toBeVisible();
 });
 
+test('Übersicht: Akku-Kachel zeigt kWh über der Reserve bei 360 px in einer Zeile', async ({
+	page
+}) => {
+	await page.setViewportSize({ width: 360, height: 740 });
+	await login(page, 'gast');
+	await page.goto('/');
+	const tile = page.getByRole('region', { name: 'Hausakku' });
+	const line = tile.getByText(/über Reserve$/);
+	await expect(line).toBeVisible();
+	const lines = await line.evaluate(
+		(item) => item.getBoundingClientRect().height / parseFloat(getComputedStyle(item).lineHeight)
+	);
+	expect(lines, 'bricht um').toBeLessThan(1.6);
+});
+
 test('System zählt die Komponenten und zeigt die gestörte zuerst, Wallboxen beim Namen', async ({
 	page
 }) => {
