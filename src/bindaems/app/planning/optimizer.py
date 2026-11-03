@@ -33,6 +33,12 @@ Ein erwartetes Auto (Plan 5b, Präzisierung 10) steht erst ab seiner Ankunft im 
 Variablen gibt es nur in den Slots ``[arrival_at, departure_at)`` (``charge_window``); Bedarf,
 Ziel, Fehlmenge und Regel R2 rechnen sonst wie bei einem angesteckten Auto.
 
+Netzgrenze je Phase (Plan Netzgrenze je Phase, Entscheidungen 4 und 5): Mit
+``BatteryState.grid_phase_import_w`` gilt zusätzlich zur Summengrenze je Slot ``t`` und Phase ``p``
+``(gr_h + gr_b) / 3 + Σ_{c aktiv, p ∈ Phasen_c} gr_ev_c / n_c ≤ R_t`` (``phase_room_w``). Haus und
+Netzladen sind symmetrisch, ein Auto lädt auf jeder seiner Phasen gleich viel (``phase_shares``);
+PV und Akku ins Auto zählen nicht. Ohne Grenze gibt es keine solche Bedingung.
+
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 """
@@ -48,6 +54,7 @@ import highspy
 import pulp
 
 from bindaems.app.planning.battery_model import SLOT_H, SimSlot, params_of, sim_slots
+from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import INERTIA_SLOTS, PlanInputs
 from bindaems.app.planning.vehicles import PlanVehicleInput, cars_charging, charge_window
 from bindaems.shared.plan import SolverStatus
@@ -285,6 +292,9 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     ]
     car_battery_max = [sum(c.car.max_w for c in active[t] if t in c.battery) for t in range(count)]
     imports = [gr_h[t] + gr_b[t] + car_grid[t] for t in range(count)]
+    # Netzgrenze je Phase (Entscheidung 4): Anteil jedes Autos je Phase; ohne Grenze keine
+    phase_limit_w = battery.grid_phase_import_w
+    shares = {c.index: phase_shares(c.car.grid_phases) for c in cars}
 
     terms: list[Any] = []
     for t, (slot, sim) in enumerate(zip(inputs.slots, slots, strict=True)):
@@ -297,6 +307,15 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         if t in z:
             prob += gr_b[t] <= caps[t] * z[t], f"netzladen_{t}"
         prob += imports[t] <= battery.grid_max_import_w, f"bezug_{t}"
+        if phase_limit_w is not None:
+            room_w = phase_room_w(phase_limit_w, slot.load_w, slot.pv_w)
+            for phase in PHASES:
+                cars_w = pulp.lpSum(
+                    shares[c.index][phase] * c.grid[t]
+                    for c in active[t]
+                    if phase in shares[c.index]
+                )
+                prob += (gr_h[t] + gr_b[t]) / 3 + cars_w <= room_w, f"phase_{t}_{phase}"
         if active[t] and slot.pv_w > slot.load_w:
             # PV erst in die Autos: Lädt eines aus dem Netz, geht keine PV in Akku oder Netz
             # (sonst Netz über das Auto in den Akku, an R1 und Schalter vorbei); ebenso, wenn es

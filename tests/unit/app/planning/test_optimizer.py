@@ -24,7 +24,8 @@ from tests.plan_helpers import (
 
 from bindaems.app.planning import optimizer
 from bindaems.app.planning.battery_model import SLOT_H, params_of
-from bindaems.app.planning.inputs import PeakMonth, PlanInputs
+from bindaems.app.planning.grid_phases import PHASES, phase_shares
+from bindaems.app.planning.inputs import BatteryState, PeakMonth, PlanInputs
 from bindaems.app.planning.optimizer import (
     R1_EMPTY_TOL_KWH,
     TIME_LIMIT_S,
@@ -35,7 +36,14 @@ from bindaems.app.planning.optimizer import (
     grid_charge_cap_w,
     solve,
 )
-from bindaems.app.planning.vehicles import EV_ON_W, grid_allowed, horizon_need, need_kwh
+from bindaems.app.planning.vehicles import (
+    EV_ON_W,
+    PlanVehicleInput,
+    grid_allowed,
+    horizon_need,
+    need_kwh,
+)
+from bindaems.shared.config import Phase
 from bindaems.shared.timeutil import SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
@@ -844,3 +852,163 @@ def test_grid_energy_at_start_never_makes_the_model_infeasible() -> None:
     assert result.status == "optimal"
     assert battery_kwh(result) == pytest.approx(0.0, abs=SLOT_KWH * EV_ON_W)
     assert result.flows[-1].soc_end_kwh == pytest.approx(params_of(carried).hi_kwh, abs=0.01)
+
+
+# Netzgrenze je Phase (Plan Netzgrenze je Phase, Entscheidungen 4 und 5)
+
+PHASE_LIMIT_W = 4370.0  # (20 A − 1 A) · 230 V an der Anlage (Entscheidung 1)
+
+
+def phase_grid_w(inputs: PlanInputs, flow: SlotFlows, phase: Phase) -> float:
+    """Netzbezug auf der Phase im Slot nach Entscheidung 4: Haus und Netzladen des Akkus je ein
+    Drittel, jedes Auto sein Netz ins Auto geteilt durch die Anzahl seiner Phasen."""
+    cars = sum(
+        flow.ev.get(car.key, (0.0, 0.0))[1] * phase_shares(car.grid_phases).get(phase, 0.0)
+        for car in inputs.vehicles
+    )
+    return (flow.gr_h + flow.gr_b) / 3 + cars
+
+
+def _tesla(**overrides: Any) -> PlanVehicleInput:
+    """Der Tesla auf L1 bis L3 (3 × 5 bis 16 A)."""
+    return planned_car(grid_phases=["L1", "L2", "L3"], **overrides)
+
+
+def _egolf(**overrides: Any) -> PlanVehicleInput:
+    """Der e-Golf auf L1 und L2 (2 × 6 bis 16 A)."""
+    values: dict[str, Any] = {
+        "key": "egolf",
+        "name": "e-Golf",
+        "wallbox": "evcs",
+        "usable_kwh": 38.6,
+        "min_w": 6 * 230.0 * 2,
+        "max_w": 16 * 230.0 * 2,
+        "grid_phases": ["L1", "L2"],
+    }
+    values.update(overrides)
+    return planned_car(**values)
+
+
+def _two_cars_night(battery: BatteryState) -> PlanInputs:
+    """Nacht ohne PV, Haus 600 W, acht Slots, die ersten zwei billig; Tesla und e-Golf brauchen
+    je zwei Slots mit voller Leistung."""
+    tesla = _tesla(departure_at=slot(8), need_kwh=2 * 11040.0 * SLOT_KWH)
+    egolf = _egolf(departure_at=slot(8), need_kwh=2 * 7360.0 * SLOT_KWH)
+    return scenario(
+        prices=[5.0, 5.0] + [30.0] * 6,
+        pv=[0.0] * 8,
+        load=[600.0] * 8,
+        battery=battery,
+        vehicles=[tesla, egolf],
+    )
+
+
+def _both_at_max(result: OptimizerResult) -> list[bool]:
+    """Je Slot: Laden Tesla und e-Golf beide mit voller Leistung?"""
+    return [
+        car_w(f, "tesla") >= 11040.0 - 1 and car_w(f, "egolf") >= 7360.0 - 1 for f in result.flows
+    ]
+
+
+def test_two_cars_stay_under_the_phase_limit() -> None:
+    # Beide mit voller Leistung wären auf L1 200 + 3680 + 3680 W, über 4370 W
+    inputs = _two_cars_night(state(grid_phase_import_w=PHASE_LIMIT_W))
+    result = solve(inputs)
+    assert result.status == "optimal"
+    for f in result.flows:
+        for phase in PHASES:
+            assert phase_grid_w(inputs, f, phase) <= PHASE_LIMIT_W + 1
+    assert not any(_both_at_max(result))
+    assert all(value == pytest.approx(0.0, abs=1e-6) for value in result.shortfall_kwh.values())
+
+
+def test_phase_limit_leaves_little_room_for_grid_charging() -> None:
+    # Der Tesla muss in Slot 0 mit voller Leistung laden (3680 W je Phase), das Haus nimmt 200 W
+    # je Phase; für das Netzladen bleiben 3 · 490 W, obwohl der Restwert viel mehr lohnte
+    tesla = _tesla(departure_at=slot(1), need_kwh=11040.0 * SLOT_KWH)
+    inputs = scenario(
+        prices=[5.0, 40.0],
+        pv=[0.0, 0.0],
+        load=[600.0, 600.0],
+        soc_pct=30.0,
+        grid_charge=True,
+        end_value_ct=30.0,
+        battery=state(grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[tesla],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert car_w(result.flows[0]) == pytest.approx(11040.0)
+    assert 1000.0 < result.flows[0].gr_b <= 3 * (4370 - 200 - 3680) + 1
+
+
+def test_house_above_phase_limit_stays_feasible() -> None:
+    # 15 kW Haus: 5000 W je Phase, über der Grenze; der Akku steht an der Reserve und hilft nicht
+    cars = [_tesla(departure_at=slot(4)), _egolf(departure_at=slot(4), need_kwh=5.0)]
+    inputs = scenario(
+        prices=[5.0] * 4,
+        pv=[0.0] * 4,
+        load=[15000.0] * 4,
+        soc_pct=20.0,
+        grid_charge=True,
+        battery=state(grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=cars,
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    for f in result.flows:
+        assert f.gr_b == 0
+        assert car_w(f, "tesla") == pytest.approx(0.0, abs=1e-6)
+        assert car_w(f, "egolf") == pytest.approx(0.0, abs=1e-6)
+    assert result.shortfall_kwh["tesla"] > 0
+    assert result.shortfall_kwh["egolf"] > 0
+
+
+def test_cars_on_different_phases_share_no_room() -> None:
+    # Gast auf L3, e-Golf auf L1/L2: je Phase 200 + 3680 W, beide passen zugleich
+    guest = planned_car(
+        key="gast",
+        name="Gast",
+        wallbox="gast",
+        min_w=6 * 230.0,
+        max_w=16 * 230.0,
+        grid_phases=["L3"],
+        departure_at=slot(4),
+        need_kwh=3680.0 * SLOT_KWH,
+    )
+    egolf = _egolf(departure_at=slot(4), need_kwh=7360.0 * SLOT_KWH)
+    inputs = scenario(
+        prices=[5.0, 30.0, 30.0, 30.0],
+        pv=[0.0] * 4,
+        load=[600.0] * 4,
+        battery=state(grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[guest, egolf],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert car_w(result.flows[0], "gast") == pytest.approx(3680.0)
+    assert car_w(result.flows[0], "egolf") == pytest.approx(7360.0)
+
+
+def test_pv_into_two_cars_is_not_limited_by_phases() -> None:
+    # 11,4 kW PV-Überschuss, Regel R2 lässt nur PV zu: PV ins Auto zählt nicht zur Phasengrenze
+    tesla = _tesla(departure_at=slot(4), need_kwh=8.0, grid_allowed_kwh=0.0)
+    egolf = _egolf(departure_at=slot(4), need_kwh=6.0, grid_allowed_kwh=0.0)
+    inputs = scenario(
+        prices=[30.0] * 4,
+        pv=[12000.0] * 4,
+        load=[600.0] * 4,
+        battery=state(grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[tesla, egolf],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    for f in result.flows:
+        assert sum(pv for pv, _ in f.ev.values()) > PHASE_LIMIT_W * 2
+
+
+def test_without_phase_limit_two_cars_charge_together() -> None:
+    # Ohne Grenze (alte Eingangsdaten, Entscheidung 5) laden beide in den billigen Slots zugleich
+    result = solve(_two_cars_night(state()))
+    assert result.status == "optimal"
+    assert any(_both_at_max(result))
