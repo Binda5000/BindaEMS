@@ -4,6 +4,7 @@ nur mit Schalter, Spread-Regel und Regel R1."""
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pytest
 from tests.plan_helpers import (
@@ -17,8 +18,16 @@ from tests.plan_helpers import (
 )
 
 from bindaems.app.planning.battery_model import SLOT_H, eta, params_of
-from bindaems.app.planning.fallback import expensive_today, fallback_intents, fallback_vehicles
+from bindaems.app.planning.fallback import (
+    expensive_today,
+    fallback_intents,
+    fallback_vehicles,
+    per_slot,
+)
+from bindaems.app.planning.grid_phases import PHASES, phase_shares
+from bindaems.app.planning.inputs import BatteryState, PlanInputs, PlanVehicleInput
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
+from bindaems.shared.config import Phase
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.timeutil import SLOT
 
@@ -332,3 +341,98 @@ def test_fallback_vehicles_skip_expected_cars() -> None:
     powers = fallback_vehicles(inputs)
     assert "tesla" not in powers
     assert powers["egolf"] == pytest.approx([5500.0, 5500.0, 0.0, 0.0])
+
+
+# Netzgrenze je Phase (Plan Netzgrenze je Phase, Entscheidung 6)
+
+PHASE_LIMIT_W = 4370.0  # (20 A − 1 A) · 230 V an der Anlage
+HOUSE_W = 600.0
+
+
+def _tesla(**overrides: Any) -> PlanVehicleInput:
+    return planned_car(grid_phases=["L1", "L2", "L3"], **overrides)
+
+
+def _egolf(**overrides: Any) -> PlanVehicleInput:
+    values: dict[str, Any] = {
+        "key": "egolf",
+        "name": "e-Golf",
+        "wallbox": "evcs",
+        "usable_kwh": 38.6,
+        "min_w": 6 * 230.0 * 2,
+        "max_w": 16 * 230.0 * 2,
+        "grid_phases": ["L1", "L2"],
+    }
+    values.update(overrides)
+    return planned_car(**values)
+
+
+def _phase_grid_w(
+    inputs: PlanInputs, watts: dict[str, list[float]], index: int, phase: Phase
+) -> float:
+    """Netzanteil auf der Phase im Slot: Haus (ohne PV) zu einem Drittel plus die Autos."""
+    house = max(0.0, inputs.slots[index].load_w - inputs.slots[index].pv_w) / 3
+    cars = sum(
+        watts[car.key][index] * phase_shares(car.grid_phases).get(phase, 0.0)
+        for car in inputs.vehicles
+    )
+    return house + cars
+
+
+def _two_cars(battery: BatteryState) -> PlanInputs:
+    """Nacht ohne PV, Haus 600 W, acht Slots, zwei billigste (0 und 1); Tesla und e-Golf brauchen
+    je zwei Slots mit voller Leistung, der Tesla ist zuerst dran."""
+    slot_h = SLOT_H / 1000
+    departure = at(SCENARIO_START) + 8 * SLOT
+    tesla = _tesla(departure_at=departure, need_kwh=2 * 11040.0 * slot_h)
+    egolf = _egolf(departure_at=departure, need_kwh=2 * 7360.0 * slot_h)
+    return scenario(
+        prices=[5.0, 5.0] + [30.0] * 6,
+        pv=[0.0] * 8,
+        load=[HOUSE_W] * 8,
+        battery=battery,
+        vehicles=[tesla, egolf],
+    )
+
+
+def test_fallback_second_car_moves_to_the_next_slot() -> None:
+    inputs = _two_cars(state(grid_phase_import_w=PHASE_LIMIT_W))
+    watts = fallback_vehicles(inputs)
+    for index in range(8):
+        assert not (watts["tesla"][index] > 0 and watts["egolf"][index] > 0)
+        for phase in PHASES:
+            assert _phase_grid_w(inputs, watts, index, phase) <= PHASE_LIMIT_W + 1
+    tesla_slots = {i for i, w in enumerate(watts["tesla"]) if w > 0}
+    egolf_slots = {i for i, w in enumerate(watts["egolf"]) if w > 0}
+    assert tesla_slots == {0, 1}
+    assert egolf_slots
+    assert not tesla_slots & egolf_slots
+    assert sum(watts["egolf"]) * SLOT_H / 1000 == pytest.approx(2 * 7360.0 * SLOT_H / 1000)
+
+
+def test_fallback_grid_charge_respects_phase_headroom() -> None:
+    # Der Tesla lädt im billigsten Slot 0 mit 3680 W je Phase, das Haus nimmt 200 W je Phase: für
+    # das Netzladen bleiben 3 · 490 = 1470 W, auf 100 W abgerundet 1400 W
+    tesla = _tesla(departure_at=at(SCENARIO_START) + SLOT, need_kwh=11040.0 * SLOT_H / 1000)
+    inputs = scenario(
+        prices=[5.0, 12.0, 12.0, 12.0, 40.0, 40.0, 40.0, 40.0],
+        pv=[0.0] * 8,
+        load=[HOUSE_W] * 4 + [3000.0] * 4,
+        battery=small_battery(grid_phase_import_w=PHASE_LIMIT_W),
+        soc_pct=20.0,
+        grid_charge=True,
+        vehicles=[tesla],
+    )
+    watts = fallback_vehicles(inputs)
+    assert watts["tesla"][0] == pytest.approx(11040.0)
+    intents = fallback_intents(inputs, per_slot(watts, 8))
+    first = intents[0]
+    assert first.kind is not BatteryIntentKind.NETZLADEN or first.grid_charge_w <= 1400
+    assert any(i.kind is BatteryIntentKind.NETZLADEN for i in intents)
+
+
+def test_fallback_without_phase_limit_unchanged() -> None:
+    inputs = _two_cars(state())
+    watts = fallback_vehicles(inputs)
+    assert watts["tesla"][:2] == [pytest.approx(11040.0)] * 2
+    assert watts["egolf"][:2] == [pytest.approx(7360.0)] * 2

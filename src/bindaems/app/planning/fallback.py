@@ -10,8 +10,9 @@ Nachrechnung wieder leer ist), in billigen Slots aus dem Netz.
 Die geplanten Autos laden zuerst den erwarteten PV-Überschuss bis zur Abfahrt, dann in den
 günstigsten Slots davor mit voller Leistung (``fallback_vehicles``); der Plan des Akkus rechnet
 sie mit, und sein Netzladen lässt neben Haus und Autos den höchsten Netzbezug
-(``grid_max_import_w``) frei. Erwartete Autos (Plan 5b, Entscheidung 11) kennt der Ersatzplan
-nicht: Er plant nur, was angesteckt ist.
+(``grid_max_import_w``) und, wenn gesetzt, die Grenze je Phase (``grid_phase_import_w``) frei.
+Erwartete Autos (Plan 5b, Entscheidung 11) kennt der Ersatzplan nicht: Er plant nur, was
+angesteckt ist.
 """
 
 from __future__ import annotations
@@ -22,11 +23,13 @@ from typing import Final
 
 from bindaems.app.planning.battery_model import (
     SLOT_H,
+    SimSlot,
     SimStep,
     params_of,
     sim_slots,
     simulate,
 )
+from bindaems.app.planning.grid_phases import PHASES, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import grid_charge_cap_w
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh, spread_pays
@@ -82,7 +85,11 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
     2. **Netz:** dann die günstigsten Slots (beim Gleichstand der frühere) mit voller Leistung,
        bis der Bedarf im Horizont (``horizon_need_kwh``) gedeckt ist; der letzte lädt nur den
        Rest, mindestens ``min_w``. Je Slot laden alle Autos zusammen höchstens
-       ``grid_max_import_w`` plus PV minus Haus.
+       ``grid_max_import_w`` plus PV minus Haus. Ist ``grid_phase_import_w`` gesetzt, hat jede
+       Phase den Platz ``max(0, Grenze − max(0, Last − PV) / 3)`` abzüglich der Netzanteile der
+       Autos davor (nur dieser Netzschritt belegt Platz, der PV-Schritt nicht); ein Auto bekommt
+       höchstens ``n_c · min_p Platz_p`` zusätzlich (``n_c`` = Zahl seiner Phasen), liegt seine
+       Leistung dann unter ``min_w``, lädt es in diesem Slot nicht (Entscheidung 6).
 
     Regel R2 hält das meist von selbst ein, denn der Überschuss nach P50 ist mindestens der nach
     P25. Nicht immer: Einen Überschuss unter ``min_w`` rechnet R2 (``grid_allowed_kwh``) dem Auto
@@ -93,10 +100,18 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
     count = len(inputs.slots)
     pv_left = [max(0.0, slot.pv_w - slot.load_w) for slot in inputs.slots]
     room = [inputs.battery.grid_max_import_w + slot.pv_w - slot.load_w for slot in inputs.slots]
+    phase_limit_w = inputs.battery.grid_phase_import_w
+    phase_room: list[dict[str, float]] = [
+        {phase: max(0.0, phase_limit_w - max(0.0, slot.load_w - slot.pv_w) / 3) for phase in PHASES}
+        if phase_limit_w is not None
+        else {}
+        for slot in inputs.slots
+    ]
     result: dict[str, list[float]] = {}
     for car in inputs.vehicles:
         if car.expected:
             continue
+        shares = phase_shares(car.grid_phases)
         watts = [0.0] * count
         before = slots_before(car.departure_at, inputs.slots) if car.need_kwh > 0 else 0
 
@@ -125,12 +140,42 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
             current = watts[index]
             power_w = max(min(car.max_w, current + left / SLOT_H * 1000), car.min_w)
             power_w = min(power_w, current + room[index])
+            if phase_limit_w is not None:
+                free_w = len(shares) * min(phase_room[index][phase] for phase in shares)
+                power_w = min(power_w, current + free_w)
             if power_w < car.min_w or power_w <= current:
                 continue
+            if phase_limit_w is not None:
+                for phase, share in shares.items():
+                    phase_room[index][phase] -= (power_w - current) * share
             charge(index, power_w, from_pv=False)
             left -= (power_w - current) * SLOT_H / 1000
         result[car.key] = watts
     return result
+
+
+def _phase_headroom_w(
+    inputs: PlanInputs,
+    ev_w: Sequence[Mapping[str, float]],
+    slots: Sequence[SimSlot],
+    index: int,
+) -> float:
+    """Platz fürs Netzladen im Slot unter der Grenze je Phase in W (Entscheidung 6): dreimal der
+    kleinste Platz einer Phase nach Haus und der ganzen Ladeleistung der Autos. Ein Schlüssel ohne
+    passendes Auto zählt 3-phasig symmetrisch."""
+    limit_w = inputs.battery.grid_phase_import_w
+    if limit_w is None:
+        raise ValueError("Grenze je Phase nötig")
+    phases = {car.key: car.grid_phases for car in inputs.vehicles}
+    cars = ev_w[index] if ev_w else {}
+    house_w = max(0.0, slots[index].load_w - slots[index].pv_w) / 3
+    room = min(
+        limit_w
+        - house_w
+        - sum(watts * phase_shares(phases.get(key)).get(phase, 0.0) for key, watts in cars.items())
+        for phase in PHASES
+    )
+    return 3 * room
 
 
 def per_slot(powers: Mapping[str, Sequence[float]], count: int) -> list[dict[str, float]]:
@@ -146,7 +191,10 @@ def fallback_intents(
     inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()
 ) -> list[BatteryIntent]:
     """Absicht je Slot des Ersatzplans für den Akku; ``ev_w`` ist die Ladeleistung der Autos je
-    Slot (``per_slot(fallback_vehicles(…))``), die die Nachrechnung mitrechnet."""
+    Slot (``per_slot(fallback_vehicles(…))``), die die Nachrechnung mitrechnet. Das Netzladen
+    bleibt unter dem höchsten Netzbezug und, wenn ``grid_phase_import_w`` gesetzt ist, unter der
+    Grenze je Phase: ``3 · min_p (Grenze − max(0, Last − PV) / 3 − Σ Ladeleistung der Autos ·
+    Anteil auf p)``; hier zählt die ganze Ladeleistung der Autos (Entscheidung 6)."""
     count = len(inputs.slots)
     intents = [BatteryIntent() for _ in range(count)]
     expensive = expensive_today(inputs)
@@ -159,6 +207,7 @@ def fallback_intents(
     planning = inputs.planning
     prices = [slot.import_ct for slot in inputs.slots]
     is_expensive = set(expensive)
+    phase_limit_w = inputs.battery.grid_phase_import_w
 
     def run(plan: Sequence[BatteryIntent]) -> list[SimStep]:
         return simulate(soc0_kwh, slots, plan, params)
@@ -207,6 +256,8 @@ def fallback_intents(
                 - steps[candidate].ev_grid_w
                 - max(0.0, slots[candidate].load_w - slots[candidate].pv_w)
             )
+            if phase_limit_w is not None:
+                headroom_w = min(headroom_w, _phase_headroom_w(inputs, ev_w, slots, candidate))
             cap_w = min(grid_charge_cap_w(inputs, candidate), headroom_w)
             power_w = ROUND_W * floor(cap_w / ROUND_W)
             if power_w <= 0:
