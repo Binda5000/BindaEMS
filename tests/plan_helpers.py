@@ -266,6 +266,19 @@ def month(m: str, peak0: float) -> PeakMonth:
     )
 
 
+def virtual(m: str, peak0: float, rate_ct: float = 100.0) -> PeakMonth:
+    """Gedachter Monat ``m`` ohne Leistungspreis (Plan Netzgrenze je Phase, Entscheidung 8): jedes
+    kW über ``peak0`` kostet ``rate_ct`` ct."""
+    return PeakMonth(
+        month=m,
+        virtual=True,
+        peak0_kw=peak0,
+        tier_kw=0.0,
+        below_ct_per_kw=0.0,
+        above_ct_per_kw=rate_ct,
+    )
+
+
 def scenario(
     *,
     prices: list[float],

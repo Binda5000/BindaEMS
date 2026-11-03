@@ -67,6 +67,8 @@ export interface PlanningDraft {
 	wearCt: string;
 	endValueFactor: string;
 	inertiaCt: string;
+	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat) */
+	peakSoftCt: string;
 }
 
 /** Fahrverhalten: Puffer und Grenzen als Text, die Anwesenheits-Entität je Fahrzeug (leer = keine) */
@@ -175,6 +177,7 @@ const NUMBER_ERROR = 'Zahl, z. B. 8,11';
 const NON_NEGATIVE_ERROR = 'Zahl ab 0, z. B. 2,0';
 const PERCENT_ERROR = 'Zahl von 50 bis 100';
 const FACTOR_ERROR = 'Zahl von 0 bis 1, z. B. 0,9';
+const SOFT_PEAK_ERROR = 'Zahl ab 0, z. B. 100';
 const DEFAULT_TIER_KW = '10';
 const DEFAULT_MINIMUM_KW = '2';
 export const MONTHS = [
@@ -340,7 +343,8 @@ function planningDraft(planning: PlanningSettings): PlanningDraft {
 		roundtripPct: decimalText(planning.roundtrip_pct),
 		wearCt: decimalText(planning.wear_ct),
 		endValueFactor: decimalText(planning.end_value_factor),
-		inertiaCt: decimalText(planning.inertia_ct)
+		inertiaCt: decimalText(planning.inertia_ct),
+		peakSoftCt: decimalText(planning.peak_soft_ct_per_kw)
 	};
 }
 
@@ -680,6 +684,14 @@ function applyPlanning(
 			0,
 			null,
 			NON_NEGATIVE_ERROR
+		),
+		peak_soft_ct_per_kw: planningNumber(
+			draft.peakSoftCt,
+			'planning.peak_soft_ct_per_kw',
+			errors,
+			0,
+			null,
+			SOFT_PEAK_ERROR
 		)
 	};
 	if (Object.keys(errors).length > before) return null;

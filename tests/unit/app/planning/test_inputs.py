@@ -28,6 +28,7 @@ from bindaems.app.planning.battery_model import params_of, sim_slots
 from bindaems.app.planning.inputs import (
     END_WINDOW,
     MAX_SLOTS,
+    PeakMonth,
     PlanInputs,
     PlanningUnavailable,
     end_value_ct,
@@ -196,6 +197,52 @@ def test_peak_months_skip_months_without_power_price():
 
 def test_missing_power_rate_has_no_peak_months():
     assert peak_months([at("2027-03-01T10:00:00+00:00")], TariffSettings(), 5.0) == []
+
+
+def test_soft_rate_gives_a_virtual_month_without_power_price():
+    # Plan Netzgrenze je Phase, Entscheidung 8: ohne Leistungspreis mit Satz ein gedachter Monat
+    starts = [at("2026-11-10T10:00:00+00:00"), at("2026-11-10T10:15:00+00:00")]
+    assert peak_months(starts, TariffSettings(), 9.2, soft_ct_per_kw=100.0) == [
+        PeakMonth(
+            month="2026-11",
+            virtual=True,
+            peak0_kw=9.2,
+            tier_kw=0,
+            below_ct_per_kw=0,
+            above_ct_per_kw=100,
+        )
+    ]
+    assert peak_months(starts, TariffSettings(), 9.2, soft_ct_per_kw=0.0) == []
+    assert peak_months(starts, TariffSettings(), 9.2) == []
+
+
+def test_soft_rate_starts_later_virtual_months_at_zero():
+    starts = [at("2026-11-30T22:45:00+00:00"), at("2026-11-30T23:00:00+00:00")]
+    months = peak_months(starts, TariffSettings(), 9.2, soft_ct_per_kw=100.0)
+    assert [(m.month, m.peak0_kw, m.virtual) for m in months] == [
+        ("2026-11", 9.2, True),
+        ("2026-12", 0.0, True),
+    ]
+
+
+def test_real_power_price_wins_over_the_soft_rate():
+    tariff = with_power_price(value_eur=30.0, above_eur=60.0, valid_from="2027-01-01")
+    starts = [at("2027-01-10T10:00:00+00:00")]
+    [real] = peak_months(starts, tariff, 3.4, soft_ct_per_kw=100.0)
+    assert (real.month, real.virtual, real.peak0_kw, real.tier_kw) == ("2027-01", False, 3.4, 10.0)
+    assert real.above_ct_per_kw == pytest.approx(600.0)
+    # Jahreswechsel: Dezember gedacht, Januar echt
+    starts = [at("2026-12-31T22:45:00+00:00"), at("2026-12-31T23:00:00+00:00")]
+    months = peak_months(starts, tariff, 3.4, soft_ct_per_kw=100.0)
+    assert [(m.month, m.virtual) for m in months] == [("2026-12", True), ("2027-01", False)]
+
+
+def test_inputs_carry_the_virtual_month_of_the_soft_rate():
+    inputs = assemble(month_peak_kw=4.0)
+    assert [(m.month, m.peak0_kw, m.virtual, m.above_ct_per_kw) for m in inputs.peak_months] == [
+        ("2026-10", 4.0, True, 100.0)
+    ]
+    assert assemble(planning=PlanningSettings(peak_soft_ct_per_kw=0.0)).peak_months == []
 
 
 def test_inputs_carry_peak_months():
@@ -392,3 +439,23 @@ def test_old_inputs_load_without_grid_energy_at_start(store: PlanStore, engine: 
     assert inputs == sample_inputs()
     carried = sample_inputs().model_copy(update={"grid_in_battery_at_start": True})
     assert PlanInputs.model_validate_json(carried.model_dump_json()) == carried
+
+
+def test_old_inputs_load_without_virtual_months(store: PlanStore, engine: Engine) -> None:
+    # Entscheidung 8: Eingangsdaten vor dem gedachten Satz laden mit echten Monaten und Satz 100
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    assert data["peak_months"] and all(m.pop("virtual") is False for m in data["peak_months"])
+    assert data["planning"].pop("peak_soft_ct_per_kw") == 100.0
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs is not None and not any(m.virtual for m in inputs.peak_months)
+    assert inputs == sample_inputs()

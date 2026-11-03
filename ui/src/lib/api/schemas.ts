@@ -591,7 +591,10 @@ export const PlanningSettingsSchema = v.looseObject({
 	roundtrip_pct: v.number(),
 	wear_ct: v.number(),
 	end_value_factor: v.number(),
-	inertia_ct: v.number()
+	inertia_ct: v.number(),
+	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat, 0 = aus);
+	 * ältere Einstellungen kennen ihn nicht */
+	peak_soft_ct_per_kw: v.optional(v.number(), 100)
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 

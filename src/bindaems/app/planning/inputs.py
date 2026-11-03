@@ -74,13 +74,20 @@ class BatteryState(_Model):
 
 
 class PeakMonth(_Model):
-    """Leistungspreis eines lokalen Monats; Sätze in ct je kW und Monat brutto."""
+    """Leistungspreis eines lokalen Monats; Sätze in ct je kW und Monat brutto.
+
+    ``virtual``: ein gedachter Monat ohne Leistungspreis mit Satz (Plan Netzgrenze je Phase,
+    Entscheidung 8) mit ``tier_kw`` 0, ``below_ct_per_kw`` 0 und ``above_ct_per_kw`` dem Satz
+    ``planning.peak_soft_ct_per_kw``. Optimierer, Budget und ``grid_charge_pays`` behandeln ihn wie
+    einen echten Monat; ``Plan.power_price`` zählt nur echte. Alte Eingangsdaten: echt.
+    """
 
     month: str  # JJJJ-MM, lokal
     peak0_kw: NonNegativeFinite  # verrechnete Spitze vor dem Horizont, mindestens ``minimum_kw``
     tier_kw: NonNegativeFinite
     below_ct_per_kw: NonNegativeFinite
     above_ct_per_kw: NonNegativeFinite
+    virtual: bool = False
 
 
 class SlotInput(_Model):
@@ -180,12 +187,18 @@ def end_value_ct(after: Sequence[PriceInput], planning: PlanningSettings) -> flo
 
 
 def peak_months(
-    starts: Sequence[datetime], tariff: TariffSettings, month_peak_kw: float | None
+    starts: Sequence[datetime],
+    tariff: TariffSettings,
+    month_peak_kw: float | None,
+    soft_ct_per_kw: float = 0.0,
 ) -> list[PeakMonth]:
-    """Leistungspreis je lokalem Monat der Slots; Monate ohne eingetragenen Satz fehlen.
+    """Leistungspreis je lokalem Monat der Slots.
 
     Die verrechnete Spitze vor dem Horizont gilt nur für den Monat des ersten Slots; spätere
-    Monate beginnen beim Mindestwert.
+    Monate beginnen beim Mindestwert. Ein Monat ohne eingetragenen Satz wird mit
+    ``soft_ct_per_kw`` über 0 ein gedachter Monat (``virtual``, Plan Netzgrenze je Phase,
+    Entscheidung 8): Bezug bis zur bisherigen Monatsspitze (spätere Monate 0) kostet nichts,
+    jedes kW darüber ``soft_ct_per_kw``. Mit 0 fehlt er.
     """
     result: list[PeakMonth] = []
     seen: set[str] = set()
@@ -196,10 +209,21 @@ def peak_months(
             continue
         seen.add(month)
         rate = power_rate(local.date(), tariff)
+        known_peak = (month_peak_kw or 0.0) if index == 0 else 0.0
         if rate is None or rate.missing:
+            if soft_ct_per_kw > 0:
+                result.append(
+                    PeakMonth(
+                        month=month,
+                        peak0_kw=known_peak,
+                        tier_kw=0.0,
+                        below_ct_per_kw=0.0,
+                        above_ct_per_kw=soft_ct_per_kw,
+                        virtual=True,
+                    )
+                )
             continue
         to_ct = 100 / 12 * rate.vat_factor
-        known_peak = (month_peak_kw or 0.0) if index == 0 else 0.0
         result.append(
             PeakMonth(
                 month=month,
@@ -295,7 +319,9 @@ def assemble_inputs(
         planning=planning,
         battery=battery,
         month_peak_kw=month_peak_kw,
-        peak_months=peak_months([s.start for s in slots], tariff, month_peak_kw),
+        peak_months=peak_months(
+            [s.start for s in slots], tariff, month_peak_kw, planning.peak_soft_ct_per_kw
+        ),
         end_value_ct=end_value_ct(_within(prices, horizon_end, END_WINDOW), planning),
         support_soc_pct=support_soc_pct,
         peak_target_kw=peak_target_kw,

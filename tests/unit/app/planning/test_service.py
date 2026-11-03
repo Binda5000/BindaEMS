@@ -9,6 +9,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import update
@@ -43,7 +44,7 @@ from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
 from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanTrigger, intent_plan
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan, PlanTrigger, intent_plan
 from bindaems.shared.settings import PlanningSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
@@ -1232,10 +1233,19 @@ async def test_shadow_shift_is_not_sent(service_with, live, cold, small_house):
 
 
 async def test_active_shift_goes_into_intent(
-    service_with, live, cold, settings_service, small_house
+    service_with, live, cold, settings_service, small_house, monkeypatch
 ):
     set_thermal(settings_service, enabled=True)
     live.health = thermal_health()
+    # der Plan des ersten Schritts, wie ihn der zweite bekommt
+    stage_one: list[Plan] = []
+    apply = thermal_stage.apply_thermal
+
+    def recording(plan: Plan, **kwargs: Any) -> Plan:
+        stage_one.append(plan)
+        return apply(plan, **kwargs)
+
+    monkeypatch.setattr("bindaems.app.planning.service.apply_thermal", recording)
     service = service_with(cfg=small_house, thermal_model=heating_models())
     plan = await service.replan("manual")
     assert plan.thermal is not None
@@ -1245,8 +1255,10 @@ async def test_active_shift_goes_into_intent(
     cheap_before = [s for s in plan.slots if s.start < expensive[0].start]
     assert max(s.thermal_steps or 0 for s in cheap_before) > 0
     assert min(s.thermal_w for s in expensive) < 0
-    # Plan des ersten Schritts bleibt: Bezug, Einspeisung und Kosten unverändert
-    first = await service_with(cfg=small_house).replan("manual")
+    # Plan des ersten Schritts bleibt: Bezug, Einspeisung und Kosten unverändert. Verglichen wird
+    # mit dem ersten Schritt desselben Laufs: Ein zweiter Lauf hat einen vorigen Plan und darf bei
+    # gleichen Kosten andere Slots wählen (gleiche Abendpreise, Monatsspitze ohne Leistungspreis).
+    [first] = stage_one
     assert [(s.import_w, s.export_w, s.cost_ct) for s in plan.slots] == [
         (s.import_w, s.export_w, s.cost_ct) for s in first.slots
     ]

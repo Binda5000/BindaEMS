@@ -98,7 +98,8 @@ class SlotFlows:
 class OptimizerResult:
     """Ergebnis eines Laufs; ``flows`` ist leer, wenn es keine Lösung gibt.
 
-    ``peaks_kw`` ist die Spitze des Optimierers je Monat mit Leistungspreis (``JJJJ-MM``). Mit
+    ``peaks_kw`` ist die Spitze des Optimierers je Monat mit Leistungspreis oder gedachtem Satz
+    (``JJJJ-MM``, ``PeakMonth.virtual``). Mit
     erwarteten Autos (Plan 5b, Ruling F-1) ist sie die Spitze ohne deren Netzleistung:
     ``max(peak0, höchster Bezug im Monat ohne erwartete Autos)``. Sie geht ins Budget des Wächters
     im core, und ein Auto, das nur die Prognose kennt, darf es nicht anheben.
@@ -401,7 +402,8 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                     f"r1_auto_vorher_{t}",
                 )
 
-    # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont.
+    # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont; ein gedachter
+    # Monat ohne Leistungspreis (Entscheidung 8) rechnet gleich, mit ``tier_kw`` 0 nur über ``d2``.
     peaks: dict[str, tuple[float, pulp.LpVariable, pulp.LpVariable]] = {}
     for k, peak in enumerate(inputs.peak_months):
         d1 = prob.add_variable(

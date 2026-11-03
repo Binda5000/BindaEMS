@@ -1,5 +1,6 @@
 <script lang="ts">
-	// Planung des Akkus im Editor: Netzladen, Akku ins Auto, Marge, Wirkungsgrad, Verschleiß, Restwert, Trägheit
+	// Planung des Akkus im Editor: Netzladen, Akku ins Auto, Marge, Wirkungsgrad, Verschleiß, Restwert,
+	// Trägheit, gedachter Satz für die Monatsspitze ohne Leistungspreis
 	import type { PlanningDraft } from './model';
 
 	interface Props {
@@ -75,6 +76,12 @@
 		'inertia_ct',
 		'Planträgheit (ct/kWh)',
 		'Kosten je kWh Abweichung vom vorigen Plan.'
+	)}
+	{@render field(
+		'peakSoftCt',
+		'peak_soft_ct_per_kw',
+		'Spitze vermeiden ohne Leistungspreis (ct je kW und Monat)',
+		'Ohne Leistungspreis meidet der Planer neue Monatsspitzen, als kostete jedes kW darüber diesen Satz; der 15-min-Wächter hält das Budget. 0 schaltet es aus.'
 	)}
 </fieldset>
 

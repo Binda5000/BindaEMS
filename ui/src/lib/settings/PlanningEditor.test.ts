@@ -28,6 +28,9 @@ it('is a group named Planung with all fields', () => {
 	expect(screen.getByLabelText('Verschleiß (ct/kWh)')).toHaveValue('2');
 	expect(screen.getByLabelText('Vorsichtsfaktor Restwert')).toHaveValue('0,9');
 	expect(screen.getByLabelText('Planträgheit (ct/kWh)')).toHaveValue('0,5');
+	expect(
+		screen.getByLabelText('Spitze vermeiden ohne Leistungspreis (ct je kW und Monat)')
+	).toHaveValue('100');
 });
 
 it('edits planning fields', async () => {
@@ -53,4 +56,16 @@ it('schaltet Akku ins Auto und zeigt den Hilfetext', async () => {
 	).toBeInTheDocument();
 	await fireEvent.click(screen.getByRole('checkbox', { name: 'Akku ins Auto, wenn übrig' }));
 	expect(draft()).toMatchObject({ carBatteryAllowed: true, gridChargeAllowed: false });
+});
+
+it('bearbeitet den gedachten Satz für die Monatsspitze', async () => {
+	const { draft } = renderEditor();
+	const input = screen.getByLabelText('Spitze vermeiden ohne Leistungspreis (ct je kW und Monat)');
+	expect(
+		screen.getByText(
+			'Ohne Leistungspreis meidet der Planer neue Monatsspitzen, als kostete jedes kW darüber diesen Satz; der 15-min-Wächter hält das Budget. 0 schaltet es aus.'
+		)
+	).toBeInTheDocument();
+	await fireEvent.input(input, { target: { value: '0' } });
+	expect(draft()).toMatchObject({ peakSoftCt: '0' });
 });

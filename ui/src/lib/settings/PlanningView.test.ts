@@ -29,3 +29,13 @@ it('zeigt Akku ins Auto, wenn übrig, als ja oder nein', () => {
 	render(PlanningView, { planning: { ...planning, car_battery_allowed: true } });
 	expect(screen.getByText('Akku ins Auto, wenn übrig').nextElementSibling).toHaveTextContent('ja');
 });
+
+it('zeigt den gedachten Satz für die Monatsspitze, bei 0 „aus“', () => {
+	const planning = settingsCurrent().settings.planning;
+	const label = 'Spitze vermeiden ohne Leistungspreis';
+	const { unmount } = render(PlanningView, { planning });
+	expect(screen.getByText(label).nextElementSibling).toHaveTextContent('100 ct je kW und Monat');
+	unmount();
+	render(PlanningView, { planning: { ...planning, peak_soft_ct_per_kw: 0 } });
+	expect(screen.getByText(label).nextElementSibling).toHaveTextContent('aus');
+});

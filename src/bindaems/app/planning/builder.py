@@ -156,7 +156,8 @@ def _budgets(
     source: PlanSource,
     optimizer_peaks_kw: Mapping[str, float] | None,
 ) -> list[float | None]:
-    """Budget je Slot (akzeptierte Monatsspitze in kW) für Monate mit Leistungspreis.
+    """Budget je Slot (akzeptierte Monatsspitze in kW) für Monate mit Leistungspreis und für
+    gedachte Monate ohne (``PeakMonth.virtual``, Plan Netzgrenze je Phase, Entscheidung 8).
 
     Eine Formel für Ersatzplan und Optimierer (Präzisierungen 10 und 11, Gesamtreview I2): auf
     0,1 kW aufgerundet das Größte aus ``peak0_kw`` (bisherige Monatsspitze, mindestens
@@ -333,7 +334,8 @@ def build_plan(
         soc_max_pct=inputs.battery.soc_max_pct,
         soc_start_pct=inputs.battery.soc_pct,
         month_peak_kw=inputs.month_peak_kw,
-        power_price=bool(inputs.peak_months),
+        # nur ein echter Leistungspreis; ein gedachter Monat gibt nur sein Budget (Entscheidung 8)
+        power_price=any(not entry.virtual for entry in inputs.peak_months),
         expected_cost_ct=sum(item.cost_ct for item in steps),
         baseline_cost_ct=baseline_cost_ct(inputs, powers),
         issues=list(issues),

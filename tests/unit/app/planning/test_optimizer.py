@@ -25,7 +25,7 @@ from tests.plan_helpers import (
 from bindaems.app.planning import optimizer
 from bindaems.app.planning.battery_model import SLOT_H, params_of
 from bindaems.app.planning.grid_phases import PHASES, phase_shares
-from bindaems.app.planning.inputs import BatteryState, PeakMonth, PlanInputs
+from bindaems.app.planning.inputs import BatteryState, PeakMonth, PlanInputs, peak_months
 from bindaems.app.planning.optimizer import (
     R1_EMPTY_TOL_KWH,
     TIME_LIMIT_S,
@@ -44,6 +44,7 @@ from bindaems.app.planning.vehicles import (
     need_kwh,
 )
 from bindaems.shared.config import Phase
+from bindaems.shared.settings import TariffSettings
 from bindaems.shared.timeutil import SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
@@ -1012,3 +1013,48 @@ def test_without_phase_limit_two_cars_charge_together() -> None:
     result = solve(_two_cars_night(state()))
     assert result.status == "optimal"
     assert any(_both_at_max(result))
+
+
+# Monatsspitze ohne Leistungspreis (Plan Netzgrenze je Phase, Entscheidung 8)
+
+
+def _two_cars_flat_night(peaks: list[PeakMonth]) -> PlanInputs:
+    """Nacht ohne PV, Haus 600 W, acht Slots zum gleichen Preis, Akku an der Reserve; Tesla und
+    e-Golf brauchen je 10 kWh bis zum Ende."""
+    tesla = _tesla(departure_at=slot(8), need_kwh=10.0)
+    egolf = _egolf(departure_at=slot(8), need_kwh=10.0)
+    return scenario(
+        prices=[20.0] * 8,
+        pv=[0.0] * 8,
+        load=[600.0] * 8,
+        soc_pct=20.0,
+        vehicles=[tesla, egolf],
+        peak_months=peaks,
+    )
+
+
+def test_soft_peak_spreads_two_cars() -> None:
+    starts = [at(SCENARIO_START)]
+    peaks = peak_months(starts, TariffSettings(), 3.0, soft_ct_per_kw=100.0)
+    assert [(m.virtual, m.peak0_kw) for m in peaks] == [(True, 3.0)]
+    inputs = _two_cars_flat_night(peaks)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    # nötiger Mittelwert: 2 · 10 kWh in 2 h und das Haus
+    mean_kw = (2 * 10.0 + 8 * 600.0 * SLOT_KWH) / (8 * SLOT_H / 1000)
+    assert max(f.gr_h + f.gr_b + sum(g for _, g in f.ev.values()) for f in result.flows) / 1000 <= (
+        max(3.0, mean_kw) + 0.1
+    )
+    assert not any(_both_at_max(result))
+    assert all(value == pytest.approx(0.0, abs=1e-6) for value in result.shortfall_kwh.values())
+    assert result.peaks_kw["2026-10"] <= max(3.0, mean_kw) + 0.1
+
+
+def test_without_soft_rate_two_cars_charge_as_before() -> None:
+    # Satz 0: kein gedachter Monat, der Optimierer rechnet wie ohne Leistungspreis
+    peaks = peak_months([at(SCENARIO_START)], TariffSettings(), 3.0, soft_ct_per_kw=0.0)
+    assert peaks == []
+    result = solve(_two_cars_flat_night(peaks))
+    assert result.status == "optimal" and result.peaks_kw == {}
+    before = solve(_two_cars_flat_night([]))
+    assert result.flows == before.flows

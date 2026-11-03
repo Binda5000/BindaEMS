@@ -398,7 +398,8 @@ it('shows the planning numbers with a decimal comma', () => {
 		roundtripPct: '88',
 		wearCt: '2',
 		endValueFactor: '0,9',
-		inertiaCt: '0,5'
+		inertiaCt: '0,5',
+		peakSoftCt: '100'
 	});
 });
 
@@ -411,7 +412,8 @@ it('takes over edited planning numbers', () => {
 		roundtripPct: '90',
 		wearCt: '1,5',
 		endValueFactor: '0,8',
-		inertiaCt: '0'
+		inertiaCt: '0',
+		peakSoftCt: '50,5'
 	};
 	const result = applyDraft(settings(), draft);
 	expect('settings' in result && result.settings.planning).toEqual({
@@ -421,7 +423,8 @@ it('takes over edited planning numbers', () => {
 		roundtrip_pct: 90,
 		wear_ct: 1.5,
 		end_value_factor: 0.8,
-		inertia_ct: 0
+		inertia_ct: 0,
+		peak_soft_ct_per_kw: 50.5
 	});
 });
 
@@ -432,12 +435,14 @@ it('checks the planning numbers', () => {
 	draft.planning.marginCt = '-1';
 	draft.planning.wearCt = 'abc';
 	draft.planning.inertiaCt = '';
+	draft.planning.peakSoftCt = '-5';
 	expect(errorsOf(draft)).toMatchObject({
 		'planning.roundtrip_pct': 'Zahl von 50 bis 100',
 		'planning.end_value_factor': 'Zahl von 0 bis 1, z. B. 0,9',
 		'planning.margin_ct': 'Zahl ab 0, z. B. 2,0',
 		'planning.wear_ct': 'Zahl ab 0, z. B. 2,0',
-		'planning.inertia_ct': 'Zahl ab 0, z. B. 2,0'
+		'planning.inertia_ct': 'Zahl ab 0, z. B. 2,0',
+		'planning.peak_soft_ct_per_kw': 'Zahl ab 0, z. B. 100'
 	});
 	draft.planning.roundtripPct = '49,9';
 	expect(errorsOf(draft)['planning.roundtrip_pct']).toBe('Zahl von 50 bis 100');

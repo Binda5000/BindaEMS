@@ -16,10 +16,11 @@ from tests.plan_helpers import (
     resimulate,
     scenario,
     small_battery,
+    virtual,
 )
 
 from bindaems.app.planning.battery_model import SLOT_H, eta, params_of
-from bindaems.app.planning.inputs import PlanInputs
+from bindaems.app.planning.inputs import PeakMonth, PlanInputs
 from bindaems.app.planning.intents import (
     GRID_CHARGE_MIN_W,
     HOLD_MIN_W,
@@ -366,15 +367,18 @@ def test_unprofitable_grid_charge_is_dropped(load0_w: float, kind: BatteryIntent
     assert derive_intents(inputs, flows_result(flows))[0] == BatteryIntent(kind=kind)
 
 
-def test_grid_charge_against_a_peak_is_kept() -> None:
+@pytest.mark.parametrize("peak", [month("2026-10", 2.0), virtual("2026-10", 2.0)])
+def test_grid_charge_against_a_peak_is_kept(peak: PeakMonth) -> None:
     # Mit Leistungspreis darf Netzladen einer Spitze ausweichen; wie in der Plausibilität bleibt es.
+    # Ein gedachter Monat ohne Leistungspreis gilt hier wie ein echter (Plan Netzgrenze je Phase,
+    # Entscheidung 8).
     inputs = scenario(
         prices=[20.0] * 2,
         pv=[0.0] * 2,
         load=[1000.0, 1000.0],
         soc_pct=50.0,
         grid_charge=True,
-        peak_months=[month("2026-10", 2.0)],
+        peak_months=[peak],
     )
     flows = [flow(gr_b=2000.0, gr_h=1000.0), flow(bt_h=1000.0)]
     assert derive_intents(inputs, flows_result(flows))[0] == BatteryIntent(

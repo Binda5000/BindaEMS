@@ -227,7 +227,8 @@ class PvModelSettings(_Model):
 
 
 class PlanningSettings(_Model):
-    """Planung des Akkus (Plan 3b): Netzladen, Marge, Wirkungsgrad, Verschleiß, Restwert."""
+    """Planung des Akkus (Plan 3b): Netzladen, Marge, Wirkungsgrad, Verschleiß, Restwert,
+    Trägheit, Akku ins Auto und der gedachte Satz für die Monatsspitze ohne Leistungspreis."""
 
     grid_charge_allowed: bool = False
     margin_ct: NonNegative = 2.0  # Mindestgewinn je kWh, damit sich Netzladen lohnt
@@ -236,6 +237,10 @@ class PlanningSettings(_Model):
     end_value_factor: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.9
     inertia_ct: NonNegative = 0.5  # Planträgheit je kWh Abweichung vom vorigen Plan
     car_battery_allowed: bool = False  # Akku ins Auto, wenn übrig (Plan Akku ins Auto)
+    # Gedachter Satz in ct je kW und Monat für Monate ohne Leistungspreis mit Satz: Der Planer
+    # meidet neue Monatsspitzen auch dann, der Wächter hält sein Budget; 0 = aus (Plan Netzgrenze
+    # je Phase, Entscheidung 8)
+    peak_soft_ct_per_kw: NonNegative = 100.0
 
 
 HaEntityId = Annotated[str, Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")]

@@ -207,7 +207,9 @@ def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -
 
     Das gilt mit einer späteren Entladung (``pays_off``) oder mit dem Restwert am Horizontende
     (``pays_off_at_end``); mit Leistungspreis immer, weil Netzladen dann auch einer Spitze
-    ausweichen darf. Plausibilität und Absichten rechnen beide hiermit.
+    ausweichen darf. Das gilt auch für einen gedachten Monat ohne Leistungspreis
+    (``PeakMonth.virtual``, Plan Netzgrenze je Phase, Entscheidung 8). Plausibilität und Absichten
+    rechnen beide hiermit.
     """
     return (
         bool(inputs.peak_months)

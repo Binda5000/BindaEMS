@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Planung in der Leseansicht der Einstellungen
 	import type { PlanningSettings } from '$lib/api/schemas';
-	import { formatNumber, NBSP } from '$lib/format';
+	import { formatNumber, formatNumberMax, NBSP } from '$lib/format';
 
 	interface Props {
 		planning: PlanningSettings;
@@ -25,4 +25,10 @@
 	<dd>{formatNumber(planning.end_value_factor, 2)}</dd>
 	<dt>Planträgheit</dt>
 	<dd>{formatNumber(planning.inertia_ct, 1)}{NBSP}ct/kWh</dd>
+	<dt>Spitze vermeiden ohne Leistungspreis</dt>
+	<dd>
+		{planning.peak_soft_ct_per_kw > 0
+			? `${formatNumberMax(planning.peak_soft_ct_per_kw, 1)}${NBSP}ct je kW und Monat`
+			: 'aus'}
+	</dd>
 </dl>
