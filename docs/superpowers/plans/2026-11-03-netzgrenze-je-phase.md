@@ -26,7 +26,8 @@ Screenshot vom 3.11.2026 21:15 (Zeitplan für den 4.11.): Tesla (bis 11 kW, 3-ph
 5. **Ohne Grenze** (`grid_phase_import_w is None`): keine Phasenbedingung, alles wie bisher. Gesetzt wird sie im Planungsdienst und in `export_days`; die synthetischen Szenarien und `tests/plan_helpers.state()` bleiben ohne, damit bestehende Erwartungen gelten.
 6. **Ersatzplan:** Im Netzschritt von `fallback_vehicles` hat jede Phase den Platz `max(0, grid_phase_import_w − max(0, load − pv) / 3)` abzüglich der Netzanteile der Autos davor; ein Auto bekommt höchstens `n_c · min_{p ∈ Phasen_c} Platz_p` zusätzlich, sonst (unter `min_w`) nicht diesen Slot. Der PV-Schritt bleibt unverändert und belegt keinen Platz. Beim Netzladen in `fallback_intents` gilt zusätzlich `headroom ≤ 3 · min_p (grid_phase_import_w − max(0, load − pv) / 3 − Σ_c ev_w_c · Anteil_c(p))`; hier zählt die ganze Ladeleistung der Autos (konservativ, nachts ohnehin gleich).
 7. **Plausibilität:** Neuer Befund (Art `phase`), wenn die Flüsse des Optimierers auf einer Phase mehr als `R_t + BALANCE_TOL_W` aus dem Netz beziehen: „Netzbezug über dem Importlimit auf L1 um 04:00“. Dann gilt wie bei jedem Befund der Ersatzplan.
-8. **Ausrollen:** nur ems-app, ohne Migration, ohne ACL; mit dem nächsten Sammel-Pull (Stufe 2, ab 23.11.), nie allein.
+8. **Monatsspitze ohne Leistungspreis** (Wunsch des Betreibers vom 3.11.2026 21:58, Karte „Wie soll der Planer die Monatsspitze vor 2027 behandeln?“; Task 5 gilt nur mit „Gedachter Satz, nur im Planer“): Für einen Monat ohne Leistungspreis mit Satz rechnet der Optimierer mit einem gedachten Satz `planning.peak_soft_ct_per_kw` (ct je kW und Monat, Standard **100**, 0 = aus). Er entsteht als `PeakMonth(virtual=True, tier_kw=0, below_ct_per_kw=0, above_ct_per_kw=Satz, peak0_kw=bisherige Monatsspitze)` (für spätere Monate im Horizont 0): Bezug bis zur schon erreichten Spitze kostet nichts, jedes kW darüber den Satz. Ein gedachter Monat gibt **kein Budget** an den core (`builder._budgets` überspringt ihn; der 15-min-Wächter bleibt wie heute), setzt `Plan.power_price` nicht und zählt in keiner Kostenanzeige oder Statistik. Optimierer und `grid_charge_pays` behandeln ihn wie einen echten Monat (Netzladen darf einer Spitze ausweichen). Gibt es einen echten Satz, gilt nur dieser.
+9. **Ausrollen:** nur ems-app, ohne Migration, ohne ACL; mit dem nächsten Sammel-Pull (Stufe 2, ab 23.11.), nie allein.
 
 ## Global Constraints
 
@@ -136,6 +137,26 @@ Screenshot vom 3.11.2026 21:15 (Zeitplan für den 4.11.): Tesla (bis 11 kW, 3-ph
 - [ ] **Step 3:** Befund in der ersten Schleife über `result.flows` ergänzen.
 - [ ] **Step 4:** Tests grün; ganze Prüfkette einschließlich UI (`pnpm check`, `lint`, `test`; unverändert) und Simulator-Szenarien.
 - [ ] **Step 5:** Doku nachführen; Commit `fix(app): Plausibilität meldet Netzbezug über dem Importlimit je Phase` und `docs: Netzgrenze je Phase in Spec, Betrieb und Übergabe`.
+
+### Task 5: Monatsspitze ohne Leistungspreis (nur mit der Wahl „Gedachter Satz, nur im Planer“)
+
+**Files:**
+- Modify: `src/bindaems/shared/settings.py` (`PlanningSettings`), `src/bindaems/app/planning/inputs.py` (`PeakMonth`, `peak_months`, Aufruf in `assemble_inputs`), `src/bindaems/app/planning/builder.py` (`_budgets`, `power_price`), `src/bindaems/app/planning/plausibility.py` (`grid_charge_pays`, Docstring), `ui/src/lib/settings/PlanningEditor.svelte`, `ui/src/lib/settings/PlanningView.svelte` (Feld „Spitze vermeiden ohne Leistungspreis“, ct je kW und Monat)
+- Test: `tests/unit/app/planning/test_inputs.py`, `tests/unit/app/planning/test_builder.py`, `tests/unit/app/planning/test_optimizer.py`, `ui/src/lib/settings/PlanningEditor.test.ts`, `PlanningView.test.ts`
+- Docs: Spec 9.3 (im Absatz von Task 4 ergänzen), `docs/betrieb.md` „Planung“ (Einstellung erklären)
+
+**Interfaces:**
+- Produces: `PlanningSettings.peak_soft_ct_per_kw: NonNegative = 100.0`; `PeakMonth.virtual: bool = False`; `peak_months(starts, tariff, month_peak_kw, soft_ct_per_kw: float = 0.0) -> list[PeakMonth]`
+
+- [ ] **Step 1: Failing tests**
+  - `test_inputs.py`: November 2026 ohne Satz, `soft_ct_per_kw=100`, Monatsspitze 9,2 → ein `PeakMonth(month="2026-11", virtual=True, peak0_kw=9.2, tier_kw=0, below_ct_per_kw=0, above_ct_per_kw=100)`; mit `soft_ct_per_kw=0` → `[]`; Januar 2027 mit echtem Satz → nur der echte Monat, `virtual=False`. Gespeicherte Eingangsdaten ohne `virtual` laden mit `False`.
+  - `test_optimizer.py`, `test_soft_peak_spreads_two_cars`: zwei Autos mit Bedarf je ~10 kWh über 8 Nachtslots mit gleichem Preis, Monatsspitze 3 kW, Satz 100 → höchster Bezug im Plan ≤ max(3, nötiger Mittelwert) + 0,1 kW statt beide gleichzeitig; ohne Satz (0) laden sie wie bisher.
+  - `test_builder.py`, `test_virtual_month_gives_no_budget`: alle `budget_kw` sind `None`, `plan.power_price is False`.
+  - UI: Editor zeigt das Feld mit Standard 100, speichert `planning.peak_soft_ct_per_kw`; Ansicht zeigt „100 ct je kW und Monat“, bei 0 „aus“.
+- [ ] **Step 2:** `pytest tests/unit/app/planning -q -k "soft or virtual"` und `cd ui && pnpm vitest run src/lib/settings` → scheitern.
+- [ ] **Step 3:** Umsetzen nach Entscheidung 8.
+- [ ] **Step 4:** Tests grün; Lösezeit-Test grün; ganze Prüfkette mit UI und E2E.
+- [ ] **Step 5:** Commit `feat(app): Planer meidet neue Monatsspitzen auch ohne Leistungspreis`, Doku nachführen.
 
 ## Nicht in diesem Plan
 
