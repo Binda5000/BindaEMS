@@ -5934,7 +5934,8 @@ Reihenfolge der Slots; der früheste ist der „erste Befund“): „Bilanz verl
 obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
 bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, bei gesetzter Grenze je
 Phase (seit dem Plan „Netzgrenze je Phase“) „Netzbezug über dem Importlimit auf L1 um HH:MM“
-(oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b) dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
+(oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b)
+dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
 Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
 (die Uhrzeit ist die erwartete Ankunft). Gibt der Akku einem Auto mehr als 1 W (Akku ins Auto), kommen
 „Akku ins Auto um HH:MM, obwohl ausgeschaltet“, „Akku ins Auto um HH:MM bei Halten oder
