@@ -278,6 +278,12 @@ freigegeben. Die Hausakku-Kachel der Übersicht zeigt unter „≈ 24 von 96 kWh
 ((SOC − Reserve) × `usable_kwh`), an oder unter der Reserve „nichts über Reserve“. **Nur UI, nur `ems-app` neu, keine Migration, keine ACL-Zeile,
 kein Schritt an `config.yaml`**; ausgerollt wird mit dem nächsten Sammel-Pull, nie allein (Punkt 18 unter „Offen an der Anlage“).
 
+**Stand Autarkie nicht negativ (03.11.2026):** Plan `docs/superpowers/plans/2026-11-03-autarkie-nicht-negativ.md`, vom Betreiber am 03.11.2026
+freigegeben. Autarkie und Eigenverbrauch sind auf 0 bis 100 % begrenzt (`app/ledger/service.py`, `share`); Anlass war die Tagesbilanz vom
+02.11.2026 mit −3 %, weil der Akku 4,81 kWh aus dem Netz lud (Bezug 36,1 kWh über dem Verbrauch von 35,1 kWh). **Nur app, nur `ems-app` neu,
+keine Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**; ausgerollt wird mit Stufe 2 des Sammel-Pulls, nie allein (Punkt 18).
+Nicht umgesetzt (Entscheidung 2 des Plans): einen Netzanteil des Akkuinhalts mitführen, der solchen Tagen eine Autarkie über 0 gäbe.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2077,6 +2083,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Der Name der Wallbox (aus den Einstellungen, sonst der Typname wie „EVCS“) steht in „Warum?“, in der
       Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
       In der Hausakku-Kachel der Übersicht steht unter „≈ … von … kWh“ neu „≈ … kWh über Reserve“ (an oder unter der Reserve „nichts über Reserve“).
+      Mit demselben Pull kommt „Autarkie nicht negativ“: Verlauf → Tagesbilanz zeigt für den 02.11. „0 %“ statt „-3 %“, ebenso „Autarkie heute“ in HA an Tagen mit Netzladung.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

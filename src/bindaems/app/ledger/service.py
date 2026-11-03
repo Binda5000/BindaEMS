@@ -162,6 +162,17 @@ def _ledger_slot(row: _Row) -> LedgerSlot:
     )
 
 
+def share(part: float, total: float) -> float | None:
+    """``part ÷ total``, begrenzt auf 0 bis 1; ``None``, wenn ``total`` nicht über 0 liegt.
+
+    Für Autarkie und Eigenverbrauch (Plan Autarkie nicht negativ): Lädt der Akku aus dem Netz,
+    kann der Bezug eines Tages den Verbrauch übersteigen; die Autarkie ist dann 0, nicht negativ.
+    """
+    if total <= 0:
+        return None
+    return min(1.0, max(0.0, part / total))
+
+
 def summarize_slots(
     day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings, now: datetime
 ) -> DaySummary:
@@ -242,8 +253,8 @@ def summarize_slots(
         cost_eur=cost_eur,
         revenue_eur=revenue_eur,
         net_cost_eur=net_cost_eur,
-        autarky=1 - import_kwh / consumption_kwh if consumption_kwh > 0 else None,
-        self_consumption=(pv_kwh - export_kwh) / pv_kwh if pv_kwh > 0 else None,
+        autarky=share(consumption_kwh - import_kwh, consumption_kwh),
+        self_consumption=share(pv_kwh - export_kwh, pv_kwh),
         savings_no_plant_eur=(
             consumption_kwh * fixed_eur - net_cost_eur if net_cost_eur is not None else None
         ),

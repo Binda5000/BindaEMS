@@ -1818,6 +1818,9 @@ und dem Abgleich (Abschnitt 8).
   Anlage, ohne Grundgebühren und Leistungspreis, denn die fielen auch ohne Anlage an) und „Erlös“
   (der Einspeiseerlös). Die Fußnote darunter erklärt beides: „* gegenüber Fixtarif ohne Anlage.
   „Erlös“ ist der Einspeiseerlös.“ Was nicht feststeht, weil etwa ein Preis fehlt, steht als „–“.
+  Autarkie (`1 − Bezug ÷ Verbrauch`) und Eigenverbrauch liegen immer zwischen 0 und 100 %: Lädt der
+  Akku an einem Tag mehr aus dem Netz, als er abgibt, kann der Bezug über dem Verbrauch liegen; der
+  Tag zeigt dann 0 % Autarkie (auch in der Tagesbilanz und in „Autarkie heute“).
 - **Diagramm „Energie“:** PV, Bezug und Einspeisung als Balken, Verbrauch als Linie; je Stunde (Tag, mit
   23 oder 25 Stunden an der Zeitumstellung), je Tag (Woche, Monat) oder je Monat (Jahr).
 - **„Kosten“:** die Zeilen „Bezug“, „Einspeiseerlös“, „Netto“, „Grundgebühren“, „Leistungspreis“ (nur

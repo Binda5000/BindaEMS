@@ -1928,6 +1928,7 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Kennzahlen:**
   - Autarkie = 1 − Bezug ÷ Verbrauch
   - Eigenverbrauchsquote = (PV − Einspeisung) ÷ PV
+  - **Stand Plan Autarkie nicht negativ** (`docs/superpowers/plans/2026-11-03-autarkie-nicht-negativ.md`, freigegeben vom Betreiber am 03.11.2026): Beide Kennzahlen sind auf 0 bis 100 % begrenzt (`app/ledger/service.py`, `share`), in der Tagesbilanz, den Statistik-Kacheln und „Autarkie heute“ in Home Assistant. Der Bezug enthält die Netzladung des Akkus, der Verbrauch nicht; lädt der Akku an einem Tag mehr aus dem Netz, als er abgibt, kann der Bezug den Verbrauch übersteigen (02.11.2026: 36,1 gegen 35,1 kWh, −3 %). Solche Tage zeigen 0 %. Monat und Jahr rechnen weiter aus den Summen der Tage. Einen Netzanteil des Akkuinhalts führt die Statistik nicht mit.
   - **Ersparnis gegenüber Fixtarif**, zwei Varianten:
     1. „Ohne Anlage“: Verbrauch × Fixpreis − Ist-Kosten
     2. „Gleicher Netzbezug zum Fixpreis“: Bezug × Fixpreis − Einspeiseerlös − Ist-Kosten
