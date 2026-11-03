@@ -17,7 +17,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, model_validator
 
 from bindaems.app.forecast.archive import HorizonClass
-from bindaems.shared.config import BatteryConfig, _Model
+from bindaems.shared.config import BatteryConfig, Phase, _Model
 from bindaems.shared.settings import PlanningSettings, TariffSettings
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
@@ -60,6 +60,7 @@ class ScenarioCar(_Model):
     max_w: PositiveFinite
     min_w: NonNegativeFinite
     efficiency: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
+    grid_phases: list[Phase] | None = None  # ohne Angabe 3-phasig symmetrisch
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -76,6 +77,7 @@ class ScenarioBattery(BatteryConfig):
 
     max_grid_charge_setpoint_w: NonNegativeFinite
     grid_max_import_w: NonNegativeFinite
+    grid_phase_import_w: NonNegativeFinite | None = None  # ohne Angabe keine Phasengrenze
     start_soc_pct: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
 
 

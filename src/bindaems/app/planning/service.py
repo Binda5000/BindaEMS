@@ -41,6 +41,7 @@ from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.battery_model import params_of, sim_slots, simulate
 from bindaems.app.planning.builder import build_plan
 from bindaems.app.planning.fallback import fallback_intents, fallback_vehicles, per_slot
+from bindaems.app.planning.grid_phases import grid_import_limits_w
 from bindaems.app.planning.inputs import (
     PRICE_WINDOW,
     BatteryState,
@@ -586,10 +587,7 @@ class PlanningService:
 
         battery = self._cfg.battery
         grid = self._cfg.grid
-        if grid.max_import_kw is not None:
-            grid_max_import_w = grid.max_import_kw * 1000
-        else:
-            grid_max_import_w = (grid.fuse_a - grid.fuse_margin_a) * grid.voltage_nominal_v * 3
+        grid_max_import_w, grid_phase_import_w = grid_import_limits_w(grid, self._cfg.control)
         return BatteryState(
             soc_pct=soc_pct,
             usable_kwh=battery.usable_kwh,
@@ -601,6 +599,7 @@ class PlanningService:
             limit_now_discharge_w=bms_w("battery.dcl_a"),
             max_grid_charge_setpoint_w=self._cfg.victron.max_grid_charge_setpoint_w,
             grid_max_import_w=grid_max_import_w,
+            grid_phase_import_w=grid_phase_import_w,
         )
 
     def _read(self, now: datetime) -> tuple[list[PriceInput], float | None]:

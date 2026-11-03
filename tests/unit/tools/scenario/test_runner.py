@@ -830,3 +830,41 @@ def test_replanning_carries_grid_energy_in_the_battery(monkeypatch: pytest.Monke
     monkeypatch.setattr(runner, "plan_once", first_charges)
     run_scenario(synthetic("winter-spread", date(2027, 1, 11), 1), step_slots=4)
     assert [item.grid_in_battery_at_start for item in inputs[:2]] == [False, True]
+
+
+def _without_phase_fields(data: ScenarioFile) -> ScenarioFile:
+    """Eine Datei Version 2 wie vor den Phasengrenzen: die neuen Felder fehlen im JSON."""
+    raw = json.loads(data.model_dump_json())
+    del raw["battery"]["grid_phase_import_w"]
+    for car in raw["cars"]:
+        del car["grid_phases"]
+    return ScenarioFile.model_validate(raw)
+
+
+def test_version_2_file_without_phase_fields_runs_without_phase_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = _without_phase_fields(synthetic("winter-spread", date(2027, 1, 11), 2))
+    assert old.version == 2 and old.cars
+    assert old.battery.grid_phase_import_w is None
+    assert all(car.grid_phases is None for car in old.cars)
+    inputs = _record_inputs(monkeypatch)
+    run_scenario(old, step_slots=8)
+    assert all(item.battery.grid_phase_import_w is None for item in inputs)
+    assert all(car.grid_phases is None for item in inputs for car in item.vehicles)
+    assert any(item.vehicles for item in inputs)
+
+
+def test_runner_passes_phase_limit_and_car_phases_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    data = data.model_copy(
+        update={
+            "battery": data.battery.model_copy(update={"grid_phase_import_w": 4370.0}),
+            "cars": [car.model_copy(update={"grid_phases": ["L2", "L3"]}) for car in data.cars],
+        }
+    )
+    inputs = _record_inputs(monkeypatch)
+    run_scenario(data, step_slots=8)
+    assert all(item.battery.grid_phase_import_w == 4370.0 for item in inputs)
+    cars = [car for item in inputs for car in item.vehicles]
+    assert cars and all(car.grid_phases == ["L2", "L3"] for car in cars)

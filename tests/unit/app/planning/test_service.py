@@ -250,6 +250,7 @@ async def test_collect_battery_from_config(service, cfg):
     )
     assert battery.max_grid_charge_setpoint_w == cfg.victron.max_grid_charge_setpoint_w
     assert battery.grid_max_import_w == (35 - 2) * 230.0 * 3
+    assert battery.grid_phase_import_w == (20 - 1) * 230.0
     assert battery.limit_now_charge_w is None and battery.limit_now_discharge_w is None
     assert inputs.month_peak_kw is None and inputs.trigger == "start"
 

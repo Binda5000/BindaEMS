@@ -20,6 +20,7 @@ from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.planning.inputs import SlotInput
 from bindaems.app.planning.vehicles import (
     EV_ON_W,
+    PlanVehicleInput,
     cars_charging,
     expected_vehicles,
     grid_allowed,
@@ -671,3 +672,41 @@ def test_plugged_allowance_is_unchanged_by_arrival_support() -> None:
 def test_cars_charging_drops_cars_below_the_on_threshold() -> None:
     powers = {"a": EV_ON_W, "b": EV_ON_W - 0.01, "c": 0.0, "d": 4140.0}
     assert cars_charging(powers) == {"a": EV_ON_W, "d": 4140.0}
+
+
+def test_planned_cars_carry_the_phases_of_their_wallbox(cfg: Config) -> None:
+    health = planned_health(vehicle_health("tesla"), vehicle_health("egolf"))
+    intent = Intent(
+        version=3,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.PLANNED),
+            "egolf": VehicleIntent(mode=ChargeMode.PLANNED),
+        },
+    )
+    cars = {c.key: c for c in planned_vehicles(cfg, health, intent, now=NOW, slots=_slots())}
+    assert cars["egolf"].grid_phases == ["L1", "L2"]  # 2-phasiger e-Golf am EVCS
+    assert cars["tesla"].grid_phases == ["L1", "L2", "L3"]  # am Wall Connector
+
+
+def test_expected_car_carries_the_phases_of_its_expected_wallbox(cfg: Config) -> None:
+    [tesla] = _expected(cfg)
+    assert (tesla.wallbox, tesla.grid_phases) == ("twc", ["L1", "L2", "L3"])
+
+
+def _vehicle_dict(cfg: Config) -> dict[str, Any]:
+    [car] = planned_vehicles(
+        cfg, planned_health(vehicle_health("tesla")), _intent(), now=NOW, slots=_slots()
+    )
+    raw = car.model_dump(mode="json")
+    del raw["grid_phases"]
+    return raw
+
+
+def test_stored_vehicle_without_phases_loads_with_none(cfg: Config) -> None:
+    assert PlanVehicleInput.model_validate(_vehicle_dict(cfg)).grid_phases is None
+
+
+@pytest.mark.parametrize("phases", [["L1", "L1"], [], ["L1", "L2", "L3", "L1"]])
+def test_vehicle_phases_must_be_one_to_three_distinct(cfg: Config, phases: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        PlanVehicleInput.model_validate({**_vehicle_dict(cfg), "grid_phases": phases})

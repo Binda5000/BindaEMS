@@ -69,6 +69,8 @@ class BatteryState(_Model):
     limit_now_discharge_w: NonNegativeFinite | None
     max_grid_charge_setpoint_w: NonNegativeFinite
     grid_max_import_w: NonNegativeFinite
+    # Netzbezug je Phase in W (Entscheidung 1); ohne Angabe keine Phasengrenze (Entscheidung 5)
+    grid_phase_import_w: NonNegativeFinite | None = None
 
 
 class PeakMonth(_Model):

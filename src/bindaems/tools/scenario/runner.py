@@ -323,6 +323,7 @@ def _battery_state(data: ScenarioFile, soc_kwh: float) -> BatteryState:
         limit_now_discharge_w=None,
         max_grid_charge_setpoint_w=battery.max_grid_charge_setpoint_w,
         grid_max_import_w=battery.grid_max_import_w,
+        grid_phase_import_w=battery.grid_phase_import_w,
     )
 
 
@@ -371,6 +372,7 @@ def _vehicle_inputs(
                 need_kwh=need,
                 horizon_need_kwh=within,
                 grid_allowed_kwh=within,
+                grid_phases=car.grid_phases,
             )
         )
     allowed = grid_allowed(result, slots, [car.key for car in result])
