@@ -281,8 +281,11 @@ kein Schritt an `config.yaml`**; ausgerollt wird mit dem nächsten Sammel-Pull, 
 **Stand Netzgrenze je Phase (3.11.2026):** Plan `docs/superpowers/plans/2026-11-03-netzgrenze-je-phase.md`, Branch `claude/project-thread-ambh18`.
 Der Planer hält neben der Summengrenze eine Grenze für den Netzbezug je Phase: `(import_limit_a − import_margin_a) · U`, an der Anlage 4370 W
 (Entscheidung des Betreibers vom 3.11.2026). Optimierer (Bedingung `phase_{t}_{p}`), Ersatzplan und Plausibilität (Befund „Netzbezug über dem
-Importlimit auf L1 um HH:MM“) sind umgesetzt (Tasks 1 bis 4); die Tasks 5 und 6 (Monatsspitze ohne Leistungspreis, Nachladen auf die Reserve)
-ergänzen diesen Absatz. Betrieb: `docs/betrieb.md`, „Planung“, „Autos im Plan“; Spec: „Stand Plan Netzgrenze je Phase“ in 9.3 und 9.4.
+Importlimit auf L1 um HH:MM“) sind umgesetzt (Tasks 1 bis 4). Task 5: Ohne Leistungspreis meidet der Planer neue Monatsspitzen mit dem
+gedachten Satz `planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und Monat, 0 = aus, Einstellungen „Planung“), und sein Budget geht wie mit
+Leistungspreis an den 15-min-Wächter (Entscheidung 8 des Betreibers: „Gedachter Satz, auch Wächter“). Task 6 (Nachladen auf die Reserve)
+ergänzt diesen Absatz. Betrieb: `docs/betrieb.md`, „Planung“, „Autos im Plan“, „Einstellungen „Planung““, „Budget“, und „15-min-Wächter“;
+Spec: „Stand Plan Netzgrenze je Phase“ in 9.3 und 9.4.
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
@@ -2087,6 +2090,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**; mit dem nächsten Sammel-Pull, **nie allein**; wann, entscheidet der Betreiber.
       Danach auf der Seite **Zeitplan** beobachten: Laden Tesla und e-Golf zusammen nur, wenn es je Phase reicht (4370 W)? Der Netzbezug einer
       Phase bleibt am Zähler unter 20 A. Meldet die Prüfung „Netzbezug über dem Importlimit auf …“, steht im Plan der Ersatzplan, und das ist ein Befund.
+      Neu ab dem Ausrollen auch vor 2027: Jeder Plan bringt ein Budget (gedachter Satz 100 ct je kW und Monat), und der 15-min-Wächter hält es
+      (Health `peak.state` nicht mehr `off`, Sensor „Budget“ in HA mit Wert). Soll das nicht sein: in den Einstellungen „Planung“ den Satz
+      „Spitze vermeiden ohne Leistungspreis“ auf 0 setzen.
       Neue Felder in Eingangsdaten und Plänen sind optional; ältere gespeicherte Daten laden unverändert. Ob ein älteres Image die neuen Felder liest, ist nicht geprüft (Rückweg wie bei Punkt 17: Vorsicht, `extra="forbid"`).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem

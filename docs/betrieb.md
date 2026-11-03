@@ -4094,11 +4094,16 @@ hoch und hält ein Ziel, wenn eins eingestellt ist (Spec 7.4). Er verhindert kei
 Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beides nicht hält, meldet er.
 
 - **Ziel einstellen und abschalten:** Das Ziel ist `control.peak_target_kw`, solange der gültige Slot
-  des Plans kein Budget nennt (unten). Ohne beides (Standard ohne Leistungspreis) ruht der Wächter
-  ganz (Health `peak.state` `off`). Zum Einschalten trägst du das Ziel in `config.yaml` ein und
-  startest den core neu; nimmst du die Zeile wieder heraus und startest neu, ruht er nur, solange
-  kein Plan ein Budget bringt. Gilt im Monat ein Leistungspreis mit Satz, bringt jeder Plan eines,
-  und der Wächter hält es, solange ein Plan gilt.
+  des Plans kein Budget nennt (unten). Ohne beides ruht der Wächter ganz (Health `peak.state`
+  `off`). Zum Einschalten trägst du das Ziel in `config.yaml` ein und startest den core neu; nimmst
+  du die Zeile wieder heraus und startest neu, ruht er nur, solange kein Plan ein Budget bringt. Gilt
+  im Monat ein Leistungspreis mit Satz, bringt jeder Plan eines, und der Wächter hält es, solange ein
+  Plan gilt. **Ohne Leistungspreis** bringt der Plan seit dem Plan „Netzgrenze je Phase“ ebenfalls
+  ein Budget, aus dem gedachten Satz `planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und
+  Monat; Abschnitt „Planung“, „Einstellungen „Planung““); der Wächter hält es genauso, am core
+  ändert sich dafür nichts. Ausschalten: den Satz in den Einstellungen der Planung auf 0 setzen,
+  dann bringt ein Plan ohne Leistungspreis kein Budget, und der Wächter ruht wieder, wenn auch
+  `control.peak_target_kw` fehlt.
 
   ```yaml
   control:
@@ -5870,10 +5875,28 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 | `planning.wear_ct` | Verschleiß (ct/kWh) | 2,0 | Kosten je entladener kWh |
 | `planning.end_value_factor` | Vorsichtsfaktor Restwert | 0,9 | bewertet die Energie im Akku am Horizontende (oben) |
 | `planning.inertia_ct` | Planträgheit (ct/kWh) | 0,5 | Kosten je kWh Abweichung der Akkuleistung vom vorigen Plan, in den ersten vier Slots |
+| `planning.peak_soft_ct_per_kw` | Spitze vermeiden ohne Leistungspreis (ct je kW und Monat) | 100 | gedachter Satz für Monate ohne Leistungspreis mit Satz (unten); 0 = aus. Die Ansicht zeigt „100 ct je kW und Monat“, bei 0 „aus“ |
 
-Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl von 50 bis 100“
-(Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“ (Vorsichtsfaktor). Gespeicherte Einstellungen ohne
-Gruppe „Planung“ (aus der Zeit vor Plan 3b) laden mit den Standardwerten. Eine Änderung von
+Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl ab 0, z. B. 100“
+(Spitze vermeiden), „Zahl von 50 bis 100“ (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“
+(Vorsichtsfaktor). Gespeicherte Einstellungen ohne Gruppe „Planung“ (aus der Zeit vor Plan 3b) laden
+mit den Standardwerten, ebenso solche ohne ein einzelnes Feld (etwa ohne `peak_soft_ct_per_kw`, vor
+dem Plan „Netzgrenze je Phase“: dann gilt 100).
+
+**Spitze vermeiden ohne Leistungspreis** (seit dem Plan „Netzgrenze je Phase“, Entscheidung 8 des
+Betreibers vom 3.11.2026: „Gedachter Satz, auch Wächter“): Gilt in einem Monat kein Leistungspreis
+mit Satz (vor 2027 oder ohne eingetragenen Wert), rechnet der Optimierer für ihn mit einem
+**gedachten** Satz: Netzbezug bis zur schon erreichten Monatsspitze kostet nichts, jedes kW darüber
+`planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und Monat; für einen späteren Monat im
+Horizont gilt als bisherige Spitze 0). So verteilt er etwa zwei Autos in einer Nacht mit gleichen
+Preisen über die Slots, statt beide zugleich mit voller Leistung laden zu lassen, und Netzladen des
+Akkus darf wie mit Leistungspreis einer Spitze ausweichen. Ein gedachter Monat bringt sein
+**Budget** wie ein echter an den core (unten, „Budget“), und der 15-min-Wächter hält es (Abschnitt
+„Akku und Spitzen“, „15-min-Wächter“). Er ist kein Preis: Er zählt in keiner Kostenanzeige, in
+keiner Statistik und nicht in den Mehrkosten eines Boosts, und der Plan meldet `power_price` nicht
+(die Seite „Zeitplan“ zeigt das Budget deshalb nicht, der Sensor „Budget“ in Home Assistant schon).
+Gilt ein echter Leistungspreis mit Satz, gilt nur dieser. Mit 0 ist alles wie vorher: kein gedachter
+Monat, kein Budget ohne Leistungspreis. Eine Änderung von
 Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen löst eine Neuplanung aus, eine andere
 Einstellung nicht.
 
@@ -6038,8 +6061,10 @@ Ist das 0 kW (am Monatsanfang mit `minimum_kw` 0 und ohne Bezug im Plan), gilt d
 Ladestrom des größten Autos: das Größte aus `min_a · phases · grid.voltage_nominal_v` über die
 Fahrzeuge in `config.yaml` (im Beispiel 3,5 kW für den Tesla). Darunter könnte der Wächter ein
 ladendes Auto nur bis zu seinem Mindeststrom drosseln und alarmieren. Willst du eine andere
-Untergrenze, setze `control.peak_target_kw` oder `minimum_kw` im Tarif. Ohne Leistungspreis ist das
-Budget leer. Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel,
+Untergrenze, setze `control.peak_target_kw` oder `minimum_kw` im Tarif. Ohne Leistungspreis mit Satz
+hat ein Monat mit dem gedachten Satz (oben, „Einstellungen „Planung““, Spitze vermeiden ohne
+Leistungspreis) ein Budget nach derselben Regel; die bisherige Monatsspitze zählt dann ohne
+Mindestverrechnung. Mit `planning.peak_soft_ct_per_kw` 0 ist das Budget ohne Leistungspreis leer. Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel,
 solange der Slot gilt (Abschnitt „15-min-Wächter“).
 
 ### Plan gegen Ist
