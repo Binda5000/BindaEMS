@@ -5705,6 +5705,19 @@ nennt.
 - **Prüfung:** Die Bilanz zählt die Autos mit; je Auto ist die Leistung 0 oder zwischen kleinster und
   voller Leistung (1 W Toleranz), und nach der Abfahrt lädt kein Auto (Befunde unten, „Ersatzplan“).
 
+**Grenze je Phase:** Seit dem Plan „Netzgrenze je Phase“ (3.11.2026) plant die app auch eine
+Grenze für den Netzbezug je Phase, nicht nur die Summe. Sie heißt an der Anlage
+(`grid.import_limit_a` − `control.import_margin_a`) · `grid.voltage_nominal_v`, also
+(20 A − 1 A) · 230 V = **4370 W** je Phase (nicht die Sicherung). Haus und Netzladen des Akkus
+verteilt der Plan gleich auf L1, L2 und L3; jedes Auto belastet die Phasen seiner Wallbox
+(`phase_map`, so viele, wie das Auto lädt) mit seinem Netzanteil. PV und Akku ins Auto zählen nicht.
+Tesla (dreiphasig) und e-Golf (zweiphasig) laden darum nur zusammen, wenn es reicht; sonst lädt der
+Plan sie nacheinander, ein Auto auf einer anderen Phase (etwa ein einphasiger Gast) bremst das
+andere nicht. Liegt das Haus allein schon über der Grenze, bleibt für Autos und Netzladen nichts, der
+Plan bleibt aber lösbar. Findet die Prüfung trotzdem einen Bezug über der Grenze, meldet sie „Netzbezug
+über dem Importlimit auf L1 um HH:MM“, und es gilt der Ersatzplan, der die Grenze ebenfalls hält.
+Ausrollen: zusammen mit `ems-core` im nächsten Sammel-Pull, ohne Migration.
+
 ### Netzladen erlaubt
 
 Der Schalter **Netzladen erlaubt** ist standardmäßig aus. Aus heißt: Kein Plan enthält `Netzladen`;
@@ -5723,19 +5736,6 @@ derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch`;
 folgt (unten, „Übergabe an den core“). Regelt der core in dem Moment nicht (Regelbetrieb aus,
 Neustart), wartet die Übergabe, bis er wieder regelt; ein gespeicherter `Netzladen`-Slot kann dann
 noch etwa 11 s laufen (eine Abfrage der Health und ein Regelzyklus).
-
-**Grenze je Phase:** Seit dem Plan „Netzgrenze je Phase“ (3.11.2026) plant die app auch eine
-Grenze für den Netzbezug je Phase, nicht nur die Summe. Sie heißt an der Anlage
-(`grid.import_limit_a` − `control.import_margin_a`) · `grid.voltage_nominal_v`, also
-(20 A − 1 A) · 230 V = **4370 W** je Phase (nicht die Sicherung). Haus und Netzladen des Akkus
-verteilt der Plan gleich auf L1, L2 und L3; jedes Auto belastet die Phasen seiner Wallbox
-(`phase_map`, so viele, wie das Auto lädt) mit seinem Netzanteil. PV und Akku ins Auto zählen nicht.
-Tesla (dreiphasig) und e-Golf (zweiphasig) laden darum nur zusammen, wenn es reicht; sonst lädt der
-Plan sie nacheinander, ein Auto auf einer anderen Phase (etwa ein einphasiger Gast) bremst das
-andere nicht. Liegt das Haus allein schon über der Grenze, bleibt für Autos und Netzladen nichts, der
-Plan bleibt aber lösbar. Findet die Prüfung trotzdem einen Bezug über der Grenze, meldet sie „Netzbezug
-über dem Importlimit auf L1 um HH:MM“, und es gilt der Ersatzplan, der die Grenze ebenfalls hält.
-Ausrollen: zusammen mit `ems-core` im nächsten Sammel-Pull, ohne Migration.
 
 ### Akku ins Auto, wenn übrig
 
@@ -5932,9 +5932,9 @@ Die Prüfung findet diese Befunde, jeweils mit der Uhrzeit des Slots (je Art der
 Reihenfolge der Slots; der früheste ist der „erste Befund“): „Bilanz verletzt um HH:MM“,
 „SOC außerhalb der Grenzen um HH:MM“, „Leistung über der Grenze um HH:MM“, „Netzladen um HH:MM,
 obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
-bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, seit dem Plan „Netzgrenze je Phase“ „Netzbezug über dem Importlimit
-auf L1 um HH:MM“ (je Phase, bei gesetzter Grenze; „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b)
-dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
+bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, bei gesetzter Grenze je
+Phase (seit dem Plan „Netzgrenze je Phase“) „Netzbezug über dem Importlimit auf L1 um HH:MM“
+(oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b) dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
 Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
 (die Uhrzeit ist die erwartete Ankunft). Gibt der Akku einem Auto mehr als 1 W (Akku ins Auto), kommen
 „Akku ins Auto um HH:MM, obwohl ausgeschaltet“, „Akku ins Auto um HH:MM bei Halten oder
@@ -5971,6 +5971,10 @@ Den Akku rechnet der Ersatzplan mit diesen Autos so:
   des teuren Slots und Regel R (Einspeisung nur, bis der Akku leer ist) gelten; Regel R hält dabei
   auch jedes schon geplante Netzladen. Die Leistung ist die höchste volle 100 W unter der Grenze
   des Slots; neben Haus und Autos bleibt dabei die Grenze des Netzbezugs frei.
+- **Grenze je Phase** (seit dem Plan „Netzgrenze je Phase“, „Autos im Plan“, „Grenze je Phase“): Jede
+  Phase hat im Netzschritt den Platz „Grenze je Phase minus Netzanteil des Hauses“, abzüglich der Autos
+  davor; ein Auto bekommt höchstens so viel, wie die engste seiner Phasen hergibt, sonst weicht es in den
+  nächsten Slot aus. Auch das Netzladen des Akkus bleibt unter der Grenze je Phase.
 - **Budget:** wie beim Optimierer (unten, „Budget“), ohne die Spitze des Optimierers.
 
 ### Erklärungen
