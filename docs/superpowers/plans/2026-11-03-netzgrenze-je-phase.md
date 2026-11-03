@@ -4,7 +4,7 @@
 
 **Goal:** Optimierer, Ersatzplan und Plausibilitätsprüfung planen den Netzbezug je Phase höchstens bis zum Importziel am Cerbo (20 A − 1 A = 19 A je Phase), mit den echten Phasen jedes Autos. So plant der Planer Tesla und e-Golf nicht mehr gleichzeitig mit voller Leistung und nicht zusätzlich Netzladen, wenn das an der Anlage nicht geht.
 
-**Architecture:** Nur app (Planung) und Szenario-Werkzeuge. Ein neues reines Modul `app/planning/grid_phases.py` rechnet die Grenzen aus der Konfiguration und die Anteile je Phase. `BatteryState` bekommt die Grenze je Phase, `PlanVehicleInput` die Netzphasen des Autos; beide Felder sind optional, damit gespeicherte Eingangsdaten und alte Szenarien unverändert laden und rechnen. Der core bleibt unverändert: Er regelt wie bisher je Phase (Phasenwächter, Importziel unter der Reserve-Absicherung).
+**Architecture:** app (Planung), Szenario-Werkzeuge und in Task 6 die Planprüfung im core. Ein neues reines Modul `app/planning/grid_phases.py` rechnet die Grenzen aus der Konfiguration und die Anteile je Phase. `BatteryState` bekommt die Grenze je Phase, `PlanVehicleInput` die Netzphasen des Autos; beide Felder sind optional, damit gespeicherte Eingangsdaten und alte Szenarien unverändert laden und rechnen. Die Regelung im core bleibt unverändert: Sie regelt wie bisher je Phase (Phasenwächter, Importziel unter der Reserve-Absicherung); nur seine Planprüfung lässt in Task 6 das Nachladen auf die Reserve ohne Schalter zu.
 
 **Tech Stack:** Python 3.12, pydantic, PuLP/HiGHS, pytest, hypothesis.
 
@@ -27,11 +27,18 @@ Screenshot vom 3.11.2026 21:15 (Zeitplan für den 4.11.): Tesla (bis 11 kW, 3-ph
 6. **Ersatzplan:** Im Netzschritt von `fallback_vehicles` hat jede Phase den Platz `max(0, grid_phase_import_w − max(0, load − pv) / 3)` abzüglich der Netzanteile der Autos davor; ein Auto bekommt höchstens `n_c · min_{p ∈ Phasen_c} Platz_p` zusätzlich, sonst (unter `min_w`) nicht diesen Slot. Der PV-Schritt bleibt unverändert und belegt keinen Platz. Beim Netzladen in `fallback_intents` gilt zusätzlich `headroom ≤ 3 · min_p (grid_phase_import_w − max(0, load − pv) / 3 − Σ_c ev_w_c · Anteil_c(p))`; hier zählt die ganze Ladeleistung der Autos (konservativ, nachts ohnehin gleich).
 7. **Plausibilität:** Neuer Befund (Art `phase`), wenn die Flüsse des Optimierers auf einer Phase mehr als `R_t + BALANCE_TOL_W` aus dem Netz beziehen: „Netzbezug über dem Importlimit auf L1 um 04:00“. Dann gilt wie bei jedem Befund der Ersatzplan.
 8. **Monatsspitze ohne Leistungspreis** (Wunsch des Betreibers vom 3.11.2026 21:58, Karte „Wie soll der Planer die Monatsspitze vor 2027 behandeln?“; Entscheidung des Betreibers vom 3.11.2026 22:02: „Gedachter Satz, auch Wächter“): Für einen Monat ohne Leistungspreis mit Satz rechnet der Optimierer mit einem gedachten Satz `planning.peak_soft_ct_per_kw` (ct je kW und Monat, Standard **100**, 0 = aus). Er entsteht als `PeakMonth(virtual=True, tier_kw=0, below_ct_per_kw=0, above_ct_per_kw=Satz, peak0_kw=bisherige Monatsspitze)` (für spätere Monate im Horizont 0): Bezug bis zur schon erreichten Spitze kostet nichts, jedes kW darüber den Satz. Ein gedachter Monat gibt sein **Budget** wie ein echter an den core (`builder._budgets`, gleiche Formel); der 15-min-Wächter hält es schon heute, wenn der Plan-Slot eins nennt (`core.control.peak_guard.guard_target_kw`), es braucht kein core-Update. Er setzt `Plan.power_price` nicht und zählt in keiner Kostenanzeige oder Statistik. Optimierer und `grid_charge_pays` behandeln ihn wie einen echten Monat (Netzladen darf einer Spitze ausweichen). Gibt es einen echten Satz, gilt nur dieser.
-9. **Ausrollen:** nur ems-app, ohne Migration, ohne ACL; mit dem nächsten Sammel-Pull (Stufe 2, ab 23.11.), nie allein.
+9. **Nachladen auf die Reserve** (Beobachtung des Betreibers vom 3.11.2026: ohne PV sinkt der SOC am Min-SOC um etwa 1 % in 9 h; unter Min-SOC − 5 % lädt Victron ESS „Optimiert ohne BatteryLife“ selbst mit voller Leistung nach, am 3.11. 22:35–23:05 mit 9 kW bei 11,5 kW Netz. Entscheidung des Betreibers 22:18: „Ja, immer“): Liegt der SOC zu Beginn unter der Reserve, plant der Planer ein Nachladen zurück auf die Reserve, **auch bei ausgeschaltetem „Netzladen erlaubt“**:
+   - Optimierer: neue Variable `gr_r_t` (Netz → Akku, Nachladen) mit `0 ≤ gr_r_t ≤ recharge_cap_w(t) = min(RESERVE_RECHARGE_MAX_W, max_charge_w_t, max(0, max_grid_charge_setpoint_w − load_t))`, `RESERVE_RECHARGE_MAX_W = 3000` W; nur wenn `SOC₀ < reserve`. Sie zählt wie `gr_b` zur Ladung (`laden_t`), zum Bezug (`bezug_t`, Spitze, Phasengrenze symmetrisch) und kostet `import_ct` (ohne `margin_ct`). `Σ η_ch · gr_r_t · Δ ≤ reserve_kwh − SOC₀`. Ziel: `s_T + short_r ≥ reserve_kwh` am Horizontende, `short_r` kostet 2000 ct/kWh (wie die Fehlmenge eines Autos). PV in den Akku bleibt vorrangig, weil sie nichts kostet.
+   - Regel R1 zählt den Akku als leer, sobald er höchstens an der Reserve steht (`reserve_kwh` statt `lo_kwh` als Leer-Grenze in `optimizer.py`, `intents._keep_rule_r1`, `plausibility`): Energie unter der Reserve verlässt den Akku nie, kann also nicht eingespeist werden.
+   - Absicht: `BatteryIntent` bekommt `reserve_recharge: bool = False` (nur mit `NETZLADEN`). `derive_intents`: `NETZLADEN(P)` mit `P = round(gr_b + gr_r)`, gekappt auf `max(GC_t, recharge_cap_w(t))`; `reserve_recharge = gr_b < GRID_CHARGE_MIN_W`. `_drop_unprofitable` und der Befund „rechnet sich nicht“ lassen `reserve_recharge` stehen.
+   - Ersatzplan: unter der Reserve `NETZLADEN(min(3000, recharge_cap_w, Phasenplatz), reserve_recharge=True)` in den billigsten Slots der ersten 24 h, bis die Nachrechnung die Reserve erreicht.
+   - core (`core/control/intent.py`): Ein Plan mit `NETZLADEN` bei ausgeschaltetem Schalter ist gültig, wenn jeder solche Slot `reserve_recharge` hat und `grid_charge_w ≤ RESERVE_RECHARGE_MAX_W`; sonst wie heute „Netzladen, obwohl ausgeschaltet“. Die Konstante steht in `shared/plan.py`.
+   - Erklärung: neuer Grund `NACHLADEN_RESERVE`, Text „Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt“; Zeitplan-Beschriftung „Nachladen“.
+10. **Ausrollen:** ems-app **und** ems-core zusammen (Task 6 ändert `shared/plan.py` und `core/control/intent.py`), ohne Migration, ohne ACL; mit dem nächsten Sammel-Pull (Stufe 2, ab 23.11.), nie allein.
 
 ## Global Constraints
 
-- Keine Änderung am core, an der Safety-Schicht, an der Datenbank oder an der API.
+- Keine Änderung an der Safety-Schicht, an der Datenbank oder an der API; im core nur die Planprüfung in `core/control/intent.py` (Task 6).
 - Neue Felder sind optional mit Standard `None`; `PlanInputs` aus der Datenbank (gespeicherte Pläne) und Szenariodateien Version 1/2 laden unverändert.
 - Lösezeit: `test_two_cars_over_36_hours_solve_in_time` muss weiter bestehen (keine neue Binärvariable).
 - Texte deutsch, Commits deutsch im Stil `fix(app): …`, keine Modellbezeichnungen im Repo.
@@ -157,6 +164,32 @@ Screenshot vom 3.11.2026 21:15 (Zeitplan für den 4.11.): Tesla (bis 11 kW, 3-ph
 - [ ] **Step 3:** Umsetzen nach Entscheidung 8.
 - [ ] **Step 4:** Tests grün; Lösezeit-Test grün; ganze Prüfkette mit UI und E2E.
 - [ ] **Step 5:** Commit `feat(app): Planer meidet neue Monatsspitzen auch ohne Leistungspreis`, Doku nachführen.
+
+### Task 6: Nachladen auf die Reserve
+
+**Files:**
+- Modify: `src/bindaems/shared/plan.py` (`BatteryIntent.reserve_recharge`, Validator: nur mit `NETZLADEN`; `RESERVE_RECHARGE_MAX_W`; `ReasonCode` `NACHLADEN_RESERVE`), `src/bindaems/app/planning/optimizer.py` (`gr_r`, R1-Leer-Grenze, `recharge_cap_w`), `src/bindaems/app/planning/intents.py`, `src/bindaems/app/planning/fallback.py`, `src/bindaems/app/planning/plausibility.py`, Erklärungen (`NACHLADEN_RESERVE`), `src/bindaems/core/control/intent.py`, `ui/src/lib/plan/model.ts` (Beschriftung und Grund)
+- Test: `tests/unit/app/planning/test_optimizer.py`, `test_intents.py`, `test_fallback.py`, `test_plausibility.py`, `tests/unit/core/control/test_intent.py` (oder die vorhandene Datei der Planprüfung), `tests/unit/shared/test_plan.py`, `ui/src/lib/plan/model.test.ts`
+- Docs: Spec 9.3/9.4 (Absatz von Task 4 ergänzen), `docs/betrieb.md` „Planung“ (Nachladen, auch ohne Schalter) und „Netzladen erlaubt“, `docs/uebergabe.md` (Ausrollen core+app)
+
+**Interfaces:**
+- Produces: `RESERVE_RECHARGE_MAX_W: Final = 3000.0` (`shared/plan.py`); `BatteryIntent.reserve_recharge: bool = False`; `recharge_cap_w(inputs: PlanInputs, index: int) -> float` in `optimizer.py` (0, wenn `SOC₀ ≥ reserve`)
+
+- [ ] **Step 1: Failing tests** (Akku 96 kWh, Reserve 20 %, SOC₀ 16 %, Haus 600 W, keine PV, Preise mit zwei billigen Slots):
+  - `test_recharge_to_reserve_with_switch_off`: `grid_charge_allowed=False` → Absichten `NETZLADEN` mit `reserve_recharge=True`, je Slot `grid_charge_w ≤ 3000`, Nachrechnung erreicht am Horizontende ≥ 20 % − 0,1 %, nicht mehr als 20 % + eine Slotladung; die billigen Slots zuerst.
+  - `test_no_recharge_at_or_above_reserve`: SOC₀ 20 % → kein `gr_r`, Ergebnis wie heute.
+  - `test_pv_refills_before_grid_recharge`: genug PV am nächsten Tag im Horizont → kein `NETZLADEN`.
+  - `test_recharge_does_not_block_export_by_r1`: nach dem Nachladen auf 20 % und PV-Überschuss danach darf eingespeist werden (R1 sieht den Akku an der Reserve als leer).
+  - `test_recharge_respects_phase_limit`: mit Grenze 4370 W und Tesla voll im billigen Slot → Nachladen dort ≤ 3 · 490 W, Rest in anderen Slots.
+  - Plausibilität: `NETZLADEN(2500, reserve_recharge=True)` bei Schalter aus → kein Befund „obwohl ausgeschaltet“; `NETZLADEN(3500, reserve_recharge=True)` → Befund; ohne Flag → Befund wie heute.
+  - Ersatzplan: `test_fallback_recharges_to_reserve`: Schalter aus, SOC₀ 16 % → `NETZLADEN` mit Flag in den billigsten Slots, Nachrechnung ≥ Reserve.
+  - core: Plan mit `NETZLADEN(3000, reserve_recharge=True)` und `grid_charge_allowed=False` gültig; mit 3100 W oder ohne Flag ungültig („Netzladen, obwohl ausgeschaltet.“).
+  - shared: `BatteryIntent(kind=EIGENVERBRAUCH, reserve_recharge=True)` → `ValidationError`; altes JSON ohne Feld lädt mit `False`.
+  - UI: Slot mit `reserve_recharge` heißt „Nachladen“, Grund-Text wie Entscheidung 9.
+- [ ] **Step 2:** neue Tests laufen lassen → scheitern.
+- [ ] **Step 3:** Umsetzen nach Entscheidung 9.
+- [ ] **Step 4:** ganze Prüfkette (Abdeckung core/control ≥ 90 %), UI, E2E, Simulator-Szenarien; Lösezeit-Test grün.
+- [ ] **Step 5:** Commits `feat(app): Planer lädt den Akku unter der Reserve sanft selbst nach`, `feat(core): Nachladen auf die Reserve auch ohne Netzladen-Schalter`, Doku.
 
 ## Nicht in diesem Plan
 
