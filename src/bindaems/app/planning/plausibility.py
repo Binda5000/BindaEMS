@@ -15,6 +15,11 @@ Entladegrenze zählen den Akkuanteil ``bt_ev`` mit. Gibt der Akku einem Auto meh
 Akku sein können (Entscheidung 2, ``grid_in_battery``, auch aus einem Netzladen vor dem Horizont)
 und nichts eingespeist werden.
 
+Netzbezug je Phase (Plan Netzgrenze je Phase, Entscheidung 7): Ist ``grid_phase_import_w`` gesetzt,
+darf der Netzbezug auf keiner Phase ``R_t + BALANCE_TOL_W`` übersteigen. Gezählt wird nur der
+Netzanteil: Haus und Netzladen je ein Drittel, jedes Auto mit seinem Netzanteil ``gr_ev`` zu den
+Anteilen seiner Phasen (``phase_shares``); PV und Akku ins Auto zählen nicht.
+
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
@@ -27,6 +32,7 @@ from datetime import datetime
 from typing import Final, Literal
 
 from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
+from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w
 from bindaems.app.planning.thermal_shift import STEP_K
@@ -244,6 +250,8 @@ def check_plan(
     from_battery = ev_battery_power_w(result) if ev_battery_w is None else list(ev_battery_w)
     if len(from_battery) != len(intents):
         raise ValueError("Akkuanteil der Autos muss zu den Absichten passen")
+    phase_limit_w = inputs.battery.grid_phase_import_w
+    car_shares = [(car, phase_shares(car.grid_phases)) for car in inputs.vehicles]
     found: dict[str, tuple[int, str]] = {}
 
     def report(kind: str, index: int, text: str) -> None:
@@ -269,6 +277,17 @@ def check_plan(
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(flows.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
+        if phase_limit_w is not None:
+            room_w = phase_room_w(phase_limit_w, inp.load_w, inp.pv_w) + BALANCE_TOL_W
+            for phase in PHASES:
+                phase_w = (flows.gr_h + flows.gr_b) / 3 + sum(
+                    shares[phase] * flows.ev[car.key][1]
+                    for car, shares in car_shares
+                    if car.key in flows.ev and phase in shares
+                )
+                if phase_w > room_w:
+                    report("phase", index, f"Netzbezug über dem Importlimit auf {phase} um {at}")
+                    break
 
     for car in inputs.vehicles:
         window = charge_window(car, inputs.slots)

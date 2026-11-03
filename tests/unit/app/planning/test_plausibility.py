@@ -799,3 +799,58 @@ def test_grid_in_battery_at_start_is_carried_until_the_battery_is_empty() -> Non
     assert grid_in_battery_at_start(_now_inputs(empty_pct + 0.1), previous, carried=True)
     grid_charged = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00"], "01:45")
     assert not grid_in_battery_at_start(_now_inputs(15.0), grid_charged, carried=True)
+
+
+# Netzbezug je Phase (Plan Netzgrenze je Phase, Entscheidung 7)
+PHASE_LIMIT_W = (20 - 1) * 230.0
+
+
+def _phase_check(
+    *, limit_w: float | None, pv_w: float, load_w: float, ev: dict[str, Any]
+) -> list[str]:
+    # Ein Slot um 04:00 Ortszeit mit Tesla und e-Golf, beide 3-phasig (``grid_phases`` ohne Angabe)
+    inputs = scenario(
+        prices=[20.0],
+        pv=[pv_w],
+        load=[load_w],
+        battery=small_battery(grid_phase_import_w=limit_w),
+        start="2026-10-16T02:00:00+00:00",
+        vehicles=[planned_car(), planned_car(key="egolf", name="e-Golf")],
+    )
+    pv_ev = sum(pv for pv, _ in ev.values())
+    result = flows_result(
+        [flow(pv_h=min(load_w, pv_w - pv_ev), gr_h=max(0.0, load_w - pv_w + pv_ev), ev=ev)]
+    )
+    intents = [BatteryIntent()]
+    return check_plan(inputs, result, intents, resimulate(inputs, intents))
+
+
+def test_phase_over_import_limit_is_a_finding() -> None:
+    issues = _phase_check(
+        limit_w=PHASE_LIMIT_W,
+        pv_w=0.0,
+        load_w=600.0,
+        ev={"tesla": (0.0, 11040.0), "egolf": (0.0, 7360.0)},
+    )
+    assert "Netzbezug über dem Importlimit auf L1 um 04:00" in issues
+
+
+def test_phase_check_without_limit_finds_nothing() -> None:
+    issues = _phase_check(
+        limit_w=None,
+        pv_w=0.0,
+        load_w=600.0,
+        ev={"tesla": (0.0, 11040.0), "egolf": (0.0, 7360.0)},
+    )
+    assert not any("Importlimit" in text for text in issues)
+
+
+def test_phase_check_counts_only_grid_share() -> None:
+    # Dieselben Autos komplett aus PV: der Netzanteil bleibt weit unter der Grenze
+    issues = _phase_check(
+        limit_w=PHASE_LIMIT_W,
+        pv_w=19000.0,
+        load_w=600.0,
+        ev={"tesla": (11040.0, 0.0), "egolf": (7360.0, 0.0)},
+    )
+    assert not any("Importlimit" in text for text in issues)
