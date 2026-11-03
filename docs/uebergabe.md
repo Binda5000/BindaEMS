@@ -278,6 +278,12 @@ freigegeben. Die Hausakku-Kachel der Übersicht zeigt unter „≈ 24 von 96 kWh
 ((SOC − Reserve) × `usable_kwh`), an oder unter der Reserve „nichts über Reserve“. **Nur UI, nur `ems-app` neu, keine Migration, keine ACL-Zeile,
 kein Schritt an `config.yaml`**; ausgerollt wird mit dem nächsten Sammel-Pull, nie allein (Punkt 18 unter „Offen an der Anlage“).
 
+**Stand Netzgrenze je Phase (3.11.2026):** Plan `docs/superpowers/plans/2026-11-03-netzgrenze-je-phase.md`, Branch `claude/project-thread-ambh18`.
+Der Planer hält neben der Summengrenze eine Grenze für den Netzbezug je Phase: `(import_limit_a − import_margin_a) · U`, an der Anlage 4370 W
+(Entscheidung des Betreibers vom 3.11.2026). Optimierer (Bedingung `phase_{t}_{p}`), Ersatzplan und Plausibilität (Befund „Netzbezug über dem
+Importlimit auf L1 um HH:MM“) sind umgesetzt (Tasks 1 bis 4); die Tasks 5 und 6 (Monatsspitze ohne Leistungspreis, Nachladen auf die Reserve)
+ergänzen diesen Absatz. Betrieb: `docs/betrieb.md`, „Planung“, „Autos im Plan“; Spec: „Stand Plan Netzgrenze je Phase“ in 9.3 und 9.4.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2077,6 +2083,11 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Der Name der Wallbox (aus den Einstellungen, sonst der Typname wie „EVCS“) steht in „Warum?“, in der
       Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
       In der Hausakku-Kachel der Übersicht steht unter „≈ … von … kWh“ neu „≈ … kWh über Reserve“ (an oder unter der Reserve „nichts über Reserve“).
+  19. **Netzgrenze je Phase ausrollen:** kommt mit Stufe 2 (ab 23.11.2026), `ems-app` **und** `ems-core` zusammen (Task 6 ändert auch die Planprüfung im core),
+      **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**; mit dem nächsten Sammel-Pull, **nie allein**; wann, entscheidet der Betreiber.
+      Danach auf der Seite **Zeitplan** beobachten: Laden Tesla und e-Golf zusammen nur, wenn es je Phase reicht (4370 W)? Der Netzbezug einer
+      Phase bleibt am Zähler unter 20 A. Meldet die Prüfung „Netzbezug über dem Importlimit auf …“, steht im Plan der Ersatzplan, und das ist ein Befund.
+      Neue Felder in Eingangsdaten und Plänen sind optional; ältere gespeicherte Daten laden unverändert. Ob ein älteres Image die neuen Felder liest, ist nicht geprüft (Rückweg wie bei Punkt 17: Vorsicht, `extra="forbid"`).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
