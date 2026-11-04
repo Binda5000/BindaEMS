@@ -512,6 +512,10 @@ class AppRuntime:
                     clock=self._clock,
                     findings=self.findings,
                     report=self.report_sender,
+                    settings=self.settings,
+                    intents=self.intents,
+                    audit=self.audit,
+                    cfg=cfg,
                 ),
                 history_router(
                     self.reader, build_catalog(cfg), self._clock, guard, self._series_labels

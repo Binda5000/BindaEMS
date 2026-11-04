@@ -7,10 +7,12 @@ from tests.unit.app.ops.test_check import _health
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionStore
+from bindaems.app.control.intent import CoreDown
 from bindaems.app.core_link import LiveState
 from bindaems.app.history.influx import InfluxQueryError
 from bindaems.app.ops.routes import ops_router
 from bindaems.app.status import ComponentStatus
+from bindaems.shared.control import Intent
 from bindaems.shared.timeutil import ManualClock
 
 
@@ -27,8 +29,43 @@ def store(engine, clock: ManualClock) -> DecisionStore:
     return DecisionStore(engine, clock)
 
 
+class FakeIntents:
+    """Absicht wie der ``IntentService``: ``cached`` und ``current``."""
+
+    def __init__(self) -> None:
+        self.intent: Intent | None = Intent(version=3, control=True)
+        self.known: Intent | None = None
+        self.fetched = 0
+
+    def cached(self) -> Intent | None:
+        return self.known
+
+    async def current(self) -> Intent | None:
+        self.fetched += 1
+        if self.intent is None:
+            raise CoreDown
+        return self.intent
+
+
 @pytest.fixture
-def client(make_client, live, guard, store, clock, findings, make_sender):
+def intents() -> FakeIntents:
+    return FakeIntents()
+
+
+@pytest.fixture
+def client(
+    make_client,
+    live,
+    guard,
+    store,
+    clock,
+    findings,
+    make_sender,
+    intents,
+    settings_service,
+    audit,
+    cfg,
+):
     def ok_source() -> ComponentStatus:
         return ComponentStatus("prices", True, "Preise bis 10.10. 23:45")
 
@@ -41,6 +78,10 @@ def client(make_client, live, guard, store, clock, findings, make_sender):
             clock=clock,
             findings=findings,
             report=make_sender(),
+            settings=settings_service,
+            intents=intents,
+            audit=audit,
+            cfg=cfg,
         )
     )
 
@@ -139,7 +180,17 @@ def test_findings_route_rejects_days_over_60(client, auth) -> None:
 
 
 async def test_findings_route_survives_a_failing_report(
-    make_client, live, guard, store, clock, findings, make_sender, auth
+    make_client,
+    live,
+    guard,
+    store,
+    clock,
+    findings,
+    make_sender,
+    auth,
+    settings_service,
+    audit,
+    cfg,
 ) -> None:
     def broken(day):
         raise RuntimeError("Abrechnung weg")
@@ -153,6 +204,10 @@ async def test_findings_route_survives_a_failing_report(
             clock=clock,
             findings=findings,
             report=make_sender(summary=broken),
+            settings=settings_service,
+            intents=FakeIntents(),
+            audit=audit,
+            cfg=cfg,
         )
     )
     login_as(app, auth, "viewer")
@@ -161,3 +216,60 @@ async def test_findings_route_survives_a_failing_report(
     body = response.json()
     assert body["report"] is None
     assert [d["day"] for d in body["days"]] == ["2026-10-08", "2026-10-07"]
+
+
+def test_switches_route_requires_login(client) -> None:
+    assert client.get("/api/ops/switches").status_code == 401
+
+
+def test_switches_route_lists_switches_with_last_change(
+    client, auth, intents, settings_service, audit
+) -> None:
+    login_as(client, auth, "viewer")
+    body = client.get("/api/ops/switches").json()
+    by_id = {item["id"]: item for item in body["switches"]}
+    assert by_id["control"]["value"] == "an"
+    assert by_id["control"]["changed"] is True
+    assert by_id["grid_charge"]["since"] is None
+    assert by_id["actuator.victron"]["label"] == "Victron"
+    assert "default_mode.twc" in by_id
+    assert set(by_id["report"]) == {
+        "id",
+        "label",
+        "group",
+        "value",
+        "factory",
+        "changed",
+        "since",
+        "actor",
+        "source",
+        "link",
+    }
+
+
+def test_switches_route_shows_who_changed(client, auth, settings_service, audit) -> None:
+    current = settings_service.current()
+    planning = current.settings.planning.model_copy(update={"grid_charge_allowed": True})
+    changed = current.settings.model_copy(update={"planning": planning})
+    settings_service.update(changed, base_version=current.version, actor="anna", source="ui")
+    login_as(client, auth, "viewer")
+    by_id = {i["id"]: i for i in client.get("/api/ops/switches").json()["switches"]}
+    assert by_id["grid_charge"]["value"] == "an"
+    assert by_id["grid_charge"]["actor"] == "anna"
+    assert by_id["grid_charge"]["since"] is not None
+
+
+def test_switches_route_without_core_marks_intent_unknown(client, auth, intents) -> None:
+    intents.intent = None
+    login_as(client, auth, "viewer")
+    by_id = {i["id"]: i for i in client.get("/api/ops/switches").json()["switches"]}
+    assert by_id["control"]["value"] == "unbekannt"
+    assert by_id["control"]["changed"] is False
+
+
+def test_switches_route_prefers_the_cached_intent(client, auth, intents) -> None:
+    intents.known = Intent(version=5, control=False)
+    login_as(client, auth, "viewer")
+    by_id = {i["id"]: i for i in client.get("/api/ops/switches").json()["switches"]}
+    assert by_id["control"]["value"] == "aus"
+    assert intents.fetched == 0

@@ -32,3 +32,14 @@ def test_naive_timestamps_are_rejected(engine: Engine) -> None:
     naive = datetime(2026, 10, 9)  # absichtlich ohne Zeitzone
     with pytest.raises(StatementError, match="naiver Zeitpunkt"), engine.begin() as conn:
         conn.execute(insert(audit_log).values(ts=naive, actor="x", source="ui", action="y"))
+
+
+def test_latest_of_filters_actions_newest_first(audit: AuditLog) -> None:
+    audit.record("a", "ui", "settings.update", "einstellungen")
+    audit.record("b", "ui", "user.create", "x")
+    audit.record("c", "ui", "intent.control", "regelbetrieb")
+    audit.record("d", "ui", "settings.update", "einstellungen")
+    found = audit.latest_of({"settings.update", "intent.control"})
+    assert [e.actor for e in found] == ["d", "c", "a"]
+    assert [e.actor for e in audit.latest_of(["settings.update"], limit=1)] == ["d"]
+    assert audit.latest_of([]) == []
