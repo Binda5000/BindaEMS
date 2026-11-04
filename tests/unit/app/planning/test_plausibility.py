@@ -118,6 +118,46 @@ def test_r1_on_resimulation_is_reported() -> None:
     )
 
 
+def test_storm_charge_then_export_is_no_r1_finding() -> None:
+    # Ruling R6: Aufladen für die Unwetter-Reserve (``NETZLADEN`` mit ``reserve_recharge``) setzt
+    # im Optimierer kein ``z_t``. Speist die PV danach ein, solange der Akku über der Reserve
+    # steht, ist das kein Befund nach Regel R1; dasselbe Netzladen ohne Flag ist einer.
+    inputs = scenario(
+        prices=[5.0, 8.0],
+        pv=[0.0, 9000.0],
+        load=[500.0, 500.0],
+        battery=small_battery(),
+        soc_pct=85.0,
+        storm_floors=[95.0, 95.0],
+    )
+    flagged = [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000, reserve_recharge=True),
+        BatteryIntent(),
+    ]
+    result = flows_result(
+        [
+            flow(gr_h=500, gr_s=3000, soc_end_kwh=9.2),
+            flow(pv_h=500, pv_b=3000, pv_x=5500, soc_end_kwh=9.9),
+        ]
+    )
+    steps = resimulate(inputs, flagged)
+    assert steps[1].export_w > 0 and steps[0].soc_end_kwh > params_of(inputs).lo_kwh + 0.5
+    issues = check_plan(inputs, result, flagged, steps)
+    assert not any(i.startswith("Regel R verletzt") for i in issues)
+    assert issues == []
+    switched = inputs.model_copy(
+        update={
+            "planning": inputs.planning.model_copy(update={"grid_charge_allowed": True}),
+            "end_value_ct": 30.0,
+        }
+    )
+    plain = [flagged[0].model_copy(update={"reserve_recharge": False}), BatteryIntent()]
+    assert any(
+        i.startswith("Regel R verletzt: Netzladen um 02:00")
+        for i in check_plan(switched, result, plain, resimulate(switched, plain))
+    )
+
+
 def test_r1_allows_grid_charge_used_up_before_pv() -> None:
     # Die 0,5 kWh Netzladung (2 kW · 15 min) sind in Slot 1 verbraucht (Last 4 kW, Akku leer),
     # bevor Slot 2 mit PV einspeist: Regel R1 gilt nur bis der Akku leer ist.

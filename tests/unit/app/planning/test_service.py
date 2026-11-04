@@ -44,8 +44,15 @@ from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
 from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan, PlanTrigger, intent_plan
-from bindaems.shared.settings import PlanningSettings, ThermalPlanSettings
+from bindaems.shared.plan import (
+    BatteryIntent,
+    BatteryIntentKind,
+    Plan,
+    PlanTrigger,
+    StormWarning,
+    intent_plan,
+)
+from bindaems.shared.settings import PlanningSettings, StormSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
 Solver = Callable[[PlanInputs], Awaitable[OptimizerResult]]
@@ -274,6 +281,29 @@ async def test_collect_budget_floors_from_the_config(service_with, cfg):
     control = cfg.control.model_copy(update={"peak_target_kw": 8.0})
     inputs = await service_with(cfg=cfg.model_copy(update={"control": control})).collect("start")
     assert inputs.peak_target_kw == 8.0
+
+
+async def test_collect_passes_the_storm_warnings(service_with, settings_service, clock):
+    # Ruling R1: ``collect`` gibt die bekannten Warnungen an ``assemble_inputs``; mit Schalter
+    # haben die Slots der Warnung (eine Stunde Vorlauf) die Untergrenze
+    begin = slot_start(clock.now()) + 8 * SLOT
+    warning = StormWarning(
+        warn_id=1,
+        version=1,
+        kind="sturm",
+        level=3,
+        begin=begin,
+        end=begin + 4 * SLOT,
+        text="Sturm",
+    )
+    service = service_with(storm=lambda: [warning])
+    inputs = await service.collect("storm")
+    assert inputs.storm_warnings == [] and all(s.storm_floor_pct is None for s in inputs.slots)
+    set_planning(settings_service, PlanningSettings(storm=StormSettings(enabled=True)))
+    inputs = await service.collect("storm")
+    assert inputs.storm_warnings == [warning]
+    floors = [i for i, s in enumerate(inputs.slots) if s.storm_floor_pct is not None]
+    assert floors == list(range(4, 12))
 
 
 async def test_collect_takes_p25_and_the_planned_cars(service_with, live, forecast):
@@ -708,8 +738,6 @@ async def test_new_pv_forecast_requests_replan(service_with, forecast):
 
 
 async def test_storm_warning_change_requests_replan_once(service_with):
-    from bindaems.shared.plan import StormWarning
-
     warnings: list[StormWarning] = []
     calls: list[PlanInputs] = []
     service = service_with(

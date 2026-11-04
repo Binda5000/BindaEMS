@@ -26,6 +26,11 @@ gilt auch bei ausgeschaltetem Schalter und muss sich nicht rechnen. Regel R1 und
 ``grid_in_battery`` zählen den Akku als leer, sobald er höchstens an der Reserve steht
 (``reserve_kwh``), auch wenn der SOC zu Beginn darunter liegt.
 
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 6): ``gr_s`` zählt in Ladung und
+Phasengrenze wie ``gr_r``. Ein ``NETZLADEN`` mit ``reserve_recharge`` (Nachladen und Aufladen für
+die Unwetter-Reserve) setzt im Optimierer kein ``z_t``; Regel R1 prüft es deshalb nicht
+(``r1_applies``), sonst wäre jede Einspeisung nach dem Aufladen über die Reserve ein Befund.
+
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
@@ -70,6 +75,13 @@ USED_ABOVE_W: Final = BALANCE_TOL_W
 MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss oder Netzbezug
 
 PaysOffBy = Literal["discharge", "import"]
+
+
+def r1_applies(intent: BatteryIntent) -> bool:
+    """Regel R1 gilt für ``intent``: ``NETZLADEN`` ohne ``reserve_recharge``. Nachladen auf die
+    Reserve und Aufladen für die Unwetter-Reserve setzen im Optimierer kein ``z_t``; für sie
+    gilt sie nicht, Absichten und Plausibilität rechnen hiermit wie der Optimierer."""
+    return intent.kind is BatteryIntentKind.NETZLADEN and not intent.reserve_recharge
 
 
 def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> int:
@@ -284,7 +296,7 @@ def check_plan(
         load_w = flows.pv_h + flows.gr_h + flows.bt_h
         if abs(pv_w - inp.pv_w) > BALANCE_TOL_W or abs(load_w - inp.load_w) > BALANCE_TOL_W:
             report("balance", index, f"Bilanz verletzt um {at}")
-        charge_w = flows.pv_b + flows.gr_b + flows.gr_r
+        charge_w = flows.pv_b + flows.gr_b + flows.gr_r + flows.gr_s
         discharge_w = flows.bt_h + sum(flows.ev_battery.values())
         if (
             charge_w > slot.max_charge_w + BALANCE_TOL_W
@@ -297,7 +309,7 @@ def check_plan(
         if phase_limit_w is not None:
             room_w = phase_room_w(phase_limit_w, inp.load_w, inp.pv_w) + BALANCE_TOL_W
             for phase in PHASES:
-                phase_w = (flows.gr_h + flows.gr_b + flows.gr_r) / 3 + sum(
+                phase_w = (flows.gr_h + flows.gr_b + flows.gr_r + flows.gr_s) / 3 + sum(
                     shares[phase] * flows.ev[car.key][1]
                     for car, shares in car_shares
                     if car.key in flows.ev and phase in shares
@@ -345,7 +357,7 @@ def check_plan(
         if not switch and not recharge_without_switch(intent):
             report("switch", index, f"Netzladen um {at}, obwohl ausgeschaltet")
         while_charged_kwh = export_while_charged_kwh(steps, index, empty_kwh)
-        if while_charged_kwh > R1_TOL_KWH:
+        if r1_applies(intent) and while_charged_kwh > R1_TOL_KWH:
             exported = _kwh_text(while_charged_kwh)
             report(
                 "r1",

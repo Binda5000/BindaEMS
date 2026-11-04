@@ -35,6 +35,7 @@ from bindaems.shared.plan import (
     Plan,
     PlanSlot,
     Reason,
+    StormWarning,
 )
 from bindaems.shared.settings import PlanningSettings, PowerComponent, TariffSettings
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
@@ -301,14 +302,20 @@ def scenario(
     vehicles: list[PlanVehicleInput] | None = None,
     pv_p25: list[float] | None = None,
     car_battery: bool = False,
+    storm_floors: Sequence[float | None] | None = None,
+    storm_warnings: list[StormWarning] | None = None,
 ) -> PlanInputs:
     """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
     ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots,
     ``origins`` ist die Herkunft der Preise je Slot (Standard ``primary``). ``vehicles`` sind die
     geplanten Autos (``planned_car``), ``pv_p25`` die PV-Prognose P25 je Slot (ohne gilt ``pv``),
-    ``car_battery`` der Schalter „Akku ins Auto, wenn übrig“."""
+    ``car_battery`` der Schalter „Akku ins Auto, wenn übrig“. ``storm_floors`` ist die
+    Untergrenze der Unwetter-Reserve je Slot in % (ohne: keine), ``storm_warnings`` die
+    passenden Warnungen des Laufs."""
     if not len(prices) == len(pv) == len(load):
         raise ValueError("Preise, PV und Last müssen gleich lang sein")
+    if storm_floors is not None and len(storm_floors) != len(prices):
+        raise ValueError("Untergrenze je Slot nötig")
     if origins is not None and len(origins) != len(prices):
         raise ValueError("Herkunft je Preis nötig")
     if pv_p25 is not None and len(pv_p25) != len(prices):
@@ -337,6 +344,7 @@ def scenario(
         peak_target_kw=peak_target_kw,
         car_floor_kw=car_floor_kw,
         vehicles=vehicles or [],
+        storm_warnings=storm_warnings or [],
         slots=[
             SlotInput(
                 start=first + i * SLOT,
@@ -347,6 +355,7 @@ def scenario(
                 pv_p25_w=pv_p25[i] if pv_p25 is not None else None,
                 load_w=load_w,
                 prev_battery_w=prev[i] if i < len(prev) else None,
+                storm_floor_pct=storm_floors[i] if storm_floors is not None else None,
             )
             for i, (ct, pv_w, load_w) in enumerate(zip(prices, pv, load, strict=True))
         ],
@@ -416,6 +425,7 @@ def flow(
                 values["pv_b"]
                 + values["gr_b"]
                 + values.get("gr_r", 0.0)
+                + values.get("gr_s", 0.0)
                 - values["bt_h"]
                 - sum(battery.values())
             )

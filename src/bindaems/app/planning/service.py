@@ -640,7 +640,8 @@ class PlanningService:
 
         Die geplanten Autos kommen aus dem Health des core und der Absicht (``planned_vehicles``),
         danach die erwarteten aus der Anwesenheitsprognose (``expected_vehicles``, nur mit
-        ``driving_profiles``), die PV-Prognose P25 für Regel R2 aus der PV-Prognose. Hat Health
+        ``driving_profiles``), die PV-Prognose P25 für Regel R2 aus der PV-Prognose, die
+        Unwetterwarnungen aus ``storm`` (Plan Unwetter-Reserve). Hat Health
         die Absicht noch nicht bestätigt und steht darin ein Auto in „Geplant“, plant der Lauf
         ohne die Autos; der Dienst merkt sich das und plant neu, sobald Health sie bestätigt
         (``_watch``, Ruling R23).
@@ -676,6 +677,7 @@ class PlanningService:
             car_floor_kw=car_floor_kw(self._cfg),
             pv_p25_w=pv.p25_w if pv is not None else None,
             vehicles=lambda slots: self._vehicles(health, intent, now, slots),
+            storm_warnings=self._storm(),
         )
         carried = await asyncio.to_thread(self._carried, previous)
         at_start = grid_in_battery_at_start(inputs, previous, carried=carried)

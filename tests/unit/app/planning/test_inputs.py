@@ -36,7 +36,8 @@ from bindaems.app.planning.inputs import (
     peak_months,
 )
 from bindaems.app.planning.store import PlanStore
-from bindaems.shared.settings import PlanningSettings, TariffSettings
+from bindaems.shared.plan import StormWarning
+from bindaems.shared.settings import PlanningSettings, StormSettings, TariffSettings
 from bindaems.shared.timeutil import SLOT
 
 
@@ -459,3 +460,69 @@ def test_old_inputs_load_without_virtual_months(store: PlanStore, engine: Engine
     inputs = store.inputs_of(saved.id)
     assert inputs is not None and not any(m.virtual for m in inputs.peak_months)
     assert inputs == sample_inputs()
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Task 4)
+
+_THUNDER = StormWarning(
+    warn_id=7,
+    version=1,
+    kind="gewitter",
+    level=2,
+    begin=at("2026-10-16T12:00:00+00:00"),  # 14:00 Ortszeit
+    end=at("2026-10-16T14:00:00+00:00"),
+    text="Gewitter",
+)
+_YELLOW = _THUNDER.model_copy(update={"warn_id": 8, "level": 1})
+
+
+def _storm_planning(*, enabled: bool) -> PlanningSettings:
+    return PlanningSettings(storm=StormSettings(enabled=enabled))
+
+
+def test_assemble_sets_floors() -> None:
+    inputs = assemble(planning=_storm_planning(enabled=True), storm_warnings=[_YELLOW, _THUNDER])
+    floors = [s.storm_floor_pct for s in inputs.slots]
+    # Slots ab 10:00 UTC: 11:00 (eine Stunde Vorlauf) bis 14:00 UTC sind Slot 4 bis 15
+    assert [i for i, f in enumerate(floors) if f is not None] == list(range(4, 16))
+    assert {f for f in floors if f is not None} == {40.0}
+    assert inputs.storm_warnings == [_THUNDER]  # Gelb liegt unter der Warnstufe
+
+
+def test_assemble_without_switch_has_no_floors() -> None:
+    inputs = assemble(planning=_storm_planning(enabled=False), storm_warnings=[_THUNDER])
+    assert all(s.storm_floor_pct is None for s in inputs.slots)
+    assert inputs.storm_warnings == []
+    plain = assemble()
+    assert plain.storm_warnings == [] and all(s.storm_floor_pct is None for s in plain.slots)
+
+
+def test_assemble_floor_is_capped_at_the_highest_soc() -> None:
+    inputs = assemble(
+        planning=_storm_planning(enabled=True),
+        battery=state(soc_max_pct=35.0),
+        storm_warnings=[_THUNDER],
+    )
+    assert {s.storm_floor_pct for s in inputs.slots[4:16]} == {35.0}
+
+
+def test_old_inputs_load_without_storm(store: PlanStore, engine: Engine) -> None:
+    # Eingangsdaten vor der Unwetter-Reserve laden ohne Warnungen und ohne Untergrenzen
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    assert data.pop("storm_warnings") == []
+    for slot in data["slots"]:
+        assert slot.pop("storm_floor_pct") is None
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs == sample_inputs()
+    stormy = assemble(planning=_storm_planning(enabled=True), storm_warnings=[_THUNDER])
+    assert PlanInputs.model_validate_json(stormy.model_dump_json()) == stormy
