@@ -3076,7 +3076,9 @@ wieder im PV-Überschuss. Für „Geplant“ hieße der Eintrag des Tesla etwa
     einmal nennen.`), ein unbekannter Aktor oder ein Plan, der nicht passt: `Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.`, `Plan: zu viele Slots
     (höchstens 8).`, `Plan: Gültigkeit passt nicht zu den Slots.` (es muss `slots[0].start ≤
     created_at < valid_until ≤` Ende des letzten Slots gelten, und höchstens 45 min zwischen
-    `created_at` und `valid_until` liegen), `Plan: Netzladen, obwohl ausgeschaltet.`, `Plan nennt
+    `created_at` und `valid_until` liegen), `Plan: Netzladen, obwohl ausgeschaltet.` (seit dem Plan
+    „Netzgrenze je Phase“ nicht für ein Nachladen auf die Reserve, `reserve_recharge`, mit höchstens
+    3000 W; Abschnitt „Planung“, „Nachladen auf die Reserve“), `Plan nennt
     unbekanntes Fahrzeug „x“.` oder `Plan hat negative Ladeleistung für „x“.`; dazu seit Plan 4b `Ein
     Gast kann nicht „Geplant“ laden.` für `guest.mode` `planned`
   - `rejected` mit Status 409: Die Version ist veraltet oder schon mit anderem Inhalt angenommen.
@@ -5554,7 +5556,9 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   Rand eines schmalen Handys.
 - **Ablauf:** Aufeinanderfolgende Slots mit gleicher Absicht, gleicher Netzladeleistung und gleichem
   Hauptcode bilden einen Block: „HH:MM–HH:MM“, die Absicht („Eigenverbrauch“, „Halten“,
-  „Netzladen {kW} kW“), „SOC a → b %“ und der Satz der Erklärung (unten). Der erste Block beginnt
+  „Netzladen {kW} kW“, beim Nachladen auf die Reserve „Nachladen {kW} kW“), „SOC a → b %“ und der
+  Satz der Erklärung (unten). Der Tooltip im Diagramm „Akku“ nennt das Nachladen ebenso; seine
+  Fläche und sein Chip gehören zu „Netzladen“. Der erste Block beginnt
   mit dem gemessenen SOC zu Beginn des Plans (`soc_start_pct`; bei einem alten Plan ohne das Feld mit
   dem Ende des ersten Slots). Ändert sich der SOC im Block um mindestens 0,05 und weniger als einen
   Prozentpunkt, steht eine Nachkommastelle („19,2 → 19,9 %“), sonst ganze Zahlen.
@@ -5591,24 +5595,27 @@ Jeder Lauf friert zuerst die Eingangsdaten ein, löst dann das Modell und prüft
    100 W entladen würde und das Modell weniger als die Hälfte davon entlädt. Sonst bleibt es
    `Eigenverbrauch`. Ein `Netzladen`, das sich an der Nachrechnung nicht rechnet (Spread-Regel
    unten), streicht die app wieder; der Slot wird dann `Halten` oder `Eigenverbrauch` nach derselben
-   Regel. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
+   Regel. Das Nachladen auf die Reserve (unten) zählt zum Netzladen des Slots; lädt das Modell
+   daneben weniger als 100 W aus dem Netz, ist der Slot ein Nachladen (höchstens 3 kW), das sich
+   nicht rechnen muss. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
 4. **Prüfung:** Ein unplausibler Plan wird verworfen, und es gilt der Ersatzplan.
 
 **Regel R** („nicht einspeisen und danach billig kaufen“) ist im Optimierer eine harte Bedingung
 (seit Plan 3d nur, bis der Akku wieder leer ist): Lädt er in einem Slot aus dem Netz, speist die PV
 laut Prognose nicht ein, bevor der Akku wieder leer ist (SOC am Slotende höchstens Reserve plus
-0,05 kWh), denn sonst füllte die PV den Akku ohnehin. Ist der Akku vor der nächsten Einspeisung
-verbraucht, darf er laden: Ist es heute trüb und morgen sonnig, lädt er heute, was bis morgen
-verbraucht ist, aber nicht mehr. Die Prüfung rechnet Regel R an der Nachrechnung nach, vom
-`Netzladen`-Slot bis zum Ende des ersten Slots mit SOC höchstens Reserve plus 0,1 kWh; die 0,1 kWh
-Einspeisung, die sie in diesem Fenster zulässt, sind nur ihre Toleranz. Weil die Absichten gerundet
-sind, kann die Nachrechnung mehr im Akku haben als das Modell; würde sie deshalb nach einem
-`Netzladen`-Slot einspeisen, bevor der Akku leer ist, kürzt die app das Netzladen des letzten
-betroffenen Slots um diese Energie, höchstens aber um die Ladung, die vor der ersten Einspeisung
-noch über Reserve plus 0,1 kWh liegt (auf 100 W aufgerundet, unter 100 W wird daraus `Halten`).
-Auch ein Netzladen vor dem Horizont zählt (seit der Fix-Welle von Akku ins Auto): Hat ein früherer
-Plan aus dem Netz geladen und war der SOC bei keinem Planungslauf seither höchstens Reserve plus
-0,1 kWh, rechnet der neue Plan mit Netzenergie im Akku, bis er leer ist. Verbieten kann er die
+0,05 kWh, auch wenn der SOC beim Start darunter lag: Energie unter der Reserve verlässt den Akku
+nie, kann also nicht eingespeist werden), denn sonst füllte die PV den Akku ohnehin. Ist der Akku
+vor der nächsten Einspeisung verbraucht, darf er laden: Ist es heute trüb und morgen sonnig, lädt er
+heute, was bis morgen verbraucht ist, aber nicht mehr. Die Prüfung rechnet Regel R an der
+Nachrechnung nach, vom `Netzladen`-Slot bis zum Ende des ersten Slots mit SOC höchstens Reserve plus
+0,1 kWh; die 0,1 kWh Einspeisung, die sie in diesem Fenster zulässt, sind nur ihre Toleranz. Weil
+die Absichten gerundet sind, kann die Nachrechnung mehr im Akku haben als das Modell; würde sie
+deshalb nach einem `Netzladen`-Slot einspeisen, bevor der Akku leer ist, kürzt die app das Netzladen
+des letzten betroffenen Slots um diese Energie, höchstens aber um die Ladung, die vor der ersten
+Einspeisung noch über Reserve plus 0,1 kWh liegt (auf 100 W aufgerundet, unter 100 W wird daraus
+`Halten`). Auch ein Netzladen vor dem Horizont zählt (seit der Fix-Welle von Akku ins Auto): Hat ein
+früherer Plan aus dem Netz geladen und war der SOC bei keinem Planungslauf seither höchstens Reserve
+plus 0,1 kWh, rechnet der neue Plan mit Netzenergie im Akku, bis er leer ist. Verbieten kann er die
 Einspeisung dann nicht mehr, denn das Laden ist geschehen; füllt die PV den Akku vorher, speist er
 so wenig wie möglich ein (im Modell 200 ct je kWh Strafe). Die Regel wirkt erst, wenn Victron live
 ist und „Netzladen erlaubt“ an ist.
@@ -5637,6 +5644,34 @@ gilt der Ersatzplan.
 Die Regel ist nicht mengenbezogen: Schon eine lohnende spätere Entladung über 1 W rechtfertigt jede
 Ladeleistung. Ein `Netzladen`, das fast ganz sofort verbraucht wird und nur einen kleinen Rest für
 später lässt, bleibt deshalb bestehen; wirtschaftlich ist das etwa ±0.
+
+**Nachladen auf die Reserve** (seit dem Plan „Netzgrenze je Phase“, Entscheidung des Betreibers vom
+3.11.2026: „Ja, immer“): Ohne PV sinkt der SOC am Min-SOC um etwa 1 % in 9 h. Fällt er 5 % unter den
+Min-SOC (die USV-Reserve), lädt Victron ESS selbst mit voller Leistung nach (am 3.11.2026
+22:35–23:05 mit 9 kW bei 11,5 kW Netzbezug), eine neue Spitze. Darum plant die app das selbst und
+sanft, **auch bei ausgeschaltetem „Netzladen erlaubt“**:
+
+- **Wann:** nur, wenn der SOC zu Beginn des Plans unter der Reserve liegt. Am Horizontende soll der
+  Akku wieder an der Reserve stehen; was fehlt, kostet im Modell 2000 ct je kWh (wie die Fehlmenge
+  eines Autos).
+- **Wie viel:** je Slot höchstens 3 kW, höchstens die Ladeleistung und höchstens der höchste
+  Netzladesetpoint minus Hauslast; über den Horizont höchstens die Lücke bis zur Reserve. Es zählt
+  wie Netzladen zum Netzbezug, zur Monatsspitze und zur Grenze je Phase und kostet den Bezugspreis,
+  ohne Marge. Lädt die PV den Akku im Horizont bis zur Reserve, kommt nichts aus dem Netz (PV kostet
+  nichts); sonst nimmt der Plan die billigsten Slots.
+- **Was nachgeladen ist, bleibt im Akku:** Der Plan entlädt es nicht wieder (danach `Halten`), sonst
+  wäre es Netzladen am Schalter vorbei. Die Spread-Regel gilt nicht (kein Befund „rechnet sich
+  nicht“), und Regel R sieht den Akku an der Reserve als leer: Nach dem Nachladen darf die PV
+  einspeisen.
+- **Absicht und Anzeige:** `Netzladen` mit dem Kennzeichen „Nachladen“ (`reserve_recharge`), im
+  „Ablauf“ „Nachladen 3 kW“, Satz „Nachladen auf die Reserve, bevor der Victron selbst mit voller
+  Leistung nachlädt.“ Lädt ein Slot mit eingeschaltetem Schalter daneben mindestens 100 W für
+  später, ist er ein gewöhnliches `Netzladen`; rechnet sich dieser Teil nicht, bleibt das Nachladen
+  allein.
+- **core:** Er nimmt ein Nachladen mit höchstens 3000 W auch bei ausgeschaltetem Schalter an; mehr
+  oder ohne Kennzeichen lehnt er den Plan ab („Plan: Netzladen, obwohl ausgeschaltet.“). Beim
+  Ausschalten des Schalters bleibt ein Nachladen im Plan, der an den core geht.
+- **Ersatzplan:** lädt in den billigsten Slots der ersten 24 h nach (unten, „Ersatzplan“).
 
 ### Autos im Plan
 
@@ -5726,7 +5761,10 @@ Ausrollen: zusammen mit `ems-core` im nächsten Sammel-Pull, ohne Migration.
 ### Netzladen erlaubt
 
 Der Schalter **Netzladen erlaubt** ist standardmäßig aus. Aus heißt: Kein Plan enthält `Netzladen`;
-wo es sich gelohnt hätte, sagt der Satz „Netzladen würde sich lohnen … ist aber ausgeschaltet.“
+wo es sich gelohnt hätte, sagt der Satz „Netzladen würde sich lohnen … ist aber ausgeschaltet.“ Die
+Ausnahme ist das Nachladen auf die Reserve mit höchstens 3 kW, wenn der SOC unter der Reserve liegt
+(oben, „Wie ein Plan entsteht“, „Nachladen auf die Reserve“): Es gilt immer, damit Victron nicht
+selbst mit voller Leistung nachlädt.
 Umschalten kannst du an drei Stellen, mit denselben Folgen:
 
 - im UI auf der Seite **Zeitplan** (ab „Bedienen“),
@@ -5737,10 +5775,11 @@ Jedes Umschalten ist eine neue Version der Einstellungen mit dem Kommentar „Ne
 „Netzladen aus“ im Änderungsprotokoll und löst eine Neuplanung aus. Hat der Schalter schon den Wert,
 entsteht keine neue Version. Der Plan geht danach neu an den core; bis er dort ist, steht der Stand
 „Der Plan ist noch nicht beim core.“ (unten, „Stand der Ausführung“). Beim Ausschalten geht sofort
-derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch`; der neue Plan
-folgt (unten, „Übergabe an den core“). Regelt der core in dem Moment nicht (Regelbetrieb aus,
-Neustart), wartet die Übergabe, bis er wieder regelt; ein gespeicherter `Netzladen`-Slot kann dann
-noch etwa 11 s laufen (eine Abfrage der Health und ein Regelzyklus).
+derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch` (ein Nachladen auf
+die Reserve bleibt); der neue Plan folgt (unten, „Übergabe an den core“). Regelt der core in dem
+Moment nicht (Regelbetrieb aus, Neustart), wartet die Übergabe, bis er wieder regelt; ein
+gespeicherter `Netzladen`-Slot kann dann noch etwa 11 s laufen (eine Abfrage der Health und ein
+Regelzyklus).
 
 ### Akku ins Auto, wenn übrig
 
@@ -5811,7 +5850,8 @@ Absicht, und ein neuer Plan wird wie eine Bedienung aus der gültigen Absicht ab
 - **Was hinausgeht:** nur der bindende Teil des neuesten gültigen Plans, die Slots vor seinem
   `valid_until` (höchstens 8), je Slot Absicht, Budget, Bezugspreis und Plan-Schwelle, dazu `id`,
   `created_at`, `valid_until` und der Stand von „Netzladen erlaubt“. Ist der Schalter aus, werden
-  `Netzladen`-Slots zu `Eigenverbrauch`. Seit Akku ins Auto trägt jeder Slot den Akkuanteil je
+  `Netzladen`-Slots zu `Eigenverbrauch`, außer einem Nachladen auf die Reserve mit höchstens 3000 W
+  (oben, „Nachladen auf die Reserve“). Seit Akku ins Auto trägt jeder Slot den Akkuanteil je
   angestecktem Auto in „Geplant“ (`ev_battery_w`, ganze W) und `now_battery`, beides nur in
   `Eigenverbrauch`-Slots.
 - **Wann:** beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder Abfrage
@@ -5955,8 +5995,9 @@ Die Seite und die Komponente nennen den Grund:
 Die Prüfung findet diese Befunde, jeweils mit der Uhrzeit des Slots (je Art der erste, in der
 Reihenfolge der Slots; der früheste ist der „erste Befund“): „Bilanz verletzt um HH:MM“,
 „SOC außerhalb der Grenzen um HH:MM“, „Leistung über der Grenze um HH:MM“, „Netzladen um HH:MM,
-obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
-bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, bei gesetzter Grenze je
+obwohl ausgeschaltet“ (nicht für ein Nachladen auf die Reserve mit höchstens 3 kW), „Regel R
+verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung, bevor der Akku leer ist“ und
+„Netzladen um HH:MM rechnet sich nicht“ (nicht für ein Nachladen), bei gesetzter Grenze je
 Phase (seit dem Plan „Netzgrenze je Phase“) „Netzbezug über dem Importlimit auf L1 um HH:MM“
 (oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b)
 dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
@@ -5984,6 +6025,14 @@ Der Ersatzplan plant zuerst die Autos im Modus „Geplant“, in der Reihenfolge
 Den Akku rechnet der Ersatzplan mit diesen Autos so:
 
 - **Grundlage:** `Eigenverbrauch` in allen Slots, nachgerechnet.
+- **Nachladen auf die Reserve** (seit dem Plan „Netzgrenze je Phase“, oben, „Wie ein Plan
+  entsteht“): Liegt der SOC zu Beginn unter der Reserve und erreicht die Nachrechnung sie in den
+  ersten 24 h nicht von selbst (etwa durch PV), lädt der Plan zuerst, auch ohne Schalter und ohne
+  teure Slots, in den billigsten Slots dieser 24 h (bei gleichem Preis der frühere) `Netzladen` als
+  Nachladen: je Slot höchstens 3 kW, die Grenze des Slots und den Platz unter dem Netzbezug und der
+  Grenze je Phase (auf volle 100 W abgerundet), der letzte nur den Rest, bis die Nachrechnung die
+  Reserve erreicht. Danach hält er den Akku (`Halten`), wo `Eigenverbrauch` ihn unter die Reserve
+  entlüde.
 - **Teuer** sind die Slots des heutigen Tages ab dem aktuellen Slot, deren Bezugspreis das 80. Perzentil
   dieser Slots erreicht. Bei einem einheitlichen Preis gibt es keinen. Der SOC **reicht nur knapp**,
   wenn die Nachrechnung in einem teuren Slot mehr als 100 W aus dem Netz bezieht, weil der Akku leer
@@ -6014,6 +6063,7 @@ Zahlen:
 
 | Code | Beispiel | Wann |
 |---|---|---|
+| `NACHLADEN_RESERVE` | Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt. | Absicht `Netzladen` als Nachladen auf die Reserve (seit dem Plan „Netzgrenze je Phase“, oben, „Wie ein Plan entsteht“) |
 | `NETZLADEN_GUENSTIG` | Akku lädt 4,0 kW aus dem Netz: jetzt 12,3 ct, um 18:00 Uhr 31,5 ct. | Absicht `Netzladen`; „um“ ist der erste spätere Slot mit Entladung ab 100 W, für den sich das Laden auszahlt (gibt es keinen, der teuerste spätere Slot) |
 | `HALTEN_FUER_SPITZE` | Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden. | Absicht `Halten`; später folgt ein Block teurerer Slots mit Entladung |
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |

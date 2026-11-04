@@ -989,6 +989,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
 
     codes = set(get_args(ReasonCode))
     examples: dict[str, dict[str, float | str]] = {
+        "NACHLADEN_RESERVE": {"kw": 3.0},
         "NETZLADEN_GUENSTIG": {"kw": 4.0, "ct": 12.3, "um": "18:00", "ct_spaeter": 31.5},
         "HALTEN_FUER_SPITZE": {"soc": 64.0, "von": "18:00", "bis": "20:00", "ct": 38.0},
         "BUDGET_SPITZE": {"soc": 55.0, "kw": 6.5},
@@ -1022,6 +1023,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
     assert set(rows) == codes
     # Hauptcodes in der Reihenfolge der Prüfung von ``explain._main_reason``, dann die Zusätze
     assert list(rows) == [
+        "NACHLADEN_RESERVE",
         "NETZLADEN_GUENSTIG",
         "HALTEN_FUER_SPITZE",
         "BUDGET_SPITZE",

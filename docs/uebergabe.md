@@ -283,9 +283,11 @@ Der Planer hält neben der Summengrenze eine Grenze für den Netzbezug je Phase:
 (Entscheidung des Betreibers vom 3.11.2026). Optimierer (Bedingung `phase_{t}_{p}`), Ersatzplan und Plausibilität (Befund „Netzbezug über dem
 Importlimit auf L1 um HH:MM“) sind umgesetzt (Tasks 1 bis 4). Task 5: Ohne Leistungspreis meidet der Planer neue Monatsspitzen mit dem
 gedachten Satz `planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und Monat, 0 = aus, Einstellungen „Planung“), und sein Budget geht wie mit
-Leistungspreis an den 15-min-Wächter (Entscheidung 8 des Betreibers: „Gedachter Satz, auch Wächter“). Task 6 (Nachladen auf die Reserve)
-ergänzt diesen Absatz. Betrieb: `docs/betrieb.md`, „Planung“, „Autos im Plan“, „Einstellungen „Planung““, „Budget“, und „15-min-Wächter“;
-Spec: „Stand Plan Netzgrenze je Phase“ in 9.3 und 9.4.
+Leistungspreis an den 15-min-Wächter (Entscheidung 8 des Betreibers: „Gedachter Satz, auch Wächter“). Task 6: Liegt der SOC unter der
+Reserve, lädt der Planer selbst sanft nach (höchstens 3 kW je Slot, auch bei ausgeschaltetem „Netzladen erlaubt“; Entscheidung 9 des Betreibers:
+„Ja, immer“), bevor Victron unter Min-SOC − 5 % mit voller Leistung nachlädt; der core nimmt ein solches Nachladen bis 3000 W auch ohne Schalter an.
+Betrieb: `docs/betrieb.md`, „Planung“, „Wie ein Plan entsteht“ („Nachladen auf die Reserve“), „Autos im Plan“, „Netzladen erlaubt“, „Einstellungen
+„Planung““, „Budget“, „Ersatzplan“ und „15-min-Wächter“; Spec: „Stand Plan Netzgrenze je Phase“ in 9.3 und 9.4.
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
@@ -2086,13 +2088,17 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Kacheln) und **Einstellungen** (Tarif als Karten, ein Hinweis „kein Wert“). Der Name der Wallbox (aus den Einstellungen, sonst der Typname wie „EVCS“) steht in „Warum?“, in der
       Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
       In der Hausakku-Kachel der Übersicht steht unter „≈ … von … kWh“ neu „≈ … kWh über Reserve“ (an oder unter der Reserve „nichts über Reserve“).
-  19. **Netzgrenze je Phase ausrollen:** kommt mit Stufe 2 (ab 23.11.2026), `ems-app` **und** `ems-core` zusammen (Task 6 ändert auch die Planprüfung im core),
+  19. **Netzgrenze je Phase ausrollen:** kommt mit Stufe 2 (ab 23.11.2026), `ems-app` **und** `ems-core` zusammen (Task 6 ändert auch die Planprüfung im core;
+      jede Absicht der neuen app trägt `reserve_recharge` in der Absicht jedes Plan-Slots, ein alter core lehnt sie ab, `extra="forbid"`),
       **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**; mit dem nächsten Sammel-Pull, **nie allein**; wann, entscheidet der Betreiber.
       Danach auf der Seite **Zeitplan** beobachten: Laden Tesla und e-Golf zusammen nur, wenn es je Phase reicht (4370 W)? Der Netzbezug einer
       Phase bleibt am Zähler unter 20 A. Meldet die Prüfung „Netzbezug über dem Importlimit auf …“, steht im Plan der Ersatzplan, und das ist ein Befund.
       Neu ab dem Ausrollen auch vor 2027: Jeder Plan bringt ein Budget (gedachter Satz 100 ct je kW und Monat), und der 15-min-Wächter hält es
       (Health `peak.state` nicht mehr `off`, Sensor „Budget“ in HA mit Wert). Soll das nicht sein: in den Einstellungen „Planung“ den Satz
       „Spitze vermeiden ohne Leistungspreis“ auf 0 setzen.
+      Neu ab dem Ausrollen auch bei ausgeschaltetem „Netzladen erlaubt“: Liegt der SOC unter der Reserve (Victron-Min-SOC), zeigt der Zeitplan
+      „Nachladen 3 kW“ in billigen Slots, und der Akku lädt aus dem Netz bis zur Reserve. Beobachten: Bleibt das Nachladen unter 3 kW, und lädt
+      Victron nicht mehr selbst mit voller Leistung nach (Entscheidungslog `plan_grid_charge` statt eines Sprungs auf 9 kW)?
       Neue Felder in Eingangsdaten und Plänen sind optional; ältere gespeicherte Daten laden unverändert. Ob ein älteres Image die neuen Felder liest, ist nicht geprüft (Rückweg wie bei Punkt 17: Vorsicht, `extra="forbid"`).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
