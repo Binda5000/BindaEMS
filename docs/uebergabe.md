@@ -2099,10 +2099,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Neu ab dem Ausrollen auch bei ausgeschaltetem „Netzladen erlaubt“: Liegt der SOC unter der Reserve (Victron-Min-SOC), zeigt der Zeitplan
       „Nachladen 3 kW“ in billigen Slots, und der Akku lädt aus dem Netz bis zur Reserve. Beobachten: Bleibt das Nachladen unter 3 kW, und lädt
       Victron nicht mehr selbst mit voller Leistung nach (Entscheidungslog `plan_grid_charge` statt eines Sprungs auf 9 kW)?
-      Neue Felder in Eingangsdaten und Plänen sind optional; ältere gespeicherte Daten laden unverändert. Ob ein älteres Image die neuen Felder liest, ist nicht geprüft (Rückweg wie bei Punkt 17: Vorsicht, `extra="forbid"`).
+      Neue Felder in Eingangsdaten und Plänen sind optional; ältere gespeicherte Daten laden unverändert. Ein älteres Image liest die neuen Felder nicht (`extra="forbid"`): Es überspringt neue Pläne, und eine nach dem Ausrollen gespeicherte Version der Einstellungen (mit `planning.peak_soft_ct_per_kw`) ersetzt es durch die **Standardwerte aller Einstellungen**, auch des Tarifs. Vor einem Rollback deshalb exportieren, den Schlüssel löschen und danach importieren (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Netzgrenze je Phase“).
       **Rückweg nur mit `ems-core` und `ems-app` zusammen:** Der neue core schreibt `reserve_recharge` in jeden Plan-Slot der `intent.json`; ein
       alter core liest sie nicht (`extra="forbid"`) und startet ohne Absicht (Alarm `intent.file` „Gespeicherte Absicht unlesbar“, Regelbetrieb aus),
-      bis die alte app die nächste Absicht sendet (oder das Feld per Skript aus `intent.json` entfernt ist). Ein alter core mit der neuen app lehnt jede Absicht ab.
+      bis die alte app die nächste Absicht sendet (oder das Feld per Skript aus `intent.json` entfernt ist, ebenda). Ein alter core mit der neuen app lehnt jede Absicht ab.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

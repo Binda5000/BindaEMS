@@ -256,6 +256,62 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
     geschaltet.
 
+- **Rollback auf einen Stand vor Netzgrenze je Phase:** Core und app gehen gemeinsam zurück, auf
+  dasselbe Tag (der Plan ändert die Planprüfung im core, Task 6). Zwei Stellen tragen neue Felder, und
+  ein älterer Stand lehnt unbekannte Felder ab (`extra="forbid"`):
+  - **Die Absicht des core** (`intent.json`, im Volume `core-data` `/data/intent.json`): Jeder Slot
+    des Plans trägt unter `intent` das Feld `reserve_recharge`, auch mit `false`. Ein älterer core
+    liest die Datei sonst nicht, startet ohne Absicht (Regelbetrieb aus) und meldet den Alarm
+    `intent.file`, wie beim Rollback vor Akku ins Auto (unten).
+  - **Die Einstellungen der app:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `planning.peak_soft_ct_per_kw`, auch mit `0`. Eine ältere app lehnt eine solche Version ab und
+    rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“). Hast du seit dem Ausrollen nichts
+    gespeichert oder importiert, ist die letzte Version noch die alte, und hier ist nichts zu tun.
+  - **Pläne und Eingangsdaten seit dem Ausrollen** tragen neue Felder (`reserve_recharge`,
+    `grid_phase_import_w`, `grid_phases`, `virtual`). Eine ältere app überspringt unlesbare Pläne
+    (im Log „Plan-Zeile nicht lesbar“), bis sie nach 30 Tagen aus der Planablage fallen; daran musst
+    du nichts tun.
+
+  So gehst du zurück:
+
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
+     die Zeile `peak_soft_ct_per_kw:` löschen. Gehst du zugleich hinter Akku ins Auto oder den
+     Standard-Lademodus zurück, löschst du auch deren Schlüssel (Punkte unten).
+  2. **Regelbetrieb aus** (System → „Bedienung“).
+  3. **Feld aus `intent.json` entfernen;** ein Slot mit Nachladen auf die Reserve wird dabei zu
+     Eigenverbrauch, damit ein älterer core bei ausgeschaltetem „Netzladen erlaubt“ kein Netzladen
+     ablehnt:
+
+     ```bash
+     cd /opt/bindaems
+     docker compose stop ems-core
+     docker compose run --rm --no-deps --entrypoint python ems-core -c '
+     import json
+     from pathlib import Path
+     path = Path("/data/intent.json")
+     document = json.loads(path.read_text())
+     plan = document["intent"].get("plan") or {}
+     for slot in plan.get("slots", []):
+         intent = slot["intent"]
+         if intent.pop("reserve_recharge", False):
+             intent["kind"] = "EIGENVERBRAUCH"
+             intent["grid_charge_w"] = 0.0
+     path.write_text(json.dumps(document))
+     print("reserve_recharge entfernt")'
+     ```
+
+  4. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  5. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“. Dann den **Regelbetrieb wieder an**, sobald **System**
+     core und app mit demselben Stand zeigt.
+
+  Lässt du Schritt 3 aus, setzt du die Absicht danach neu (Bedienung oder `PUT /v1/intent`). Hast du
+  vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
+  gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
+  `key = "$.planning.peak_soft_ct_per_kw"`. Die Datenbank hat keine Migration.
+
 - **Update mit Akku ins Auto:** Der Plan „Akku ins Auto, wenn er übrig ist“ ändert core und app; beide
   rollen **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose
   up -d`). Jeder Slot des Plans in der Absicht hat zwei neue Felder (`ev_battery_w`, `now_battery`),

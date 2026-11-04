@@ -35,9 +35,9 @@ Ziel, Fehlmenge und Regel R2 rechnen sonst wie bei einem angesteckten Auto.
 
 Netzgrenze je Phase (Plan Netzgrenze je Phase, Entscheidungen 4 und 5): Mit
 ``BatteryState.grid_phase_import_w`` gilt zusätzlich zur Summengrenze je Slot ``t`` und Phase ``p``
-``(gr_h + gr_b) / 3 + Σ_{c aktiv, p ∈ Phasen_c} gr_ev_c / n_c ≤ R_t`` (``phase_room_w``). Haus und
-Netzladen sind symmetrisch, ein Auto lädt auf jeder seiner Phasen gleich viel (``phase_shares``);
-PV und Akku ins Auto zählen nicht. Ohne Grenze gibt es keine solche Bedingung.
+``(gr_h + gr_b + gr_r) / 3 + Σ_{c aktiv, p ∈ Phasen_c} gr_ev_c / n_c ≤ R_t`` (``phase_room_w``).
+Haus und Netzladen sind symmetrisch, ein Auto lädt auf jeder seiner Phasen gleich viel
+(``phase_shares``); PV und Akku ins Auto zählen nicht. Ohne Grenze gibt es keine solche Bedingung.
 
 Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9): Liegt der SOC zu Beginn
 unter der Reserve, gibt es ``gr_r`` (Netz → Akku, auch bei ausgeschaltetem Schalter) mit
