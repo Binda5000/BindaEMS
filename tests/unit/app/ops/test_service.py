@@ -99,11 +99,18 @@ async def test_run_day_without_influx_gives_not_checked(make_findings, influx, b
 
 
 async def test_run_day_collects_the_inputs_of_the_day(
-    findings, ledger, decision_store, engine
+    findings, ledger, decision_store, engine, settings_service
 ) -> None:
-    # Monatsspitze: vorher 4 kW am 2. 10., am Tag 8 kW; der Slot am 9. 10. zählt nicht als vorher
+    # Monatsspitze: vorher 4 kW am 2. 10., am Tag 12 kW; der Slot am 9. 10. zählt nicht als vorher
+    current = settings_service.current()
+    settings_service.update(
+        current.settings.model_copy(update={"wallbox_names": {"evcs": "Garage"}}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
     ingest(ledger, utc("10:00", "2026-10-02"), {"grid>house": 1000.0})
-    ingest(ledger, utc("10:00"), {"grid>house": 2000.0})
+    ingest(ledger, utc("10:00"), {"grid>house": 2000.0, "grid>wallbox.twc": 1000.0})
     ingest(ledger, utc("06:00", "2026-10-09"), {"grid>house": 4000.0})
     decision_store.add(
         [
@@ -137,9 +144,11 @@ async def test_run_day_collects_the_inputs_of_the_day(
                 outcome="missed",
             )
         )
-        for day, signal, flagged in (
-            ("2026-10-08", "grid.import", True),
-            ("2026-10-08", "grid.export", False),
+        for day, signal, flagged in (  # Signale wie in ``LedgerChecks``
+            ("2026-10-08", "import", True),
+            ("2026-10-08", "export", False),
+            ("2026-10-08", "wb:evcs", True),
+            ("2026-10-08", "wb:twc", False),
             ("2026-10-07", "pv", True),
         ):
             conn.execute(
@@ -155,11 +164,18 @@ async def test_run_day_collects_the_inputs_of_the_day(
             )
     found = await findings.run_day(DAY)
     assert [(item.rule, item.text) for item in found] == [
-        ("month_peak", "Neue Monatsspitze 8,0 kW um 12:00 (vorher 4,0 kW): Haus 8,0 kW."),
+        (
+            "month_peak",
+            "Neue Monatsspitze 12,0 kW um 12:00 (vorher 4,0 kW): "
+            "Haus 8,0 kW, Wallbox Wall Connector 4,0 kW.",
+        ),
         ("target_missed", "Tesla Model 3 hat das Ziel 80 % um 07:00 verfehlt (erreicht: 61 %)."),
         ("command_failures", "2 Befehle an Victron gescheitert."),
-        ("counter_check", "Abrechnung und Zähler weichen bei grid.import um 4,2 % ab."),
+        ("counter_check", "Abrechnung und Zähler weichen bei Netzbezug um 4,2 % ab."),
+        ("counter_check", "Abrechnung und Zähler weichen bei Wallbox Garage um 4,2 % ab."),
     ]
+    checks = [item.data["signal"] for item in found if item.rule == "counter_check"]
+    assert checks == ["import", "wb:evcs"]  # der Schlüssel bleibt in den Daten
 
 
 def test_actuator_labels_from_health() -> None:

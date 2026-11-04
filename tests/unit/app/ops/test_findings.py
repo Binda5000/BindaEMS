@@ -58,6 +58,7 @@ def inputs(**changes: Any) -> DayInputs:
         "actuator_labels": {},
         "missed": [],
         "flagged_checks": [],
+        "wallbox_labels": {},
     }
     values.update(changes)
     return DayInputs(**values)
@@ -235,12 +236,34 @@ def test_command_failures_per_actuator_with_label() -> None:
 
 
 def test_flagged_counter_check() -> None:
-    found = find(inputs(flagged_checks=[("Netzbezug", 2.4), ("Einspeisung", None)]))
+    flagged = [("export", None), ("import", 2.4), ("wb:evcs", 5.0), ("wb:twc", -3.0)]
+    found = find(inputs(flagged_checks=flagged, wallbox_labels={"evcs": "Garage"}))
     items = only(found, "counter_check")
     assert items[0].level == "info"
-    assert items[0].text == "Abrechnung und Zähler weichen bei Netzbezug um 2,4 % ab."
-    assert items[1].text == "Abrechnung und Zähler weichen bei Einspeisung ab."
+    assert [item.text for item in items] == [
+        "Abrechnung und Zähler weichen bei Einspeisung ab.",
+        "Abrechnung und Zähler weichen bei Netzbezug um 2,4 % ab.",
+        "Abrechnung und Zähler weichen bei Wallbox Garage um 5,0 % ab.",
+        "Abrechnung und Zähler weichen bei Wallbox twc um -3,0 % ab.",
+    ]
+    assert [item.data["signal"] for item in items] == ["export", "import", "wb:evcs", "wb:twc"]
     assert items[0].link == "/statistik"
+
+
+def test_month_peak_split_names_the_wallbox() -> None:
+    flows = {"grid>house": 225.0, "grid>wallbox.evcs": 1000.0, "grid>wallbox.twc": 500.0}
+    found = find(
+        inputs(
+            slots=[slot("21:30", flows, import_wh=1725.0)],
+            previous_peak_kw=4.0,
+            wallbox_labels={"evcs": "Garage", "twc": "Wall Connector"},
+        )
+    )
+    [item] = only(found, "month_peak")
+    assert item.text == (
+        "Neue Monatsspitze 6,9 kW um 22:30 (vorher 4,0 kW): "
+        "Wallbox Garage 4,0 kW, Wallbox Wall Connector 2,0 kW, Haus 0,9 kW."
+    )
 
 
 def test_rules_on_dst_day_cover_100_slots() -> None:
@@ -279,7 +302,7 @@ def test_findings_sorted_by_start_then_day_rules() -> None:
             plans=[plan(["21:30"], charge_grid_w=0.0)],
             soc_min={utc("08:00"): 10.0},
             failures={"evcs": 1},
-            flagged_checks=[("Netzbezug", 1.0)],
+            flagged_checks=[("import", 1.0)],
         )
     )
     assert [item.rule for item in found] == [

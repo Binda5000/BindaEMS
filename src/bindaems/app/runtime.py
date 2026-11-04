@@ -394,6 +394,7 @@ class AppRuntime:
             self.engine,
             self._clock,
             cfg,
+            self.settings,
             self.ledger,
             self.plan_store,
             self.decisions,

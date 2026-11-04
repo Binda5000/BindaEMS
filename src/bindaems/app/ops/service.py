@@ -19,6 +19,7 @@ from sqlalchemy import Engine, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from bindaems.app.charging.planned import PlannedCharges
+from bindaems.app.charging.sessions import wallbox_name
 from bindaems.app.control.decisions import DecisionStore
 from bindaems.app.db.schema import ledger_check, ops_day, ops_finding
 from bindaems.app.ha.notify import HaNotifier
@@ -97,6 +98,7 @@ class FindingsService:
         engine: Engine,
         clock: Clock,
         cfg: Config,
+        settings: CurrentSettings,
         ledger: LedgerService,
         plans: PlanStore,
         decisions: DecisionStore,
@@ -109,6 +111,7 @@ class FindingsService:
         self._engine = engine
         self._clock = clock
         self._cfg = cfg
+        self._settings = settings
         self._ledger = ledger
         self._plans = plans
         self._decisions = decisions
@@ -139,6 +142,7 @@ class FindingsService:
         labels: Mapping[str, str],
     ) -> DayInputs:
         peak = self._ledger.month_peak_before(day)
+        names = self._settings.current().settings.wallbox_names
         return DayInputs(
             day=day,
             slots=self._ledger.slots(start, end),
@@ -150,6 +154,9 @@ class FindingsService:
             actuator_labels=labels,
             missed=self._planned.missed(day),
             flagged_checks=self._flagged(day),
+            wallbox_labels={
+                key: wallbox_name(self._cfg, names, key) for key in self._cfg.wallboxes
+            },
         )
 
     def _flagged(self, day: date) -> list[tuple[str, float | None]]:

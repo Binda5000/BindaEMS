@@ -39,7 +39,7 @@ def influx() -> FakeInflux:
 
 @pytest.fixture
 def make_findings(
-    engine, clock, cfg, ledger, plan_store, decision_store, influx
+    engine, clock, cfg, settings_service, ledger, plan_store, decision_store, influx
 ) -> Callable[..., FindingsService]:
     def build(**changes: Any) -> FindingsService:
         values: dict[str, Any] = {
@@ -53,6 +53,7 @@ def make_findings(
             engine,
             clock,
             cfg,
+            settings_service,
             ledger,
             plan_store,
             decision_store,

@@ -80,7 +80,9 @@ class DayInputs:
     """Alles, was die Regeln für einen Tag brauchen.
 
     ``soc_min`` ist je Slotbeginn der kleinste SOC (%); ``None`` heißt: InfluxDB nicht erreichbar.
-    ``flagged_checks`` sind markierte Zählervergleiche: Signal und Abweichung in %.
+    ``flagged_checks`` sind markierte Zählervergleiche: Signal (``import``, ``export``, ``pv``,
+    ``wb:<key>``) und Abweichung in %. ``wallbox_labels`` nennt je Wallbox-Schlüssel den
+    Anzeigenamen wie im UI (eigener Name, sonst die Art der Ladestation).
     """
 
     day: date
@@ -93,6 +95,7 @@ class DayInputs:
     actuator_labels: Mapping[str, str]
     missed: Sequence[MissedTarget]
     flagged_checks: Sequence[tuple[str, float | None]]
+    wallbox_labels: Mapping[str, str]
 
 
 def _num(value: float, digits: int = 1) -> str:
@@ -221,7 +224,11 @@ def _kw(wh: float) -> float:
     return wh * _PER_HOUR / _WH_PER_KWH
 
 
-def _split(flows: Mapping[str, float]) -> str:
+def _wallbox(key: str, labels: Mapping[str, str]) -> str:
+    return f"Wallbox {labels.get(key, key)}"
+
+
+def _split(flows: Mapping[str, float], wallbox_labels: Mapping[str, str]) -> str:
     """„Akku 8,2 kW, Haus 0,9 kW“: Netzbezug nach Ziel; Ziele ohne Bezug entfallen."""
     parts: list[tuple[str, float]] = []
     for name, wh in sorted(flows.items()):
@@ -233,7 +240,7 @@ def _split(flows: Mapping[str, float]) -> str:
         elif target == "house":
             parts.append(("Haus", wh))
         elif target.startswith("wallbox."):
-            parts.append((f"Wallbox {target.removeprefix('wallbox.')}", wh))
+            parts.append((_wallbox(target.removeprefix("wallbox."), wallbox_labels), wh))
     parts.sort(key=lambda part: -part[1])
     return ", ".join(f"{label} {_num(_kw(wh))} kW" for label, wh in parts)
 
@@ -246,7 +253,7 @@ def _month_peak(inputs: DayInputs) -> list[Finding]:
     if peak_kw < inputs.previous_peak_kw + PEAK_RISE_MIN_KW:
         return []
     start = ensure_utc(top.slot_start)
-    split = _split(top.flows_wh)
+    split = _split(top.flows_wh, inputs.wallbox_labels)
     text = (
         f"Neue Monatsspitze {_num(peak_kw)} kW um {_clock(start)} "
         f"(vorher {_num(inputs.previous_peak_kw)} kW)"
@@ -342,10 +349,21 @@ def _command_failures(inputs: DayInputs) -> list[Finding]:
     return findings
 
 
+_SIGNAL_LABELS: Final = {"import": "Netzbezug", "export": "Einspeisung", "pv": "PV"}
+
+
+def _signal_label(signal: str, wallbox_labels: Mapping[str, str]) -> str:
+    """Name eines Zählervergleichs wie in der Statistik: „Netzbezug“, „Wallbox Garage“."""
+    if signal.startswith("wb:"):
+        return _wallbox(signal.removeprefix("wb:"), wallbox_labels)
+    return _SIGNAL_LABELS.get(signal, signal)
+
+
 def _counter_check(inputs: DayInputs) -> list[Finding]:
     findings: list[Finding] = []
     for signal, deviation in inputs.flagged_checks:
         by = "" if deviation is None else f" um {_num(deviation)} %"
+        label = _signal_label(signal, inputs.wallbox_labels)
         findings.append(
             Finding(
                 day=inputs.day,
@@ -353,7 +371,7 @@ def _counter_check(inputs: DayInputs) -> list[Finding]:
                 level="info",
                 start=None,
                 end=None,
-                text=f"Abrechnung und Zähler weichen bei {signal}{by} ab.",
+                text=f"Abrechnung und Zähler weichen bei {label}{by} ab.",
                 link="/statistik",
                 data={"signal": signal, "deviation_pct": deviation},
             )

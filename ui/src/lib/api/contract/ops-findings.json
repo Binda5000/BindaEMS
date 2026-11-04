@@ -67,7 +67,7 @@
           "level": "info",
           "start": null,
           "end": null,
-          "text": "Abrechnung und Zähler weichen bei import um -3,4 % ab.",
+          "text": "Abrechnung und Zähler weichen bei Netzbezug um -3,4 % ab.",
           "link": "/statistik",
           "data": {
             "signal": "import",
