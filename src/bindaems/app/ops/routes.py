@@ -56,11 +56,13 @@ def ops_router(
         first = last - timedelta(days=days - 1)
         by_day = await run_in_threadpool(findings.days, first, last)
         listed = [last - timedelta(days=back) for back in range(days)]
-        text = await run_in_threadpool(report.text, last)
-        return {
-            "days": [_day_json(day, by_day.get(day)) for day in listed],
-            "report": {"day": last.isoformat(), "text": text},
-        }
+        try:
+            text = await run_in_threadpool(report.text, last)
+            summary: dict[str, Any] | None = {"day": last.isoformat(), "text": text}
+        except Exception:
+            log.exception("Tagesbericht für die Betriebsseite nicht erstellt")
+            summary = None
+        return {"days": [_day_json(day, by_day.get(day)) for day in listed], "report": summary}
 
     return router
 

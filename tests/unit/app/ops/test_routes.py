@@ -136,3 +136,28 @@ def test_findings_route_rejects_days_over_60(client, auth) -> None:
     assert client.get("/api/ops/findings?days=61").status_code == 422
     assert client.get("/api/ops/findings?days=0").status_code == 422
     assert client.get("/api/ops/findings?days=60").status_code == 200
+
+
+async def test_findings_route_survives_a_failing_report(
+    make_client, live, guard, store, clock, findings, make_sender, auth
+) -> None:
+    def broken(day):
+        raise RuntimeError("Abrechnung weg")
+
+    app = make_client(
+        ops_router(
+            live=live,
+            guard=guard,
+            sources=[],
+            decisions=store,
+            clock=clock,
+            findings=findings,
+            report=make_sender(summary=broken),
+        )
+    )
+    login_as(app, auth, "viewer")
+    response = app.get("/api/ops/findings?days=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"] is None
+    assert [d["day"] for d in body["days"]] == ["2026-10-08", "2026-10-07"]

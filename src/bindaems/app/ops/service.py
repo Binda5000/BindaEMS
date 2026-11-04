@@ -375,6 +375,8 @@ class ReportSender:
         self._notifier = notifier
         self._sleep = sleep
         self._retry_at: datetime | None = None
+        # (Tag, Modus, Uhrzeit), für die ein ruhiger Tag im Modus ``findings`` schon feststeht
+        self._quiet: tuple[date, str, str] | None = None
 
     def text(self, day: date) -> str:
         """Der Bericht über ``day`` mit dem Stand von jetzt (blockierend: Datenbank)."""
@@ -405,12 +407,15 @@ class ReportSender:
         if self._retry_at is not None and now < self._retry_at:
             return
         day = local.date() - timedelta(days=1)
+        if self._quiet == (day, mode.report, mode.report_at):
+            return
         if await asyncio.to_thread(self._sent, day):
             return
         found = self._findings.day(day)
         if found is None:
             found = await self._findings.run_day(day)
         if mode.report == "findings" and not any(item.level == "warn" for item in found):
+            self._quiet = (day, mode.report, mode.report_at)  # nicht jede Minute neu lesen
             return
         text = await asyncio.to_thread(self.text, day)
         if await self._notifier.report(text):

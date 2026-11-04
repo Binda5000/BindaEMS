@@ -330,8 +330,11 @@ async def test_report_sent_once_per_day_across_restart(
 
 async def test_report_computes_a_missing_day_first(make_sender, ha_calls, engine) -> None:
     await make_sender().check()
-    assert "Keine Auffälligkeiten" in ha_calls.reports[0] or "Auffälligkeit" in ha_calls.reports[0]
-    assert "noch nicht gerechnet" not in ha_calls.reports[0]
+    assert ha_calls.reports[0] == (
+        "Donnerstag 8.10.: Netzbezug 14,2 kWh (geplant 9,8), "
+        "davon Netzladen 4,4 kWh (geplant 0,0). Kosten 3,12 €, Ersparnis 1,85 €. "
+        "Monatsspitze 9,1 kW. Keine Auffälligkeiten. Betriebscheck jetzt: alles in Ordnung."
+    )
     assert report_sent_at(engine) is not None
 
 
@@ -447,3 +450,21 @@ class StatsStub:
             "energy": {"import_kwh": 14.2},
             "money": {"net_eur": 3.12, "savings_no_plant_eur": 1.85},
         }
+
+
+async def test_findings_mode_decides_a_quiet_day_once(
+    make_sender, ha_calls, engine, settings_service, monkeypatch
+) -> None:
+    set_ops(settings_service, report="findings")
+    with engine.begin() as conn:
+        conn.execute(insert(ops_day).values(day=DAY.isoformat(), computed_at=SENT))
+    sender = make_sender()
+    reads = []
+    original = sender._sent
+    monkeypatch.setattr(sender, "_sent", lambda day: reads.append(day) or original(day))
+    for _ in range(3):
+        await sender.check()
+    assert len(reads) == 1  # die anderen Minuten merken sich „ruhig“
+    set_ops(settings_service, report="daily")  # anderer Modus: neu entscheiden
+    await sender.check()
+    assert len(ha_calls.reports) == 1
