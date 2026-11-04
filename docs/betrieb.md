@@ -5658,7 +5658,8 @@ sanft, **auch bei ausgeschaltetem „Netzladen erlaubt“**:
   Netzladesetpoint minus Hauslast; über den Horizont höchstens die Lücke bis zur Reserve. Es zählt
   wie Netzladen zum Netzbezug, zur Monatsspitze und zur Grenze je Phase und kostet den Bezugspreis,
   ohne Marge. Lädt die PV den Akku im Horizont bis zur Reserve, kommt nichts aus dem Netz (PV kostet
-  nichts); sonst nimmt der Plan die billigsten Slots.
+  nichts); sonst nimmt der Plan die billigsten Slots. Nachgeladenes trägt keinen Restwert: Ein
+  billiger Slot unter dem Restwert ist kein Grund, über die Lücke hinaus oder statt der PV zu laden.
 - **Was nachgeladen ist, bleibt im Akku:** Der Plan entlädt es nicht wieder (danach `Halten`), sonst
   wäre es Netzladen am Schalter vorbei. Die Spread-Regel gilt nicht (kein Befund „rechnet sich
   nicht“), und Regel R sieht den Akku an der Reserve als leer: Nach dem Nachladen darf die PV

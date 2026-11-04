@@ -1,7 +1,13 @@
 import type { LineSeriesOption } from 'echarts/charts';
 import { expect, it, vi } from 'vitest';
 import type { Palette } from '$lib/charts/palette';
-import { intentEndingAt, planPriceOption, planSocOption, planVehiclesOption } from './chart';
+import {
+	chargeLegendName,
+	intentEndingAt,
+	planPriceOption,
+	planSocOption,
+	planVehiclesOption
+} from './chart';
 import { slotEndSocPoints } from '$lib/charts/options';
 import { formatTime } from '$lib/format';
 import { NOW, PLAN, planWithWindows } from '$lib/testing/plan';
@@ -263,6 +269,27 @@ it('nennt in der Legende nur Absichten, die der Plan hat', () => {
 	expect(option.series.map((s) => s.name)).not.toContain('Halten');
 	const none = planSocOption(PLAN, NOW, palette) as SocOption;
 	expect(none.legend.data).toEqual(['Geplanter SOC', 'Reserve']);
+});
+
+it('nennt die Netzladen-Fläche „Nachladen“, wenn der Plan nur auf die Reserve nachlädt', () => {
+	const charging = planWithWindows().slots.filter((s) => s.intent === 'NETZLADEN');
+	expect(charging.length).toBeGreaterThan(1);
+	const only = planWithWindows().slots.map((s) =>
+		s.intent === 'NETZLADEN' ? { ...s, reserve_recharge: true } : s
+	);
+	const option = planSocOption({ ...PLAN, slots: only }, NOW, palette) as SocOption;
+	expect(option.legend.data).toContainEqual({ name: 'Nachladen', icon: 'rect' });
+	expect(option.series.map((s) => s.name)).not.toContain('Netzladen');
+	const nachladen = option.series.find((s) => s.name === 'Nachladen');
+	expect(nachladen?.markArea?.data).toHaveLength(1);
+	// gemischt: beide Namen an einem Chip
+	const first = charging[0]!.start;
+	const mixed = planWithWindows().slots.map((s) =>
+		s.intent === 'NETZLADEN' && s.start === first ? { ...s, reserve_recharge: true } : s
+	);
+	const both = planSocOption({ ...PLAN, slots: mixed }, NOW, palette) as SocOption;
+	expect(both.legend.data).toContainEqual({ name: 'Netzladen und Nachladen', icon: 'rect' });
+	expect(chargeLegendName(planWithWindows().slots)).toBe('Netzladen');
 });
 
 it('intentEndingAt nennt die Absicht des Slots, der an der Zeit endet, mit seiner Zeitspanne', () => {

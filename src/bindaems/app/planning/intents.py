@@ -26,7 +26,7 @@ from bindaems.app.planning.optimizer import (
     ev_battery_power_w,
     ev_power_w,
     grid_charge_cap_w,
-    recharge_cap_w,
+    recharge_caps_w,
 )
 from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
@@ -96,6 +96,7 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     params = params_of(inputs)
     slots = sim_slots(inputs, ev_w, ev_battery_w)
     soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    recharge_caps = recharge_caps_w(inputs)
     intents: list[BatteryIntent] = []
     # Absicht je Slot, wenn das Netzladen sich nicht rechnet: nach der Regel ohne Netzladen, mit
     # dem Nachladen auf die Reserve allein, wenn es eines gibt
@@ -112,7 +113,7 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
             plain.append(BatteryIntent())
         soc_kwh = flows.soc_end_kwh
         recharge = flows.gr_b < GRID_CHARGE_MIN_W
-        recharge_w = recharge_cap_w(inputs, index)
+        recharge_w = recharge_caps[index]
         if flows.gr_r >= GRID_CHARGE_MIN_W and not recharge:
             alone = _grid_charge(flows.gr_r, recharge_w, reserve_recharge=True)
             plain[-1] = alone or plain[-1]

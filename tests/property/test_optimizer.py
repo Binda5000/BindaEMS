@@ -32,7 +32,7 @@ from tests.plan_helpers import planned_car, scenario, state
 from bindaems.app.planning.battery_model import SLOT_H, params_of, reserve_kwh, sim_slots
 from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, solve
+from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, recharge_caps_w, solve
 from bindaems.app.planning.vehicles import (
     PlanVehicleInput,
     grid_allowed,
@@ -123,13 +123,24 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
     params = params_of(inputs)
     empty_kwh = reserve_kwh(inputs)  # Leer-Grenze von R1 ist die Reserve (Entscheidung 9)
     sims = sim_slots(inputs)
+    # Nachladen auf die Reserve (Entscheidung 9): nur unter der Reserve, je Slot höchstens
+    # ``recharge_cap_w``, und was nachgeladen ist, bleibt im Akku
+    recharge_caps = recharge_caps_w(inputs)
+    below_reserve = inputs.battery.soc_pct < inputs.battery.reserve_pct
+    recharged_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     for index, (slot, flow) in enumerate(zip(inputs.slots, result.flows, strict=True)):
         bt_ev = sum(flow.ev_battery.values())
         assert params.lo_kwh - 0.01 <= flow.soc_end_kwh <= params.hi_kwh + 0.01
+        assert flow.gr_r <= recharge_caps[index] + 1
+        if below_reserve:
+            recharged_kwh += params.eta_ch * flow.gr_r * _KWH
+            assert flow.soc_end_kwh >= recharged_kwh - 1e-3
+        else:
+            assert flow.gr_r == 0
         assert flow.pv_x <= slot.pv_w + 1
         assert flow.gr_h + flow.bt_h <= max(0.0, slot.load_w - slot.pv_w) + 1
         assert flow.bt_h + bt_ev <= sims[index].max_discharge_w + 1
-        assert min(flow.pv_b + flow.gr_b, flow.bt_h + bt_ev) <= 1
+        assert min(flow.pv_b + flow.gr_b + flow.gr_r, flow.bt_h + bt_ev) <= 1
         if not inputs.planning.grid_charge_allowed:
             assert flow.gr_b == 0
         if not inputs.planning.car_battery_allowed:
@@ -149,7 +160,7 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
         pv_ev = sum(pv for pv, _ in flow.ev.values())
         gr_ev = sum(grid for _, grid in flow.ev.values())
         assert flow.pv_h + pv_ev + flow.pv_b + flow.pv_x <= slot.pv_w + 1
-        assert flow.gr_h + flow.gr_b + gr_ev <= inputs.battery.grid_max_import_w + 1
+        assert flow.gr_h + flow.gr_b + flow.gr_r + gr_ev <= inputs.battery.grid_max_import_w + 1
         if gr_ev > 1 or bt_ev > 1:
             assert flow.pv_b + flow.pv_x <= 1
         limit_w = inputs.battery.grid_phase_import_w
@@ -161,7 +172,7 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
                     * phase_shares(car.grid_phases).get(phase, 0.0)
                     for car in inputs.vehicles
                 )
-                assert (flow.gr_h + flow.gr_b) / 3 + cars_w <= room_w + 1
+                assert (flow.gr_h + flow.gr_b + flow.gr_r) / 3 + cars_w <= room_w + 1
     for car in inputs.vehicles:
         charged = [
             sum(flow.ev.get(car.key, (0.0, 0.0))) + flow.ev_battery.get(car.key, 0.0)

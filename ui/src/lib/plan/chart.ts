@@ -17,7 +17,7 @@ import {
 import type { Palette } from '$lib/charts/palette';
 import { NBSP, expectedLabel, formatCt, formatNumber, formatTime } from '$lib/format';
 import { parseIso } from '$lib/time';
-import { INTENT_LABELS, intentLabel } from './model';
+import { INTENT_LABELS, RESERVE_RECHARGE_LABEL, intentLabel } from './model';
 
 type Point = [number, number | null];
 
@@ -169,6 +169,18 @@ export function intentEndingAt(
 		: null;
 }
 
+/**
+ * Name des Chips der Netzladen-Fläche: „Nachladen“, wenn der Plan nur auf die Reserve nachlädt
+ * (`reserve_recharge`), „Netzladen und Nachladen“, wenn er beides hat, sonst „Netzladen“.
+ */
+export function chargeLegendName(slots: PlanSlot[]): string {
+	const charging = slots.filter((slot) => slot.intent === 'NETZLADEN');
+	const recharging = charging.filter((slot) => slot.reserve_recharge).length;
+	if (recharging === 0) return INTENT_LABELS.NETZLADEN;
+	if (recharging === charging.length) return RESERVE_RECHARGE_LABEL;
+	return `${INTENT_LABELS.NETZLADEN} und ${RESERVE_RECHARGE_LABEL}`;
+}
+
 export function planSocOption(plan: Plan, nowIso: string, palette: Palette): EChartsCoreOption {
 	const { xAxis, now } = timeAxis(plan, nowIso, palette);
 	const colors = { NETZLADEN: palette.importPrice, HALTEN: palette.pv };
@@ -220,9 +232,9 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 	// hängen an der Reihe ihres Chips, ein Tipp blendet sie also mit aus
 	for (const intent of ['NETZLADEN', 'HALTEN'] as const) {
 		if (!plan.slots.some((slot) => slot.intent === intent)) continue;
-		const name = INTENT_LABELS[intent];
+		const name = intent === 'NETZLADEN' ? chargeLegendName(plan.slots) : INTENT_LABELS[intent];
 		series.push({
-			id: `legend_${name.toLowerCase()}`,
+			id: `legend_${intent.toLowerCase()}`,
 			name,
 			type: 'line',
 			data: [],
@@ -236,7 +248,7 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 	const format = axisTooltip({
 		'Geplanter SOC': socFormat,
 		Reserve: socFormat,
-		Netzladen: null,
+		[chargeLegendName(plan.slots)]: null,
 		Halten: null
 	});
 	return {

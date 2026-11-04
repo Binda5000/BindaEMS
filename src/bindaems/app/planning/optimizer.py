@@ -46,8 +46,10 @@ Phasengrenze und kostet den Bezugspreis ohne Marge, setzt aber kein ``z_t`` (Reg
 die Lücke bis zur Reserve wird nachgeladen (``Σ η_ch · gr_r · Δ ≤ Reserve − SOC₀``), und was
 nachgeladen ist, verlässt den Akku nicht (``s_t ≥ SOC₀ + Σ_{τ≤t} η_ch · gr_r_τ · Δ``), sonst wäre
 es Netzladen am Schalter vorbei. Ziel ist ``s_T + short_r ≥ Reserve`` am Horizontende,
-``short_r`` kostet ``SHORTFALL_CT`` je kWh; PV in den Akku bleibt vorrangig, weil sie nichts
-kostet. Mit dem Schalter lädt ein Slot zusammen höchstens ``GC_t`` (``gr_b + gr_r ≤ GC_t``).
+``short_r`` kostet ``SHORTFALL_CT`` je kWh; Nachgeladenes trägt keinen Restwert
+(``+ Restwert · Σ η_ch · gr_r · Δ``), sonst lohnte ``gr_r`` auch über der Reserve oder wenn die
+PV sie füllt. PV in den Akku bleibt vorrangig, weil sie nichts kostet. Mit dem Schalter lädt ein
+Slot zusammen höchstens ``GC_t`` (``gr_b + gr_r ≤ GC_t``).
 
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
@@ -174,15 +176,25 @@ def _grid_charge_cap_w(inputs: PlanInputs, slot: SimSlot) -> float:
 def recharge_cap_w(inputs: PlanInputs, index: int) -> float:
     """Höchstes Nachladen auf die Reserve im Slot ``index`` (Entscheidung 9): ``min(
     RESERVE_RECHARGE_MAX_W, Ladeleistung, höchster Sollwert − Last)``, unabhängig vom Schalter; 0,
-    wenn der SOC zu Beginn nicht unter der Reserve liegt."""
+    wenn der SOC zu Beginn nicht unter der Reserve liegt. Für alle Slots ``recharge_caps_w``."""
+    if not _below_reserve(inputs):
+        return 0.0
     return _recharge_cap_w(inputs, sim_slots(inputs)[index])
 
 
+def recharge_caps_w(inputs: PlanInputs) -> list[float]:
+    """``recharge_cap_w`` aller Slots in einem Zug; ohne SOC unter der Reserve lauter 0."""
+    if not _below_reserve(inputs):
+        return [0.0] * len(inputs.slots)
+    return [_recharge_cap_w(inputs, slot) for slot in sim_slots(inputs)]
+
+
+def _below_reserve(inputs: PlanInputs) -> bool:
+    return inputs.battery.soc_pct < inputs.battery.reserve_pct
+
+
 def _recharge_cap_w(inputs: PlanInputs, slot: SimSlot) -> float:
-    battery = inputs.battery
-    if battery.soc_pct >= battery.reserve_pct:
-        return 0.0
-    setpoint_w = battery.max_grid_charge_setpoint_w
+    setpoint_w = inputs.battery.max_grid_charge_setpoint_w
     return min(RESERVE_RECHARGE_MAX_W, slot.max_charge_w, max(0.0, setpoint_w - slot.load_w))
 
 
@@ -306,8 +318,8 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     gr_b = [var("gr_b", t, caps[t]) for t in range(count)]
     # Nachladen auf die Reserve (Entscheidung 9): nur unter der Reserve, auch ohne Schalter
     reserve = reserve_kwh(inputs)
-    below_reserve = battery.soc_pct < battery.reserve_pct
-    recharge_caps = [_recharge_cap_w(inputs, sim) for sim in slots]
+    below_reserve = _below_reserve(inputs)
+    recharge_caps = [_recharge_cap_w(inputs, sim) if below_reserve else 0.0 for sim in slots]
     gr_r = {t: var("gr_r", t, cap) for t, cap in enumerate(recharge_caps) if cap > 0}
     # Netz in den Akku je Slot: Netzladen und Nachladen
     to_battery = [gr_b[t] + gr_r[t] if t in gr_r else gr_b[t] for t in range(count)]
@@ -482,7 +494,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             terms.append(_KWH * planning.inertia_ct * dev)
 
     if below_reserve:
-        _add_recharge(prob, terms, soc, gr_r, soc0, reserve, params.eta_ch)
+        _add_recharge(prob, terms, soc, gr_r, soc0, reserve, params.eta_ch, inputs.end_value_ct)
 
     for c in cars:
         terms.append(SHORTFALL_CT * c.short + R2_CT * c.rho)
@@ -541,17 +553,21 @@ def _add_recharge(
     soc0: float,
     reserve: float,
     eta_ch: float,
+    end_value_ct: float,
 ) -> None:
     """Bedingungen und Ziel des Nachladens auf die Reserve (Entscheidung 9), nur bei ``SOC₀`` unter
     der Reserve: Höchstens die Lücke bis zur Reserve wird nachgeladen (``nachladen_menge``), das
     Nachgeladene bleibt im Akku (``nachgeladen_t`` über die Summe ``r_t`` bis Slot t), und am
     Horizontende steht der Akku an der Reserve oder es fehlt ``short_r`` (``SHORTFALL_CT`` je kWh).
+
+    Nachgeladenes trägt keinen Restwert: ``+ end_value_ct · Σ η_ch · gr_r · Δ`` hebt den Anteil an
+    ``− end_value_ct · s_T`` auf. Sonst lohnte ``gr_r``, sobald ``import_ct < η_ch · Restwert``, und
+    wäre Netzladen am Schalter vorbei, auch wenn die PV die Reserve füllt.
     """
     if gr_r:
-        prob += (
-            pulp.lpSum(eta_ch * _KWH * g for g in gr_r.values()) <= reserve - soc0,
-            "nachladen_menge",
-        )
+        recharged = pulp.lpSum(eta_ch * _KWH * g for g in gr_r.values())
+        prob += recharged <= reserve - soc0, "nachladen_menge"
+        terms.append(end_value_ct * recharged)
         total: Any = 0  # nachgeladene Energie bis Slot t in kWh
         for t in range(min(gr_r), len(soc)):
             if t in gr_r:

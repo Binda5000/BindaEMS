@@ -1089,9 +1089,10 @@ def _below_reserve(
     pv: list[float] | None = None,
     battery: BatteryState | None = None,
     vehicles: list[PlanVehicleInput] | None = None,
+    end_value_ct: float = 0.0,
 ) -> PlanInputs:
-    """Akku 96 kWh, Reserve 20 %, SOC 16 %, Haus 600 W, ohne PV; 24 Slots zu 30 ct, Slot 4 und 5
-    zu 10 ct. Es fehlen 3,84 kWh bis zur Reserve, gut fünf Slots mit 3 kW."""
+    """Akku 96 kWh, Reserve 20 %, SOC 16 %, Haus 600 W, ohne PV und ohne Restwert; 24 Slots zu
+    30 ct, Slot 4 und 5 zu 10 ct. Es fehlen 3,84 kWh bis zur Reserve, gut fünf Slots mit 3 kW."""
     prices = prices if prices is not None else [30.0] * 4 + [10.0] * 2 + [30.0] * 18
     return scenario(
         prices=prices,
@@ -1101,14 +1102,21 @@ def _below_reserve(
         grid_charge=grid_charge,
         battery=battery or state(usable_kwh=_BIG_KWH),
         vehicles=vehicles,
+        end_value_ct=end_value_ct,
     )
 
 
-def test_recharge_to_reserve_with_switch_off() -> None:
-    inputs = _below_reserve()
+@pytest.mark.parametrize("end_value_ct", [0.0, 25.0])
+def test_recharge_to_reserve_with_switch_off(end_value_ct: float) -> None:
+    # Mit Restwert genauso: Nachgeladenes trägt keinen Restwert, der Plan lädt bis zur Reserve
+    inputs = _below_reserve(end_value_ct=end_value_ct)
     result = solve(inputs)
     assert result.status == "optimal"
     assert all(f.gr_b == 0 for f in result.flows)
+    # genau die Lücke bis zur Reserve, nie darüber
+    recharged = sum(params_of(inputs).eta_ch * f.gr_r * SLOT_KWH for f in result.flows)
+    assert recharged == pytest.approx(_RESERVE_KWH - 0.16 * _BIG_KWH, abs=0.01)
+    assert result.flows[-1].soc_end_kwh == pytest.approx(_RESERVE_KWH, abs=0.01)
     intents = derive_intents(inputs, result)
     charging = [i for i in intents if i.kind is BatteryIntentKind.NETZLADEN]
     assert charging and all(i.reserve_recharge for i in charging)
@@ -1141,15 +1149,31 @@ def test_no_recharge_at_or_above_reserve() -> None:
         )
 
 
-def test_pv_refills_before_grid_recharge() -> None:
-    # 24 Slots Nacht, dann 16 Slots mit 4 kW PV: 3,4 kW Überschuss füllen die Reserve umsonst
+@pytest.mark.parametrize("end_value_ct", [0.0, 25.0])
+def test_pv_refills_before_grid_recharge(end_value_ct: float) -> None:
+    # 24 Slots Nacht, dann 16 Slots mit 4 kW PV: 3,4 kW Überschuss füllen die Reserve umsonst.
+    # Auch mit Restwert über dem Preis der billigen Slots lädt der Plan nicht aus dem Netz nach.
     prices = [30.0] * 4 + [10.0] * 2 + [30.0] * 34
-    inputs = _below_reserve(prices=prices, pv=[0.0] * 24 + [4000.0] * 16)
+    inputs = _below_reserve(prices=prices, pv=[0.0] * 24 + [4000.0] * 16, end_value_ct=end_value_ct)
     result = solve(inputs)
     assert result.status == "optimal"
     assert sum(f.gr_r for f in result.flows) < 1
     assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in derive_intents(inputs, result))
     assert result.flows[-1].soc_end_kwh >= _RESERVE_KWH - 0.01
+
+
+def test_no_recharge_above_reserve_for_end_value() -> None:
+    # Die PV füllt den Akku tagsüber über die Reserve, danach kommt ein Slot zu 5 ct: Ohne
+    # Schalter lädt der Plan dort nicht nach, auch wenn der Restwert (25 ct) mehr wert ist.
+    prices = [30.0] * 24 + [30.0] * 16 + [5.0] * 4 + [30.0] * 4
+    pv = [0.0] * 24 + [8000.0] * 16 + [0.0] * 8
+    inputs = _below_reserve(prices=prices, pv=pv, end_value_ct=25.0)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert sum(f.gr_r for f in result.flows) < 1
+    intents = derive_intents(inputs, result)
+    assert not any(i.reserve_recharge for i in intents)
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in intents)
 
 
 @pytest.mark.parametrize("grid_charge", [False, True])

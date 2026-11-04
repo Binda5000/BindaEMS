@@ -38,7 +38,7 @@ from bindaems.app.planning.battery_model import (
 )
 from bindaems.app.planning.grid_phases import PHASES, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.optimizer import grid_charge_cap_w, recharge_cap_w
+from bindaems.app.planning.optimizer import grid_charge_cap_w, recharge_caps_w
 from bindaems.app.planning.plausibility import (
     R1_TOL_KWH,
     SOC_TOL_KWH,
@@ -277,6 +277,7 @@ def _recharge(
 
     if inputs.battery.soc_pct >= inputs.battery.reserve_pct or not window:
         return intents
+    caps_w = recharge_caps_w(inputs)
     steps = run(intents)
     for candidate in sorted(window, key=lambda index: (inputs.slots[index].import_ct, index)):
         missing = missing_kwh(steps)
@@ -286,7 +287,7 @@ def _recharge(
             continue
         cap_w = min(
             RESERVE_RECHARGE_MAX_W,
-            recharge_cap_w(inputs, candidate),
+            caps_w[candidate],
             _grid_headroom_w(inputs, ev_w, slots, steps, candidate),
         )
         need_w = missing / params.eta_ch / SLOT_H * 1000
