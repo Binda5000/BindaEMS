@@ -421,7 +421,7 @@ class ReportSender:
             return
         if await asyncio.to_thread(self._sent, day):
             return
-        found = self._findings.day(day)
+        found = await asyncio.to_thread(self._findings.day, day)
         if found is None:
             found = await self._findings.run_day(day)
         if mode.report == "findings" and not any(item.level == "warn" for item in found):

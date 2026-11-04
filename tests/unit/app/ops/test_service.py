@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -468,3 +469,22 @@ async def test_findings_mode_decides_a_quiet_day_once(
     set_ops(settings_service, report="daily")  # anderer Modus: neu entscheiden
     await sender.check()
     assert len(ha_calls.reports) == 1
+
+
+async def test_report_reads_the_findings_off_the_event_loop(
+    make_sender, findings, ha_calls, engine, monkeypatch
+) -> None:
+    # die Datenbank blockiert: wie die übrigen Abfragen im Thread, nicht in der Ereignisschleife
+    warn_day(engine)
+    loop_thread = threading.current_thread()
+    threads: list[threading.Thread] = []
+    read = findings.day
+
+    def day(value: date) -> Any:
+        threads.append(threading.current_thread())
+        return read(value)
+
+    monkeypatch.setattr(findings, "day", day)
+    await make_sender().check()
+    assert len(ha_calls.reports) == 1
+    assert threads and loop_thread not in threads
