@@ -2105,8 +2105,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       und unter **Entwicklerwerkzeuge → YAML** die Automationen neu laden (`LIESMICH.md` dort, „Aktualisieren“). Beim Anstecken kommt
       „🔌 <Auto> angesteckt · <SOC> %“ mit Kosten je Modus und Knöpfen; ein Tipp auf einen Modus stellt den Lademodus um und ersetzt die Meldung
       durch „✅ <Auto> lädt jetzt „…““, im Änderungsprotokoll steht `home-assistant`. In HA gibt es je Auto den Sensor „Ladeschätzung“. Lädt das
-      Auto gleich los, ersetzt „⚡ lädt“ die Meldung mit den Knöpfen nach „Ladung gestartet nach“ (Standard 2 min); dann den Wert höher setzen oder
-      „Ladung gestartet“ abwählen (`LIESMICH.md`). Zurück: `bindaems_benachrichtigungen-2026-10-27.yaml` zurückkopieren; mit einem älteren Image
+      Auto gleich los, trägt das erste „⚡ lädt“ (es ersetzt die Meldung nach „Ladung gestartet nach“) dieselben Knöpfe und Kosten. Zurück: `bindaems_benachrichtigungen-2026-10-27.yaml` zurückkopieren; mit einem älteren Image
       verschwindet der Sensor (verwaiste Entität in HA löschen).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
