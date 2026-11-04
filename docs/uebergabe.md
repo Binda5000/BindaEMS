@@ -289,6 +289,21 @@ Reserve, lädt der Planer selbst sanft nach (höchstens 3 kW je Slot, auch bei a
 Betrieb: `docs/betrieb.md`, „Planung“, „Wie ein Plan entsteht“ („Nachladen auf die Reserve“), „Autos im Plan“, „Netzladen erlaubt“, „Einstellungen
 „Planung““, „Budget“, „Ersatzplan“ und „15-min-Wächter“; Spec: „Stand Plan Netzgrenze je Phase“ in 9.3 und 9.4.
 
+**Stand Unwetter-Reserve (4.11.2026):** Plan `docs/superpowers/plans/2026-11-04-unwetter-reserve.md` (Entscheidungen 1 bis 13; Ziel 40 % und
+ab Orange als Standard, beides im UI einstellbar, Wunsch des Betreibers vom 4.11.2026), Branch `claude/project-thread-74t3bg`, **noch nicht auf
+`main`**, **nicht ausgerollt**. Die sechs Tasks sind umgesetzt, 1 bis 5 je Task geprüft; der Review von Task 6 und der Gesamtreview stehen aus. Während einer amtlichen
+Unwetterwarnung von GeoSphere Austria (Warn-API `getWarningsForCoords`, alle 15 min, nur mit Schalter) hält der Planer den Akku von einer Stunde
+vor Beginn bis zum Ende mindestens auf dem Ziel (`planning.storm`: Schalter ab Werk aus, Ziel 40 %, ab Orange, Sturm und Gewitter) und lädt vorher
+dafür auf: PV zuerst, sonst höchstens 3 kW aus dem Netz, auch bei ausgeschaltetem „Netzladen erlaubt“; das Aufgeladene bleibt bis zum Ende des
+letzten Fensters im Akku. Die Untergrenze ist weich (200 ct je kWh und Slot), die USV-Reserve bleibt hart, an Victron geht kein neuer Min-SOC.
+Dazu: Auslöser `storm`, Befund „Akku entlädt um HH:MM unter die Unwetter-Reserve“, Ersatzplan lädt vor dem Fenster auf und hält, Grundcode
+`UNWETTER_RESERVE`, Komponente „Unwetterwarnungen“, HA-Sensor `sensor.bindaems_unwetter_reserve`, im UI der Abschnitt „Unwetter-Reserve“ unter
+„Planung“ und im Zeitplan die Zeile „Unwetterwarnung: Gewitter (orange) 14:00–16:00“ und die angehobene Reserve-Linie. **Nur Code der app**
+(keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`); ausgerollt wird nach Entscheidung 13 (unten, „Offen an der Anlage“, Punkt 20).
+Betrieb: `docs/betrieb.md`, „Planung“, „Unwetter-Reserve“, dazu „Einstellungen „Planung““, „Auslöser“, „Ersatzplan“, „Erklärungen“, „Home
+Assistant“ und Abschnitt 4 („Rollback auf einen Stand vor der Unwetter-Reserve“); Spec: 6.10 „GeoSphere Warn-API“ und „Stand Plan
+Unwetter-Reserve“ in 9.3, 9.4 und 9.6. Rulings und aufgeschobene Kleinigkeiten stehen unter „Bewusst offen gelassen“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2103,6 +2118,18 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       **Rückweg nur mit `ems-core` und `ems-app` zusammen:** Der neue core schreibt `reserve_recharge` in jeden Plan-Slot der `intent.json`; ein
       alter core liest sie nicht (`extra="forbid"`) und startet ohne Absicht (Alarm `intent.file` „Gespeicherte Absicht unlesbar“, Regelbetrieb aus),
       bis die alte app die nächste Absicht sendet (oder das Feld per Skript aus `intent.json` entfernt ist, ebenda). Ein alter core mit der neuen app lehnt jede Absicht ab.
+  20. **Unwetter-Reserve ausrollen** (Entscheidung 13): nach den Abnahmen, **nicht vor dem 23.11.2026**, mit oder nach Stufe 2 (Punkt 19),
+      `ems-core` **und** `ems-app` zusammen wie immer, mit dem nächsten Sammel-Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`),
+      **nie allein**; wann, entscheidet der Betreiber. Der core bekommt keinen geänderten Code; **keine Migration, keine ACL-Zeile, keine
+      Änderung an `config.yaml`**, an der Anlage ist nichts umzustellen (die Warn-API braucht keinen Schlüssel, `site.location` steht schon in
+      `config.yaml`). Der Schalter „Unwetter-Reserve“ ist **ab Werk aus**; Binda schaltet ihn vor der Gewittersaison ein (bis April), unter
+      **Einstellungen** → „Bearbeiten“ → „Planung“ → „Unwetter-Reserve“. Danach auf **System** die Komponente „Unwetterwarnungen“ ansehen
+      („keine Warnung“ oder „Gewitter (orange) bis HH:MM“, nicht „Warnungen seit HH:MM nicht abrufbar“). Bei der ersten passenden Warnung im
+      **Zeitplan** beobachten: Kopfzeile „Unwetterwarnung: …“, vorher „Nachladen 3 kW“ höchstens bis zur Untergrenze, im Fenster der Satz
+      „Unwetter-Reserve: … der Akku hält mindestens 40 %.“ und kein Akku ins Auto; in HA zeigt „Unwetter-Reserve“ die Untergrenze. Wirken
+      kann sie nur mit Victron live und Regelbetrieb an. Ein älteres Image liest Einstellungsversionen mit `planning.storm` und Pläne mit dem
+      Auslöser `storm` nicht (`extra="forbid"`); vor einem Rollback exportieren, den Block `storm:` löschen und danach importieren
+      (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor der Unwetter-Reserve“).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -4166,3 +4193,57 @@ Fix-Welle erledigt.
   bewusst keine Migration vor; eine Migration mit Downgrade wie `0013` könnte den Schalter beim Zurückführen aus den
   Einstellungen nehmen. Im Betriebshandbuch stand bei `ZIEL_SOC_ABFAHRT`, „kW“ sei die Netzleistung; es ist die ganze
   Ladeleistung des Autos (seit Plan 4b so), jetzt richtiggestellt.
+
+Entschieden in Plan „Unwetter-Reserve“ (Rulings des Controllers bei der Umsetzung; die, die das Verhalten ändern, stehen auch in der Spec,
+9.3, 9.4 und 9.6, „Stand Plan Unwetter-Reserve“):
+
+- **R6 (Regel R1):** Nachladen und Aufladen für die Unwetter-Reserve setzen kein `z_t`; `_keep_rule_r1` und die R1-Prüfung der
+  Plausibilität werten Energie über der Reserve aus dem Aufladen nicht als Verletzung. Kosten, falls falsch: Nach einer Warnung kann
+  Netzstrom aus dem Akku indirekt PV ins Netz drücken (kleiner Betrag).
+- **R7 (Autos):** Gibt es im Lauf Aufladen für die Unwetter-Reserve, plant der Optimierer kein Akku ins Auto (`bt_ev = 0` im ganzen
+  Horizont), damit der Befund `car_grid` den Plan nicht in den Ersatzplan schiebt und Regel R2 ohne Binärvariable hält.
+- **R9 (Aufgeladenes bleibt):** Das Aufgeladene bleibt bis zum letzten Slot mit Untergrenze im Akku (gemeinsame Bedingung mit dem
+  Nachladen), sonst wäre Netzladen am Schalter vorbei für Preisarbitrage möglich.
+- **R10 (Ersatzplan):** Der Ersatzplan hält schon ab Slot 0 nicht unter die Untergrenze des nächsten Fensters.
+- **R11 (Absichten):** Eine Teilentladung in einem Slot mit Untergrenze wird `HALTEN`; sonst fielen einzelne Zufallspläne durch den
+  Befund `storm` in den Ersatzplan.
+- **R12 (Anzeige):** Der Kopf des Zeitplans zeigt alle Warnungen aus `Plan.storm`, auch eine, die erst hinter dem Horizont beginnt.
+- **Ablauf ohne Wirkung auf das Verhalten:** R1 (Übergabe der Warnungen an `assemble_inputs` erst mit Task 4), R2 (der HA-Sensor rechnet
+  die Untergrenze aus Warnungen und Einstellungen, nicht aus dem Plan, und zeigt sie so auch ohne Plan), R3 (Vertragsdateien und
+  `schemas.ts` je Task minimal), R4 (lokal nur die betroffenen Testordner, die volle Suite auf der CI), R5 (Komponente `storm`, Anzeige
+  „Unwetterwarnungen“), R8 (Testzahlen eines Optimierertests).
+- **Nicht in diesem Plan** (bewusst, siehe Plan): den Victron-Min-SOC während einer Warnung anheben (Schutz auch ohne app, aber Selbsttest
+  `min_soc`, Nachladen von Victron unter Min-SOC − 5 % und Watchdog), schneller als 3 kW laden, `getGewitterAuto`, Szenario-Dateien mit
+  Warnungen für `scenario_days` (erst mit aufgezeichneten Warntagen).
+
+Aufgeschobene Kleinigkeiten aus Plan „Unwetter-Reserve“ (Deferred minors Unwetter-Reserve), aus den Reviews der Tasks 1 bis 6. Keine
+davon gefährdet die Anlage: Der Schalter ist ab Werk aus, die Untergrenze kann den Akku nur höher halten, und die USV-Reserve und die
+Safety-Schicht sind unverändert. Der Gesamtreview steht aus; Punkte, die er aufgreift, werden hier durchgestrichen.
+
+- **Quelle (Task 1):** Ein Eintrag, der kein Objekt ist und keine `warnid` hat, wird ohne Log übersprungen (`geosphere.py`, Zeile 111);
+  der Test der übersprungenen Warnungen pinnt nicht `"abc"` als Zeit, einen falschen Typ von `rawinfo`, einen Eintrag, der kein Objekt
+  ist, eine unbekannte `warnstufeid` und eine fehlende `warnid`; eine Zeit wie `"…0.0"` wird übersprungen (wie in der Doku der API).
+- **Einstellung und Fenster (Task 2):** `test_docs` übergeht die Standardwerte verschachtelter Modelle (die Zeile `planning.storm` im
+  Betriebshandbuch wird nicht gegen 40, 2 und aus geprüft); `storm/windows.py` definiert `SLOT` neu statt `shared.timeutil.SLOT`; lokale
+  Imports in `tests/unit/shared/test_settings.py`; kein Test für `min_level` 3 und leere Startzeiten.
+- **Dienst und Auslöser (Task 3):** Eine unerwartete Ausnahme in `refresh` lässt den Status grün (nur `WarningsUnavailable` setzt ihn
+  auf gestört); der Fingerabdruck ist nur nach `begin` sortiert (bei gleichem Beginn zählt die Reihenfolge der Antwort,
+  `planning/service.py` und `StormService.fingerprint`); eine Änderung von `planning.storm` löst `settings` **und** `storm` aus (ein Lauf
+  zu viel); `self._storm()` in `_watch` und `_storm_ha` in der Laufzeit haben keinen eigenen Schutz (würfen sie, stünden alle Auslöser,
+  gegen „ein Ausfall darf keinen Plan verhindern“; für den Gesamtreview markiert); `StormService.fingerprint()` ist ungenutzt, die
+  Logik steht doppelt; `suppress(CancelledError, Exception)` beim Aufräumen in `run()` kann ein äußeres Cancel schlucken; `_on_settings`
+  ändert den Zustand aus einem Worker-Thread ohne Lock (heilt sich selbst).
+- **Optimierer (Task 4):** R7 ist breiter als nötig: kein `bt_ev` im ganzen Horizont, sobald `gr_s` existiert (`SOC₀ < F_max`), auch
+  wenn der Optimierer `gr_s = 0` wählt (bewusst).
+- **Ersatzplan, Prüfung, Erklärung (Task 5):** Ein Lauf von pytest über planning, shared, docs, layout und storm in einem Aufruf gibt
+  11 Fixture-Fehler in `storm/test_service` (auch auf `3552fb1`, der Volllauf der CI ist grün; Testisolation prüfen);
+  `Plan.storm.warnings` enthält auch Warnungen ohne Fenster im Horizont, der Docstring von `PlanStorm` sagt anderes (für die Anzeige
+  gewollt, Ruling R12); der Parameter `soc` ist eine Gleitkommazahl (40.0), der Satz stimmt; `r1_applies` in der Schleife mit
+  eingeschaltetem Schalter des Ersatzplans hat keinen eigenen Test (ohne Warnung praktisch ohne Wirkung); Tests des Ersatzplans fehlen
+  für Schalter an, ein Fenster ab Slot 0 und mehrere Fenster (die Proben des Reviewers waren grün); eine kurze Zeile im Docstring von
+  `derive_intents` (`intents.py`, etwa Zeile 95).
+- **UI und Doku (Task 6):** Die Vertragsdateien haben keine Warnung (`plan.json` mit `storm: null`); Plan und Einstellungen mit Warnung
+  prüfen die Vitest-Tests mit abgewandelten Kopien und die E2E-Tests über das Demo-Backend (`tests.ui_world.demo_storm`, nur in
+  `tests.e2e.ui_server`). Der E2E-Test „System zählt die Komponenten …“ erwartete seit Task 3 noch „10 von 11 in Ordnung“ (die Komponente
+  „Unwetterwarnungen“ kam dazu), jetzt „11 von 12“. Der Kopf des Zeitplans nennt den Tag nach der Uhr des Browsers (wie die Abfahrt,
+  Ruling F-7), im Demo-Backend also mit Datum.

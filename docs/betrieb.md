@@ -256,6 +256,45 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
     geschaltet.
 
+- **Update mit der Unwetter-Reserve:** Der Plan „Unwetter-Reserve“ ändert nur Code der app (der core
+  bekommt keinen geänderten Code), es gibt keine Migration, keine Zeile in der ACL des
+  Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Ausgerollt wird trotzdem wie
+  immer `ems-core` **und** `ems-app` zusammen, mit oder nach Stufe 2 (nicht vor dem 23.11.2026), mit
+  dem nächsten Sammel-Pull (`docker compose pull && docker compose up -d`). Der Schalter ist ab Werk
+  aus; was er tut, steht im Abschnitt „Planung“, „Unwetter-Reserve“.
+- **Rollback auf einen Stand vor der Unwetter-Reserve:** Core und app gehen wie immer gemeinsam auf
+  dasselbe Tag zurück; die Absicht des core (`intent.json`) trägt nichts Neues. Zwei Stellen der app
+  tragen neue Felder, und eine ältere app lehnt unbekannte Felder ab (`extra="forbid"`):
+  - **Die Einstellungen:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `planning.storm`, auch mit ausgeschaltetem Schalter. Eine ältere app lehnt eine solche Version ab
+    und rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“). Hast du seit dem Ausrollen nichts
+    gespeichert oder importiert, ist die letzte Version noch die alte, und hier ist nichts zu tun.
+  - **Pläne und Eingangsdaten seit dem Ausrollen** tragen `storm` und je Slot `storm_reserve_pct`
+    (auch mit `null`), die Eingangsdaten die Warnungen und die Untergrenze je Slot; Pläne mit dem
+    Anlass `storm` kennt eine ältere app auch nicht. Sie überspringt diese Pläne (im Log „Plan-Zeile
+    nicht lesbar“, `code=plan_row_unreadable`), bis sie nach 30 Tagen aus der Planablage fallen; bis
+    dahin fehlt der Zeitraum im Verlauf und im Vergleich Plan gegen Ist. Daran musst du nichts tun.
+
+  So gehst du zurück:
+
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
+     den Block `storm:` löschen, samt den eingerückten Zeilen darunter (`enabled`, `target_soc_pct`,
+     `min_level`, `kinds` und die Warnarten). Gehst du zugleich hinter Netzgrenze je Phase zurück,
+     löschst du auch `peak_soft_ct_per_kw:` (nächster Punkt).
+  2. **Regelbetrieb aus** (System → „Bedienung“), wie bei jedem Wechsel des core.
+  3. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  4. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“. Bis dahin rechnet die ältere app mit den
+     Standardwerten; speichere die Einstellungen in dieser Zeit nicht von Hand. Dann den
+     **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
+
+  Hast du vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
+  gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
+  `key = "$.planning.storm"`. Die Datenbank hat keine Migration. Gehst du später wieder auf den Stand
+  mit der Unwetter-Reserve, gilt die Gruppe mit den Standardwerten (Schalter aus).
+
 - **Rollback auf einen Stand vor Netzgrenze je Phase:** Core und app gehen gemeinsam zurück, auf
   dasselbe Tag (der Plan ändert die Planprüfung im core, Task 6). Zwei Stellen tragen neue Felder, und
   ein älterer Stand lehnt unbekannte Felder ab (`extra="forbid"`):
@@ -277,7 +316,8 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 
   1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
      „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
-     die Zeile `peak_soft_ct_per_kw:` löschen. Gehst du zugleich hinter Akku ins Auto oder den
+     die Zeile `peak_soft_ct_per_kw:` löschen. Ist die Unwetter-Reserve schon ausgerollt, löschst du
+     auch den Block `storm:` (Punkt oben). Gehst du zugleich hinter Akku ins Auto oder den
      Standard-Lademodus zurück, löschst du auch deren Schlüssel (Punkte unten).
   2. **Regelbetrieb aus** (System → „Bedienung“).
   3. **Feld aus `intent.json` entfernen;** ein Slot mit Nachladen auf die Reserve wird dabei zu
@@ -1955,7 +1995,7 @@ nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“).
 
 Die Karte **Komponenten** nennt jede Komponente mit deutschem Namen („Preise“, „PV-Prognose“,
 „Lastprognose“, „Lastmodell“, „Fahrverhalten“, „Wärmemodell“, „Planer“, „Abrechnung“, „InfluxDB“,
-„Home Assistant“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
+„Home Assistant“, „Unwetterwarnungen“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
 (rot), die übrigen in der Reihenfolge der app. In der Kopfzeile der Karte steht „{x} von {n} in
 Ordnung“. Beginnt die Meldung mit dem Namen der Komponente („Fahrverhalten aktuell“), steht der Name nur
 einmal, die Meldung ohne ihn rechts („aktuell“); jede andere Meldung bleibt unverändert. Die Texte
@@ -5593,8 +5633,10 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
   „Grund: …“), „gültig bis HH:MM Uhr“ oder „Plan abgelaufen“, „Anlass“ (der Auslöser, unten), die
   „Erwarteten Kosten“ des Plans und, daneben, was „Victron allein“ im selben Zeitraum kostet. Mit
-  einem Leistungspreis kommt das „Budget“ dazu (unten). Unter „Auffälligkeiten“ stehen die Befunde
-  der Prüfung eines unplausiblen Plans. Ohne Plan steht „Noch kein Plan.“ und der Status.
+  einem Leistungspreis kommt das „Budget“ dazu (unten). Kennt der Plan Unwetterwarnungen, steht je
+  Warnung eine Zeile „Unwetterwarnung: Gewitter (orange) 14:00–16:00“ darunter (unten,
+  „Unwetter-Reserve“). Unter „Auffälligkeiten“ stehen die Befunde der Prüfung eines unplausiblen
+  Plans. Ohne Plan steht „Noch kein Plan.“ und der Status.
 - **Bedienung:** Ab „Bedienen“ gibt es den Schalter „Netzladen erlaubt“ und die Taste „Neu planen“;
   „Lesen“ sieht den Stand des Schalters als „ja“ oder „nein“. Während eines Laufs steht „Plant …“.
   Nach dem Schalten wartet die Seite auf den Plan, den die geänderte Einstellung auslöst (alle 2 s
@@ -5602,8 +5644,9 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
 - **Gültigkeit:** Ob ein Plan noch gilt, sagt allein die app (`valid` in der Antwort). Die Uhr des
   Browsers zählt nicht: Eine falsche Uhr am Handy zeigt so nie dauerhaft „Plan abgelaufen“.
 - **Diagramme:** „Preise und Prognosen“ mit den Reihen „Bezugspreis“, „Bezugspreis geschätzt“,
-  „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ und den Fenstern
-  „Netzladen“ und „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
+  „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ (im Fenster einer
+  Unwetterwarnung auf der Untergrenze der Unwetter-Reserve) und den Fenstern „Netzladen“ und
+  „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
   auf dem Handy): Die Legende nennt „Netzladen“ und „Halten“, aber nur, was der Plan hat, und der
   Tooltip eines Punktes nennt die Absicht des Slots, dessen Ergebnis der Punkt ist („Akku
   14:15–14:30: Netzladen 6,7 kW“; der SOC gilt am Ende des Slots). Alle Diagramme haben die Legende
@@ -5896,6 +5939,108 @@ bleiben, wie sie sind.
     Haus, Akku-Unterstützung und Boost frei bleibt (`battery.max_discharge_w`), zuerst Geplant,
     dann Sofort. Den Rest holt der Override aus dem Netz, und der 15-min-Wächter kann ihn drosseln.
 
+### Unwetter-Reserve
+
+Seit dem Plan „Unwetter-Reserve“ (4.11.2026, `docs/superpowers/plans/2026-11-04-unwetter-reserve.md`)
+hält der Planer den Akku während einer amtlichen Unwetterwarnung von **GeoSphere Austria** über einer
+höheren Untergrenze, damit die USV bei einem Stromausfall länger trägt, und lädt vorher dafür auf. Der
+Schalter ist **ab Werk aus**; Binda schaltet ihn vor der Gewittersaison ein (bis April).
+
+- **Quelle:** `GET https://warnungen.zamg.at/wsapp/api/getWarningsForCoords` mit `site.location` aus
+  `config.yaml` und `lang=de`, ohne Schlüssel, **alle 15 min und nur mit eingeschaltetem Schalter**
+  (beim Einschalten sofort). Beginn und Ende kommen aus den Unix-Sekunden in `rawinfo`; eine Warnung
+  ohne gültige Zeit oder mit Ende vor dem Beginn überspringt die app (im Log
+  `code=storm_warning_skipped`), die übrigen gelten. Bekannte Warnungen gelten bis zu ihrem Ende
+  weiter, auch wenn Abrufe scheitern (eine höhere Reserve ist die sichere Richtung); nur eine
+  erfolgreiche Antwort ersetzt die Liste, eine fehlende Warnung ist dann zurückgenommen. Ein- und
+  Ausschalten verwirft den alten Stand. Die Kurzfrist-Gewitterwarnung `getGewitterAuto` nutzt die app
+  nicht (ohne Beginn und Ende, zu kurz zum Laden).
+- **Welche Warnungen:** die eingestellten Warnarten ab der eingestellten Stufe (Standard Sturm und
+  Gewitter ab Orange, unten).
+- **Wann und wie hoch:** Die Untergrenze gilt am Ende jedes Slots, der die Zeit von **einer Stunde vor
+  Beginn bis zum Ende** einer passenden Warnung berührt (Warnungen beginnen unscharf); mehrere
+  Warnungen vereinigen sich, alle haben dasselbe Ziel. Wirksam ist das Ziel, höchstens `soc_max_pct`;
+  liegt es nicht über der USV-Reserve (`battery.reserve_soc_pct`), tut die Funktion nichts. Was hinter
+  dem Horizont (36 h) liegt, plant die app erst, wenn es hereinrückt.
+- **Weich, die Reserve bleibt hart:** Liegt der Akku im Fenster unter dem Ziel, kostet das im Modell
+  200 ct je kWh und Slot (1 kWh über 10 Slots so viel wie 1 kWh Fehlmenge eines Autos). So entsteht
+  auch dann ein Plan, wenn das Ziel nicht mehr zu erreichen ist (Warnung schon im Gange, Akku leer);
+  der Akku entlädt im Fenster dann nicht weiter (`Halten`). Die USV-Reserve aus `config.yaml` bleibt
+  die harte Untergrenze, und an Victron geht kein neuer Wert.
+- **Aufladen:** Liegt der SOC zu Beginn unter der höchsten Untergrenze im Horizont, darf der Plan bis
+  zum Ende des letzten Fensters aus dem Netz in den Akku laden, **auch bei ausgeschaltetem
+  „Netzladen erlaubt“**: zusammen mit dem Nachladen auf die Reserve höchstens 3 kW je Slot (oben,
+  „Wie ein Plan entsteht“), zum Bezugspreis ohne Marge, über den Horizont höchstens bis zur höchsten
+  Untergrenze. Die PV hat Vorrang, weil sie nichts kostet; sonst nimmt der Plan die billigsten Slots.
+  Von 20 auf 40 % sind das bei 96 kWh 19,2 kWh, mit 3 kW rund 7 h; was bis zum Beginn fehlt, fehlt.
+  Das Aufgeladene **bleibt bis zum Ende des letzten Fensters im Akku** (sonst wäre es Netzladen am
+  Schalter vorbei, etwa billig laden und vor der Warnung teuer entladen); danach darf das Haus es
+  verbrauchen. Es trägt keinen Restwert, setzt keine Sperre von Regel R (nach dem Fenster darf die
+  PV einspeisen) und ist im Ablauf ein „Nachladen 3 kW“ mit dem Satz von `NACHLADEN_RESERVE`; der
+  core nimmt es wie jedes Nachladen bis 3000 W auch ohne Schalter an.
+- **Autos:** Die Plan-Schwelle der Akku-Unterstützung rechnet mit der Untergrenze je Slot statt mit
+  der Reserve, „Sofort aus dem Akku“ ist in Slots mit Untergrenze aus, und solange der Plan für die
+  Warnung aufladen darf, gibt der Akku keinem Auto in „Geplant“ etwas (kein Akku ins Auto im ganzen
+  Horizont; sonst flösse Netzstrom aus dem Aufladen über den Akku ins Auto, an Regel R2 vorbei).
+- **Prüfung und Ersatzplan:** Entlädt die Nachrechnung in einem Slot mit Untergrenze (mindestens
+  100 W) und liegt am Slotende mehr als 0,5 Prozentpunkte darunter, meldet die Prüfung „Akku entlädt
+  um HH:MM unter die Unwetter-Reserve“, und es gilt der Ersatzplan; ein Ziel, das ohne Entladen nicht
+  erreicht wird, ist kein Befund. Der Ersatzplan lädt vor jedem Fenster auf und hält den Akku (unten,
+  „Ersatzplan“).
+- **Neu planen:** Ändern sich die passenden Warnungen (neu, neue Version, andere Zeit, zurückgenommen)
+  oder endet eine, plant die app mit dem Anlass „Unwetterwarnung“ (`storm`) neu; eine Änderung der
+  Einstellung löst „Einstellungen geändert“ aus.
+
+**Einstellungen** (Admins, **Einstellungen** → „Bearbeiten“ → „Planung“ → „Unwetter-Reserve“, gespeichert
+als `planning.storm`). Der Editor erklärt: „Während einer Unwetterwarnung von GeoSphere Austria hält
+der Planer den Akku mindestens auf dem Ziel und lädt ihn vorher dafür auf, zuerst mit PV, sonst mit
+höchstens 3 kW aus dem Netz, auch bei ausgeschaltetem „Netzladen erlaubt“; die USV-Reserve aus
+config.yaml bleibt die harte Untergrenze.“
+
+| Feld | Einstellung | Standard | Werte |
+|---|---|---|---|
+| Unwetter-Reserve | `enabled` | aus | aus: kein Abruf, keine Untergrenze, Status „aus“ |
+| Ziel-SOC (%) | `target_soc_pct` | 40 | ganze Zahl von 10 bis 100 („Ganze Zahl von 10 bis 100“) |
+| Warnstufe | `min_level` | ab orange (2) | „ab gelb“ (1), „ab orange“ (2), „nur rot“ (3) |
+| Warnarten | `kinds` | Sturm, Gewitter | Sturm, Regen, Schnee, Glatteis, Gewitter, Hitze, Kälte; mindestens eine („Mindestens eine Warnart wählen“) |
+
+Die Leseansicht zeigt unter „Planung“ die Zeilen „Eingeschaltet“, „Ziel-SOC“, „Warnstufe“ und
+„Warnarten“.
+
+**Im Zeitplan:** Hat der Plan Warnungen, nennt der Kopf jede in einer Zeile, „Unwetterwarnung: Gewitter
+(orange) 14:00–16:00“, auch eine, die erst hinter dem Horizont beginnt; liegt Beginn oder Ende nicht
+heute, mit „morgen“ oder Wochentag und Datum („Unwetterwarnung: Sturm (rot) morgen 06:00–10:30“). Die
+Slots im Fenster tragen den Satz von `UNWETTER_RESERVE` (unten, „Erklärungen“), und im Diagramm „Akku“
+steigt die Linie „Reserve“ im Fenster auf die Untergrenze.
+
+**Status** der Komponente „Unwetterwarnungen“ (`storm`) auf der Seite **System**:
+
+| Status | Bedeutung |
+|---|---|
+| „aus“ | der Schalter ist aus (in Ordnung) |
+| „keine Warnung“ | der letzte Abruf fand keine passende Warnung (in Ordnung) |
+| „Gewitter (orange) bis 18:00“ | passende Warnungen mit Art, Stufe und Ende, mehrere durch „; “ getrennt (in Ordnung) |
+| „Warnungen seit HH:MM nicht abrufbar“ | die Abrufe scheitern, und der letzte Erfolg (sonst der erste Versuch) liegt mehr als 1 h zurück (gestört); bekannte Warnungen gelten weiter |
+
+**Home Assistant:** Der Sensor „Unwetter-Reserve“ (`sensor.bindaems_unwetter_reserve`, unten, „Home
+Assistant“) zeigt die Untergrenze des laufenden Slots in %, ohne Warnung `0`, mit den Attributen `bis`
+(Ende des Fensters) und `warnung` (Text der Warnung). Er rechnet aus den Warnungen und den
+Einstellungen, nicht aus dem Plan, und zeigt die Untergrenze darum auch, wenn gerade kein Plan gilt.
+
+**Was die Unwetter-Reserve nicht tut:**
+
+- **Kein Victron-Min-SOC:** Der Min-SOC bleibt auf der USV-Reserve, der Selbsttest `min_soc` bleibt
+  gleich. Die Untergrenze hält allein der Plan (`Halten` und Netzladen über den core). Wirken kann sie
+  also nur, wenn Victron live ist und der Regelbetrieb an ist; im Dry-Run rechnet der core sie nur mit.
+- **Kein Schutz, wenn die app steht:** Ohne app gibt es keinen neuen Plan; der core führt den letzten
+  höchstens bis zu seinem Ende aus (`valid_until`, höchstens 45 min), danach wirkt kein Plan, und
+  Victron entlädt wieder bis zum Min-SOC. Den Min-SOC während einer
+  Warnung anzuheben, ist bewusst nicht Teil des Plans (Selbsttest, Nachladen von Victron unter
+  Min-SOC − 5 % mit voller Leistung, Watchdog); erst prüfen, wenn sich die Funktion im Sommer bewährt
+  hat.
+- **Nicht schneller als 3 kW:** Was bis zum Beginn der Warnung nicht geladen ist, fehlt.
+- **Kein Akku ins Auto**, solange der Plan für die Warnung aufladen darf (oben, „Autos“).
+
 ### Übergabe an den core
 
 Die app schickt den Plan als Teil der Absicht (Abschnitt 13, „Absicht und Regelbetrieb“), mit einer
@@ -5973,7 +6118,7 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 | `planning.end_value_factor` | Vorsichtsfaktor Restwert | 0,9 | bewertet die Energie im Akku am Horizontende (oben) |
 | `planning.inertia_ct` | Planträgheit (ct/kWh) | 0,5 | Kosten je kWh Abweichung der Akkuleistung vom vorigen Plan, in den ersten vier Slots |
 | `planning.peak_soft_ct_per_kw` | Spitze vermeiden ohne Leistungspreis (ct je kW und Monat) | 100 | gedachter Satz für Monate ohne Leistungspreis mit Satz (unten); 0 = aus. Die Ansicht zeigt „100 ct je kW und Monat“, bei 0 „aus“ |
-| `planning.storm` | Unwetter-Reserve | aus | Gruppe mit `enabled` (aus), `target_soc_pct` (40), `min_level` (2 = orange) und `kinds` (`sturm`, `gewitter`): Bei amtlichen Warnungen hebt die Planung die Untergrenze des Akkus von einer Stunde vor Beginn bis zum Ende der Warnung auf das Ziel; die Anzeige im UI folgt |
+| `planning.storm` | Unwetter-Reserve | aus | Gruppe mit `enabled` (aus), `target_soc_pct` (40), `min_level` (2 = orange) und `kinds` (`sturm`, `gewitter`): Bei amtlichen Warnungen hebt die Planung die Untergrenze des Akkus von einer Stunde vor Beginn bis zum Ende der Warnung auf das Ziel. Editor und Ansicht: Abschnitt „Unwetter-Reserve“ (oben, „Unwetter-Reserve“) |
 
 Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl ab 0, z. B. 100“
 (Spitze vermeiden), „Zahl von 50 bis 100“ (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“
@@ -6061,7 +6206,9 @@ Phase (seit dem Plan „Netzgrenze je Phase“) „Netzbezug über dem Importlim
 (oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b)
 dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
 Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
-(die Uhrzeit ist die erwartete Ankunft). Gibt der Akku einem Auto mehr als 1 W (Akku ins Auto), kommen
+(die Uhrzeit ist die erwartete Ankunft), mit Unwetter-Reserve (seit dem Plan „Unwetter-Reserve“)
+„Akku entlädt um HH:MM unter die Unwetter-Reserve“ (oben, „Unwetter-Reserve“). Gibt der Akku einem
+Auto mehr als 1 W (Akku ins Auto), kommen
 „Akku ins Auto um HH:MM, obwohl ausgeschaltet“, „Akku ins Auto um HH:MM bei Halten oder
 Netzladen“, „Akku ins Auto um HH:MM, solange Netzstrom im Akku ist“ und „Akku ins Auto um HH:MM,
 während eingespeist wird“ dazu; die Leistung je Auto und die Entladegrenze zählen den Akkuanteil mit.
@@ -6092,6 +6239,13 @@ Den Akku rechnet der Ersatzplan mit diesen Autos so:
   Grenze je Phase (auf volle 100 W abgerundet), der letzte nur den Rest, bis die Nachrechnung die
   Reserve erreicht. Danach hält er den Akku (`Halten`), wo `Eigenverbrauch` ihn unter die Reserve
   entlüde.
+- **Unwetter-Reserve** (seit dem Plan „Unwetter-Reserve“, oben, „Unwetter-Reserve“): Bis zum letzten
+  Slot mit Untergrenze entlädt der Akku nie unter die Untergrenze des Fensters, in dem oder vor dem
+  der Slot liegt, schon ab dem ersten Slot des Plans (`Halten`, wo `Eigenverbrauch` darunter führte;
+  sonst deckte das Aufladen auch den Hausverbrauch davor). Liegt die Nachrechnung zu Beginn eines
+  Fensters trotzdem unter der Untergrenze, lädt der Plan nach dem Nachladen auf die Reserve, auch ohne
+  Schalter, in den billigsten Slots vor dem Beginn (bei gleichem Preis der frühere) `Netzladen` als
+  Nachladen mit höchstens 3 kW, bis die Nachrechnung die Untergrenze erreicht oder die Slots aus sind.
 - **Teuer** sind die Slots des heutigen Tages ab dem aktuellen Slot, deren Bezugspreis das 80. Perzentil
   dieser Slots erreicht. Bei einem einheitlichen Preis gibt es keinen. Der SOC **reicht nur knapp**,
   wenn die Nachrechnung in einem teuren Slot mehr als 100 W aus dem Netz bezieht, weil der Akku leer
