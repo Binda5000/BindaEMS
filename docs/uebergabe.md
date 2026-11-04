@@ -290,7 +290,9 @@ Nicht umgesetzt (Entscheidung 2 des Plans): einen Netzanteil des Akkuinhalts mit
 der Betriebscheck („Alles in Ordnung?“, ersetzt die `jq`-Befehle aus B2 und B6), die Auffälligkeiten der letzten 14 Tage mit dem Tagesbericht von gestern und die
 Schalter-Übersicht (Stand, ab Werk, seit wann, wer; nur lesend). Dazu der Sensor „Betriebscheck“ in Home Assistant (`sensor.bindaems_ops_check`: `ok`, `warnung`,
 `fehler`, `unbekannt`; Attribut `befunde`) und der Tagesbericht als Meldung `bindaems_tagesbericht`; der Blueprint der Handys zeigt sie mit dem Titel „Tagesbericht“.
-Die app rechnet die Auffälligkeiten nachts um 03:05 Uhr (beim Start die fehlenden Tage der letzten 7) in `ops_finding` und `ops_day` (**Migration `0016`**). **Nur app und UI,
+Die app rechnet die Auffälligkeiten nachts um 03:05 Uhr (beim Start die fehlenden Tage der letzten 7) in `ops_finding` und `ops_day` (**Migration `0016`**);
+Startreihenfolge in `runtime.py`: Nachtrag der Abrechnung → erster Lauf von Nachrechnung und Zählerabgleich → Nachholen der Auffälligkeiten → Tagesbericht
+(Events `_ledger_backfilled`, `_ledger_checked`, `_findings_caught_up`, je höchstens `LEDGER_BACKFILL_WAIT_S`). **Nur app und UI,
 nur `ems-app` neu**, der core bleibt unverändert, keine ACL-Zeile, kein Schritt an `config.yaml`; ausgerollt wird mit Stufe 2 des Sammel-Pulls (ab 23.11.2026).
 Rückweg: Einstellungen als YAML exportieren, den Schlüssel `ops` löschen, Datenbank auf `0015` zurücknehmen, nach dem Rollback importieren (Betrieb: `docs/betrieb.md`,
 Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“). Betrieb: Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“, und Abschnitt 7, „Benachrichtigungen“.

@@ -452,10 +452,11 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
      „YAML-Datei importieren“ → „Importieren“ (oder `POST /api/settings/import`). Das legt eine neue
      Version ohne den Schlüssel an; Tarif und übrige Einstellungen sind danach wieder da.
 
-  Der core ist nicht betroffen. Die Auffälligkeiten und Berichttage gehen mit der Tabelle verloren
-  (sie lassen sich für 30 Tage aus den Plänen neu rechnen, danach nicht mehr). In Home Assistant
-  bleibt der Sensor „Betriebscheck“ als nicht mehr gepflegte Entität stehen, bis du ihn dort
-  entfernst; eine stehende Meldung `bindaems_tagesbericht` löschst du dort von Hand.
+  Der core ist nicht betroffen. Die Auffälligkeiten und Berichttage gehen mit der Tabelle verloren;
+  rollst du später wieder vor, holt die app beim Start nur die fehlenden Tage der letzten 7 nach, ältere
+  Tage rechnet sie nicht neu. In Home Assistant bleibt der Sensor „Betriebscheck“ als nicht mehr
+  gepflegte Entität stehen, bis du ihn dort entfernst; eine stehende Meldung `bindaems_tagesbericht`
+  löschst du dort von Hand.
 - **Update mit dem Plan Vorklimatisieren:** Der Plan ändert core und app; beide rollen
   **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`):
   der core sendet neue Grund-Codes („Vorklimatisieren“, „Geladen, bleibt an“), und die app kennt ihren
@@ -948,22 +949,25 @@ homeassistant:
     bleibt aber stehen.
 - **Abgelehnte Befehle** aus Home Assistant erscheinen als persistente Meldung `bindaems_ha_command`
   (oben).
-- Der **Tagesbericht** (Plan Betrieb im Blick) kommt jeden Morgen um 07:30 Uhr als persistente Meldung
-  `bindaems_tagesbericht` mit dem Titel „BindaEMS Tagesbericht“ und über `notify_service`; der Bericht
-  von heute ersetzt den von gestern. Er nennt Netzbezug und Netzladen gegen den Plan, Kosten und
-  Ersparnis von gestern (wie in der Statistik), die wichtigsten Auffälligkeiten und den
-  Betriebscheck; an ruhigen Tagen steht „Keine Auffälligkeiten“. Einstellungen → „Tagesbericht“ stellt
-  ihn auf „nur bei Auffälligkeiten“ oder „aus“ und wählt die Uhrzeit. Er zählt nicht zum Budget der
-  Warnungen. Der Blueprint für die Handys (`bindaems_benachrichtigungen.yaml`) zeigt ihn mit dem Titel
-  „Tagesbericht“ statt als Warnung. Ohne Home Assistant steht der Bericht nur auf der Seite Betrieb
-  (Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“).
+- Der **Tagesbericht** (Plan Betrieb im Blick) kommt jeden Morgen (ab Werk um 07:30 Uhr) als persistente
+  Meldung `bindaems_tagesbericht` mit dem Titel „BindaEMS Tagesbericht“ und über `notify_service`; der
+  Bericht von heute ersetzt den von gestern. Er nennt Netzbezug und Netzladen gegen den Plan, Kosten und
+  Ersparnis von gestern (wie in der Statistik), die wichtigsten Auffälligkeiten und den Betriebscheck;
+  an ruhigen Tagen steht „Keine Auffälligkeiten“. Einstellungen → „Tagesbericht“ stellt ihn auf „nur bei
+  Auffälligkeiten“ oder „aus“ und wählt die Uhrzeit. Er zählt zum Budget von 10 Meldungen je Minute
+  (unten); ist es voll oder scheitert das Senden, versucht die app es nach 15 Minuten wieder, längstens
+  bis der Tag wechselt. Nach einem Neustart wartet er, bis die Abrechnung nachgetragen und abgeglichen
+  ist und die Auffälligkeiten nachgeholt sind (höchstens je 10 Minuten), damit er gestern nicht aus
+  einer halben Abrechnung rechnet. Der Blueprint für die Handys (`bindaems_benachrichtigungen.yaml`)
+  zeigt ihn mit dem Titel „Tagesbericht“ statt als Warnung. Ohne Home Assistant steht der Bericht nur
+  auf der Seite Betrieb (Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“).
 - Der Sensor **Betriebscheck** (`sensor.bindaems_ops_check`, Zustand `ok`, `warnung`, `fehler` oder
   `unbekannt`, Attribut `befunde` mit den Texten der gelben und roten Prüfungen) ist derselbe Check
   wie auf der Seite Betrieb. Er löst keine Meldung aus; eine Automation darauf ist deine Sache.
-- Höchstens **10 Meldungen je Minute** über alle Alarme, Warnungen und Ablehnungen zusammen, davon
-  höchstens **4 für Ablehnungen**: Den Alarmen und Warnungen bleiben so immer mindestens 6, auch wenn
-  eine Automation eine Flut ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht nur im Log
-  der app; eine Warnung über dem Budget folgt wie ein Alarm, sobald es frei ist.
+- Höchstens **10 Meldungen je Minute** über alle Alarme, Warnungen, Ablehnungen und den Tagesbericht
+  zusammen, davon höchstens **4 für Ablehnungen**: Den Alarmen und Warnungen bleiben so immer mindestens
+  6, auch wenn eine Automation eine Flut ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht
+  nur im Log der app; eine Warnung über dem Budget folgt wie ein Alarm, sobald es frei ist.
 - Ein fehlgeschlagener Aufruf stört nichts; er steht im Log (`Dienstaufruf an Home Assistant
   fehlgeschlagen`). Ein Alarm gilt erst als gemeldet, wenn die persistente Meldung angelegt ist: Über
   dem Budget oder während Home Assistant neu startet versucht es die app erneut, solange der Alarm
@@ -1985,17 +1989,21 @@ mit Link hierher.
   Dry-Run lässt (heute die Klimaanlage), ist grün mit „Dry-Run (so gewünscht)“; gelb oder rot wird nur,
   was anders läuft als gewünscht. Ist der core nicht erreichbar, steht er allein rot und alle
   weiteren Prüfungen „unbekannt“. Fehlt dem Health eines älteren core ein Feld, ist die Prüfung
-  „unbekannt“ („vom core nicht gemeldet“). Die Schwellen sind feste Werte, keine Einstellungen.
+  „unbekannt“ („vom core nicht gemeldet“). Ist keine Prüfung gelb oder rot, steht „Alles in Ordnung“,
+  auch wenn einzelne „unbekannt“ sind. Die Schwellen sind feste Werte, keine Einstellungen.
   Abruf: `GET /api/ops/check`.
 - **Auffälligkeiten:** Was die app selbst über die Tage findet, die letzten 14 Tage, neueste zuerst; je
   Treffer Zeit, ein Satz und ein Link zu den Entscheidungen dieses Tages. Sieben Regeln: Akku lädt aus
   dem Netz ohne Plan (mit dem Zusatz „Vermutlich lud Victron selbst nach“, wenn der SOC dabei unter der
   Reserve lag), Akku unter der Reserve, neue Monatsspitze, Netzbezug weicht vom Plan ab, Auto hat das
-  Ziel verfehlt, gescheiterte Befehle, vom Zählerabgleich markiert. Die app rechnet nachts um 03:05
-  Uhr den Vortag und holt beim Start die fehlenden Tage der letzten 7 nach; ältere Tage lassen sich
-  nicht mehr rechnen (Pläne werden 30 Tage gehalten). Ein Tag ohne Lauf steht als „nicht berechnet“
-  da. Auffälligkeiten und Tage bleiben 400 Tage. Einen Live-Alarm gibt es dafür nicht: Was sofort
-  zählt, melden die Alarme des core. Abruf: `GET /api/ops/findings?days=14`.
+  Ziel verfehlt, gescheiterte Befehle, vom Zählerabgleich markiert. Dazu kommt ein Hinweis „nicht
+  geprüft“, wenn der Akku-SOC fehlt (InfluxDB nicht erreichbar oder ohne Werte des Tages) oder der
+  Abrechnung mehr als 10 % der Viertelstunden fehlen („Abrechnung unvollständig (82 von 96
+  Viertelstunden), Auffälligkeiten nur teilweise geprüft.“): Ein Tag ohne Daten ist kein ruhiger Tag.
+  Zählervergleiche und Wallboxen heißen wie in der Statistik („Netzbezug“, „Wallbox Garage“). Die app
+  rechnet nachts um 03:05 Uhr den Vortag und holt beim Start die fehlenden Tage der letzten 7 nach;
+  ältere Tage rechnet sie nicht nach. Ein Tag ohne Lauf steht als „noch nicht gerechnet“ da. Auffälligkeiten und Tage bleiben 400 Tage. Einen Live-Alarm gibt es
+  dafür nicht: Was sofort zählt, melden die Alarme des core. Abruf: `GET /api/ops/findings?days=14`.
 - **Tagesbericht:** Oben auf der Karte steht der Bericht von gestern: Netzbezug und Netzladen gegen den
   Plan, Kosten und Ersparnis, Monatsspitze, die wichtigsten Auffälligkeiten und der Betriebscheck von
   jetzt. Kosten und Ersparnis stehen wie in der Statistik (gegen „ohne PV und Akku“); eine gemessene
