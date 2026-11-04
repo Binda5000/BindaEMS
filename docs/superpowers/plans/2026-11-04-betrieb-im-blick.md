@@ -24,14 +24,14 @@
 
 ## Entscheidungen
 
-Vorschläge; die mit **(offen)** stehen dir als Karte im Thread zur Wahl, der Rest gilt, wenn du nichts dagegen sagst.
+Vorschläge; 5 und 6 hast du am 4.11.2026 entschieden, der Rest gilt, wenn du nichts dagegen sagst.
 
 1. **Eigene Seite „Betrieb“** statt einer weiteren Karte auf „System“: System ist schon lang (Signale, Prognosen, Bedienung), und die Schalter-Übersicht braucht ohnehin eine eigene Seite. System verweist oben mit einer Zeile darauf. Sichtbar für alle Rollen (viewer); stellen kannst du die Schalter weiter nur dort, wo sie heute sind (die Übersicht verlinkt).
 2. **Betriebscheck aus vorhandenen Daten, ohne Schwellen in den Einstellungen.** Die Schwellen sind Konstanten aus B2/B6 (Tabelle in Task 1). Ein Aktor, den du bewusst im Dry-Run hast (heute die Klimaanlage), ist grün mit dem Satz „Dry-Run (so gewünscht)“; gelb oder rot wird nur, was anders läuft als gewünscht.
 3. **Auffälligkeiten nachts für den Vortag** (03:05 Uhr, nach dem Zählerabgleich um 02:45 und vor dem Training um 03:15), beim Start für die letzten 7 Tage, die noch fehlen. Kein Live-Alarm: Was sofort zählt, melden schon die Alarme.
 4. **Sieben Regeln** (Task 3): Akku lädt aus dem Netz ohne Plan (mit dem Hinweis „vermutlich Victron-Nachladen“, wenn der SOC dabei unter der Reserve war), Akku unter der Reserve, Monatsspitze gestiegen, Netzbezug weicht vom Plan ab, Auto hat Ziel verfehlt, Befehle gescheitert, Zählerabgleich markiert. Nicht dabei: eine feste kW-Schwelle je Viertelstunde (ein Tesla mit 11 kW wäre jeden Abend ein Treffer; der finanziell wichtige Fall ist die neue Monatsspitze, und der 9-kW-Fall vom 3.11. fällt unter „ohne Plan“).
 5. **Tagesbericht (entschieden vom Betreiber am 4.11.2026: „Täglich um 07:30“):** jeden Morgen um 07:30 Uhr, auch an ruhigen Tagen (dann ein Satz „Keine Auffälligkeiten“), als persistente Meldung in HA und über den eingestellten `notify`-Dienst aufs Handy. Umstellbar unter Einstellungen → „Tagesbericht“ auf „nur bei Auffälligkeiten“ oder „aus“, Uhrzeit wählbar. Ohne Home Assistant steht der Bericht nur auf der Seite Betrieb.
-6. **Ersparnis im Tagesbericht (offen):** Vorschlag: Kosten und Ersparnis von gestern wie in der Statistik (gegen „ohne PV und Akku“). Eine gemessene Ersparnis gegen „Victron allein“ gibt es in der app nicht (das rechnet `scenario_days` für die Abnahme am 17.11.); sie käme als eigener kleiner Plan nach der Abnahme.
+6. **Ersparnis im Tagesbericht (entschieden vom Betreiber am 4.11.2026: „Echte Rechnung später“):** Kosten und Ersparnis von gestern wie in der Statistik (gegen „ohne PV und Akku“). Eine gemessene Ersparnis gegen „Victron allein“ gibt es in der app nicht (das rechnet `scenario_days` für die Abnahme am 17.11.); sie kommt als eigener kleiner Plan nach der Abnahme am 17.11.
 7. **Schalter-Übersicht nur lesend**, Katalog in Task 6. „Seit wann und wer“ ist der jüngste passende Eintrag im Änderungsprotokoll; ohne Eintrag steht „seit Einrichtung“. Nicht in der Liste: Lademodus, Ziel und Abfahrt je Auto (das sind Bedienungen, keine Schalter), Werte aus `config.yaml` außer `live_allowed` (das steht beim Aktor als „in config.yaml gesperrt“).
 8. **Aufbewahrung:** Auffälligkeiten 400 Tage (für den Jahresrückblick), Bericht-Tage ebenso; Löschen in der bestehenden Wartung.
 
