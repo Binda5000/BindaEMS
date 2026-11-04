@@ -284,6 +284,20 @@ freigegeben. Autarkie und Eigenverbrauch sind auf 0 bis 100 % begrenzt (`app/led
 keine Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**; ausgerollt wird mit Stufe 2 des Sammel-Pulls, nie allein (Punkt 18).
 Nicht umgesetzt (Entscheidung 2 des Plans): einen Netzanteil des Akkuinhalts mitführen, der solchen Tagen eine Autarkie über 0 gäbe.
 
+**Stand Ladeauswahl beim Anstecken (04.11.2026):** Plan `docs/superpowers/plans/2026-11-04-ladeauswahl-beim-anstecken.md`, vom Betreiber am
+04.11.2026 freigegeben (Knöpfe nach Entscheidung 1: „Geplant, Sofort, PV + Passt“). Die app rechnet je angestecktem Fahrzeug eine einfache
+Ladeschätzung für „Geplant“, „Sofort“, „PV-Überschuss“ und „Min+PV“ über die Viertelstunden des gültigen Plans (`app/charging/estimate.py`, ohne
+Hausakku, darum eher zu hoch) und veröffentlicht sie als HA-Sensor „Ladeschätzung“ (`sensor.bindaems_<auto>_ladeschatzung`, Zustand die Kosten
+für „Geplant“). Der Blueprint `bindaems_benachrichtigungen.yaml` im Projektordner `ha-benachrichtigungen/` (nicht im Repo) nennt damit beim
+Anstecken Kosten und „fertig ca.“ je Modus und hat bis zu drei Knöpfe, die über `select.select_option` den Lademodus umstellen (beim Gast den
+Gast-Lademodus, ohne „Geplant“ und ohne Kosten); die Fassung vom 27.10.2026 liegt als `bindaems_benachrichtigungen-2026-10-27.yaml` daneben.
+Geprüft im Test-Home-Assistant 2026.2.3 (34 Szenarien, die bisherigen bleiben gleich). Branch `claude/project-thread-oayz1g`, **noch nicht auf
+`main`**, **nicht ausgerollt**. **Nur app, nur `ems-app` neu, keine Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**; core, UI und
+Datenbank bleiben gleich. Ausgerollt wird mit Stufe 2 des Sammel-Pulls, nie allein, dazu den Blueprint in HA neu kopieren (Punkt 19 unter
+„Offen an der Anlage“); bis zum 22.11.2026 nichts an der Anlage. Ohne neue app zeigt der neue Blueprint die Meldung wie bisher plus Knöpfe
+ohne Kosten. Der Rückweg ist der alte Blueprint und ein älteres Image; der Sensor verschwindet dann (die verwaiste Entität in HA löschen).
+Betrieb: `docs/betrieb.md`, Abschnitt 7 („Ladeschätzung“); Blueprint: `LIESMICH.md` im Projektordner, „Knöpfe beim Anstecken (Stand 2026-11)“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2084,6 +2098,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Tagesbilanz und in den Dialogen „Live schalten…“ und „Auf Dry-Run…“.
       In der Hausakku-Kachel der Übersicht steht unter „≈ … von … kWh“ neu „≈ … kWh über Reserve“ (an oder unter der Reserve „nichts über Reserve“).
       Mit demselben Pull kommt „Autarkie nicht negativ“: Verlauf → Tagesbilanz zeigt für den 02.11. „0 %“ statt „-3 %“, ebenso „Autarkie heute“ in HA an Tagen mit Netzladung.
+  19. **Ladeauswahl beim Anstecken (Plan „Ladeauswahl beim Anstecken“) ausrollen:** nur `ems-app` neu (kein core, **keine Migration, keine
+      ACL-Zeile, keine Änderung an `config.yaml`**), mit Stufe 2 des Sammel-Pulls (ab 23.11.2026, `anlage/sammel-pull.md` im Projektordner),
+      **nie allein**; bis dahin nichts an der Anlage. Danach **Blueprint neu kopieren, einmal anstecken, Knopf probieren:**
+      `bindaems_benachrichtigungen.yaml` aus dem Projektordner `ha-benachrichtigungen/` nach `/config/blueprints/automation/bindaems/` kopieren
+      und unter **Entwicklerwerkzeuge → YAML** die Automationen neu laden (`LIESMICH.md` dort, „Aktualisieren“). Beim Anstecken kommt
+      „🔌 <Auto> angesteckt · <SOC> %“ mit Kosten je Modus und Knöpfen; ein Tipp auf einen Modus stellt den Lademodus um und ersetzt die Meldung
+      durch „✅ <Auto> lädt jetzt „…““, im Änderungsprotokoll steht `home-assistant`. In HA gibt es je Auto den Sensor „Ladeschätzung“. Lädt das
+      Auto gleich los, ersetzt „⚡ lädt“ die Meldung mit den Knöpfen nach „Ladung gestartet nach“ (Standard 2 min); dann den Wert höher setzen oder
+      „Ladung gestartet“ abwählen (`LIESMICH.md`). Zurück: `bindaems_benachrichtigungen-2026-10-27.yaml` zurückkopieren; mit einem älteren Image
+      verschwindet der Sensor (verwaiste Entität in HA löschen).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
