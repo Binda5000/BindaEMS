@@ -162,6 +162,11 @@ class HaInputs:
     thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     # Plan 5c: Schalter „Vorheizen und Vorkühlen“ (``learning.thermal.enabled``); None = unbekannt
     thermal_plan_enabled: bool | None = None
+    # Unwetter-Reserve: Untergrenze des Akkus im aktuellen Slot in %, Ende und Text der Warnung;
+    # None = keine Untergrenze
+    storm_floor_pct: float | None = None
+    storm_until: datetime | None = None
+    storm_text: str | None = None
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -899,6 +904,21 @@ def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     }
 
 
+def _storm_floor(inputs: HaInputs) -> str:
+    return fmt(0.0 if inputs.storm_floor_pct is None else inputs.storm_floor_pct, 0)
+
+
+def _storm_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    """Ende der Warnung (lokal wie bei ``prices``) und ihr Text; ohne Untergrenze ``None``."""
+    if inputs.storm_floor_pct is None:
+        return {"bis": None, "warnung": None}
+    until = inputs.storm_until
+    return {
+        "bis": until.astimezone(LOCAL_TZ).isoformat() if until is not None else None,
+        "warnung": inputs.storm_text,
+    }
+
+
 def _budget_kw(inputs: HaInputs) -> str:
     return fmt(None if inputs.plan_now is None else inputs.plan_now.budget_kw, 1)
 
@@ -1054,6 +1074,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             device_class="power",
             state_class="measurement",
             attributes=_execution,
+        ),
+        EntitySpec(
+            "storm_reserve",
+            "sensor",
+            "Unwetter-Reserve",
+            main,
+            _storm_floor,
+            unit="%",
+            state_class="measurement",
+            attributes=_storm_attributes,
         ),
         _power("grid_power", "Netzleistung", main, _derived_w("grid_w")),
         _power("pv_power", "PV-Leistung", main, _derived_w("pv_total_w")),
@@ -1454,6 +1484,9 @@ def build_inputs(
     driving_profiles: Mapping[str, VehicleProfile] | None = None,
     auto_target: Mapping[str, bool] | None = None,
     thermal_plan_enabled: bool | None = None,
+    storm_floor_pct: float | None = None,
+    storm_until: datetime | None = None,
+    storm_text: str | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -1545,6 +1578,9 @@ def build_inputs(
         driving_profiles=dict(driving_profiles or {}),
         auto_target=dict(auto_target or {}),
         thermal_plan_enabled=thermal_plan_enabled,
+        storm_floor_pct=storm_floor_pct,
+        storm_until=storm_until,
+        storm_text=storm_text,
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

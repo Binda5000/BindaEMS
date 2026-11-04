@@ -113,6 +113,7 @@ PlanTrigger = Literal[
     "manual",
     "vehicles",
     "thermal",
+    "storm",
 ]
 SolverStatus = Literal["optimal", "time_limit", "infeasible", "timeout", "error"]
 

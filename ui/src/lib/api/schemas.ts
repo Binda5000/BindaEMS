@@ -1475,7 +1475,8 @@ export const PlanTriggerSchema = v.picklist([
 	'settings',
 	'manual',
 	'vehicles',
-	'thermal'
+	'thermal',
+	'storm'
 ]);
 export type PlanTrigger = v.InferOutput<typeof PlanTriggerSchema>;
 

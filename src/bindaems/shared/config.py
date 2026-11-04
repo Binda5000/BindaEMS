@@ -46,6 +46,7 @@ HA_SYSTEM_IDS = (
     "battery_plan_next",
     "planned_soc",
     "budget",
+    "storm_reserve",
     "grid_power",
     "pv_power",
     "battery_power",

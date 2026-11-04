@@ -29,7 +29,8 @@ export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	settings: 'Einstellungen geändert',
 	manual: 'Neu planen',
 	vehicles: 'Fahrzeug geändert',
-	thermal: 'Klimaanlage geändert'
+	thermal: 'Klimaanlage geändert',
+	storm: 'Unwetterwarnung'
 };
 
 export const SOURCE_LABELS = { optimizer: 'Optimierer', fallback: 'Ersatzplan' } as const;

@@ -101,12 +101,14 @@ from bindaems.app.settings.service import SettingsService
 from bindaems.app.stats.routes import stats_router
 from bindaems.app.stats.service import StatsService, TodayStats
 from bindaems.app.status import ComponentStatus, StatusSource
+from bindaems.app.storm.service import StormService
+from bindaems.app.storm.windows import storm_floors, warning_at
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent
 from bindaems.shared.influx.lineprotocol import Point, PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock, local_day_slots
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock, local_day_slots, slot_start
 
 log = structlog.get_logger(__name__)
 
@@ -239,6 +241,7 @@ class AppRuntime:
             self.forecast_archive,
             self.weather,
         )
+        self.storm = StormService(cfg, self.settings, self._http, self._clock)
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
         )
@@ -352,6 +355,7 @@ class AppRuntime:
             intent=self.intents.cached,
             driving_profiles=self.driving.profiles,
             thermal_model=self.thermal_model,
+            storm=self.storm.warnings,
         )
         if self.thermal_model is not None:
             # ein neues Wärmemodell plant mit „thermal“ neu (Plan 5c, höchstens alle 5 min)
@@ -445,6 +449,7 @@ class AppRuntime:
             self.live_feed.component_status,
             self.pipeline.component_status,
             self.forecast.component_status,
+            self.storm.component_status,
             self.load_forecast.component_status,
             self.load_model.component_status,
             self.driving.component_status,
@@ -604,7 +609,28 @@ class AppRuntime:
             driving_profiles=self.driving.profiles(),
             auto_target=self._auto_targets(),
             thermal_plan_enabled=settings.learning.thermal.enabled,
+            **self._storm_ha(now),
         )
+
+    def _storm_ha(self, now: datetime) -> dict[str, Any]:
+        """Untergrenze des aktuellen Slots, Ende und Text der Warnung für den HA-Sensor."""
+        current = slot_start(now)
+        warnings = self.storm.warnings()
+        floor = storm_floors(
+            [current],
+            warnings,
+            self.settings.current().settings.planning.storm,
+            reserve_pct=self._cfg.battery.reserve_soc_pct,
+            soc_max_pct=self._cfg.battery.soc_max_pct,
+        )[0]
+        warning = warning_at(current, warnings) if floor is not None else None
+        if floor is None or warning is None:
+            return {}
+        return {
+            "storm_floor_pct": floor,
+            "storm_until": warning.end,
+            "storm_text": warning.text,
+        }
 
     async def _ha_intent(self) -> Intent | None:
         """Die Absicht für HA: ohne gültige die Basis, bei Störung die zuletzt bekannte."""
@@ -629,6 +655,7 @@ class AppRuntime:
             ("decisions", self.collector.run),
             ("prices", self.price_scheduler.run),
             ("forecast", self._forecast_run),
+            ("storm", self.storm.run),
             ("load-forecast", self.load_forecast.run),
             ("load-model", self.load_model.run),
             ("driving", self.driving.run),

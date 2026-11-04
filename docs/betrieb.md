@@ -6015,6 +6015,7 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `settings` | Einstellungen geändert | Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
 | `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus (ändern sich nur das Ladelimit oder die Quelle des Ladestands, plant die app höchstens alle 5 min neu; Ziel, Abfahrt und die Menge der geplanten Autos lösen sofort aus); außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
+| `storm` | Unwetterwarnung | die passenden Unwetterwarnungen ändern sich (neue, geänderte, zurückgenommene) oder eine endet (seit Plan Unwetter-Reserve) |
 | `thermal` | Klimaanlage geändert | die Betriebsart der Klimaanlage aus Health wechselt zwischen Heizen, Kühlen und dem Rest (Lüften, aus, unbekannt), oder ein neues Wärmemodell liegt vor (seit Plan 5c); je Wechsel einmal, höchstens alle 5 min, auch wenn der Lauf keinen Plan ergibt |
 
 Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core ab seinem nächsten
@@ -6214,6 +6215,7 @@ steht `execution` auf `null`.
 | `battery_plan_next` | Akku-Plan nächster Slot | sensor | wie oben für den Slot danach; am Ende des Plans „unbekannt“ |
 | `planned_soc` | Geplanter SOC | sensor | SOC am Ende des laufenden Slots in %; Attribut `hourly` mit `[{start, soc_pct}]` je volle Stunde des Plans |
 | `budget` | Budget | sensor | das Budget des laufenden Slots in kW mit einer Nachkommastelle; ohne Leistungspreis „unbekannt“ |
+| `storm_reserve` | Unwetter-Reserve | sensor | die Untergrenze des Akkus im laufenden Slot in % (Unwetterwarnung), sonst `0`; Attribute `bis` (Ende der Warnung) und `warnung` (ihr Text) |
 | `grid_charge` | Netzladen erlaubt | switch | die Einstellung (nicht die des Plans); schreibend |
 | `replan` | Neu planen | button | löst eine Neuplanung aus (Anlass „Neu planen“) |
 

@@ -1119,6 +1119,7 @@ def test_planning_entities_in_the_guide_exist() -> None:
             "battery_plan_next",
             "planned_soc",
             "budget",
+            "storm_reserve",
             "grid_charge",
             "replan",
         },

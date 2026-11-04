@@ -87,7 +87,7 @@ from bindaems.app.settings.service import (
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import ChargeMode, Intent
-from bindaems.shared.plan import Plan, PlanTrigger
+from bindaems.shared.plan import Plan, PlanTrigger, StormWarning
 from bindaems.shared.settings import RuntimeSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, slot_start
 
@@ -209,6 +209,7 @@ class PlanningService:
         intent: Callable[[], Intent | None] | None = None,
         driving_profiles: Callable[[], Mapping[str, VehicleProfile]] | None = None,
         thermal_model: ThermalModels | None = None,
+        storm: Callable[[], list[StormWarning]] | None = None,
     ) -> None:
         self._cfg = cfg
         self._settings = settings
@@ -227,6 +228,8 @@ class PlanningService:
         self._intent = intent or (lambda: None)
         # Profile des Fahrverhaltens (Plan 5b) für die erwarteten Autos; ohne Quelle gibt es keine
         self._driving_profiles = driving_profiles
+        # bekannte Unwetterwarnungen (Plan Unwetter-Reserve); ohne Quelle gibt es keine
+        self._storm = storm or (lambda: [])
         self._lock = asyncio.Lock()  # ein Lauf nach dem anderen
         self._running = False
         self._unavailable: str | None = None
@@ -440,6 +443,7 @@ class PlanningService:
             load_issued=load.issued_at if load is not None else None,
             vehicles=vehicles,
             support_pct=self._support_pct(),
+            storm=tuple((w.warn_id, w.version, w.begin, w.end) for w in self._storm()),
         )
         triggers = changed(old, new)
         for trigger in triggers:

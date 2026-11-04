@@ -15,6 +15,7 @@ const COMPONENTS: Record<string, string> = {
 	core: 'core',
 	prices: 'Preise',
 	forecast: 'PV-Prognose',
+	storm: 'Unwetterwarnungen',
 	'load-forecast': 'Lastprognose',
 	'load-model': 'Lastmodell',
 	driving: 'Fahrverhalten',

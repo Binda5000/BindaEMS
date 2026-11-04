@@ -328,6 +328,13 @@
       "details": {}
     },
     {
+      "name": "storm",
+      "ok": true,
+      "message": "aus",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "load-forecast",
       "ok": true,
       "message": "Lastprognose von 10:00 Uhr",

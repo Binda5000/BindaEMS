@@ -101,7 +101,8 @@ it('names intents, triggers and sources in German', () => {
 		settings: 'Einstellungen geändert',
 		manual: 'Neu planen',
 		vehicles: 'Fahrzeug geändert',
-		thermal: 'Klimaanlage geändert'
+		thermal: 'Klimaanlage geändert',
+		storm: 'Unwetterwarnung'
 	});
 	expect(SOURCE_LABELS).toEqual({ optimizer: 'Optimierer', fallback: 'Ersatzplan' });
 });

@@ -65,6 +65,7 @@ def test_entities_from_config(cfg) -> None:
         "battery_plan_next",
         "planned_soc",
         "budget",
+        "storm_reserve",
         "grid_power",
         "pv_power",
         "battery_power",
@@ -1655,3 +1656,16 @@ def test_build_inputs_takes_the_thermal_plan_setting(
         live, price_service, store, forecast_service, T_APP, thermal_plan_enabled=True
     )
     assert inputs.thermal_plan_enabled is True
+
+
+def test_storm_sensor(cfg) -> None:
+    until = datetime(2026, 7, 1, 14, 0, tzinfo=UTC)
+    inputs = sample_inputs(storm_floor_pct=40.0, storm_until=until, storm_text="Gewitter")
+    spec = entity(cfg, "storm_reserve")
+    assert spec.value(inputs) == "40"
+    assert spec.attributes(inputs) == {"bis": "2026-07-01T16:00:00+02:00", "warnung": "Gewitter"}
+    assert config_of(cfg, "storm_reserve")["name"] == "Unwetter-Reserve"
+    assert config_of(cfg, "storm_reserve")["unit_of_measurement"] == "%"
+    quiet = sample_inputs()
+    assert spec.value(quiet) == "0"
+    assert spec.attributes(quiet) == {"bis": None, "warnung": None}

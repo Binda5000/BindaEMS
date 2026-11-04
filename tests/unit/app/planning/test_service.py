@@ -707,6 +707,35 @@ async def test_new_pv_forecast_requests_replan(service_with, forecast):
     assert triggers(calls) == ["start", "pv_forecast"]
 
 
+async def test_storm_warning_change_requests_replan_once(service_with):
+    from bindaems.shared.plan import StormWarning
+
+    warnings: list[StormWarning] = []
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), storm=lambda: list(warnings)
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        warnings.append(
+            StormWarning(
+                warn_id=1,
+                version=1,
+                kind="gewitter",
+                level=2,
+                begin=at("2026-10-16T12:00:00+00:00"),
+                end=at("2026-10-16T14:00:00+00:00"),
+                text="t",
+            )
+        )
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)  # unveränderte Warnung plant nicht noch einmal
+        warnings.clear()  # zurückgenommen
+        await until(lambda: len(calls) == 3)
+    assert triggers(calls) == ["start", "storm", "storm"]
+
+
 async def test_new_prices_request_replan(service_with, price_store, clock):
     calls: list[PlanInputs] = []
     service = service_with(solver=recording(calls), sleep=fast_sleep())

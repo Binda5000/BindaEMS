@@ -104,6 +104,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "core",
         "prices",
         "forecast",
+        "storm",
         "load-forecast",
         "load-model",
         "driving",
