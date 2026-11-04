@@ -21,6 +21,9 @@ from bindaems.shared.timeutil import SLOT, ensure_utc, slot_start
 
 PLAN_VALID: Final = timedelta(minutes=45)
 MAX_INTENT_PLAN_SLOTS: Final = 8
+# Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9): höchstens so viel W, auch
+# bei ausgeschaltetem „Netzladen erlaubt“
+RESERVE_RECHARGE_MAX_W: Final = 3000.0
 # Hinweis für die Klimaanlage (Plan 6a, Entscheidung 7): Schwellen und Perzentil der teuren Slots
 THERMAL_MORE_EXPORT_W: Final = 500.0  # ab dieser geplanten Einspeisung „mehr“
 THERMAL_LESS_EXPORT_W: Final = 100.0  # „weniger“ nur unter dieser geplanten Einspeisung
@@ -38,10 +41,17 @@ class BatteryIntentKind(StrEnum):
 
 
 class BatteryIntent(_Model):
-    """Absicht für den Akku in einem Slot; ``grid_charge_w`` gilt nur bei ``NETZLADEN``."""
+    """Absicht für den Akku in einem Slot; ``grid_charge_w`` gilt nur bei ``NETZLADEN``.
+
+    ``reserve_recharge`` (nur mit ``NETZLADEN``, Plan Netzgrenze je Phase, Entscheidung 9): Das
+    Netzladen lädt den Akku nur auf die Reserve nach; bis ``RESERVE_RECHARGE_MAX_W`` gilt es auch
+    bei ausgeschaltetem „Netzladen erlaubt“ (``recharge_without_switch``). Alte Absichten und Pläne
+    laden mit ``False``.
+    """
 
     kind: BatteryIntentKind = BatteryIntentKind.EIGENVERBRAUCH
     grid_charge_w: NonNegativeW = 0.0
+    reserve_recharge: bool = False
 
     @model_validator(mode="after")
     def _grid_charge_matches_kind(self) -> Self:
@@ -50,10 +60,24 @@ class BatteryIntent(_Model):
             raise ValueError("NETZLADEN braucht eine Leistung über 0 W")
         if not charging and self.grid_charge_w != 0:
             raise ValueError("Nur NETZLADEN hat eine Netzladeleistung")
+        if not charging and self.reserve_recharge:
+            raise ValueError("Nur NETZLADEN lädt auf die Reserve nach")
         return self
 
 
+def recharge_without_switch(intent: BatteryIntent) -> bool:
+    """Gilt ``intent`` auch bei ausgeschaltetem „Netzladen erlaubt“? Nur ein Nachladen auf die
+    Reserve (``reserve_recharge``) mit höchstens ``RESERVE_RECHARGE_MAX_W`` (Entscheidung 9); die
+    app (``intent_plan``, Plausibilität) und der core (Planprüfung) rechnen beide hiermit."""
+    return (
+        intent.kind is BatteryIntentKind.NETZLADEN
+        and intent.reserve_recharge
+        and intent.grid_charge_w <= RESERVE_RECHARGE_MAX_W
+    )
+
+
 ReasonCode = Literal[
+    "NACHLADEN_RESERVE",
     "NETZLADEN_GUENSTIG",
     "HALTEN_FUER_SPITZE",
     "BUDGET_SPITZE",
@@ -373,8 +397,9 @@ def intent_plan(
 ) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
-    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Ebenso der Akku-
-    Anteil daran (``ev_battery_w``, ohne erwartete Autos und ohne Anteile unter 1 W) und
+    ``EIGENVERBRAUCH``, außer einem Nachladen auf die Reserve (``recharge_without_switch``). Die
+    Ladeleistung je Auto geht auf ganze W gerundet mit. Ebenso der Akku-Anteil daran
+    (``ev_battery_w``, ohne erwartete Autos und ohne Anteile unter 1 W) und
     ``now_battery`` (Akku ins Auto): beides nur, wenn die Absicht des Slots nach dieser Umwandlung
     ``EIGENVERBRAUCH`` ist, sonst ``{}`` und ``False``. Jedes Auto aus
     ``plan.vehicles`` steht in jedem Slot vor seiner Abfahrt, auch mit 0 W (Ruling R22): Ein Auto,
@@ -400,7 +425,11 @@ def intent_plan(
 
     def binding(slot: PlanSlot) -> IntentPlanSlot:
         intent = slot.intent
-        if not grid_charge_allowed and intent.kind is BatteryIntentKind.NETZLADEN:
+        if (
+            not grid_charge_allowed
+            and intent.kind is BatteryIntentKind.NETZLADEN
+            and not recharge_without_switch(intent)
+        ):
             intent = BatteryIntent()
         planned = {car.key: 0 for car in cars if slot.start < car.departure_at}
         powers = {key: round(w) for key, w in slot.ev_w.items() if key not in expected}

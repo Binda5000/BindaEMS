@@ -89,6 +89,7 @@ async def test_get_plan_shape(client_as, planning):
         "start",
         "intent",
         "grid_charge_w",
+        "reserve_recharge",
         "soc_pct",
         "pv_w",
         "load_w",
@@ -202,6 +203,24 @@ async def test_slot_json_names_the_battery_share_of_the_cars(planning):
     )
     item = slot_json(slot)
     assert item["ev_battery_w"] == {"tesla": 2300.0} and item["now_battery"] is True
+
+
+async def test_slot_json_names_a_reserve_recharge(planning):
+    from bindaems.app.planning.routes import slot_json
+    from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+
+    stored = await planning.replan("manual")
+    assert stored is not None
+    assert slot_json(stored.slots[0])["reserve_recharge"] is False
+    recharge = BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000.0, reserve_recharge=True
+    )
+    item = slot_json(stored.slots[0].model_copy(update={"intent": recharge}))
+    assert (item["intent"], item["grid_charge_w"], item["reserve_recharge"]) == (
+        "NETZLADEN",
+        3000.0,
+        True,
+    )
 
 
 async def test_get_plan_marks_expired_plan(client_as, planning, clock):

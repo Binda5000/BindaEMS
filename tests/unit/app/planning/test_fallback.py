@@ -436,3 +436,73 @@ def test_fallback_without_phase_limit_unchanged() -> None:
     watts = fallback_vehicles(inputs)
     assert watts["tesla"][:2] == [pytest.approx(11040.0)] * 2
     assert watts["egolf"][:2] == [pytest.approx(7360.0)] * 2
+
+
+# Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9)
+
+_BIG_KWH = 96.0
+
+
+def _below_reserve(**overrides: Any) -> PlanInputs:
+    """Akku 96 kWh, Reserve 20 %, SOC 16 %, Haus 600 W, ohne PV, Schalter aus; Slot 4 und 5 am
+    billigsten (10 ct), danach 20 ct, die ersten vier Slots teuer (30 ct)."""
+    values: dict[str, Any] = {
+        "prices": [30.0] * 4 + [10.0] * 2 + [20.0] * 18,
+        "pv": [0.0] * 24,
+        "load": [600.0] * 24,
+        "soc_pct": 16.0,
+        "battery": state(usable_kwh=_BIG_KWH),
+    }
+    values.update(overrides)
+    return scenario(**values)
+
+
+def test_fallback_recharges_to_reserve() -> None:
+    inputs = _below_reserve()
+    intents = fallback_intents(inputs)
+    charging = [i for i, intent in enumerate(intents) if intent.kind is BatteryIntentKind.NETZLADEN]
+    assert charging[:2] == [4, 5]  # die billigsten zuerst
+    assert all(intents[i].reserve_recharge for i in charging)
+    assert all(0 < intents[i].grid_charge_w <= 3000.0 for i in charging)
+    assert [intents[4].grid_charge_w, intents[5].grid_charge_w] == [3000.0, 3000.0]
+    steps = resimulate(inputs, intents)
+    one_slot_kwh = 3000.0 * SLOT_H / 1000 * params_of(inputs).eta_ch
+    assert 0.2 * _BIG_KWH - 0.1 <= steps[-1].soc_end_kwh <= 0.2 * _BIG_KWH + one_slot_kwh
+    # vor dem ersten Nachladen steht der Akku am SOC des Starts, danach entlädt er nicht mehr
+    assert all(item.discharge_w == 0 for item in steps)
+
+
+def test_fallback_recharge_uses_only_the_first_24_hours() -> None:
+    # 100 Slots, der billigste erst nach 24 h: er bleibt frei
+    prices = [20.0] * 96 + [1.0] + [20.0] * 3
+    inputs = _below_reserve(prices=prices, pv=[0.0] * 100, load=[600.0] * 100)
+    intents = fallback_intents(inputs)
+    assert intents[96].kind is not BatteryIntentKind.NETZLADEN
+    assert any(i.reserve_recharge for i in intents[:96])
+
+
+def test_fallback_without_recharge_at_reserve() -> None:
+    intents = fallback_intents(_below_reserve(soc_pct=20.0))
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in intents)
+
+
+def test_fallback_waits_for_pv_that_refills_the_reserve() -> None:
+    prices = [30.0] * 4 + [10.0] * 2 + [20.0] * 34
+    inputs = _below_reserve(prices=prices, pv=[0.0] * 24 + [4000.0] * 16, load=[600.0] * 40)
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in fallback_intents(inputs))
+
+
+def test_fallback_recharge_respects_phase_headroom() -> None:
+    # Tesla voll im billigsten Slot 4: dort bleiben 3 · 490 W, auf 100 W abgerundet 1400 W
+    tesla = _tesla(departure_at=at(SCENARIO_START) + 6 * SLOT, need_kwh=11040.0 * SLOT_H / 1000)
+    inputs = _below_reserve(
+        prices=[30.0] * 4 + [5.0, 10.0] + [20.0] * 18,
+        battery=state(usable_kwh=_BIG_KWH, grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[tesla],
+    )
+    watts = fallback_vehicles(inputs)
+    assert watts["tesla"][4] == pytest.approx(11040.0)
+    intents = fallback_intents(inputs, per_slot(watts, 24))
+    assert intents[4] == BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=1400.0, reserve_recharge=True
+    )

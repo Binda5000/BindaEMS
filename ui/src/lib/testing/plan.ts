@@ -32,6 +32,7 @@ export function slot(
 		start: iso(local),
 		intent,
 		grid_charge_w: gridChargeW,
+		reserve_recharge: false,
 		soc_pct: 50,
 		pv_w: 0,
 		load_w: 1000,

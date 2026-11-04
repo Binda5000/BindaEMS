@@ -575,6 +575,30 @@ describe('Akku ins Auto im Plan', () => {
 	});
 });
 
+describe('Nachladen auf die Reserve im Plan', () => {
+	const demo = files['./contract/plan.json'] as { plan: { slots: Record<string, unknown>[] } };
+
+	it('liest das Flag und den Grund, die Demo nennt das Flag', () => {
+		const slot = demo.plan.slots[0]!;
+		expect(Object.keys(slot)).toContain('reserve_recharge');
+		const parsed = v.parse(s.PlanSlotSchema, {
+			...slot,
+			intent: 'NETZLADEN',
+			grid_charge_w: 3000,
+			reserve_recharge: true,
+			codes: ['NACHLADEN_RESERVE']
+		});
+		expect(parsed.reserve_recharge).toBe(true);
+		expect(parsed.codes).toEqual(['NACHLADEN_RESERVE']);
+	});
+
+	it('liest ältere Pläne ohne das Feld mit false', () => {
+		const slot: Record<string, unknown> = { ...demo.plan.slots[0] };
+		delete slot.reserve_recharge;
+		expect(v.parse(s.PlanSlotSchema, slot).reserve_recharge).toBe(false);
+	});
+});
+
 describe('Planung in den Einstellungen', () => {
 	it('liest ältere Einstellungen ohne Akku ins Auto mit false', () => {
 		const demo = files['./contract/settings.json'] as {

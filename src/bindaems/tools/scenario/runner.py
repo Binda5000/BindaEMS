@@ -68,6 +68,7 @@ from bindaems.app.planning.battery_model import (
     SimStep,
     eta,
     params_of,
+    reserve_kwh,
     sim_slots,
     simulate,
     step,
@@ -330,12 +331,13 @@ def _battery_state(data: ScenarioFile, soc_kwh: float) -> BatteryState:
 @dataclass(frozen=True)
 class _Planned:
     """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R), deren Reserve
-    (``lo_kwh`` des Plans, nicht des Laufs) und ob er Regel R2 verletzt."""
+    (die Leer-Grenze von Regel R, ``reserve_kwh`` seiner Eingangsdaten, Plan Netzgrenze je Phase,
+    Entscheidung 9) und ob er Regel R2 verletzt."""
 
     plan: Plan
     steps: list[SimStep]
     index: dict[datetime, int]
-    lo_kwh: float
+    empty_kwh: float
     r2_broken: bool = False
     grid_in_battery_at_start: bool = False  # aus seinen Eingangsdaten, für den nächsten Plan
 
@@ -466,7 +468,7 @@ def _plan_at(
     grid = car_grid_kwh(inputs, ev_w, ev_battery_w) if ev_w else {}
     r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
     positions = {s.start: i for i, s in enumerate(plan.slots)}
-    return _Planned(plan, steps, positions, params.lo_kwh, r2_broken, at_start)
+    return _Planned(plan, steps, positions, reserve_kwh(inputs), r2_broken, at_start)
 
 
 def _charge(car: ScenarioCar, soc_pct: float, wanted_w: float) -> tuple[float, float]:
@@ -642,7 +644,7 @@ def run_scenario(
                 intent = active[1].intent
                 broken = (
                     intent.kind is BatteryIntentKind.NETZLADEN
-                    and export_while_charged_kwh(current.steps, position, current.lo_kwh)
+                    and export_while_charged_kwh(current.steps, position, current.empty_kwh)
                     > R1_TOL_KWH
                 )
         ev_w = 0.0
@@ -687,7 +689,9 @@ def run_scenario(
         baseline_power_ct=baseline_power,
         optimizer_power_ct=optimizer_power,
         r1_violations=sum(violation),
-        charge_before_export_kwh=_charge_before_export_kwh(steps, params.lo_kwh),
+        charge_before_export_kwh=_charge_before_export_kwh(
+            steps, battery.reserve_soc_pct / 100 * capacity
+        ),
         min_soc_kwh=min(soc0, *(item.soc_end_kwh for item in steps)),
         reserve_kwh=battery.reserve_soc_pct / 100 * capacity,
         plans=len(plans),
@@ -745,11 +749,13 @@ def _days(
     return result
 
 
-def _charge_before_export_kwh(steps: Sequence[SimStep], lo_kwh: float) -> float:
+def _charge_before_export_kwh(steps: Sequence[SimStep], empty_kwh: float) -> float:
     """Netzgeladene Energie in Slots, nach denen tatsächlich mehr als ``R1_TOL_KWH`` eingespeist
-    wurde, bevor der Akku leer war (den Slot eingeschlossen; über den ganzen Lauf, nicht je Tag)."""
+    wurde, bevor der Akku leer war (höchstens ``empty_kwh``, die Reserve; den Slot eingeschlossen;
+    über den ganzen Lauf, nicht je Tag)."""
     return sum(
         item.charge_grid_w * SLOT_H / 1000
         for position, item in enumerate(steps)
-        if item.charge_grid_w > 0 and export_while_charged_kwh(steps, position, lo_kwh) > R1_TOL_KWH
+        if item.charge_grid_w > 0
+        and export_while_charged_kwh(steps, position, empty_kwh) > R1_TOL_KWH
     )

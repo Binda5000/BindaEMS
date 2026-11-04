@@ -3,7 +3,9 @@ import {
 	INTENT_LABELS,
 	SOURCE_LABELS,
 	TRIGGER_LABELS,
+	RESERVE_RECHARGE_LABEL,
 	blockLabel,
+	intentLabel,
 	planBlocks,
 	socRange
 } from './model';
@@ -58,6 +60,24 @@ it('carries SOC from the end of the slot before the block', () => {
 		[41, 53.6]
 	]);
 	expect(blocks[1].text).toBe('Satz NETZLADEN_GUENSTIG');
+});
+
+it('nennt ein Nachladen auf die Reserve „Nachladen“, mit dem Satz des Servers', () => {
+	const text = 'Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt.';
+	const recharge = { reserve_recharge: true, text };
+	const blocks = planBlocks([
+		slot('10:00', 'NETZLADEN', 3000, 'NACHLADEN_RESERVE', recharge),
+		slot('10:15', 'NETZLADEN', 3000, 'NACHLADEN_RESERVE', recharge),
+		slot('10:30', 'NETZLADEN', 3000, 'NETZLADEN_GUENSTIG')
+	]);
+	expect(blocks.map((b) => [b.start, b.end, blockLabel(b), b.text])).toEqual([
+		[iso('10:00'), iso('10:30'), 'Nachladen 3 kW', text],
+		[iso('10:30'), iso('10:45'), 'Netzladen 3 kW', 'Satz NETZLADEN_GUENSTIG']
+	]);
+	expect(RESERVE_RECHARGE_LABEL).toBe('Nachladen');
+	expect(intentLabel('NETZLADEN', 1500, true)).toBe('Nachladen 1,5 kW');
+	expect(intentLabel('NETZLADEN', 1500, false)).toBe('Netzladen 1,5 kW');
+	expect(intentLabel('NETZLADEN', 1500)).toBe('Netzladen 1,5 kW');
 });
 
 it('returns no blocks without slots', () => {

@@ -17,6 +17,7 @@ from tests.plan_helpers import (
     month,
     planned_car,
     pv_arc,
+    resimulate,
     scenario,
     small_battery,
     state,
@@ -26,6 +27,7 @@ from bindaems.app.planning import optimizer
 from bindaems.app.planning.battery_model import SLOT_H, params_of
 from bindaems.app.planning.grid_phases import PHASES, phase_shares
 from bindaems.app.planning.inputs import BatteryState, PeakMonth, PlanInputs, peak_months
+from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import (
     R1_EMPTY_TOL_KWH,
     TIME_LIMIT_S,
@@ -34,8 +36,10 @@ from bindaems.app.planning.optimizer import (
     ev_battery_power_w,
     ev_power_w,
     grid_charge_cap_w,
+    recharge_cap_w,
     solve,
 )
+from bindaems.app.planning.plausibility import R1_TOL_KWH, check_plan, export_while_charged_kwh
 from bindaems.app.planning.vehicles import (
     EV_ON_W,
     PlanVehicleInput,
@@ -44,6 +48,7 @@ from bindaems.app.planning.vehicles import (
     need_kwh,
 )
 from bindaems.shared.config import Phase
+from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, BatteryIntentKind
 from bindaems.shared.settings import TariffSettings
 from bindaems.shared.timeutil import SLOT
 
@@ -867,7 +872,7 @@ def phase_grid_w(inputs: PlanInputs, flow: SlotFlows, phase: Phase) -> float:
         flow.ev.get(car.key, (0.0, 0.0))[1] * phase_shares(car.grid_phases).get(phase, 0.0)
         for car in inputs.vehicles
     )
-    return (flow.gr_h + flow.gr_b) / 3 + cars
+    return (flow.gr_h + flow.gr_b + flow.gr_r) / 3 + cars
 
 
 def _tesla(**overrides: Any) -> PlanVehicleInput:
@@ -1068,3 +1073,138 @@ def test_without_soft_rate_two_cars_charge_as_before() -> None:
     # Ursache und Wirkung: ohne Satz bleibt die Spitze nicht beim nötigen Mittelwert (beobachtet:
     # beide Autos zugleich mit voller Leistung, 19,0 kW), mit Satz schon (oben)
     assert _peak_import_kw(result) > _FLAT_NIGHT_MEAN_KW + 0.1
+
+
+# Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9)
+
+_BIG_KWH = 96.0
+_RESERVE_KWH = 0.2 * _BIG_KWH
+
+
+def _below_reserve(
+    *,
+    soc_pct: float = 16.0,
+    grid_charge: bool = False,
+    prices: list[float] | None = None,
+    pv: list[float] | None = None,
+    battery: BatteryState | None = None,
+    vehicles: list[PlanVehicleInput] | None = None,
+) -> PlanInputs:
+    """Akku 96 kWh, Reserve 20 %, SOC 16 %, Haus 600 W, ohne PV; 24 Slots zu 30 ct, Slot 4 und 5
+    zu 10 ct. Es fehlen 3,84 kWh bis zur Reserve, gut fünf Slots mit 3 kW."""
+    prices = prices if prices is not None else [30.0] * 4 + [10.0] * 2 + [30.0] * 18
+    return scenario(
+        prices=prices,
+        pv=pv if pv is not None else [0.0] * len(prices),
+        load=[600.0] * len(prices),
+        soc_pct=soc_pct,
+        grid_charge=grid_charge,
+        battery=battery or state(usable_kwh=_BIG_KWH),
+        vehicles=vehicles,
+    )
+
+
+def test_recharge_to_reserve_with_switch_off() -> None:
+    inputs = _below_reserve()
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert all(f.gr_b == 0 for f in result.flows)
+    intents = derive_intents(inputs, result)
+    charging = [i for i in intents if i.kind is BatteryIntentKind.NETZLADEN]
+    assert charging and all(i.reserve_recharge for i in charging)
+    assert all(0 < i.grid_charge_w <= RESERVE_RECHARGE_MAX_W for i in charging)
+    # die billigen Slots zuerst, mit voller Leistung
+    assert [intents[4].grid_charge_w, intents[5].grid_charge_w] == [3000.0, 3000.0]
+    steps = resimulate(inputs, intents)
+    end_pct = steps[-1].soc_end_kwh / _BIG_KWH * 100
+    one_slot_pct = 3000.0 * SLOT_KWH * params_of(inputs).eta_ch / _BIG_KWH * 100
+    assert 20.0 - 0.1 <= end_pct <= 20.0 + one_slot_pct
+    assert check_plan(inputs, result, intents, steps) == []
+
+
+def test_recharge_cap_follows_limit_setpoint_and_reserve() -> None:
+    inputs = _below_reserve(battery=state(usable_kwh=_BIG_KWH, max_grid_charge_setpoint_w=2600.0))
+    assert recharge_cap_w(inputs, 0) == 2000.0  # 2600 W Sollwert − 600 W Haus
+    assert recharge_cap_w(_below_reserve(), 0) == RESERVE_RECHARGE_MAX_W
+    assert recharge_cap_w(_below_reserve(soc_pct=20.0), 0) == 0.0
+
+
+def test_no_recharge_at_or_above_reserve() -> None:
+    for soc_pct in (20.0, 35.0):
+        inputs = _below_reserve(soc_pct=soc_pct)
+        assert all(recharge_cap_w(inputs, t) == 0 for t in range(len(inputs.slots)))
+        result = solve(inputs)
+        assert result.status == "optimal"
+        assert all(f.gr_r == 0 and f.gr_b == 0 for f in result.flows)
+        assert all(
+            i.kind is not BatteryIntentKind.NETZLADEN for i in derive_intents(inputs, result)
+        )
+
+
+def test_pv_refills_before_grid_recharge() -> None:
+    # 24 Slots Nacht, dann 16 Slots mit 4 kW PV: 3,4 kW Überschuss füllen die Reserve umsonst
+    prices = [30.0] * 4 + [10.0] * 2 + [30.0] * 34
+    inputs = _below_reserve(prices=prices, pv=[0.0] * 24 + [4000.0] * 16)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert sum(f.gr_r for f in result.flows) < 1
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in derive_intents(inputs, result))
+    assert result.flows[-1].soc_end_kwh >= _RESERVE_KWH - 0.01
+
+
+@pytest.mark.parametrize("grid_charge", [False, True])
+def test_recharge_does_not_block_export_by_r1(grid_charge: bool) -> None:
+    # Nachts billig nachladen, mittags ein Slot mit 12 kW PV: 10 kW gehen in den Akku, 1,4 kW
+    # ins Netz; das reicht nicht ganz bis zur Reserve, der Rest kommt aus dem Netz davor. Mit der
+    # Reserve als Leer-Grenze steht der nachgeladene Akku nicht unter Regel R.
+    prices = [30.0] * 4 + [10.0] * 4 + [30.0] * 4 + [8.0] + [40.0] * 7
+    pv = [0.0] * 12 + [12000.0] + [0.0] * 7
+    inputs = _below_reserve(prices=prices, pv=pv, grid_charge=grid_charge)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert result.flows[12].pv_x > 1000
+    intents = derive_intents(inputs, result)
+    charging = [i for i, intent in enumerate(intents) if intent.kind is BatteryIntentKind.NETZLADEN]
+    assert charging and all(i < 12 for i in charging)
+    # ohne Schalter nur Nachladen; mit Schalter lädt er dazu für die Slots vor der PV
+    assert all(intents[i].reserve_recharge for i in charging) or grid_charge
+    steps = resimulate(inputs, intents)
+    assert steps[12].export_w > 1000
+    for index in charging:
+        assert export_while_charged_kwh(steps, index, _RESERVE_KWH) <= R1_TOL_KWH
+    assert check_plan(inputs, result, intents, steps) == []
+    assert steps[-1].soc_end_kwh >= _RESERVE_KWH - 0.1
+
+
+def test_recharge_respects_phase_limit() -> None:
+    # Der Tesla muss in Slot 0 voll laden (3680 W je Phase), das Haus nimmt 200 W je Phase: Im
+    # billigen Slot bleiben fürs Nachladen 3 · 490 W, der Rest kommt später
+    tesla = _tesla(departure_at=slot(1), need_kwh=11040.0 * SLOT_KWH)
+    inputs = _below_reserve(
+        prices=[5.0] + [30.0] * 11,
+        battery=state(usable_kwh=_BIG_KWH, grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[tesla],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert car_w(result.flows[0]) == pytest.approx(11040.0)
+    assert 1000.0 < result.flows[0].gr_r <= 3 * (4370 - 200 - 3680) + 1
+    assert sum(f.gr_r for f in result.flows[1:]) > 3000.0
+    for f in result.flows:
+        for phase in PHASES:
+            assert phase_grid_w(inputs, f, phase) <= PHASE_LIMIT_W + 1
+
+
+def test_recharged_energy_stays_in_the_battery() -> None:
+    # Nachts billig nachladen und morgens teuer entladen wäre Netzladen am Schalter vorbei: Was
+    # nachgeladen ist, verlässt den Akku nicht, auch wenn die PV ihn danach wieder füllt.
+    prices = [10.0] * 8 + [60.0] * 8 + [30.0] * 24
+    pv = [0.0] * 16 + [6000.0] * 24
+    inputs = _below_reserve(prices=prices, pv=pv)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    soc0 = 0.16 * _BIG_KWH
+    charged = 0.0
+    for f in result.flows:
+        charged += params_of(inputs).eta_ch * f.gr_r * SLOT_KWH
+        assert f.soc_end_kwh >= soc0 + charged - 1e-6

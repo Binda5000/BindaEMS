@@ -16,6 +16,7 @@ from tests.plan_helpers import (
     resimulate,
     scenario,
     small_battery,
+    state,
     virtual,
 )
 
@@ -45,6 +46,67 @@ def test_grid_charge_becomes_netzladen_rounded() -> None:
     assert kinds[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2300)
     assert kinds[1].kind == BatteryIntentKind.EIGENVERBRAUCH
     assert kinds[2].grid_charge_w == 7000
+
+
+def _recharge(watts: float) -> BatteryIntent:
+    return BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=watts, reserve_recharge=True
+    )
+
+
+def _below_reserve(*, grid_charge: bool, slots: int = 2) -> PlanInputs:
+    """Akku 96 kWh, Reserve 20 %, SOC 16 %, Haus 600 W, ohne PV, ein Preis, kein Restwert."""
+    return scenario(
+        prices=[10.0] * slots,
+        pv=[0.0] * slots,
+        load=[600.0] * slots,
+        soc_pct=16.0,
+        grid_charge=grid_charge,
+        battery=state(usable_kwh=96.0),
+    )
+
+
+def test_reserve_recharge_becomes_netzladen_with_flag() -> None:
+    # Schalter aus: das Nachladen wird ``NETZLADEN`` mit Flag, gekappt auf ``recharge_cap_w``; es
+    # muss sich nicht rechnen (kein Restwert, keine spätere Entladung)
+    inputs = _below_reserve(grid_charge=False)
+    soc0 = 0.16 * 96.0
+    result = flows_result(
+        [
+            flow(gr_h=600, gr_r=2340, soc_end_kwh=soc0 + 0.5),
+            flow(gr_h=600, gr_r=3000, soc_end_kwh=soc0 + 1.2),
+        ]
+    )
+    assert derive_intents(inputs, result) == [_recharge(2300.0), _recharge(3000.0)]
+
+
+def test_reserve_recharge_with_switch_on_stays_below_the_limit() -> None:
+    # Netzladen unter 100 W zählt nicht: der Slot ist ein Nachladen, höchstens 3000 W
+    inputs = _below_reserve(grid_charge=True)
+    soc0 = 0.16 * 96.0
+    result = flows_result(
+        [
+            flow(gr_h=600, gr_b=90, gr_r=3000, soc_end_kwh=soc0 + 0.7),
+            flow(gr_h=600, gr_b=40, gr_r=2000, soc_end_kwh=soc0 + 1.2),
+        ]
+    )
+    assert derive_intents(inputs, result) == [_recharge(3000.0), _recharge(2000.0)]
+
+
+def test_unprofitable_grid_charge_keeps_its_recharge_part() -> None:
+    # Netzladen 2000 W rechnet sich nicht (ein Preis, kein Restwert); gestrichen wird nur dieser
+    # Teil, das Nachladen (1500 W) bleibt
+    inputs = _below_reserve(grid_charge=True)
+    soc0 = 0.16 * 96.0
+    result = flows_result(
+        [
+            flow(gr_h=600, gr_b=2000, gr_r=1500, soc_end_kwh=soc0 + 0.8),
+            flow(gr_h=600, soc_end_kwh=soc0 + 0.8),
+        ]
+    )
+    kinds = derive_intents(inputs, result)
+    assert kinds[0] == _recharge(1500.0)
+    assert kinds[1].kind is BatteryIntentKind.HALTEN
 
 
 def test_grid_charge_below_one_step_of_headroom_is_not_netzladen() -> None:

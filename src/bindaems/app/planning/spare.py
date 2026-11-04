@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final
 
-from bindaems.app.planning.battery_model import SimStep, params_of
+from bindaems.app.planning.battery_model import SimStep, params_of, reserve_kwh
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import grid_in_battery
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
@@ -50,7 +50,7 @@ def now_battery_flags(
         return [False] * len(intents)
     params = params_of(inputs)
     grid_inside = grid_in_battery(
-        intents, steps, params.lo_kwh, at_start=inputs.grid_in_battery_at_start
+        intents, steps, reserve_kwh(inputs), at_start=inputs.grid_in_battery_at_start
     )
     flags: list[bool] = []
     for index, intent in enumerate(intents):

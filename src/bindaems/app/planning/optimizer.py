@@ -5,8 +5,8 @@ Minimiert über den Horizont Bezug minus Einspeisung, Verschleiß beim Entladen,
 Netzladen, den Leistungspreis je Monat und die Abweichung vom vorigen Plan in den ersten Slots,
 abzüglich des Restwerts der Energie im Akku am Horizontende. Regel R1 ist hart: Nach Netzladen
 wird nichts eingespeist, solange Netzenergie im Akku sein kann, also bis der Akku wieder leer ist
-(SOC am Slotende ≤ untere Grenze ``min(Reserve, SOC₀)`` + ``R1_EMPTY_TOL_KWH``) oder der
-Horizont endet. Das gilt auch für Netzenergie, die schon zu Beginn im Akku sein kann
+(SOC am Slotende ≤ Reserve + ``R1_EMPTY_TOL_KWH``, auch wenn der SOC zu Beginn darunter liegt) oder
+der Horizont endet. Das gilt auch für Netzenergie, die schon zu Beginn im Akku sein kann
 (``PlanInputs.grid_in_battery_at_start``, Fix-Welle F2): Sie sperrt Akku ins Auto hart, die
 Einspeisung kostet bis zum leeren Akku ``CARRIED_EXPORT_CT`` je kWh, denn vermeiden lässt sie sich
 nicht immer, wenn das Netzladen schon geschehen ist.
@@ -39,6 +39,16 @@ Netzgrenze je Phase (Plan Netzgrenze je Phase, Entscheidungen 4 und 5): Mit
 Netzladen sind symmetrisch, ein Auto lädt auf jeder seiner Phasen gleich viel (``phase_shares``);
 PV und Akku ins Auto zählen nicht. Ohne Grenze gibt es keine solche Bedingung.
 
+Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9): Liegt der SOC zu Beginn
+unter der Reserve, gibt es ``gr_r`` (Netz → Akku, auch bei ausgeschaltetem Schalter) mit
+``0 ≤ gr_r ≤ recharge_cap_w``. Es zählt wie ``gr_b`` zur Ladung, zum Bezug, zur Spitze und zur
+Phasengrenze und kostet den Bezugspreis ohne Marge, setzt aber kein ``z_t`` (Regel R1). Höchstens
+die Lücke bis zur Reserve wird nachgeladen (``Σ η_ch · gr_r · Δ ≤ Reserve − SOC₀``), und was
+nachgeladen ist, verlässt den Akku nicht (``s_t ≥ SOC₀ + Σ_{τ≤t} η_ch · gr_r_τ · Δ``), sonst wäre
+es Netzladen am Schalter vorbei. Ziel ist ``s_T + short_r ≥ Reserve`` am Horizontende,
+``short_r`` kostet ``SHORTFALL_CT`` je kWh; PV in den Akku bleibt vorrangig, weil sie nichts
+kostet. Mit dem Schalter lädt ein Slot zusammen höchstens ``GC_t`` (``gr_b + gr_r ≤ GC_t``).
+
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 """
@@ -53,11 +63,17 @@ from typing import Any, Final
 import highspy
 import pulp
 
-from bindaems.app.planning.battery_model import SLOT_H, SimSlot, params_of, sim_slots
+from bindaems.app.planning.battery_model import (
+    SLOT_H,
+    SimSlot,
+    params_of,
+    reserve_kwh,
+    sim_slots,
+)
 from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import INERTIA_SLOTS, PlanInputs
 from bindaems.app.planning.vehicles import PlanVehicleInput, cars_charging, charge_window
-from bindaems.shared.plan import SolverStatus
+from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, SolverStatus
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
 TIME_LIMIT_S: Final = 20.0
@@ -76,7 +92,8 @@ class SlotFlows:
     """Flüsse eines Slots in W und SOC am Slotende in kWh.
 
     ``pv_h``/``pv_b``/``pv_x``: PV ins Haus, in den Akku, ins Netz; ``gr_h``/``gr_b``: Netz ins
-    Haus, in den Akku; ``bt_h``: Akku ins Haus. ``ev``: ``(pv_ev, gr_ev)`` je geplantem Auto, PV
+    Haus, in den Akku; ``bt_h``: Akku ins Haus. ``gr_r``: Netz in den Akku beim Nachladen auf die
+    Reserve (Entscheidung 9), 0 ohne. ``ev``: ``(pv_ev, gr_ev)`` je geplantem Auto, PV
     und Netz ins Auto; es fehlen Autos, die in dem Slot nicht laden können (ab der Abfahrt, ohne
     Bedarf, ein erwartetes Auto vor seiner Ankunft). ``ev_battery``: ``bt_ev`` je Auto, Akku ins
     Auto, nur mit dem Schalter „Akku ins Auto, wenn übrig“ und nur für Autos, die im Slot laden
@@ -92,6 +109,7 @@ class SlotFlows:
     soc_end_kwh: float
     ev: Mapping[str, tuple[float, float]] = field(default_factory=dict)
     ev_battery: Mapping[str, float] = field(default_factory=dict)
+    gr_r: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -151,6 +169,21 @@ def _grid_charge_cap_w(inputs: PlanInputs, slot: SimSlot) -> float:
         return 0.0
     setpoint_w = inputs.battery.max_grid_charge_setpoint_w
     return min(slot.max_charge_w, max(0.0, setpoint_w - slot.load_w))
+
+
+def recharge_cap_w(inputs: PlanInputs, index: int) -> float:
+    """Höchstes Nachladen auf die Reserve im Slot ``index`` (Entscheidung 9): ``min(
+    RESERVE_RECHARGE_MAX_W, Ladeleistung, höchster Sollwert − Last)``, unabhängig vom Schalter; 0,
+    wenn der SOC zu Beginn nicht unter der Reserve liegt."""
+    return _recharge_cap_w(inputs, sim_slots(inputs)[index])
+
+
+def _recharge_cap_w(inputs: PlanInputs, slot: SimSlot) -> float:
+    battery = inputs.battery
+    if battery.soc_pct >= battery.reserve_pct:
+        return 0.0
+    setpoint_w = battery.max_grid_charge_setpoint_w
+    return min(RESERVE_RECHARGE_MAX_W, slot.max_charge_w, max(0.0, setpoint_w - slot.load_w))
 
 
 def _month(inputs: PlanInputs, index: int) -> str:
@@ -271,6 +304,13 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     gr_h = [var("gr_h", t) for t in range(count)]
     caps = [_grid_charge_cap_w(inputs, sim) for sim in slots]
     gr_b = [var("gr_b", t, caps[t]) for t in range(count)]
+    # Nachladen auf die Reserve (Entscheidung 9): nur unter der Reserve, auch ohne Schalter
+    reserve = reserve_kwh(inputs)
+    below_reserve = battery.soc_pct < battery.reserve_pct
+    recharge_caps = [_recharge_cap_w(inputs, sim) for sim in slots]
+    gr_r = {t: var("gr_r", t, cap) for t, cap in enumerate(recharge_caps) if cap > 0}
+    # Netz in den Akku je Slot: Netzladen und Nachladen
+    to_battery = [gr_b[t] + gr_r[t] if t in gr_r else gr_b[t] for t in range(count)]
     bt_h = [var("bt_h", t) for t in range(count)]
     y = [prob.add_variable(f"y_{t}", cat=pulp.LpBinary) for t in range(count)]
     z: dict[int, pulp.LpVariable] = {
@@ -292,14 +332,14 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         pulp.lpSum(c.battery[t] for c in active[t] if t in c.battery) for t in range(count)
     ]
     car_battery_max = [sum(c.car.max_w for c in active[t] if t in c.battery) for t in range(count)]
-    imports = [gr_h[t] + gr_b[t] + car_grid[t] for t in range(count)]
+    imports = [gr_h[t] + to_battery[t] + car_grid[t] for t in range(count)]
     # Netzgrenze je Phase (Entscheidung 4): Anteil jedes Autos je Phase; ohne Grenze keine
     phase_limit_w = battery.grid_phase_import_w
     shares = {c.index: phase_shares(c.car.grid_phases) for c in cars}
 
     terms: list[Any] = []
     for t, (slot, sim) in enumerate(zip(inputs.slots, slots, strict=True)):
-        charge = pv_b[t] + gr_b[t]
+        charge = pv_b[t] + to_battery[t]
         prob += pv_h[t] + car_pv[t] + pv_b[t] + pv_x[t] == slot.pv_w, f"pv_{t}"
         prob += pv_h[t] + gr_h[t] + bt_h[t] == slot.load_w, f"haus_{t}"
         prob += charge <= sim.max_charge_w * y[t], f"laden_{t}"
@@ -307,6 +347,8 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         prob += discharge <= sim.max_discharge_w * (1 - y[t]), f"entladen_{t}"
         if t in z:
             prob += gr_b[t] <= caps[t] * z[t], f"netzladen_{t}"
+        if t in gr_r and switch:
+            prob += gr_b[t] + gr_r[t] <= caps[t], f"netzladen_summe_{t}"
         prob += imports[t] <= battery.grid_max_import_w, f"bezug_{t}"
         if phase_limit_w is not None:
             room_w = phase_room_w(phase_limit_w, slot.load_w, slot.pv_w)
@@ -316,7 +358,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                     for c in active[t]
                     if phase in shares[c.index]
                 )
-                prob += (gr_h[t] + gr_b[t]) / 3 + cars_w <= room_w, f"phase_{t}_{phase}"
+                prob += (gr_h[t] + to_battery[t]) / 3 + cars_w <= room_w, f"phase_{t}_{phase}"
         if active[t] and slot.pv_w > slot.load_w:
             # PV erst in die Autos: Lädt eines aus dem Netz, geht keine PV in Akku oder Netz
             # (sonst Netz über das Auto in den Akku, an R1 und Schalter vorbei); ebenso, wenn es
@@ -344,7 +386,8 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             terms.append(_KWH * (planning.wear_ct + planning.margin_ct) * car_battery[t])
 
     # Regel R1: Keine Einspeisung, solange Netzenergie im Akku sein kann. ``e_t`` = 1 heißt: Der
-    # Akku ist am Ende von Slot t leer (SOC ≤ untere Grenze ``min(Reserve, SOC₀)`` + Toleranz).
+    # Akku ist am Ende von Slot t leer (SOC ≤ Reserve + Toleranz, auch wenn SOC₀ darunter liegt:
+    # Energie unter der Reserve verlässt den Akku nie, Entscheidung 9).
     # Die Binärvariable des letzten Slots bleibt, um die Lösezeit nicht zu berühren. ``c_t`` ≥ 0
     # hält fest, dass nach Netzladen noch Netzenergie im Akku ist: Es springt bei Netzladen auf 1
     # und fällt erst nach einem leeren Akku wieder. ``c_t`` ist nur nach unten beschränkt, der
@@ -362,7 +405,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         empty = {t: prob.add_variable(f"e_{t}", cat=pulp.LpBinary) for t in range(first, count)}
         for t in range(first, count):
             prob += (
-                soc[t] <= params.lo_kwh + R1_EMPTY_TOL_KWH + span * (1 - empty[t]),
+                soc[t] <= reserve + R1_EMPTY_TOL_KWH + span * (1 - empty[t]),
                 f"leer_{t}",
             )
     if z:
@@ -423,7 +466,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         if slot.prev_battery_w is None:
             continue
         dev = var("dev", t)
-        net = pv_b[t] + gr_b[t] - bt_h[t] - car_battery[t]
+        net = pv_b[t] + to_battery[t] - bt_h[t] - car_battery[t]
         prob += dev >= net - slot.prev_battery_w, f"traeg_auf_{t}"
         prob += dev >= slot.prev_battery_w - net, f"traeg_ab_{t}"
         terms.append(_KWH * planning.inertia_ct * dev)
@@ -437,6 +480,9 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             prob += dev >= c.power(t) - previous, f"traeg_auto{c.index}_auf_{t}"
             prob += dev >= previous - c.power(t), f"traeg_auto{c.index}_ab_{t}"
             terms.append(_KWH * planning.inertia_ct * dev)
+
+    if below_reserve:
+        _add_recharge(prob, terms, soc, gr_r, soc0, reserve, params.eta_ch)
 
     for c in cars:
         terms.append(SHORTFALL_CT * c.short + R2_CT * c.rho)
@@ -465,6 +511,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             soc_end_kwh=float(soc[t].varValue),
             ev={c.car.key: (_value(c.pv[t]), _value(c.grid[t])) for c in active[t]},
             ev_battery={c.car.key: _value(c.battery[t]) for c in active[t] if t in c.battery},
+            gr_r=_value(gr_r[t]) if t in gr_r else 0.0,
         )
         for t in range(count)
     )
@@ -486,6 +533,37 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     )
 
 
+def _add_recharge(
+    prob: pulp.LpProblem,
+    terms: list[Any],
+    soc: list[pulp.LpVariable],
+    gr_r: Mapping[int, pulp.LpVariable],
+    soc0: float,
+    reserve: float,
+    eta_ch: float,
+) -> None:
+    """Bedingungen und Ziel des Nachladens auf die Reserve (Entscheidung 9), nur bei ``SOC₀`` unter
+    der Reserve: Höchstens die Lücke bis zur Reserve wird nachgeladen (``nachladen_menge``), das
+    Nachgeladene bleibt im Akku (``nachgeladen_t`` über die Summe ``r_t`` bis Slot t), und am
+    Horizontende steht der Akku an der Reserve oder es fehlt ``short_r`` (``SHORTFALL_CT`` je kWh).
+    """
+    if gr_r:
+        prob += (
+            pulp.lpSum(eta_ch * _KWH * g for g in gr_r.values()) <= reserve - soc0,
+            "nachladen_menge",
+        )
+        total: Any = 0  # nachgeladene Energie bis Slot t in kWh
+        for t in range(min(gr_r), len(soc)):
+            if t in gr_r:
+                running = prob.add_variable(f"r_{t}", lowBound=0)
+                prob += running == total + eta_ch * _KWH * gr_r[t], f"r_summe_{t}"
+                total = running
+            prob += soc[t] >= soc0 + total, f"nachgeladen_{t}"
+    short = prob.add_variable("fehl_reserve", lowBound=0)
+    prob += soc[-1] + short >= reserve, "reserve_ende"
+    terms.append(SHORTFALL_CT * short)
+
+
 def _known_peaks_kw(
     inputs: PlanInputs,
     peak0_kw: Mapping[str, float],
@@ -493,14 +571,15 @@ def _known_peaks_kw(
     expected: set[str],
 ) -> dict[str, float]:
     """Spitze je Monat ohne die Netzleistung der erwarteten Autos (Ruling F-1): das Größere aus
-    ``peak0`` und dem höchsten Bezug ``gr_h + gr_b + Netz in angesteckte Autos`` im Monat."""
+    ``peak0`` und dem höchsten Bezug ``gr_h + gr_b + gr_r + Netz in angesteckte Autos`` im
+    Monat."""
     result = dict(peak0_kw)
     for t, item in enumerate(flows):
         month = _month(inputs, t)
         if month not in result:
             continue
         cars_w = sum(grid for key, (_, grid) in item.ev.items() if key not in expected)
-        result[month] = max(result[month], (item.gr_h + item.gr_b + cars_w) / 1000)
+        result[month] = max(result[month], (item.gr_h + item.gr_b + item.gr_r + cars_w) / 1000)
     return result
 
 

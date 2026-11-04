@@ -15,6 +15,9 @@ export const INTENT_LABELS: Record<BatteryIntentKind, string> = {
 	NETZLADEN: 'Netzladen'
 };
 
+/** `NETZLADEN` nur auf die Reserve (`reserve_recharge`), auch ohne „Netzladen erlaubt“ */
+export const RESERVE_RECHARGE_LABEL = 'Nachladen';
+
 export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	start: 'Start',
 	slot: 'Viertelstunde',
@@ -40,6 +43,8 @@ export interface PlanBlock {
 	end: string;
 	intent: PlanSlot['intent'];
 	gridChargeW: number;
+	/** Nachladen auf die Reserve (`reserve_recharge` der Slots) */
+	reserveRecharge: boolean;
 	/** SOC am Ende des Slots vor dem Block, beim ersten Block der Start-SOC des Plans (sonst das Ende des ersten Slots) */
 	socFrom: number;
 	socTo: number;
@@ -63,7 +68,8 @@ function endOf(slot: PlanSlot): string {
 }
 
 /**
- * Aufeinanderfolgende Slots mit gleicher Absicht, gleichem Netzladen und gleichem Hauptcode. Ein
+ * Aufeinanderfolgende Slots mit gleicher Absicht, gleichem Netzladen (auch ob es ein Nachladen ist)
+ * und gleichem Hauptcode. Ein
  * erwartetes Auto (Plan 5b) hängt am Block seiner Ankunft, eine Ankunft vor dem Plan am ersten Block;
  * liegt die Ankunft hinter dem Plan, bleibt es weg.
  */
@@ -75,7 +81,7 @@ export function planBlocks(
 	const blocks: PlanBlock[] = [];
 	let key = '';
 	slots.forEach((slot, index) => {
-		const slotKey = `${slot.intent}|${slot.grid_charge_w}|${mainCode(slot)}`;
+		const slotKey = `${slot.intent}|${slot.grid_charge_w}|${slot.reserve_recharge}|${mainCode(slot)}`;
 		const last = blocks.at(-1);
 		if (last && slotKey === key) {
 			last.end = endOf(slot);
@@ -88,6 +94,7 @@ export function planBlocks(
 			end: endOf(slot),
 			intent: slot.intent,
 			gridChargeW: slot.grid_charge_w,
+			reserveRecharge: slot.reserve_recharge,
 			socFrom: index > 0 ? slots[index - 1]!.soc_pct : (socStartPct ?? slot.soc_pct),
 			socTo: slot.soc_pct,
 			text: slot.text,
@@ -120,15 +127,23 @@ export function socRange(from: number, to: number): string {
 	return `${formatNumber(from, digits)} → ${formatNumber(to, digits)}`;
 }
 
-/** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ (die kW nur beim Netzladen mit Leistung) */
-export function intentLabel(intent: BatteryIntentKind, gridChargeW: number): string {
-	const label = INTENT_LABELS[intent];
-	return intent === 'NETZLADEN' && gridChargeW > 0
+/**
+ * „Netzladen 2,3 kW“, „Nachladen 3 kW“ (Netzladen nur auf die Reserve), „Halten“,
+ * „Eigenverbrauch“ (die kW nur beim Netzladen mit Leistung)
+ */
+export function intentLabel(
+	intent: BatteryIntentKind,
+	gridChargeW: number,
+	reserveRecharge = false
+): string {
+	const charging = intent === 'NETZLADEN';
+	const label = charging && reserveRecharge ? RESERVE_RECHARGE_LABEL : INTENT_LABELS[intent];
+	return charging && gridChargeW > 0
 		? `${label} ${formatNumberMax(gridChargeW / 1000, 1)} kW`
 		: label;
 }
 
-/** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ */
+/** „Netzladen 2,3 kW“, „Nachladen 3 kW“, „Halten“, „Eigenverbrauch“ */
 export function blockLabel(block: PlanBlock): string {
-	return intentLabel(block.intent, block.gridChargeW);
+	return intentLabel(block.intent, block.gridChargeW, block.reserveRecharge);
 }

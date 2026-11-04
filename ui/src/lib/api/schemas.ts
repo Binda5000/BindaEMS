@@ -1429,6 +1429,7 @@ export const BatteryIntentKindSchema = v.picklist(['EIGENVERBRAUCH', 'HALTEN', '
 export type BatteryIntentKind = v.InferOutput<typeof BatteryIntentKindSchema>;
 
 export const PlanReasonCodeSchema = v.picklist([
+	'NACHLADEN_RESERVE',
 	'NETZLADEN_GUENSTIG',
 	'HALTEN_FUER_SPITZE',
 	'BUDGET_SPITZE',
@@ -1473,6 +1474,8 @@ export const PlanSlotSchema = v.object({
 	start: Iso,
 	intent: BatteryIntentKindSchema,
 	grid_charge_w: v.number(),
+	/** Netzladen nur auf die Reserve, auch ohne „Netzladen erlaubt“; ältere Pläne haben es nicht */
+	reserve_recharge: v.optional(v.boolean(), false),
 	soc_pct: v.number(),
 	pv_w: v.number(),
 	load_w: v.number(),

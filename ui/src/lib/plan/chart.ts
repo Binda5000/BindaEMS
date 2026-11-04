@@ -164,7 +164,7 @@ export function intentEndingAt(
 		? {
 				from: new Date(epoch(slot.start)).toISOString(),
 				to: new Date(time).toISOString(),
-				label: intentLabel(slot.intent, slot.grid_charge_w)
+				label: intentLabel(slot.intent, slot.grid_charge_w, slot.reserve_recharge)
 			}
 		: null;
 }

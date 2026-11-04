@@ -412,7 +412,13 @@ def flow(
         soc_end_kwh = (
             SLOT_H
             / 1000
-            * (values["pv_b"] + values["gr_b"] - values["bt_h"] - sum(battery.values()))
+            * (
+                values["pv_b"]
+                + values["gr_b"]
+                + values.get("gr_r", 0.0)
+                - values["bt_h"]
+                - sum(battery.values())
+            )
         )
     return SlotFlows(soc_end_kwh=soc_end_kwh, ev=dict(ev or {}), ev_battery=battery, **values)
 

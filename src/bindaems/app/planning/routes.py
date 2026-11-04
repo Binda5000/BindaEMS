@@ -38,6 +38,7 @@ def slot_json(slot: PlanSlot) -> dict[str, Any]:
         "start": slot.start.isoformat(),
         "intent": slot.intent.kind.value,
         "grid_charge_w": slot.intent.grid_charge_w,
+        "reserve_recharge": slot.intent.reserve_recharge,
         "soc_pct": slot.soc_end_pct,
         "pv_w": slot.pv_w,
         "load_w": slot.load_w,

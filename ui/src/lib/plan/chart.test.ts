@@ -281,6 +281,11 @@ it('intentEndingAt nennt die Absicht des Slots, der an der Zeit endet, mit seine
 	expect(intentEndingAt(slots, start)).toBeNull();
 	expect(intentEndingAt(slots, start + 300_000)).toBeNull();
 	expect(intentEndingAt(slots, start + 2_700_000)).toBeNull();
+	// ein Nachladen auf die Reserve heißt „Nachladen“
+	const recharge = [
+		{ ...base, intent: 'NETZLADEN' as const, grid_charge_w: 3000, reserve_recharge: true }
+	];
+	expect(intentEndingAt(recharge, start + 900_000)?.label).toBe('Nachladen 3 kW');
 });
 
 it('zeigt im Tooltip die Absicht des Slots, dessen Ergebnis der SOC-Punkt ist, mit Zeitspanne', () => {

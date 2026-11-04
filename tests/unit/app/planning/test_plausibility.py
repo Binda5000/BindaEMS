@@ -20,6 +20,7 @@ from tests.plan_helpers import (
     sample_plan,
     scenario,
     small_battery,
+    state,
     virtual,
 )
 
@@ -69,6 +70,33 @@ def test_grid_charge_when_switched_off_is_reported() -> None:
         inputs, flows_result([flow(gr_h=1000)]), intents, resimulate(inputs, intents)
     )
     assert "Netzladen um 02:00, obwohl ausgeschaltet" in issues
+
+
+def _recharge(watts: float, *, flag: bool = True) -> list[BatteryIntent]:
+    return [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=watts, reserve_recharge=flag)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("watts", "flag", "reported"),
+    [(2500.0, True, False), (3000.0, True, False), (3500.0, True, True), (2500.0, False, True)],
+)
+def test_reserve_recharge_with_switch_off(watts: float, flag: bool, reported: bool) -> None:
+    # Entscheidung 9: Nachladen auf die Reserve bis 3000 W ist auch ohne Schalter erlaubt, und
+    # es muss sich nicht rechnen
+    inputs = scenario(
+        prices=[10.0], pv=[0.0], load=[1000.0], soc_pct=16.0, battery=state(usable_kwh=96.0)
+    )
+    intents = _recharge(watts, flag=flag)
+    issues = check_plan(
+        inputs,
+        flows_result([flow(gr_h=1000, gr_r=watts, soc_end_kwh=15.36 + watts * SLOT_H / 1000)]),
+        intents,
+        resimulate(inputs, intents),
+    )
+    assert ("Netzladen um 02:00, obwohl ausgeschaltet" in issues) is reported
+    assert ("Netzladen um 02:00 rechnet sich nicht" in issues) is not flag
 
 
 def test_r1_on_resimulation_is_reported() -> None:

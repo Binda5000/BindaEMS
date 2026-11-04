@@ -29,7 +29,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from tests.plan_helpers import planned_car, scenario, state
 
-from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots
+from bindaems.app.planning.battery_model import SLOT_H, params_of, reserve_kwh, sim_slots
 from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, solve
@@ -121,6 +121,7 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
     result = solve(inputs)
     assert result.status in ("optimal", "time_limit") and result.flows
     params = params_of(inputs)
+    empty_kwh = reserve_kwh(inputs)  # Leer-Grenze von R1 ist die Reserve (Entscheidung 9)
     sims = sim_slots(inputs)
     for index, (slot, flow) in enumerate(zip(inputs.slots, result.flows, strict=True)):
         bt_ev = sum(flow.ev_battery.values())
@@ -138,8 +139,7 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
                 (
                     j
                     for j in range(index, len(result.flows))
-                    if result.flows[j].soc_end_kwh
-                    <= params.lo_kwh + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+                    if result.flows[j].soc_end_kwh <= empty_kwh + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
                 ),
                 len(result.flows) - 1,
             )
