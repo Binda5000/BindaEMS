@@ -154,6 +154,42 @@ async def test_run_survives_unexpected_error(cfg, settings_service, clock) -> No
     assert len(sleeps) == 1
 
 
+async def test_run_error_counts_as_failing(cfg, settings_service, clock) -> None:
+    _enable(settings_service)
+    service = _service(
+        cfg,
+        settings_service,
+        clock,
+        FakeFetch(RuntimeError("x")),
+        sleep=record_then_stop([], 1),
+    )
+    with pytest.raises(StopScheduler):
+        await service.run()
+    clock.advance(STALE_AFTER + timedelta(minutes=1))
+    status = service.component_status()
+    assert not status.ok and status.message == "Warnungen seit 10:00 nicht abrufbar"
+
+
+async def test_fingerprint_ignores_the_order_of_the_source(cfg, settings_service, clock) -> None:
+    _enable(settings_service)
+    first, second = _w(14, 16, warn_id=1), _w(14, 18, warn_id=2)
+    one = _service(cfg, settings_service, clock, FakeFetch([first, second]))
+    other = _service(cfg, settings_service, clock, FakeFetch([second, first]))
+    await one.refresh()
+    await other.refresh()
+    assert one.fingerprint() == other.fingerprint()
+    assert [item[0] for item in one.fingerprint()] == [1, 2]
+
+
+async def test_status_shows_the_date_when_the_end_is_not_today(
+    cfg, settings_service, clock
+) -> None:
+    _enable(settings_service)
+    service = _service(cfg, settings_service, clock, FakeFetch([_w(14, 30)]))
+    await service.refresh()
+    assert service.component_status().message == "Gewitter (orange) bis 10.10. 06:00"
+
+
 async def test_switch_cycle_drops_old_state(cfg, settings_service, clock) -> None:
     _enable(settings_service)
     fetch = FakeFetch([_w(14, 16)], [])

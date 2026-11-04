@@ -80,7 +80,9 @@ class StormService:
         return relevant(live, self._settings.current().settings.planning.storm)
 
     def fingerprint(self) -> tuple[tuple[int, int, datetime, datetime], ...]:
-        return tuple((w.warn_id, w.version, w.begin, w.end) for w in self.warnings())
+        # nach (Beginn, Nummer): die Reihenfolge der Quelle löst keinen Neuplan aus
+        ordered = sorted(self.warnings(), key=lambda w: (w.begin, w.warn_id))
+        return tuple((w.warn_id, w.version, w.begin, w.end) for w in ordered)
 
     async def refresh(self) -> None:
         """Ein Abruf; bei ausgeschaltetem Schalter keiner. Ein Fehler lässt die Liste stehen."""
@@ -113,6 +115,7 @@ class StormService:
             try:
                 await self.refresh()
             except Exception:  # die Schleife darf nie stehen bleiben
+                self._failing = True  # ein unerwarteter Fehler zählt wie ein Ausfall der Quelle
                 log.exception("Unwetterwarnungen fehlgeschlagen")
             waiting = asyncio.ensure_future(self._sleep(POLL.total_seconds()))
             woken = asyncio.ensure_future(self._wake.wait())
@@ -137,9 +140,10 @@ class StormService:
         active = self.warnings()
         if not active:
             return ComponentStatus(NAME, True, "keine Warnung")
-        parts = [
-            f"{STORM_KIND_LABELS[w.kind]} ({STORM_LEVEL_LABELS[w.level]}) bis "
-            f"{w.end.astimezone(LOCAL_TZ):%H:%M}"
-            for w in active
-        ]
+        today = now.astimezone(LOCAL_TZ).date()
+        parts = []
+        for w in active:
+            end = w.end.astimezone(LOCAL_TZ)
+            when = f"{end:%H:%M}" if end.date() == today else f"{end:%d.%m. %H:%M}"
+            parts.append(f"{STORM_KIND_LABELS[w.kind]} ({STORM_LEVEL_LABELS[w.level]}) bis {when}")
         return ComponentStatus(NAME, True, "; ".join(parts))
