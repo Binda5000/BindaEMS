@@ -29,7 +29,7 @@
 8. **Tarif mit Stichtag:** Alle Slots rechnen mit den Tarifbestandteilen, die am `tarif_stand` gelten (Standard: heute), ohne deren Gültigkeitsgrenzen; Uhrzeit- und Saisonfenster (SNAP) gelten nach dem Datum des Slots. So zählt der Leistungspreis ab 2027 auch für Monate von 2026. Börsenpreis je Slot echt. Einspeisung: OeMAG-Wert aus den Einstellungen wie in der app (`feed_in_price`); fehlt er, `einspeisung_ct` des Monats aus der Variantendatei, sonst `einspeisung_ersatz_ct`; fehlt auch der, bricht der Lauf mit der Liste der Monate ab.
 9. **Abgleich:** Auf den echten Tagen stehen gemessener Bezug und gemessene Einspeisung neben denen von „Heute“ im Modell. Weicht eines um mehr als 15 % ab, steht ein Hinweis über der Tabelle.
 10. **Geld:** Stromkosten = Energie (Bezug × Bezugspreis brutto − Einspeisung × Einspeisepreis) + Leistungspreis je Monat auf die höchste Viertelstunde. Grundgebühren zählen nicht (gleich in allen Varianten). Ersparnis/Jahr = Strom „Heute“ − Strom Variante + `ersparnis_sonst_eur_jahr` (etwa Heizöl und Kesselwartung, von dir). Netto-Investition = `investition_eur − foerderung_eur`. Amortisation = Netto ÷ Ersparnis (bei Ersparnis ≤ 0 „nie“), Saldo über `nutzungsdauer_jahre` = Ersparnis × Jahre − Netto. Ohne Zins und Preissteigerung.
-11. **Ergebnis als Markdown-Bericht**, keine Seite in der App. *(Karte 2.)*
+11. **Ergebnis als Markdown-Bericht**, keine Seite in der App. **Entschieden vom Betreiber am 04.11.2026: „Markdown-Bericht“.**
 12. **Nicht in diesem Plan:** Optimierer je Variante, Netzladen, Pufferspeicher/Steuerung der Wärmepumpe, Alterung von PV und Akku, Zins, HA-Werte aus der Zeit vor BindaEMS, eine Seite in der App.
 
 ## Global Constraints
