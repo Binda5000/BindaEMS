@@ -65,6 +65,7 @@ def run(
     now: datetime = T0,
     soc: float = 20.0,
     target: float = 80.0,
+    limit: float | None = None,
     departure: datetime | None = None,
     now_w: float = MAX_W,
     power_cost_eur: float | None = None,
@@ -75,6 +76,7 @@ def run(
         now=now,
         soc_pct=soc,
         target_soc_pct=target,
+        limit_soc_pct=limit,
         departure_at=departure or slots[-1].start + SLOT,
         usable_kwh=USABLE,
         efficiency=EFF,
@@ -127,7 +129,8 @@ def test_planned_picks_cheapest_slots() -> None:
 
 
 def test_now_charges_from_now() -> None:
-    est = run(four_slots(), soc=soc_for_kwh(2 * 11.04 * 0.25))
+    # Ladelimit 80 wie das Ziel: Auch „Sofort“ stoppt dort
+    est = run(four_slots(), soc=soc_for_kwh(2 * 11.04 * 0.25), limit=80.0)
     now = est.modes[ChargeMode.NOW]
     assert now.cost_eur == round(11.04 * 0.25 * (0.30 + 0.10), 2)
     assert now.finish_at == T0 + 2 * SLOT
@@ -138,20 +141,25 @@ def test_now_charges_from_now() -> None:
     prices=st.lists(st.floats(0, 60), min_size=1, max_size=96),
     surplus=st.lists(st.floats(0, 12000), min_size=96, max_size=96),
     soc=st.floats(0, 100),
+    target=st.floats(50, 100),
+    above=st.none() | st.floats(0, 50),
 )
 def test_planned_never_costs_more_than_now(
-    prices: list[float], surplus: list[float], soc: float
+    prices: list[float], surplus: list[float], soc: float, target: float, above: float | None
 ) -> None:
+    # Das Ladelimit liegt hier nie unter dem Ziel: Dann lädt „Sofort“ mindestens so weit
+    limit = None if above is None else min(100.0, target + above)
     slots = [slot(T0 + i * SLOT, import_ct=ct, export_w=surplus[i]) for i, ct in enumerate(prices)]
-    est = run(slots, soc=soc, target=100.0)
+    est = run(slots, soc=soc, target=target, limit=limit)
     now, planned = est.modes[ChargeMode.NOW], est.modes[ChargeMode.PLANNED]
     if now.reachable:
         assert planned.cost_eur <= now.cost_eur + 0.01
         assert planned.reachable
     for mode in ESTIMATED_MODES:
         m = est.modes[mode]
-        assert m.energy_kwh <= est.need_kwh + 1e-6 + 0.05
-        assert m.soc_pct <= est.target_soc_pct
+        stop_need = max(0.0, m.target_soc_pct - soc) / 100.0 * USABLE / EFF
+        assert m.energy_kwh <= stop_need + 1e-6 + 0.05
+        assert soc - 0.05 <= m.soc_pct <= max(soc, m.target_soc_pct) + 0.05  # auf 0,1 gerundet
 
 
 def test_now_includes_power_cost() -> None:
@@ -195,7 +203,7 @@ def test_own_planned_charging_counts_as_surplus() -> None:
 
 
 def test_already_at_target() -> None:
-    est = run(four_slots(), soc=80.0, target=80.0)
+    est = run(four_slots(), soc=80.0, target=80.0, limit=80.0)
     assert est.need_kwh == 0
     for mode in ESTIMATED_MODES:
         m = est.modes[mode]
@@ -216,6 +224,54 @@ def test_price_estimated_flag() -> None:
 def test_dst_day() -> None:
     start = datetime(2026, 10, 24, 22, 0, tzinfo=UTC)  # 25.10. 00:00 Ortszeit
     slots = [slot(start + i * SLOT) for i in range(100)]
-    est = run(slots, now=start, soc=0.0, target=100.0, departure=start + 100 * SLOT)
-    assert est.modes[ChargeMode.NOW].energy_kwh == round(min(est.need_kwh, 11.04 * 25), 1)
+    # 1 kW: Der Bedarf ist größer als 25 h Laden, also zählt jede der 100 Viertelstunden
+    est = run(slots, now=start, soc=0.0, target=100.0, departure=start + 100 * SLOT, now_w=1000.0)
+    assert est.need_kwh > 25.0
+    assert est.modes[ChargeMode.NOW].energy_kwh == 25.0
     assert est.until == start + 100 * SLOT
+
+
+def kwh_to(soc: float, stop: float) -> float:
+    return round(max(0.0, stop - soc) / 100.0 * USABLE / EFF, 1)
+
+
+def long_slots() -> list[PlanSlot]:
+    return [slot(T0 + i * SLOT) for i in range(24)]  # 6 h ohne Überschuss
+
+
+def test_without_limit_other_modes_charge_to_full() -> None:
+    # e-Golf ohne bekanntes Ladelimit: Er lädt in „Sofort“ bis voll, nur „Geplant“ stoppt am Ziel
+    est = run(long_slots(), soc=70.0, target=80.0, limit=None)
+    planned, now = est.modes[ChargeMode.PLANNED], est.modes[ChargeMode.NOW]
+    assert (planned.target_soc_pct, now.target_soc_pct) == (80.0, 100.0)
+    assert planned.energy_kwh == kwh_to(70.0, 80.0)
+    assert now.energy_kwh == kwh_to(70.0, 100.0)
+    assert now.soc_pct == 100.0 and now.reachable
+    assert est.modes[ChargeMode.MIN_PV].target_soc_pct == 100.0
+    assert est.modes[ChargeMode.PV].target_soc_pct == 100.0
+    assert est.target_soc_pct == 80.0 and est.need_kwh == pytest.approx(10 / 100 * USABLE / EFF)
+
+
+def test_other_modes_stop_at_car_limit() -> None:
+    # Tesla mit Ladelimit 90 und Ziel 80: „Sofort“ bis 90, „Geplant“ bis 80
+    est = run(long_slots(), soc=70.0, target=80.0, limit=90.0)
+    planned, now = est.modes[ChargeMode.PLANNED], est.modes[ChargeMode.NOW]
+    assert (planned.target_soc_pct, now.target_soc_pct) == (80.0, 90.0)
+    assert planned.energy_kwh == kwh_to(70.0, 80.0) and planned.soc_pct == 80.0
+    assert now.energy_kwh == kwh_to(70.0, 90.0) and now.soc_pct == 90.0
+    assert now.reachable and planned.reachable
+
+
+def test_reachable_against_own_stop() -> None:
+    # 2 h Sofort reichen bis 80, aber nicht bis 100
+    est = run(slots_from(T0), soc=60.0, target=80.0, limit=None)
+    assert est.modes[ChargeMode.PLANNED].reachable
+    assert est.modes[ChargeMode.NOW].reachable is False
+
+
+def test_soc_never_below_current() -> None:
+    # Ladestand 85 über dem Ziel 80: kein Laden, der Ladestand bleibt 85
+    est = run(four_slots(), soc=85.0, target=80.0, limit=80.0)
+    for mode in ESTIMATED_MODES:
+        m = est.modes[mode]
+        assert m.energy_kwh == 0 and m.soc_pct == 85.0 and m.reachable

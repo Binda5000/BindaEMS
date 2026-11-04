@@ -809,9 +809,10 @@ def charge_estimate(cfg: Config, key: str, inputs: HaInputs) -> ChargeEstimate |
     """Die Ladeschätzung für das Fahrzeug ``key``; ``None``, wenn sie sich nicht rechnen lässt.
 
     Das ist ohne gültigen Plan oder Zeitpunkt der Fall, wenn das Auto laut Health nicht steckt
-    oder keine Wallbox hat, und wenn sein Ladestand nur angenommen ist. Ziel ist das der Absicht,
-    höchstens das Ladelimit des Autos; die Abfahrt ist die nächste. In „Sofort“ gilt das Limit
-    ``now_max_a`` der Absicht.
+    oder keine Wallbox hat, und wenn sein Ladestand nur angenommen ist. Das Ziel von „Geplant“ ist
+    das der Absicht, wie im core (``effective_target``) ohne Abgleich des Ladelimits höchstens das
+    Ladelimit des Autos; die anderen Modi laden bis zu diesem Limit (unbekannt: bis voll). Die
+    Abfahrt ist die nächste. In „Sofort“ gilt das Limit ``now_max_a`` der Absicht.
     """
     plan, now = inputs.plan, inputs.now
     entry = _entry(inputs.vehicles, key)
@@ -824,11 +825,11 @@ def charge_estimate(cfg: Config, key: str, inputs: HaInputs) -> ChargeEstimate |
         return None
     wish = VehicleIntent() if inputs.intent is None else inputs.intent.vehicles.get(key)
     wish = wish or VehicleIntent()
+    vehicle = cfg.vehicles[key]
     target = float(wish.target_soc_pct)
     limit = finite_number(entry.get("charge_limit_pct"))
-    if limit is not None:
+    if limit is not None and not vehicle.charge_limit_sync:
         target = min(target, limit)
-    vehicle = cfg.vehicles[key]
     volt = cfg.grid.voltage_nominal_v
     max_w = full_power_w(vehicle, wallbox, volt)
     now_w = max_w
@@ -840,6 +841,7 @@ def charge_estimate(cfg: Config, key: str, inputs: HaInputs) -> ChargeEstimate |
         now=now,
         soc_pct=soc,
         target_soc_pct=target,
+        limit_soc_pct=limit,
         departure_at=next_departure(wish.departure, now, wish.departure_on),
         usable_kwh=vehicle.usable_kwh,
         efficiency=vehicle.charge_efficiency_pct / 100,
@@ -851,7 +853,9 @@ def charge_estimate(cfg: Config, key: str, inputs: HaInputs) -> ChargeEstimate |
 
 
 def _local_iso(moment: datetime | None) -> str | None:
-    return None if moment is None else moment.astimezone(LOCAL_TZ).isoformat()
+    """Ortszeit ISO, auf die volle Minute aufgerundet: Ab jetzt gerechnete Zeiten änderten sonst
+    mit jedem Publish die Attribute (neue retained Nachricht, neue Zeile im Recorder)."""
+    return None if moment is None else _ceil_minute(moment).astimezone(LOCAL_TZ).isoformat()
 
 
 def _charge_estimate_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
@@ -865,8 +869,9 @@ def _charge_estimate_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
 
 
 def _charge_estimate_attributes(cfg: Config, key: str) -> Callable[[HaInputs], Mapping[str, Any]]:
-    """Ladestand, Ziel, Abfahrt, Ende des Fensters, Bedarf und je Modus Energie, Kosten, Ende,
-    Ladestand und Erreichbarkeit; Zeiten in Ortszeit, ``None`` ohne Schätzung."""
+    """Ladestand, Ziel von „Geplant“, Abfahrt, Ende des Fensters, Bedarf und je Modus Stopp
+    (``target_soc_pct``), Energie, Kosten, Ende, Ladestand und Erreichbarkeit; Zeiten in Ortszeit
+    auf die volle Minute, ``None`` ohne Schätzung."""
 
     names = {
         ChargeMode.PLANNED: "planned",
@@ -881,7 +886,7 @@ def _charge_estimate_attributes(cfg: Config, key: str) -> Callable[[HaInputs], M
             keys = ("soc_pct", "target_soc_pct", "departure_at", "until", "need_kwh")
             return dict.fromkeys(keys) | {"price_estimated": None} | dict.fromkeys(names.values())
         result: dict[str, Any] = {
-            "soc_pct": estimate.soc_pct,
+            "soc_pct": round(estimate.soc_pct, 1),
             "target_soc_pct": estimate.target_soc_pct,
             "departure_at": _local_iso(estimate.departure_at),
             "until": _local_iso(estimate.until),
@@ -891,6 +896,7 @@ def _charge_estimate_attributes(cfg: Config, key: str) -> Callable[[HaInputs], M
         for mode in ESTIMATED_MODES:
             item = estimate.modes[mode]
             entry: dict[str, Any] = {
+                "target_soc_pct": item.target_soc_pct,
                 "energy_kwh": item.energy_kwh,
                 "cost_eur": item.cost_eur,
                 "finish_at": _local_iso(item.finish_at),

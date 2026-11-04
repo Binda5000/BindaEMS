@@ -1699,6 +1699,7 @@ def _expected(cfg: Config, **changes: Any) -> Any:
         "now": T_APP,
         "soc_pct": 40.0,
         "target_soc_pct": 80.0,
+        "limit_soc_pct": None,
         "departure_at": T_APP + timedelta(hours=1),
         "usable_kwh": vehicle.usable_kwh,
         "efficiency": vehicle.charge_efficiency_pct / 100,
@@ -1735,6 +1736,7 @@ def test_charge_estimate_state_is_planned_cost(cfg) -> None:
         want = expected.modes[mode]
         assert got["energy_kwh"] == want.energy_kwh and got["cost_eur"] == want.cost_eur
         assert got["soc_pct"] == want.soc_pct and got["reachable"] is want.reachable
+        assert got["target_soc_pct"] == want.target_soc_pct
         finish = None if want.finish_at is None else local(want.finish_at)
         assert got["finish_at"] == finish
     assert "power_cost_eur" in attrs["now"] and "power_cost_eur" not in attrs["planned"]
@@ -1769,8 +1771,50 @@ def test_estimate_uses_charge_limit(cfg) -> None:
         _estimate_inputs(intent=intent, vehicles=[health])
     )
     assert attrs["target_soc_pct"] == 80
+    assert attrs["planned"]["target_soc_pct"] == 80 and attrs["now"]["target_soc_pct"] == 80
     attrs = entity(cfg, "tesla_charge_estimate").attributes(_estimate_inputs(intent=intent))
     assert attrs["target_soc_pct"] == 90
+    # ohne bekanntes Ladelimit laden die Modi außer „Geplant“ bis voll
+    assert attrs["planned"]["target_soc_pct"] == 90
+    for name in ("now", "pv", "min_pv"):
+        assert attrs[name]["target_soc_pct"] == 100
+
+
+def test_estimate_other_modes_stop_at_car_limit(cfg) -> None:
+    # Ladelimit 90, Ziel 80: „Sofort“ lädt bis 90, „Geplant“ bis 80
+    health = _health_car() | {"soc_pct": 75.0, "charge_limit_pct": 90}
+    inputs = _estimate_inputs(vehicles=[health])
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(inputs)
+    expected = _expected(cfg, soc_pct=75.0, limit_soc_pct=90.0)
+    assert attrs["target_soc_pct"] == 80
+    assert attrs["planned"]["target_soc_pct"] == 80 and attrs["now"]["target_soc_pct"] == 90
+    assert attrs["now"]["energy_kwh"] == expected.modes[ChargeMode.NOW].energy_kwh
+    assert attrs["now"]["energy_kwh"] > attrs["planned"]["energy_kwh"] > 0
+
+
+def test_estimate_synced_limit_keeps_target(cfg) -> None:
+    # Mit Abgleich des Ladelimits stellt BindaEMS das Limit selbst: „Geplant“ nimmt das Ziel der
+    # Absicht wie der core (effective_target), auch über einem Limit von 70
+    vehicle = cfg.vehicles["tesla"].model_copy(update={"charge_limit_sync": True})
+    synced = cfg.model_copy(update={"vehicles": {**cfg.vehicles, "tesla": vehicle}})
+    health = _health_car() | {"charge_limit_pct": 70}
+    attrs = entity(synced, "tesla_charge_estimate").attributes(_estimate_inputs(vehicles=[health]))
+    assert attrs["target_soc_pct"] == 80 and attrs["planned"]["target_soc_pct"] == 80
+    assert attrs["now"]["target_soc_pct"] == 70
+
+
+def test_estimate_attributes_stable_while_idle(cfg) -> None:
+    # Zwei Läufe 5 s auseinander, am Laden ändert sich nichts: dieselben Attribute, sonst
+    # schriebe jeder Publish (alle 5 s) eine neue Zeile in den Recorder
+    health = _health_car() | {"soc_pct": 78.04}
+    spec = entity(cfg, "tesla_charge_estimate")
+    first = spec.attributes(_estimate_inputs(vehicles=[health], now=T_APP + timedelta(seconds=20)))
+    second = spec.attributes(_estimate_inputs(vehicles=[health], now=T_APP + timedelta(seconds=25)))
+    assert first["now"]["finish_at"] is not None
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert first["soc_pct"] == 78.0
+    finish = datetime.fromisoformat(first["now"]["finish_at"])
+    assert (finish.second, finish.microsecond) == (0, 0)
 
 
 def test_estimate_departure_is_next(cfg) -> None:

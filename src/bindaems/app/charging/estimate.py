@@ -5,6 +5,10 @@ das Laden bis zur Abfahrt kostet, wie viel Energie fließt und wann es fertig is
 
 Entscheidungen:
 
+- Wo das Laden stoppt, hängt vom Modus ab (wie im core, Spezifikation 7.5): „Geplant“ stoppt am
+  Ziel, die anderen Modi kennen kein Ziel, das Auto stoppt an seinem eigenen Ladelimit, ohne
+  bekanntes Limit bei 100 %.
+
 - Der Hausakku zählt nicht: Als Überschuss gilt nur, was ins Netz ginge, und das eigene PV-Laden
   des Autos im Plan (``pv_for_car``); Akku- und Netzanteil des Plans zählen nicht dazu.
 - Alle Zahlen sind „ca.“: Preise können geschätzt sein (``price_estimated``), und der Plan ändert
@@ -30,9 +34,11 @@ _DONE_KWH: Final = 1e-9  # darunter gilt der Bedarf als gedeckt
 
 @dataclass(frozen=True)
 class ModeEstimate:
-    """Schätzung für einen Modus; ``energy_kwh`` ist die Energie an der Wallbox, ``soc_pct`` der
-    Ladestand an der Abfahrt bzw. am Fensterende, ``power_cost_eur`` nur bei ``NOW``."""
+    """Schätzung für einen Modus; ``target_soc_pct`` ist der Ladestand, an dem das Laden in
+    diesem Modus stoppt, ``energy_kwh`` die Energie an der Wallbox, ``soc_pct`` der Ladestand am
+    Fensterende (nie unter dem jetzigen), ``power_cost_eur`` nur bei ``NOW``."""
 
+    target_soc_pct: float
     energy_kwh: float
     cost_eur: float
     finish_at: datetime | None
@@ -44,10 +50,10 @@ class ModeEstimate:
 @dataclass(frozen=True)
 class ChargeEstimate:
     soc_pct: float
-    target_soc_pct: float
+    target_soc_pct: float  # das Ziel von „Geplant“
     departure_at: datetime
     until: datetime
-    need_kwh: float
+    need_kwh: float  # der Bedarf bis zum Ziel von „Geplant“
     price_estimated: bool
     modes: Mapping[ChargeMode, ModeEstimate]
 
@@ -147,6 +153,7 @@ def estimate_charge(
     now: datetime,
     soc_pct: float,
     target_soc_pct: float,
+    limit_soc_pct: float | None,
     departure_at: datetime,
     usable_kwh: float,
     efficiency: float,
@@ -160,31 +167,42 @@ def estimate_charge(
     Das Fenster sind die Slots ab ``now`` bis zur Abfahrt (erster und letzter anteilig). Endet der
     Plan früher, endet das Fenster dort (``until``). ``departure_at`` muss nach ``now`` liegen;
     den nächsten Abfahrtstag wählt der Aufrufer.
+
+    ``target_soc_pct`` ist das Ziel von „Geplant“, so wie der core es nimmt (unter einem nicht
+    abgeglichenen Ladelimit das Limit, ``effective_target``); das rechnet der Aufrufer.
+    ``limit_soc_pct`` ist das Ladelimit des Autos, an dem es in den anderen Modi stoppt;
+    ``None`` heißt unbekannt, dann lädt es bis 100 %.
     """
     if departure_at <= now:
         raise ValueError("Die Abfahrt muss nach dem jetzigen Zeitpunkt liegen")
-    need = need_kwh(soc_pct, target_soc_pct, usable_kwh, efficiency)
+    stop_pct = {mode: 100.0 if limit_soc_pct is None else limit_soc_pct for mode in ESTIMATED_MODES}
+    stop_pct[ChargeMode.PLANNED] = target_soc_pct
+    need = {
+        mode: need_kwh(soc_pct, stop, usable_kwh, efficiency) for mode, stop in stop_pct.items()
+    }
     pieces, until = _window(slots, key, now, departure_at)
 
     pv_only = [min(p.pv_w, max_w) if p.pv_w >= min_w else 0.0 for p in pieces]
     min_pv = [min(max_w, max(min_w, p.pv_w)) for p in pieces]
     runs: dict[ChargeMode, _Run] = {
-        ChargeMode.PLANNED: _planned(pieces, need, max_w),
-        ChargeMode.NOW: _charge_in_order(pieces, need, [now_w] * len(pieces)),
-        ChargeMode.PV: _charge_in_order(pieces, need, pv_only),
-        ChargeMode.MIN_PV: _charge_in_order(pieces, need, min_pv),
+        ChargeMode.PLANNED: _planned(pieces, need[ChargeMode.PLANNED], max_w),
+        ChargeMode.NOW: _charge_in_order(pieces, need[ChargeMode.NOW], [now_w] * len(pieces)),
+        ChargeMode.PV: _charge_in_order(pieces, need[ChargeMode.PV], pv_only),
+        ChargeMode.MIN_PV: _charge_in_order(pieces, need[ChargeMode.MIN_PV], min_pv),
     }
 
     modes: dict[ChargeMode, ModeEstimate] = {}
     for mode in ESTIMATED_MODES:
-        r = runs[mode]
-        soc_end = min(target_soc_pct, soc_pct + r.kwh * efficiency / usable_kwh * 100.0)
+        r, stop = runs[mode], stop_pct[mode]
+        gained = soc_pct + r.kwh * efficiency / usable_kwh * 100.0
+        soc_end = max(soc_pct, min(stop, gained))  # über dem Stopp lädt nichts, nie darunter
         modes[mode] = ModeEstimate(
+            target_soc_pct=stop,
             energy_kwh=round(r.kwh, 1),
             cost_eur=round(r.cost_ct / 100.0, 2),
             finish_at=r.finish_at,
             soc_pct=round(soc_end, 1),
-            reachable=r.kwh >= need - REACH_EPS_KWH,
+            reachable=r.kwh >= need[mode] - REACH_EPS_KWH,
             power_cost_eur=power_cost_eur if mode is ChargeMode.NOW else None,
         )
     return ChargeEstimate(
@@ -192,7 +210,7 @@ def estimate_charge(
         target_soc_pct=target_soc_pct,
         departure_at=departure_at,
         until=until,
-        need_kwh=need,
+        need_kwh=need[ChargeMode.PLANNED],
         price_estimated=any(r.graded for r in runs.values()),
         modes=modes,
     )
