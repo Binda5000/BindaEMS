@@ -75,6 +75,7 @@ def test_entities_from_config(cfg) -> None:
         "problem_competitor",
         "problem_prices",
         "problem_device_offline",
+        "ops_check",
         "watchdog_tripped",
         "regulation",
         "guest_mode",
@@ -196,6 +197,32 @@ def test_problem_sensors(cfg) -> None:
     assert offline.value(sample_inputs(adapters_offline=["twc"])) == "ON"
     assert offline.value(sample_inputs(adapters_offline=None)) == "None"
     assert offline.attributes(sample_inputs(adapters_offline=["twc"])) == {"adapters": ["twc"]}
+
+
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [("ok", "ok"), ("warn", "warnung"), ("error", "fehler"), ("unknown", "unbekannt")],
+)
+def test_ops_check_sensor_states(cfg, level: str, expected: str) -> None:
+    spec = entity(cfg, "ops_check")
+    assert (spec.component, spec.name) == ("sensor", "Betriebscheck")
+    assert spec.value(sample_inputs(ops_level=level)) == expected
+
+
+def test_ops_check_attribute_lists_findings(cfg) -> None:
+    spec = entity(cfg, "ops_check")
+    assert spec.attributes is not None
+    texts = ("Klima: Dry-Run", "Victron-Entscheidungen: 70 in der letzten Stunde")
+    assert spec.attributes(sample_inputs(ops_level="warn", ops_text=texts)) == {
+        "befunde": list(texts)
+    }
+    assert spec.attributes(sample_inputs(ops_level="ok")) == {"befunde": []}
+
+
+def test_ops_check_unknown_without_core(cfg) -> None:
+    spec = entity(cfg, "ops_check")
+    assert spec.value(sample_inputs()) == "unbekannt"  # kein Betriebscheck bestimmt
+    assert spec.value(sample_inputs(core_connected=False, ops_level=None)) == "unbekannt"
 
 
 def test_watchdog_tripped_entity(cfg) -> None:

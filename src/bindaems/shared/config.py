@@ -56,6 +56,7 @@ HA_SYSTEM_IDS = (
     "problem_competitor",
     "problem_prices",
     "problem_device_offline",
+    "ops_check",
     "watchdog_tripped",
     "regulation",
     "guest_mode",

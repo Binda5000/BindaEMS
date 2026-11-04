@@ -147,6 +147,8 @@ class HaInputs:
     )
     support_soc_pct: float | None = None  # Unterstützungsschwelle (Absicht, sonst Konfiguration)
     stats: TodayStats | None = None  # Ersparnis und Autarkie (Plan 4a); None = unbekannt
+    ops_level: str | None = None  # Gesamtstufe des Betriebschecks (ok, warn, error, unknown)
+    ops_text: Sequence[str] = ()  # Texte der gelben und roten Prüfungen des Betriebschecks
     # je Fahrzeug (Schlüssel aus ``config.yaml``) die laufende oder letzte Ladesession; ein
     # fehlender Schlüssel oder ``None`` heißt: keine bekannt
     sessions: Mapping[str, ChargingSession | None] = field(default_factory=dict)
@@ -741,6 +743,18 @@ def _price_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     }
 
 
+# Zustände des Sensors „Betriebscheck“ je Stufe des Betriebschecks
+OPS_STATES: Final = {"ok": "ok", "warn": "warnung", "error": "fehler", "unknown": "unbekannt"}
+
+
+def _ops_check(inputs: HaInputs) -> str:
+    return OPS_STATES.get(inputs.ops_level or "", OPS_STATES["unknown"])
+
+
+def _ops_check_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    return {"befunde": list(inputs.ops_text)}
+
+
 def _month_peak_kw(inputs: HaInputs) -> str:
     return fmt(None if inputs.month_peak is None else inputs.month_peak.kw, 1)
 
@@ -1110,6 +1124,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             lambda i: on_off(None if i.adapters_offline is None else bool(i.adapters_offline)),
             device_class="problem",
             attributes=lambda i: {"adapters": list(i.adapters_offline or [])},
+        ),
+        EntitySpec(
+            "ops_check",
+            "sensor",
+            "Betriebscheck",
+            main,
+            _ops_check,
+            device_class="enum",
+            options=tuple(OPS_STATES.values()),
+            attributes=_ops_check_attributes,
         ),
         EntitySpec(
             "watchdog_tripped",

@@ -480,6 +480,7 @@ class AppRuntime:
         if self._notify_status is not None:
             status = self._notify_status
             sources.append(lambda: status)
+        self._ops_sources = sources
         # Tagesbericht: der Betriebscheck wie in der Route ``/api/ops/check``
         self.report_sender = ReportSender(
             self.engine,
@@ -634,7 +635,7 @@ class AppRuntime:
         now = self._clock.now()
         settings = self.settings.current().settings
         cached = self._stats_inputs  # Statistik: nur der Cache, keine Abfrage im 5-s-Takt
-        return build_inputs(
+        inputs = build_inputs(
             self.live,
             self.prices,
             self.price_store,
@@ -653,6 +654,20 @@ class AppRuntime:
             auto_target=self._auto_targets(),
             thermal_plan_enabled=settings.learning.thermal.enabled,
         )
+        return self._with_ops_check(inputs)
+
+    def _with_ops_check(self, inputs: HaInputs) -> HaInputs:
+        """Ergänzt den Betriebscheck wie in der Route ``/api/ops/check`` (Zähler der letzten
+        Stunde, Worker-Thread); scheitert er, bleibt der Sensor „unbekannt“."""
+        try:
+            check = current_check(self.live, self._ops_sources, self.decisions, self._clock)
+        except Exception:
+            log.exception("Betriebscheck für Home Assistant nicht bestimmbar")
+            return inputs
+        texts = tuple(
+            f"{item.label}: {item.text}" for item in check.items if item.level in ("warn", "error")
+        )
+        return replace(inputs, ops_level=check.level, ops_text=texts)
 
     async def _ha_intent(self) -> Intent | None:
         """Die Absicht für HA: ohne gültige die Basis, bei Störung die zuletzt bekannte."""

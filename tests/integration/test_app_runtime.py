@@ -1183,6 +1183,18 @@ async def test_warnings_without_mqtt_get_their_ha_inputs(cfg, tmp_path, respx_mo
         runtime.engine.dispose()
 
 
+def test_ha_inputs_carry_the_ops_check(runtime, monkeypatch) -> None:
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.ops_level == "error"  # ohne verbundenen core
+    assert any(text.startswith("core:") for text in inputs.ops_text)
+
+    def broken(*_args: object) -> None:
+        raise RuntimeError("Datenbank weg")
+
+    monkeypatch.setattr("bindaems.app.runtime.current_check", broken)
+    assert runtime._build_ha_inputs(Intent(version=1)).ops_level is None
+
+
 async def test_ha_inputs_carry_the_intent(runtime, monkeypatch) -> None:
     valid = Intent(version=5, control=True)
 
