@@ -303,8 +303,9 @@
 	<fieldset>
 		<legend>Tagesbericht</legend>
 		<p class="hint">
-			Jeden Morgen eine Meldung in Home Assistant über gestern: Netzbezug, Kosten, Auffälligkeiten
-			und Betriebscheck. Ohne Home Assistant steht er nur auf der Seite Betrieb.
+			Zur gewählten Uhrzeit eine Meldung in Home Assistant, je nach Auswahl täglich oder nur bei
+			Auffälligkeiten. Sie fasst gestern zusammen: Netzbezug, Kosten, Auffälligkeiten und
+			Betriebscheck. Ohne Home Assistant oder bei „Aus“ steht der Bericht nur auf der Seite Betrieb.
 		</p>
 		<div class="field">
 			<label for="{uid}-ops-report">Bericht in Home Assistant</label>

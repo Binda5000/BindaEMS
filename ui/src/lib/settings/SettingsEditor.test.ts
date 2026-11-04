@@ -489,6 +489,11 @@ it('stellt den Tagesbericht ein: Auswahl und Uhrzeit', async () => {
 	const save = vi.fn().mockResolvedValueOnce(current);
 	render(SettingsEditor, { current, save, onSaved: vi.fn(), onReload: vi.fn() });
 	const group = screen.getByRole('group', { name: 'Tagesbericht' });
+	// der Hinweis passt zu allen drei Auswahlen, nicht nur zu „täglich“
+	expect(group).toHaveTextContent(
+		'Zur gewählten Uhrzeit eine Meldung in Home Assistant, je nach Auswahl täglich oder nur bei Auffälligkeiten.'
+	);
+	expect(group).not.toHaveTextContent('Jeden Morgen');
 	const select = within(group).getByLabelText('Bericht in Home Assistant') as HTMLSelectElement;
 	expect(select.value).toBe('daily');
 	expect(
