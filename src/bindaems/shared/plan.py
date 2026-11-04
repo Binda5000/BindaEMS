@@ -283,6 +283,41 @@ class Plan(_Model):
         return next((slot for slot in self.slots if slot.start == wanted), None)
 
 
+# Unwetterwarnung (Plan Unwetter-Reserve): Art in der Reihenfolge der ``warntypid`` 1–7 von
+# GeoSphere Austria, Stufe 1 gelb, 2 orange, 3 rot.
+StormKind = Literal["sturm", "regen", "schnee", "glatteis", "gewitter", "hitze", "kaelte"]
+StormLevel = Literal[1, 2, 3]
+STORM_KIND_LABELS: Final[dict[StormKind, str]] = {
+    "sturm": "Sturm",
+    "regen": "Regen",
+    "schnee": "Schnee",
+    "glatteis": "Glatteis",
+    "gewitter": "Gewitter",
+    "hitze": "Hitze",
+    "kaelte": "Kälte",
+}
+STORM_LEVEL_LABELS: Final[dict[StormLevel, str]] = {1: "gelb", 2: "orange", 3: "rot"}
+
+
+class StormWarning(_Model):
+    """Eine amtliche Wetterwarnung für den Standort; ``warn_id`` und ``version`` kommen von der
+    Quelle, ``begin`` und ``end`` sind der Geltungszeitraum."""
+
+    warn_id: int
+    version: int
+    kind: StormKind
+    level: StormLevel
+    begin: AwareDatetime
+    end: AwareDatetime
+    text: str
+
+    @model_validator(mode="after")
+    def _end_after_begin(self) -> Self:
+        if self.end <= self.begin:
+            raise ValueError("end muss nach begin liegen")
+        return self
+
+
 # Hinweis des Plans für die Klimaanlage in einem Slot (Plan 6a, Entscheidung 7): „mehr“ erwartet
 # Einspeisung, „weniger“ gehört zu den teuersten Stunden, sonst „neutral“.
 ThermalHint = Literal["mehr", "neutral", "weniger"]
