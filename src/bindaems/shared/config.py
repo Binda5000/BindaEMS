@@ -79,6 +79,7 @@ HA_VEHICLE_SUFFIXES = (
     "boost_stop",
     "wallbox",
     "charge_energy",
+    "charge_estimate",
     "target_soc",
     "now_max_a",
     "departure",

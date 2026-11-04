@@ -15,6 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
+from bindaems.app.charging.estimate import ESTIMATED_MODES, ChargeEstimate, estimate_charge
 from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE, guest_range
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
@@ -53,6 +54,7 @@ from bindaems.shared.control import (
     Intent,
     VehicleIntent,
     _local_instant,
+    next_departure,
 )
 from bindaems.shared.domain import Value
 from bindaems.shared.numbers import finite_number
@@ -162,6 +164,9 @@ class HaInputs:
     thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     # Plan 5c: Schalter „Vorheizen und Vorkühlen“ (``learning.thermal.enabled``); None = unbekannt
     thermal_plan_enabled: bool | None = None
+    # je Fahrzeug die Mehrkosten des Leistungspreises bei voller Leistung (``boost_cost``); leer,
+    # wenn kein Leistungspreis gilt
+    boost_cost_eur: Mapping[str, float] = field(default_factory=dict)
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -800,6 +805,106 @@ def _charge_energy(key: str) -> Callable[[HaInputs], str]:
     return value
 
 
+def charge_estimate(cfg: Config, key: str, inputs: HaInputs) -> ChargeEstimate | None:
+    """Die Ladeschätzung für das Fahrzeug ``key``; ``None``, wenn sie sich nicht rechnen lässt.
+
+    Das ist ohne gültigen Plan oder Zeitpunkt der Fall, wenn das Auto laut Health nicht steckt
+    oder keine Wallbox hat, und wenn sein Ladestand nur angenommen ist. Ziel ist das der Absicht,
+    höchstens das Ladelimit des Autos; die Abfahrt ist die nächste. In „Sofort“ gilt das Limit
+    ``now_max_a`` der Absicht.
+    """
+    plan, now = inputs.plan, inputs.now
+    entry = _entry(inputs.vehicles, key)
+    if plan is None or now is None or entry is None or entry.get("plugged") is not True:
+        return None
+    at = entry.get("wallbox")
+    wallbox = cfg.wallboxes.get(at) if isinstance(at, str) else None
+    soc = finite_number(entry.get("soc_pct"))
+    if wallbox is None or soc is None or entry.get("soc_source") not in ("measured", "estimated"):
+        return None
+    wish = VehicleIntent() if inputs.intent is None else inputs.intent.vehicles.get(key)
+    wish = wish or VehicleIntent()
+    target = float(wish.target_soc_pct)
+    limit = finite_number(entry.get("charge_limit_pct"))
+    if limit is not None:
+        target = min(target, limit)
+    vehicle = cfg.vehicles[key]
+    volt = cfg.grid.voltage_nominal_v
+    max_w = full_power_w(vehicle, wallbox, volt)
+    now_w = max_w
+    if wish.now_max_a is not None:
+        now_w = min(max_w, wish.now_max_a * volt * vehicle.phases)
+    return estimate_charge(
+        plan.slots,
+        key=key,
+        now=now,
+        soc_pct=soc,
+        target_soc_pct=target,
+        departure_at=next_departure(wish.departure, now, wish.departure_on),
+        usable_kwh=vehicle.usable_kwh,
+        efficiency=vehicle.charge_efficiency_pct / 100,
+        min_w=vehicle.min_a * volt * vehicle.phases,
+        max_w=max_w,
+        now_w=now_w,
+        power_cost_eur=inputs.boost_cost_eur.get(key),
+    )
+
+
+def _local_iso(moment: datetime | None) -> str | None:
+    return None if moment is None else moment.astimezone(LOCAL_TZ).isoformat()
+
+
+def _charge_estimate_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        estimate = charge_estimate(cfg, key, inputs)
+        if estimate is None:
+            return UNKNOWN
+        return fmt(estimate.modes[ChargeMode.PLANNED].cost_eur, 2)
+
+    return value
+
+
+def _charge_estimate_attributes(cfg: Config, key: str) -> Callable[[HaInputs], Mapping[str, Any]]:
+    """Ladestand, Ziel, Abfahrt, Ende des Fensters, Bedarf und je Modus Energie, Kosten, Ende,
+    Ladestand und Erreichbarkeit; Zeiten in Ortszeit, ``None`` ohne Schätzung."""
+
+    names = {
+        ChargeMode.PLANNED: "planned",
+        ChargeMode.NOW: "now",
+        ChargeMode.PV: "pv",
+        ChargeMode.MIN_PV: "min_pv",
+    }
+
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        estimate = charge_estimate(cfg, key, inputs)
+        if estimate is None:
+            keys = ("soc_pct", "target_soc_pct", "departure_at", "until", "need_kwh")
+            return dict.fromkeys(keys) | {"price_estimated": None} | dict.fromkeys(names.values())
+        result: dict[str, Any] = {
+            "soc_pct": estimate.soc_pct,
+            "target_soc_pct": estimate.target_soc_pct,
+            "departure_at": _local_iso(estimate.departure_at),
+            "until": _local_iso(estimate.until),
+            "need_kwh": round(estimate.need_kwh, 1),
+            "price_estimated": estimate.price_estimated,
+        }
+        for mode in ESTIMATED_MODES:
+            item = estimate.modes[mode]
+            entry: dict[str, Any] = {
+                "energy_kwh": item.energy_kwh,
+                "cost_eur": item.cost_eur,
+                "finish_at": _local_iso(item.finish_at),
+                "soc_pct": item.soc_pct,
+                "reachable": item.reachable,
+            }
+            if mode is ChargeMode.NOW:
+                entry["power_cost_eur"] = item.power_cost_eur
+            result[names[mode]] = entry
+        return result
+
+    return attributes
+
+
 def _kwh(value: float | None) -> float | None:
     number = _number(value)
     return None if number is None else round(number, 3)
@@ -1212,6 +1317,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 attributes=_charge_energy_attributes(key),
             ),
             EntitySpec(
+                f"{oid}_charge_estimate",
+                "sensor",
+                "Ladeschätzung",
+                device,
+                _charge_estimate_state(cfg, key),
+                unit="EUR",
+                device_class="monetary",
+                attributes=_charge_estimate_attributes(cfg, key),
+            ),
+            EntitySpec(
                 f"{oid}_target_soc",
                 "number",
                 "Ziel-SOC",
@@ -1454,6 +1569,7 @@ def build_inputs(
     driving_profiles: Mapping[str, VehicleProfile] | None = None,
     auto_target: Mapping[str, bool] | None = None,
     thermal_plan_enabled: bool | None = None,
+    boost_cost_eur: Mapping[str, float] | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -1545,6 +1661,7 @@ def build_inputs(
         driving_profiles=dict(driving_profiles or {}),
         auto_target=dict(auto_target or {}),
         thermal_plan_enabled=thermal_plan_enabled,
+        boost_cost_eur=dict(boost_cost_eur or {}),
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)
