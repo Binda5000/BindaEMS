@@ -28,7 +28,7 @@ def store(engine, clock: ManualClock) -> DecisionStore:
 
 
 @pytest.fixture
-def client(make_client, live, guard, store, clock, findings):
+def client(make_client, live, guard, store, clock, findings, make_sender):
     def ok_source() -> ComponentStatus:
         return ComponentStatus("prices", True, "Preise bis 10.10. 23:45")
 
@@ -40,6 +40,7 @@ def client(make_client, live, guard, store, clock, findings):
             decisions=store,
             clock=clock,
             findings=findings,
+            report=make_sender(),
         )
     )
 
@@ -114,7 +115,16 @@ async def test_findings_route_groups_by_day(client, auth, findings, influx) -> N
             {"day": "2026-10-07", "computed": False, "findings": []},
             {"day": "2026-10-06", "computed": False, "findings": []},
         ],
-        "report": None,
+        "report": {
+            "day": "2026-10-08",
+            "text": (
+                "Donnerstag 8.10.: Netzbezug 14,2 kWh (geplant 9,8), "
+                "davon Netzladen 4,4 kWh (geplant 0,0). Kosten 3,12 €, Ersparnis 1,85 €. "
+                "Monatsspitze 9,1 kW. 1 Auffälligkeit: "
+                "Akku-SOC nicht geprüft: InfluxDB nicht erreichbar. "
+                "Betriebscheck jetzt: alles in Ordnung."
+            ),
+        },
     }
     days = client.get("/api/ops/findings").json()["days"]
     assert [d["day"] for d in days][::13] == ["2026-10-08", "2026-09-25"]  # 14 Tage

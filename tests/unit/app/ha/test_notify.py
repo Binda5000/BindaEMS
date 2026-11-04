@@ -734,3 +734,40 @@ async def test_unreachable_target_without_expected_soc_waits(cfg: Config, warn: 
     await warn.warnings.check()
     await warn.advance(2 * NOTIFY_AFTER_S)
     assert warn.calls == []
+
+
+async def test_ha_report_replaces_notification_and_notifies(clock) -> None:
+    env = Env(clock, "notify.mobile_app_handy")
+    assert await env.notifier.report("Montag 3.11.: Keine Auffälligkeiten.") is True
+    assert env.calls == [
+        (
+            "persistent_notification",
+            "create",
+            {
+                "notification_id": "bindaems_tagesbericht",
+                "title": "BindaEMS Tagesbericht",
+                "message": "Montag 3.11.: Keine Auffälligkeiten.",
+            },
+        ),
+        (
+            "notify",
+            "mobile_app_handy",
+            {"title": "BindaEMS Tagesbericht", "message": "Montag 3.11.: Keine Auffälligkeiten."},
+        ),
+    ]
+
+
+async def test_ha_report_fails_quietly(clock) -> None:
+    env = Env(clock, "notify.mobile_app_handy")
+    env.failing = True
+    assert await env.notifier.report("Text") is False
+    assert env.calls == []
+
+
+async def test_ha_report_respects_minute_budget(clock) -> None:
+    env = Env(clock, None)
+    for n in range(MAX_PER_MINUTE):
+        assert await env.notifier.report(f"Bericht {n}") is True
+    assert await env.notifier.report("zu viel") is False
+    clock.advance(timedelta(seconds=61))
+    assert await env.notifier.report("wieder") is True

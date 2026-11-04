@@ -15,9 +15,9 @@ from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.control.decisions import DecisionStore
 from bindaems.app.core_link import LiveState
-from bindaems.app.ops.check import DecisionRates, check_json, operations_check
+from bindaems.app.ops.check import DecisionRates, OpsCheck, check_json, operations_check
 from bindaems.app.ops.findings import Finding
-from bindaems.app.ops.service import FindingsService, finding_json
+from bindaems.app.ops.service import FindingsService, ReportSender, finding_json
 from bindaems.app.status import StatusSource
 from bindaems.shared.timeutil import LOCAL_TZ, Clock
 
@@ -35,28 +35,14 @@ def ops_router(
     decisions: DecisionStore,
     clock: Clock,
     findings: FindingsService,
+    report: ReportSender,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/ops")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
 
     @router.get("/check")
     async def check(session: Viewer) -> dict[str, Any]:
-        now = clock.now()
-        rates: DecisionRates | None
-        try:
-            counts = await run_in_threadpool(decisions.counts, now - RATE_WINDOW)
-            rates = DecisionRates(counts)
-        except Exception:
-            log.exception("Entscheidungsraten für den Betriebscheck nicht lesbar")
-            rates = None
-        result = operations_check(
-            connected=live.connected,
-            health=live.health,
-            components=[source() for source in sources],
-            rates=rates,
-            now=now,
-        )
-        return check_json(result)
+        return check_json(await run_in_threadpool(current_check, live, sources, decisions, clock))
 
     @router.get("/findings")
     async def findings_by_day(
@@ -64,14 +50,43 @@ def ops_router(
         days: Annotated[int, Query(ge=1, le=FINDINGS_DAYS_MAX)] = 14,
     ) -> dict[str, Any]:
         """Die Auffälligkeiten der letzten ``days`` Tage bis gestern, neueste zuerst; ein Tag ohne
-        Lauf hat ``computed`` falsch. ``report`` füllt der Tagesbericht."""
+        Lauf hat ``computed`` falsch. ``report`` ist der Tagesbericht über gestern, auch ohne Home
+        Assistant."""
         last = clock.now().astimezone(LOCAL_TZ).date() - timedelta(days=1)
         first = last - timedelta(days=days - 1)
         by_day = await run_in_threadpool(findings.days, first, last)
         listed = [last - timedelta(days=back) for back in range(days)]
-        return {"days": [_day_json(day, by_day.get(day)) for day in listed], "report": None}
+        text = await run_in_threadpool(report.text, last)
+        return {
+            "days": [_day_json(day, by_day.get(day)) for day in listed],
+            "report": {"day": last.isoformat(), "text": text},
+        }
 
     return router
+
+
+def current_check(
+    live: LiveState,
+    sources: Sequence[StatusSource],
+    decisions: DecisionStore,
+    clock: Clock,
+) -> OpsCheck:
+    """Der Betriebscheck von jetzt (blockierend: liest die Entscheidungsraten der Datenbank);
+    ohne lesbare Raten sind sie ``unknown``. Route und Tagesbericht nutzen ihn gemeinsam."""
+    now = clock.now()
+    rates: DecisionRates | None
+    try:
+        rates = DecisionRates(decisions.counts(now - RATE_WINDOW))
+    except Exception:
+        log.exception("Entscheidungsraten für den Betriebscheck nicht lesbar")
+        rates = None
+    return operations_check(
+        connected=live.connected,
+        health=live.health,
+        components=[source() for source in sources],
+        rates=rates,
+        now=now,
+    )
 
 
 def _day_json(day: date, found: Sequence[Finding] | None) -> dict[str, Any]:

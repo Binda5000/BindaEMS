@@ -172,6 +172,10 @@
         "margin_ct": 2.0
       }
     },
+    "ops": {
+      "report": "daily",
+      "report_at": "07:30"
+    },
     "wallbox_names": {
       "twc": "Garage"
     },

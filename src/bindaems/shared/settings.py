@@ -301,6 +301,13 @@ WallboxKey = Annotated[str, Field(min_length=1, max_length=60)]
 DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 
 
+class OpsSettings(_Model):
+    """Tagesbericht in Home Assistant (Betrieb im Blick)."""
+
+    report: Literal["daily", "findings", "off"] = "daily"  # täglich | nur mit Warnung | aus
+    report_at: Annotated[str, Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")] = "07:30"  # Ortszeit
+
+
 class RuntimeSettings(_Model):
     prices: PriceSettings = Field(default_factory=PriceSettings)
     tariff: TariffSettings = Field(default_factory=TariffSettings)
@@ -308,6 +315,7 @@ class RuntimeSettings(_Model):
     pv_model: PvModelSettings = Field(default_factory=PvModelSettings)
     planning: PlanningSettings = Field(default_factory=PlanningSettings)
     learning: LearningSettings = Field(default_factory=LearningSettings)
+    ops: OpsSettings = Field(default_factory=OpsSettings)
     # eigene Namen der Ladestationen (Schlüssel wie in config.yaml); ohne Namen gilt der Typ
     wallbox_names: dict[WallboxKey, DisplayName] = Field(default_factory=dict)
     # Lademodus nach dem Abstecken je Ladestation (Schlüssel wie in config.yaml); ohne Eintrag

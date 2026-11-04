@@ -4,29 +4,35 @@
 InfluxDB, gescheiterte Befehle, verfehlte Ladeziele, markierte Zählervergleiche), ruft ``find``
 und ersetzt die Zeilen des Tages in ``ops_finding``; ``ops_day`` merkt sich die gerechneten Tage.
 Beim Start holt er die fehlenden der letzten 7 Tage nach, dann rechnet er täglich um 03:05 Uhr
-Ortszeit den Vortag.
+Ortszeit den Vortag. ``ReportSender`` schickt den Tagesbericht über Home Assistant.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
 
 import structlog
-from sqlalchemy import Engine, delete, insert, select
+from sqlalchemy import Engine, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.control.decisions import DecisionStore
 from bindaems.app.db.schema import ledger_check, ops_day, ops_finding
+from bindaems.app.ha.notify import HaNotifier
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader, quote_ident, quote_str
 from bindaems.app.history.series import SeriesSpec, build_catalog, choose_rp_and_step
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.ops.check import OpsCheck
 from bindaems.app.ops.findings import DayInputs, Finding, find
+from bindaems.app.ops.report import DaySummary, report_text
+from bindaems.app.planning.review import review
 from bindaems.app.planning.store import PlanStore
 from bindaems.app.schedule import next_local
+from bindaems.app.settings.service import CurrentSettings
+from bindaems.app.stats.service import StatsService
 from bindaems.shared.config import Config
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, ensure_utc, local_day_slots
@@ -36,6 +42,8 @@ log = structlog.get_logger(__name__)
 OPS_NIGHTLY_AT: Final = (3, 5)  # Ortszeit, nach dem Abgleich der Abrechnung um 02:45
 START_DAYS: Final = 7  # beim Start: fehlende Tage der letzten 7 bis gestern
 KEEP_DAYS: Final = 400
+REPORT_INTERVAL_S: Final = 60.0  # so oft prüft ``ReportSender``, ob der Bericht fällig ist
+REPORT_RETRY: Final = timedelta(minutes=15)  # nach einem gescheiterten Senden
 SOC_SERIES: Final = "soc.battery"
 SOC_STEP_S: Final = 900  # je Viertelstunde der kleinste SOC
 
@@ -291,3 +299,133 @@ def _finding(row: Any) -> Finding:
         link=row.link,
         data=row.data,
     )
+
+
+def day_summary(
+    day: date,
+    *,
+    stats: StatsService,
+    ledger: LedgerService,
+    plans: PlanStore,
+    now: datetime,
+) -> DaySummary:
+    """Zahlen des Tagesberichts über den Ortstag ``day`` (blockierend: Datenbank).
+
+    Kosten, Ersparnis und Netzbezug stehen in der Statistik des Tages. Gibt es Viertelstunden mit
+    Plan und Abrechnung, vergleicht ``review`` Netzbezug und Netzladen über genau diese; sonst
+    gelten der Netzbezug der Statistik und das Netzladen der Abrechnung, ohne Plan.
+    """
+    period = stats.period("day", day)
+    start, end = _bounds(day)
+    slots = ledger.slots(start, end)
+    reviewed = review(day, plans.plans_between(start, end), slots, now)
+    totals = reviewed["totals"]
+    compared = any(
+        row["planned"] is not None and row["actual"] is not None for row in reviewed["slots"]
+    )
+    peak = ledger.month_peak(day)
+    if compared:
+        actual, planned = totals["actual"], totals["planned"]
+        import_kwh, grid_charge = actual["import_kwh"], actual["grid_charge_kwh"]
+        planned_import, planned_grid = planned["import_kwh"], planned["grid_charge_kwh"]
+    else:
+        import_kwh = period["energy"]["import_kwh"]
+        grid_charge = sum(slot.flows_wh.get("grid>battery", 0.0) for slot in slots) / 1000.0
+        planned_import = planned_grid = None
+    return DaySummary(
+        import_kwh=import_kwh,
+        planned_import_kwh=planned_import,
+        grid_charge_kwh=grid_charge,
+        planned_grid_charge_kwh=planned_grid,
+        net_eur=period["money"]["net_eur"],
+        savings_eur=period["money"]["savings_no_plant_eur"],
+        month_peak_kw=None if peak is None else peak.kw,
+    )
+
+
+class ReportSender:
+    """Schickt den Tagesbericht über gestern an Home Assistant (``HaNotifier.report``).
+
+    Jede Minute: ist es lokal nach ``report_at``, steht ``report_sent_at`` von gestern in
+    ``ops_day`` noch leer und ist der Bericht nicht ``off`` (bei ``findings`` nur mit mindestens
+    einer Warnung), geht er hinaus und ``report_sent_at`` wird gesetzt: ein Neustart sendet nichts
+    doppelt. Ein Fehler beim Senden (oder beim Rechnen des Berichts) wird nach ``REPORT_RETRY``
+    wiederholt, längstens bis der Tag wechselt. Ist gestern noch nicht gerechnet, rechnet er ihn
+    zuerst. Ohne ``notifier`` (kein Home Assistant) sendet er nichts.
+    """
+
+    def __init__(
+        self,
+        engine: Engine,
+        clock: Clock,
+        settings: CurrentSettings,
+        findings: FindingsService,
+        summary: Callable[[date], DaySummary],
+        check: Callable[[], OpsCheck],
+        notifier: HaNotifier | None,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._engine = engine
+        self._clock = clock
+        self._settings = settings
+        self._findings = findings
+        self._summary = summary
+        self._check = check
+        self._notifier = notifier
+        self._sleep = sleep
+        self._retry_at: datetime | None = None
+
+    def text(self, day: date) -> str:
+        """Der Bericht über ``day`` mit dem Stand von jetzt (blockierend: Datenbank)."""
+        return report_text(day, self._summary(day), self._findings.day(day), self._check())
+
+    async def run(self) -> None:
+        while True:
+            await self.check()
+            await self._sleep(REPORT_INTERVAL_S)
+
+    async def check(self) -> None:
+        """Ein Durchlauf: sendet den Bericht, wenn er fällig ist. Ein Fehler wird protokolliert
+        und nach ``REPORT_RETRY`` wiederholt."""
+        try:
+            await self._send_if_due()
+        except Exception:
+            log.exception("Tagesbericht nicht gesendet")
+            self._retry_at = self._clock.now() + REPORT_RETRY
+
+    async def _send_if_due(self) -> None:
+        mode = self._settings.current().settings.ops
+        now = self._clock.now()
+        local = now.astimezone(LOCAL_TZ)
+        if self._notifier is None or mode.report == "off":
+            return
+        if local.time() < time.fromisoformat(mode.report_at):
+            return
+        if self._retry_at is not None and now < self._retry_at:
+            return
+        day = local.date() - timedelta(days=1)
+        if await asyncio.to_thread(self._sent, day):
+            return
+        found = self._findings.day(day)
+        if found is None:
+            found = await self._findings.run_day(day)
+        if mode.report == "findings" and not any(item.level == "warn" for item in found):
+            return
+        text = await asyncio.to_thread(self.text, day)
+        if await self._notifier.report(text):
+            self._retry_at = None
+            await asyncio.to_thread(self._mark_sent, day, now)
+        else:
+            self._retry_at = now + REPORT_RETRY
+
+    def _sent(self, day: date) -> bool:
+        query = select(ops_day.c.report_sent_at).where(ops_day.c.day == day.isoformat())
+        with self._engine.connect() as conn:
+            return conn.execute(query).scalar_one_or_none() is not None
+
+    def _mark_sent(self, day: date, at: datetime) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(ops_day).where(ops_day.c.day == day.isoformat()).values(report_sent_at=at)
+            )

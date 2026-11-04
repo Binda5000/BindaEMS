@@ -9,6 +9,7 @@ from bindaems.shared.settings import (
     EnergyComponent,
     FeedInSettings,
     LearningSettings,
+    OpsSettings,
     RuntimeSettings,
     TariffSettings,
     ThermalPlanSettings,
@@ -246,3 +247,25 @@ def test_stored_settings_without_default_modes_load() -> None:
     old = RuntimeSettings().model_dump(mode="json")
     del old["wallbox_default_modes"]
     assert RuntimeSettings.model_validate(old).wallbox_default_modes == {}
+
+
+def test_ops_settings_defaults() -> None:
+    ops = RuntimeSettings().ops
+    assert (ops.report, ops.report_at) == ("daily", "07:30")
+
+
+@pytest.mark.parametrize("bad", ["7:30", "24:00", "07:60", "0730", "morgens"])
+def test_ops_settings_reject_bad_time(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        OpsSettings(report_at=bad)
+
+
+def test_ops_settings_reject_unknown_mode() -> None:
+    with pytest.raises(ValidationError):
+        OpsSettings(report="weekly")  # type: ignore[arg-type]
+
+
+def test_stored_settings_without_ops_load() -> None:
+    old = RuntimeSettings().model_dump(mode="json")
+    del old["ops"]
+    assert RuntimeSettings.model_validate(old).ops == OpsSettings()

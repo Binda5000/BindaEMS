@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import func, insert, select, update
@@ -18,12 +19,14 @@ from bindaems.app.db.schema import (
     planned_charge,
 )
 from bindaems.app.history.influx import InfluxQueryError, Series
-from bindaems.app.ops.service import OPS_NIGHTLY_AT, actuator_labels
+from bindaems.app.ops.report import DaySummary
+from bindaems.app.ops.service import OPS_NIGHTLY_AT, actuator_labels, day_summary
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.influx.lineprotocol import epoch_ms
 
 DAY = date(2026, 10, 8)  # Sommerzeit, lokal = UTC + 2; die Uhr steht am 9. 10. 10:00 lokal
 SENT = datetime(2026, 10, 9, 5, 30, tzinfo=UTC)
+SUMMARY = DaySummary(14.2, 9.8, 4.4, 0.0, 3.12, 1.85, 9.1)
 
 
 def utc(clock: str, day: str = "2026-10-08") -> datetime:
@@ -263,3 +266,184 @@ def test_recent_lists_newest_days_first(findings, engine) -> None:
         conn.execute(insert(ops_day).values(day="2026-10-09", computed_at=SENT))
     assert [item.day for item in findings.recent(2)] == [date(2026, 10, 8), date(2026, 10, 7)]
     assert findings.day(date(2026, 10, 9)) == []  # gerechnet, ohne Auffälligkeiten
+
+
+# --- Tagesbericht (Task 5) ----------------------------------------------------------------------
+
+
+def set_ops(settings_service, **changes: Any) -> None:
+    current = settings_service.current()
+    ops = current.settings.ops.model_copy(update=changes)
+    settings_service.update(
+        current.settings.model_copy(update={"ops": ops}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+
+
+def report_sent_at(engine) -> datetime | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            select(ops_day.c.report_sent_at).where(ops_day.c.day == DAY.isoformat())
+        ).scalar_one_or_none()
+
+
+def warn_day(engine) -> None:
+    """Gestern hat eine Warnung."""
+    with engine.begin() as conn:
+        conn.execute(insert(ops_day).values(day=DAY.isoformat(), computed_at=SENT))
+        conn.execute(
+            insert(ops_finding).values(
+                day=DAY.isoformat(),
+                rule="grid_charge_unplanned",
+                level="warn",
+                text="Akku lud nachts.",
+                data={},
+            )
+        )
+
+
+async def test_report_sent_after_report_at_once(make_sender, ha_calls, engine, clock) -> None:
+    sender = make_sender()
+    clock.advance(datetime(2026, 10, 9, 5, 29, tzinfo=UTC) - clock.now())  # 07:29 lokal
+    await sender.check()
+    assert ha_calls.reports == []
+    clock.advance(timedelta(minutes=1))  # 07:30
+    await sender.check()
+    assert len(ha_calls.reports) == 1
+    assert ha_calls.reports[0].startswith("Donnerstag 8.10.: Netzbezug 14,2 kWh (geplant 9,8)")
+    assert report_sent_at(engine) == clock.now()
+    clock.advance(timedelta(minutes=5))
+    await sender.check()
+    assert len(ha_calls.reports) == 1
+
+
+async def test_report_sent_once_per_day_across_restart(
+    make_sender, ha_calls, engine, clock
+) -> None:
+    await make_sender().check()
+    assert len(ha_calls.reports) == 1
+    await make_sender().check()  # Neustart: gleiche Datenbank
+    assert len(ha_calls.reports) == 1
+
+
+async def test_report_computes_a_missing_day_first(make_sender, ha_calls, engine) -> None:
+    await make_sender().check()
+    assert "Keine Auffälligkeiten" in ha_calls.reports[0] or "Auffälligkeit" in ha_calls.reports[0]
+    assert "noch nicht gerechnet" not in ha_calls.reports[0]
+    assert report_sent_at(engine) is not None
+
+
+async def test_findings_mode_skips_quiet_day(
+    make_sender, ha_calls, engine, settings_service
+) -> None:
+    set_ops(settings_service, report="findings")
+    with engine.begin() as conn:
+        conn.execute(insert(ops_day).values(day=DAY.isoformat(), computed_at=SENT))
+    await make_sender().check()
+    assert ha_calls.reports == []
+    assert report_sent_at(engine) is None
+
+
+async def test_findings_mode_sends_on_warning(
+    make_sender, ha_calls, engine, settings_service
+) -> None:
+    set_ops(settings_service, report="findings")
+    warn_day(engine)
+    await make_sender().check()
+    assert len(ha_calls.reports) == 1
+    assert "Akku lud nachts." in ha_calls.reports[0]
+
+
+async def test_off_sends_nothing(make_sender, ha_calls, engine, settings_service) -> None:
+    set_ops(settings_service, report="off")
+    warn_day(engine)
+    await make_sender().check()
+    assert ha_calls.calls == []
+    assert report_sent_at(engine) is None
+
+
+async def test_report_at_follows_the_setting(make_sender, ha_calls, settings_service) -> None:
+    set_ops(settings_service, report_at="10:01")  # die Uhr steht auf 10:00
+    await make_sender().check()
+    assert ha_calls.reports == []
+
+
+async def test_without_notifier_nothing_is_sent(make_sender, engine) -> None:
+    warn_day(engine)
+    await make_sender(notifier=None).check()
+    assert report_sent_at(engine) is None
+
+
+async def test_failed_send_retries_after_15_min(make_sender, ha_calls, engine, clock) -> None:
+    warn_day(engine)
+    sender = make_sender()
+    ha_calls.failing = True
+    await sender.check()
+    assert report_sent_at(engine) is None
+    ha_calls.failing = False
+    clock.advance(timedelta(minutes=14))
+    await sender.check()
+    assert ha_calls.reports == []  # noch zu früh
+    clock.advance(timedelta(minutes=1))
+    await sender.check()
+    assert len(ha_calls.reports) == 1
+    assert report_sent_at(engine) == clock.now()
+
+
+async def test_error_in_summary_is_retried(make_sender, ha_calls, engine, clock) -> None:
+    warn_day(engine)
+    fail = [True]
+
+    def summary(day):
+        if fail[0]:
+            raise RuntimeError("Abrechnung weg")
+        return SUMMARY
+
+    sender = make_sender(summary=summary)
+    await sender.check()
+    assert report_sent_at(engine) is None
+    fail[0] = False
+    clock.advance(timedelta(minutes=15))
+    await sender.check()
+    assert len(ha_calls.reports) == 1
+
+
+async def test_run_checks_every_minute(make_sender, engine, clock, ha_calls) -> None:
+    warn_day(engine)
+    sleeps: list[float] = []
+    sender = make_sender()
+    sender._sleep = record_then_stop(sleeps, 2)  # type: ignore[assignment]
+    with pytest.raises(StopScheduler):
+        await sender.run()
+    assert sleeps == [60.0, 60.0]
+    assert len(ha_calls.reports) == 1
+
+
+def test_day_summary_compares_planned_and_actual(findings, ledger, plan_store, clock) -> None:
+    grid_charge(ledger, plan_store)  # zwei Slots mit 2200 Wh Netzladen, Plan ohne Netzladen
+    stats = StatsStub()
+    summary = day_summary(DAY, stats=stats, ledger=ledger, plans=plan_store, now=clock.now())
+    assert summary.grid_charge_kwh == pytest.approx(4.4)
+    assert summary.planned_grid_charge_kwh == 0.0
+    assert summary.planned_import_kwh is not None
+    assert (summary.net_eur, summary.savings_eur) == (3.12, 1.85)
+    assert summary.month_peak_kw == pytest.approx(8.8)  # 2200 Wh je Viertelstunde
+
+
+def test_day_summary_without_plan_uses_statistics(ledger, plan_store, clock) -> None:
+    ingest(ledger, utc("19:30"), {"grid>battery": 1000.0, "grid>house": 500.0})
+    summary = day_summary(DAY, stats=StatsStub(), ledger=ledger, plans=plan_store, now=clock.now())
+    assert summary.import_kwh == 14.2  # aus der Statistik
+    assert summary.grid_charge_kwh == pytest.approx(1.0)
+    assert (summary.planned_import_kwh, summary.planned_grid_charge_kwh) == (None, None)
+    assert summary.month_peak_kw == pytest.approx(6.0)  # 1500 Wh je Viertelstunde
+
+
+class StatsStub:
+    def period(self, period: str, day: date) -> dict:
+        return {
+            "energy": {"import_kwh": 14.2},
+            "money": {"net_eur": 3.12, "savings_no_plant_eur": 1.85},
+        }

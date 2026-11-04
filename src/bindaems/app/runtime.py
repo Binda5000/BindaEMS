@@ -85,8 +85,13 @@ from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.estimate import GapEstimator
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
-from bindaems.app.ops.routes import ops_router
-from bindaems.app.ops.service import FindingsService, actuator_labels
+from bindaems.app.ops.routes import current_check, ops_router
+from bindaems.app.ops.service import (
+    FindingsService,
+    ReportSender,
+    actuator_labels,
+    day_summary,
+)
 from bindaems.app.planning.routes import planning_router
 from bindaems.app.planning.sender import PlanSender
 from bindaems.app.planning.service import PlanningService
@@ -475,6 +480,22 @@ class AppRuntime:
         if self._notify_status is not None:
             status = self._notify_status
             sources.append(lambda: status)
+        # Tagesbericht: der Betriebscheck wie in der Route ``/api/ops/check``
+        self.report_sender = ReportSender(
+            self.engine,
+            self._clock,
+            self.settings,
+            self.findings,
+            lambda day: day_summary(
+                day,
+                stats=self.stats,
+                ledger=self.ledger,
+                plans=self.plan_store,
+                now=self._clock.now(),
+            ),
+            lambda: current_check(self.live, sources, self.decisions, self._clock),
+            self.ha_notifier,
+        )
         guard = Guard(self.auth, cookie_secure=cfg.app.cookie_secure)
         self.app: FastAPI = create_app(
             [
@@ -490,6 +511,7 @@ class AppRuntime:
                     decisions=self.decisions,
                     clock=self._clock,
                     findings=self.findings,
+                    report=self.report_sender,
                 ),
                 history_router(
                     self.reader, build_catalog(cfg), self._clock, guard, self._series_labels
@@ -667,6 +689,7 @@ class AppRuntime:
             ("forecast-nightly", self._forecast_nightly_loop),
             ("ledger-nightly", self._ledger_nightly_loop),
             ("ops-nightly", self._ops_nightly_loop),
+            ("ops-report", self.report_sender.run),
             ("consumer-energy", self._energy_loop),
         ]
         if self.thermal_model is not None:

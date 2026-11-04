@@ -46,7 +46,9 @@ async def test_findings_after_unplanned_grid_charge(runtime, respx_mock) -> None
     assert grid["end"] == "2026-10-08T20:00:00+00:00"
     assert grid["text"].startswith("Akku lud 21:30–22:00 mit bis zu 8,8 kW aus dem Netz")
     assert "not_checked" in [f["rule"] for f in yesterday["findings"]]
-    assert body["report"] is None
+    assert body["report"]["day"] == "2026-10-08"
+    assert body["report"]["text"].startswith("Donnerstag 8.10.: Netzbezug 4,4 kWh (geplant 0,0)")
+    assert "Betriebscheck jetzt:" in body["report"]["text"]
 
 
 async def test_maintenance_cleans_up_old_findings(runtime, monkeypatch) -> None:
