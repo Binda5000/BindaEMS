@@ -1262,6 +1262,7 @@ def _storm(
     battery: BatteryState | None = None,
     vehicles: list[PlanVehicleInput] | None = None,
     warning: StormWarning | None = _STORM,
+    car_battery: bool = False,
 ) -> PlanInputs:
     """Akku 96 kWh, Reserve 20 %, Ziel 40 %, ohne PV und ohne Restwert; 96 Slots ab 02:00
     Ortszeit, Haus 600 W, 30 ct und 10 ct von 02:00 bis 04:00; mit Warnung Gewitter (orange) von
@@ -1281,6 +1282,7 @@ def _storm(
         grid_charge=grid_charge,
         battery=battery or state(usable_kwh=_BIG_KWH),
         vehicles=vehicles,
+        car_battery=car_battery,
         storm_floors=floors,
         storm_warnings=warnings,
     )
@@ -1353,9 +1355,16 @@ def test_storm_charge_caps_follow_window_and_soc() -> None:
     assert storm_charge_caps_w(limited)[0] == 2000.0  # 2600 W Sollwert − 600 W Haus
 
 
+# billig in der Nacht (02:00 bis 04:00), teuer am Morgen vor der PV (04:00 bis 08:00), sonst 30 ct
+_MORNING_PRICES = [10.0] * 8 + [40.0] * 16 + [30.0] * 72
+
+
 def test_pv_fills_storm_reserve_first() -> None:
+    # Haus 1500 W und ein teurer Morgen: Nachts aufladen und den Akku am Morgen leeren lohnte
+    # sich, wenn das Aufgeladene vor dem Fenster wieder hinaus dürfte; die PV füllt die
+    # Untergrenze umsonst
     pv = pv_arc(SCENARIO_START, 96, 8000.0)
-    inputs = _storm(soc_pct=22.0, pv=pv)
+    inputs = _storm(soc_pct=22.0, pv=pv, prices=_MORNING_PRICES, load=[1500.0] * 96)
     result = solve(inputs)
     assert result.status == "optimal"
     assert sum(f.gr_s for f in result.flows) < 1
@@ -1363,6 +1372,69 @@ def test_pv_fills_storm_reserve_first() -> None:
     assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in intents)
     steps = resimulate(inputs, intents)
     assert all(steps[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH for t in _WINDOW)
+
+
+def test_storm_charge_is_no_arbitrage() -> None:
+    # Ruling R9 (Befund des Reviews): Ohne die Bedingung „bleibt im Akku“ lud der Plan nachts
+    # 1,9 kWh zu 10 ct, entlud sie am Morgen zu 40 ct und war um 06:00 wieder an der Reserve; die
+    # PV füllte die Untergrenze trotzdem (Ziel 80,8 ct mit Warnung gegen 125,1 ct ohne).
+    pv = pv_arc(SCENARIO_START, 96, 9000.0)
+    kw: dict[str, Any] = {"soc_pct": 22.0, "pv": pv, "prices": _MORNING_PRICES}
+    kw["load"] = [1500.0] * 96
+    without = solve(_storm(**kw, warning=None))
+    inputs = _storm(**kw)
+    result = solve(inputs)
+    assert result.status == without.status == "optimal"
+    assert result.objective_ct is not None and without.objective_ct is not None
+    assert result.objective_ct >= without.objective_ct - 0.01
+    assert sum(f.gr_s for f in result.flows) < 1
+    intents = derive_intents(inputs, result)
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in intents)
+    assert result.storm_shortfall_kwh == pytest.approx(0.0, abs=1e-6)
+
+
+def test_storm_charge_stays_until_the_window_ends() -> None:
+    # Aufgeladenes verlässt den Akku nicht vor dem Ende des letzten Fensters: SOC am Slotende
+    # mindestens Reserve plus das bis dahin Aufgeladene; danach darf das Haus es verbrauchen
+    inputs = _storm(soc_pct=22.0, prices=_MORNING_PRICES, load=[1500.0] * 96)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    eta_ch = params_of(inputs).eta_ch
+    charged = 0.0
+    for t, f in enumerate(result.flows[: _WINDOW[-1] + 1]):
+        charged += eta_ch * f.gr_s * SLOT_KWH
+        assert f.soc_end_kwh >= _RESERVE_KWH + charged - 1e-6, t
+    assert charged == pytest.approx(_FLOOR_KWH - 0.22 * _BIG_KWH, abs=0.01)
+    assert result.flows[-1].soc_end_kwh < _FLOOR_KWH - 5.0  # danach nimmt es das Haus
+
+
+def test_no_battery_to_car_with_storm_charge() -> None:
+    # Ruling R7: Kann der Plan für die Unwetter-Reserve aufladen, gibt der Akku keinem Auto etwas;
+    # die Plausibilität zählt das Aufladen als Netzenergie im Akku (``car_grid``). Ohne Warnung
+    # nimmt das Auto, das erst am Abend kommt, PV-Energie aus dem Akku.
+    pv = pv_arc(SCENARIO_START, 96, 9000.0)
+    car = _tesla(expected=True, arrival_at=slot(72), departure_at=slot(95), need_kwh=10.0)
+    kw: dict[str, Any] = {"soc_pct": 22.0, "pv": pv, "vehicles": [car], "car_battery": True}
+    without = solve(_storm(**kw, warning=None))
+    assert battery_kwh(without) > 1.0
+    inputs = _storm(**kw)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert all(not f.ev_battery for f in result.flows)
+    assert sum(f.gr_s for f in result.flows) > 0 or result.flows[_WINDOW[0]].pv_b > 0
+    intents = derive_intents(inputs, result)
+    issues = check_plan(inputs, result, intents, resimulate(inputs, intents))
+    assert not any("Akku ins Auto" in i for i in issues)
+
+
+def test_battery_to_car_stays_with_floor_above_the_soc() -> None:
+    # Liegt der SOC zu Beginn schon über der Untergrenze, gibt es kein Aufladen und Akku ins
+    # Auto bleibt wie ohne Warnung möglich
+    pv = pv_arc(SCENARIO_START, 96, 9000.0)
+    car = _tesla(expected=True, arrival_at=slot(72), departure_at=slot(95), need_kwh=10.0)
+    result = solve(_storm(soc_pct=60.0, pv=pv, vehicles=[car], car_battery=True))
+    assert result.status == "optimal"
+    assert battery_kwh(result) > 1.0
 
 
 def test_storm_already_running_stays_feasible() -> None:
