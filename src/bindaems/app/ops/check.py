@@ -124,6 +124,8 @@ def _watchdog(health: Mapping[str, Any]) -> CheckItem:
     if not isinstance(dog, Mapping):
         return _unknown("watchdog", "Watchdog")
     required, armed, state = dog.get("required"), dog.get("armed"), dog.get("state")
+    if required is None or state is None:
+        return _unknown("watchdog", "Watchdog")
     if state == "tripped":
         return CheckItem("watchdog", "Watchdog", "error", "Watchdog hat ausgelöst")
     if required and not (armed and state == "armed"):
@@ -139,12 +141,13 @@ def _alarms(health: Mapping[str, Any]) -> CheckItem:
     alarms = health.get("alarms")
     if alarms is None:
         return _unknown("alarms", "Alarme")
-    for severity, level in (("error", "error"), ("warning", "warn")):
+    severities: tuple[tuple[str, Level], ...] = (("error", "error"), ("warning", "warn"))
+    for severity, level in severities:
         hits = [a for a in alarms if a.get("severity") == severity]
         if hits:
             count = f"{len(hits)} Alarm{'e' if len(hits) > 1 else ''}"
             text = f"{count}, zuerst: {hits[0].get('message')}"
-            return CheckItem("alarms", "Alarme", level, text)  # type: ignore[arg-type]
+            return CheckItem("alarms", "Alarme", level, text)
     return CheckItem("alarms", "Alarme", "ok", "keine Alarme")
 
 
@@ -152,7 +155,9 @@ def _assignment(health: Mapping[str, Any]) -> CheckItem:
     wallboxes = health.get("wallboxes")
     if wallboxes is None:
         return _unknown("assignment", "Zuordnung")
-    unclear = [str(w.get("id")) for w in wallboxes if w.get("assignment") == "unclear"]
+    unclear = [
+        str(w.get("name") or w.get("id")) for w in wallboxes if w.get("assignment") == "unclear"
+    ]
     if unclear:
         text = f"Zuordnung unklar an {', '.join(unclear)}"
         return CheckItem("assignment", "Zuordnung", "warn", text, "/laden")
@@ -162,6 +167,8 @@ def _assignment(health: Mapping[str, Any]) -> CheckItem:
 def _tesla(health: Mapping[str, Any]) -> CheckItem:
     vehicles = health.get("vehicles")
     if vehicles is None:
+        return _unknown("tesla_commands", "Tesla-Befehle")
+    if not any(v.get("commands_hour") is not None for v in vehicles):
         return _unknown("tesla_commands", "Tesla-Befehle")
     over = [
         f"{v.get('name')} ({int(v['commands_hour'])})"
@@ -235,11 +242,12 @@ def _selfcheck(health: Mapping[str, Any]) -> CheckItem:
     results = health.get("selfcheck")
     if results is None:
         return _unknown("selfcheck", "Selbsttest")
-    for status, level in (("fail", "error"), ("warn", "warn")):
+    statuses: tuple[tuple[str, Level], ...] = (("fail", "error"), ("warn", "warn"))
+    for status, level in statuses:
         hits = [r for r in results if r.get("status") == status]
         if hits:
             text = "; ".join(f"{r.get('id')}: {r.get('message')}" for r in hits[:2])
-            return CheckItem("selfcheck", "Selbsttest", level, text)  # type: ignore[arg-type]
+            return CheckItem("selfcheck", "Selbsttest", level, text)
     return CheckItem("selfcheck", "Selbsttest", "ok", "bestanden")
 
 
@@ -337,6 +345,7 @@ def operations_check(
 
 
 def check_json(check: OpsCheck) -> dict[str, Any]:
+    """Der Betriebscheck als JSON für die API: Gesamtstufe, Zeitpunkt und die Prüfungen."""
     return {
         "level": check.level,
         "checked_at": check.checked_at.isoformat(),

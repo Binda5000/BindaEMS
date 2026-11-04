@@ -213,7 +213,9 @@ def test_unclear_assignment_is_warn_with_link() -> None:
     item = _item(_run(health), "assignment")
     assert item.level == "warn"
     assert item.link == "/laden"
-    assert "wb1" in item.text
+    assert "Garage" in item.text
+    health["wallboxes"][0]["name"] = None
+    assert "wb1" in _item(_run(health), "assignment").text
 
 
 def test_tesla_commands_over_16_is_warn() -> None:
@@ -307,3 +309,18 @@ def test_check_json_shape() -> None:
         "text": "core verbunden",
         "link": None,
     }
+
+
+def test_tesla_without_reported_commands_is_unknown() -> None:
+    health = _health()
+    health["vehicles"][0]["commands_hour"] = None
+    item = _item(_run(health), "tesla_commands")
+    assert (item.level, item.text) == ("unknown", "vom core nicht gemeldet")
+
+
+def test_watchdog_without_required_or_state_is_unknown() -> None:
+    for key in ("required", "state"):
+        health = _health()
+        del health["watchdog"][key]
+        item = _item(_run(health), "watchdog")
+        assert (item.level, item.text) == ("unknown", "vom core nicht gemeldet")
