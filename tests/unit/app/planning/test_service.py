@@ -764,6 +764,31 @@ async def test_storm_warning_change_requests_replan_once(service_with):
     assert triggers(calls) == ["start", "storm", "storm"]
 
 
+async def test_storm_warning_order_does_not_request_replan(service_with):
+    def warning(warn_id: int) -> StormWarning:
+        return StormWarning(
+            warn_id=warn_id,
+            version=1,
+            kind="gewitter",
+            level=2,
+            begin=at("2026-10-16T12:00:00+00:00"),
+            end=at("2026-10-16T14:00:00+00:00"),
+            text="t",
+        )
+
+    warnings = [warning(1), warning(2)]
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), storm=lambda: list(warnings)
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        warnings.reverse()  # gleicher Beginn, andere Reihenfolge der Quelle
+        await asyncio.sleep(0.2)
+    assert triggers(calls) == ["start"]
+
+
 async def test_new_prices_request_replan(service_with, price_store, clock):
     calls: list[PlanInputs] = []
     service = service_with(solver=recording(calls), sleep=fast_sleep())

@@ -443,7 +443,11 @@ class PlanningService:
             load_issued=load.issued_at if load is not None else None,
             vehicles=vehicles,
             support_pct=self._support_pct(),
-            storm=tuple((w.warn_id, w.version, w.begin, w.end) for w in self._storm()),
+            # nach (Beginn, Nummer): die Reihenfolge der Quelle löst keinen Neuplan aus
+            storm=tuple(
+                (w.warn_id, w.version, w.begin, w.end)
+                for w in sorted(self._storm(), key=lambda w: (w.begin, w.warn_id))
+            ),
         )
         triggers = changed(old, new)
         for trigger in triggers:
