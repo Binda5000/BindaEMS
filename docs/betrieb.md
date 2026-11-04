@@ -5973,6 +5973,7 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 | `planning.end_value_factor` | Vorsichtsfaktor Restwert | 0,9 | bewertet die Energie im Akku am Horizontende (oben) |
 | `planning.inertia_ct` | Planträgheit (ct/kWh) | 0,5 | Kosten je kWh Abweichung der Akkuleistung vom vorigen Plan, in den ersten vier Slots |
 | `planning.peak_soft_ct_per_kw` | Spitze vermeiden ohne Leistungspreis (ct je kW und Monat) | 100 | gedachter Satz für Monate ohne Leistungspreis mit Satz (unten); 0 = aus. Die Ansicht zeigt „100 ct je kW und Monat“, bei 0 „aus“ |
+| `planning.storm` | Unwetter-Reserve | aus | Gruppe mit `enabled` (aus), `target_soc_pct` (40), `min_level` (2 = orange) und `kinds` (`sturm`, `gewitter`): Bei amtlichen Warnungen hebt die Planung die Untergrenze des Akkus von einer Stunde vor Beginn bis zum Ende der Warnung auf das Ziel; die Anzeige im UI folgt |
 
 Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl ab 0, z. B. 100“
 (Spitze vermeiden), „Zahl von 50 bis 100“ (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“

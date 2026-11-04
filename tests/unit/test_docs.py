@@ -1212,6 +1212,8 @@ def test_support_entities_in_the_guide_exist() -> None:
 
 def test_planning_settings_in_the_guide_match_the_configuration() -> None:
     # Die Tabelle der Einstellungen „Planung“ nennt jedes Feld mit dem Standardwert.
+    from pydantic import BaseModel
+
     from bindaems.shared.settings import PlanningSettings
 
     defaults = PlanningSettings()
@@ -1224,6 +1226,8 @@ def test_planning_settings_in_the_guide_match_the_configuration() -> None:
     assert set(documented) == set(PlanningSettings.model_fields)
     for key, shown in documented.items():
         value = getattr(defaults, key)
+        if isinstance(value, BaseModel):  # Untergruppe (storm): Felder stehen in der Beschreibung
+            continue
         if isinstance(value, bool):
             assert shown == ("ein" if value else "aus"), key
         else:

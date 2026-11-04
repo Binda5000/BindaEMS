@@ -246,3 +246,20 @@ def test_stored_settings_without_default_modes_load() -> None:
     old = RuntimeSettings().model_dump(mode="json")
     del old["wallbox_default_modes"]
     assert RuntimeSettings.model_validate(old).wallbox_default_modes == {}
+
+
+def test_storm_defaults() -> None:
+    from bindaems.shared.settings import PlanningSettings
+
+    s = PlanningSettings().storm
+    assert s.enabled is False
+    assert (s.target_soc_pct, s.min_level) == (40, 2)
+    assert s.kinds == ["sturm", "gewitter"]
+    assert RuntimeSettings.model_validate({"planning": {"margin_ct": 1.0}}).planning.storm == s
+
+
+def test_storm_kinds_must_not_be_empty() -> None:
+    from bindaems.shared.settings import StormSettings
+
+    with pytest.raises(ValidationError):
+        StormSettings(kinds=[])

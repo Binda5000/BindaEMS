@@ -594,7 +594,17 @@ export const PlanningSettingsSchema = v.looseObject({
 	inertia_ct: v.number(),
 	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat, 0 = aus);
 	 * ältere Einstellungen kennen ihn nicht */
-	peak_soft_ct_per_kw: v.optional(v.number(), 100)
+	peak_soft_ct_per_kw: v.optional(v.number(), 100),
+	/** Unwetter-Reserve; ältere Einstellungen kennen sie nicht */
+	storm: v.optional(
+		v.looseObject({
+			enabled: v.boolean(),
+			target_soc_pct: v.number(),
+			min_level: v.picklist([1, 2, 3]),
+			kinds: v.array(v.string())
+		}),
+		{ enabled: false, target_soc_pct: 40, min_level: 2, kinds: ['sturm', 'gewitter'] }
+	)
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 

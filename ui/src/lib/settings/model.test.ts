@@ -424,7 +424,8 @@ it('takes over edited planning numbers', () => {
 		wear_ct: 1.5,
 		end_value_factor: 0.8,
 		inertia_ct: 0,
-		peak_soft_ct_per_kw: 50.5
+		peak_soft_ct_per_kw: 50.5,
+		storm: { enabled: false, target_soc_pct: 40, min_level: 2, kinds: ['sturm', 'gewitter'] }
 	});
 });
 
