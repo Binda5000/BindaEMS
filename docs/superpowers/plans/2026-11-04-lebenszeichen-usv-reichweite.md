@@ -4,7 +4,7 @@
 
 **Goal:** Fällt die VM, der Proxmox-Cluster, das Internet, der core oder das Netz aus, kommt binnen Minuten eine Nachricht aufs Handy, über einen externen Dienst außerhalb des Clusters (Idee 1.3). Dazu zeigen UI und Home Assistant, wie lange der Akku das Haus bei einem Netzausfall noch versorgt, und die app führt ein Protokoll der Netzausfälle (Idee 1.5).
 
-**Architecture:** Nur app, UI und HA; der core bleibt unverändert. Ein neuer Baustein `bindaems.app.monitoring` hat drei Teile: `backup_range.py` rechnet die Reichweite (Lastannahme aus der Abrechnung, Formel), `outages.py` erkennt Netzausfälle am Signal `system.active_in_source` (240 = Inselbetrieb) und speichert sie in einer neuen Tabelle `grid_outage`, `heartbeat.py` pingt alle 5 min eine URL im Stil von healthchecks.io (`<url>` = in Ordnung, `<url>/fail` = Störung, Text im Body). Die URL steht als Secret `BINDAEMS_PING_URL` in der `.env`; ohne sie ist das Lebenszeichen aus. Bleibt der Ping aus (VM, Cluster, Internet weg), meldet der Dienst das selbst.
+**Architecture:** Nur app, UI und HA; der core bleibt unverändert. Ein neuer Baustein `bindaems.app.monitoring` hat drei Teile: `backup_range.py` rechnet die Reichweite (Lastannahme nur aus den Lasten an AC-Out der Multis, Formel), `outages.py` erkennt Netzausfälle am Signal `system.active_in_source` (240 = Inselbetrieb) und speichert sie in einer neuen Tabelle `grid_outage`, `heartbeat.py` pingt alle 5 min eine URL im Stil von healthchecks.io (`<url>` = in Ordnung, `<url>/fail` = Störung, Text im Body). Die URL steht als Secret `BINDAEMS_PING_URL` in der `.env`; ohne sie ist das Lebenszeichen aus. Bleibt der Ping aus (VM, Cluster, Internet weg), meldet der Dienst das selbst.
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy/Alembic, httpx, pytest; Svelte 5, TypeScript, Vitest, Playwright.
 
@@ -15,6 +15,7 @@
 - core, `cerbo-watchdog` und alle Aktoren bleiben unverändert; nichts schaltet an der Anlage.
 - Das Lebenszeichen ist keine Sicherheitsfunktion (Spec 1.4 „keine Cloud-Abhängigkeiten für sicherheitsrelevante Funktionen“): Fällt der Dienst oder das Internet aus, läuft alles andere unverändert weiter, und kein Fehler des Pings bricht einen anderen Job ab.
 - Die Ping-URL ist ein Secret: nur `BINDAEMS_PING_URL`, nie in `config.yaml`, nie im Log, nie in API, HA oder UI (dort nur „eingerichtet: ja/nein“).
+- Reichweite nur mit den **Lasten an AC-Out** (Hinweis des Betreibers vom 4.11.2026: nur AC-Out ist USV-versorgt; Lasten an AC-In, Wallboxen und alles andere fallen bei Netzausfall weg). Quelle ist das Victron-Signal `consumption_output.l1..l3.power_w` (`Ac/ConsumptionOnOutput`), nie die Hauslast der Abrechnung.
 - Reichweite immer **ohne PV** gerechnet und so beschriftet; nie negativ, nie NaN, nie unendlich; ohne Grundlage keine Zahl, sondern „zu wenig Daten“.
 - Texte deutsch, Zahlen mit Komma, `NBSP` vor Einheiten (wie `energyText`).
 - Neue Felder in `config.yaml` haben Standardwerte; sie dürfen erst in die `config.yaml` der Anlage, wenn core und app aus diesem Stand laufen (der core liest dieselbe Datei).
@@ -31,12 +32,12 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 3. **Takt 5 min** (`app.ping_interval_s`, Standard 300, 60–3600), erster Ping 30 s nach dem Start der app.
 4. **Wann „Störung“ (`/fail`):** core seit mindestens 120 s nicht erreichbar; Netzausfall (Inselbetrieb); core im Zustand SAFE (veraltete Cerbo-Daten u. a.). OBSERVE und DEGRADED gelten als in Ordnung (OBSERVE ist normal bei Regelbetrieb aus); der Text nennt die Betriebsart. Mehr prüft der Betriebscheck (Idee 1.1), nicht dieses Lebenszeichen.
 5. **(Karte) Netzausfall meldet das Lebenszeichen als Störung**, mit SOC und Reichweite im Text („Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18 h ohne PV“); kehrt das Netz zurück, kommt mit dem nächsten Ping „wieder in Ordnung“. Ist der Router nicht an der USV, bleibt der Ping ganz aus, und der Dienst meldet das nach der Karenz ebenfalls.
-6. **(Karte) Lastannahme der Reichweite: mittlere Hauslast der letzten 7 vollen Tage** (24 h, aus der Abrechnung, ohne Wallboxen). Die Nacht-Grundlast (00:00–05:00 der letzten 7 Nächte) rechnet die app trotzdem und zeigt sie als zweite Zahl („nachts bis ≈ 40 h“) in API, HA-Attributen und der Karte auf der Seite System. Begründung: Bei einem echten Ausfall läuft das Haus weiter (Kühlschrank, Kochen, Heizungspumpen); nur mit der Nachtlast wäre die Zahl zu optimistisch.
+6. **(Karte) Lastannahme der Reichweite: mittlere Last an AC-Out der letzten 7 vollen Tage** (24 h). Quelle: InfluxDB, Retention `long`, Messung `power` mit `source='load'`, `id='consumption_output'`, Phasen L1–L3, je Viertelstunde gemittelt und über die Phasen summiert (eine Viertelstunde zählt nur mit allen drei Phasen). Die Nacht-Grundlast an AC-Out (00:00–05:00 der letzten 7 Nächte) rechnet die app trotzdem und zeigt sie als zweite Zahl („nachts bis ≈ 40 h“) in API, HA-Attributen und der Karte auf der Seite System. Begründung: Was an AC-Out hängt, läuft bei einem Ausfall tagsüber wie sonst weiter; nur mit der Nachtlast wäre die Zahl zu optimistisch.
 7. **Untergrenze im Inselbetrieb:** neues Feld `battery.outage_floor_soc_pct` (Standard 5 %, Bereich 0 bis `reserve_soc_pct`). Victron ESS entlädt bei Netzausfall unter den Min-SOC, bis das BMS abschaltet; diese Schwelle trägst du für deinen Akku ein (Frage in der Freigabe).
 8. **Formel:** `η = √(planning.roundtrip_pct / 100)` (Entladeseite, Standard 88 % → 0,938). `kWh(soc) = max(0, soc − Untergrenze) / 100 × usable_kwh × η`. Reichweite `h = kWh × 1000 / Last_W`. Zwei Zahlen: **jetzt** (aktueller SOC) und **ab Reserve** (`reserve_soc_pct`, also was die Reserve allein trägt). Last unter 50 W gilt als unplausibel → keine Zahl.
-9. **Während eines Netzausfalls** rechnet die Reichweite mit der mittleren Hauslast seit Beginn des Ausfalls, sobald 15 min erfasst sind; vorher mit der Lastannahme.
+9. **Während eines Netzausfalls** rechnet die Reichweite mit der mittleren Last an AC-Out (Summe `consumption_output.l1..l3.power_w` aus dem Live-Stand) seit Beginn des Ausfalls, sobald 15 min erfasst sind; vorher mit der Lastannahme.
 10. **Anzeige:** unter 10 h mit einer Nachkommastelle („≈ 7,5 h“), sonst ganze Stunden („≈ 31 h“); HA-Sensor in h mit einer Nachkommastelle.
-11. **Protokoll der Netzausfälle:** ab dem Ausrollen, kein Nachtragen aus der Vergangenheit (`active_in_source` steht nicht in InfluxDB). Erfasst wird jeder Ausfall, auch kurze. Je Ausfall: Beginn, Ende, Dauer, SOC zu Beginn, am Ende und das Minimum, mittlere Hauslast, Hausenergie. Ein Neustart der app während eines Ausfalls setzt die offene Zeile fort; ist das Netz beim Start schon zurück, schließt sie mit „Ende geschätzt“ (Zeit des Starts).
+11. **Protokoll der Netzausfälle:** ab dem Ausrollen, kein Nachtragen aus der Vergangenheit (`active_in_source` steht nicht in InfluxDB). Erfasst wird jeder Ausfall, auch kurze. Je Ausfall: Beginn, Ende, Dauer, SOC zu Beginn, am Ende und das Minimum, mittlere Last an AC-Out und Energie an AC-Out. Ein Neustart der app während eines Ausfalls setzt die offene Zeile fort; ist das Netz beim Start schon zurück, schließt sie mit „Ende geschätzt“ (Zeit des Starts).
 12. **Orte:** Akku-Kachel der Übersicht bekommt eine Zeile „Netzausfall: ≈ 31 h, ab Reserve ≈ 14 h“ (während eines Ausfalls hervorgehoben: „Netzausfall seit 14:03 · reicht noch ≈ 18 h“). Seite System: Karte „USV und Netzausfälle“ (Lastannahme, Nachtlast, Untergrenze, Lebenszeichen, letzte 20 Ausfälle). Das Lebenszeichen erscheint zusätzlich als Baustein in der Liste der Komponenten. HA: Sensoren `usv_reichweite`, `usv_reichweite_reserve`, Binärsensor `netzausfall`.
 
 ## Review Focus
@@ -44,7 +45,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 1. **Internet weg, VM läuft:** jeder Ping scheitert (Timeout, DNS, Proxy). Erwartet: kein Absturz, kein Neustart anderer Jobs, eine Logzeile je Wechsel (nicht je Versuch), Komponente „Lebenszeichen nicht gesendet seit 14:05“, nächster Versuch im Takt. Test in Task 4.
 2. **Neustart der app während eines Netzausfalls** und Neustart nach dem Ende: keine zweite offene Zeile, kein Ausfall ohne Ende. Test in Task 3.
 3. **SOC ungültig oder veraltet, core getrennt:** keine Reichweite (`None`), kein „0 h“; das Lebenszeichen meldet erst nach 120 s „core nicht erreichbar“. Tests in Task 2 und Task 4.
-4. **Neue Anlage oder Lücken in der Abrechnung:** weniger als 192 vollständige Slots (2 Tage) → keine Lastannahme, Text „zu wenig Daten“, keine Division durch null. Test in Task 2.
+4. **InfluxDB nicht erreichbar, neue Anlage oder Lücken bei `consumption_output`:** weniger als 192 vollständige Viertelstunden (2 Tage, alle drei Phasen) → keine Lastannahme, Text „zu wenig Daten“, keine Division durch null. Test in Task 2.
 5. **Secret-Leck:** die URL (mit UUID) erscheint weder im Log noch in `/api/backup`, `/api/system` oder HA, auch nicht in einer Fehlermeldung von httpx. Test in Task 4.
 
 ---
@@ -78,19 +79,24 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 - Test: `tests/unit/app/monitoring/__init__.py`, `tests/unit/app/monitoring/test_backup_range.py`
 
 **Interfaces:**
-- Consumes: `bindaems.app.forecast.archive.actuals(ledger, start, end) -> dict[datetime, Actual]` (`Actual.house_w`), `SlotSource`, `LOCAL_TZ`
+- Consumes: `InfluxReader.query` und `RP_LONG`, `quote_ident`/`quote_str` aus `bindaems.app.history.influx` (Muster: `build_query` in `history/series.py`), `LOCAL_TZ`
 - Produces:
   - `@dataclass(frozen=True) class LoadBasis: day_w: float | None; night_w: float | None; day_slots: int; night_slots: int; first_day: date; last_day: date`
-  - `def load_basis(ledger: SlotSource, today: date) -> LoadBasis` — Tage `today−7 … today−1` (lokal), Tag = alle vollständigen Slots, Nacht = Slots mit lokalem Beginn 00:00–04:45; `day_w` nur ab `MIN_DAY_SLOTS = 192`, `night_w` ab `MIN_NIGHT_SLOTS = 40`, sonst `None`.
+  - `def ac_out_query(start: datetime, end: datetime) -> str` — `SELECT mean("p_w") FROM "long"."power" WHERE "source"='load' AND "id"='consumption_output' AND time … GROUP BY time(15m),"phase" fill(none)`
+  - `def slot_loads(series: Sequence[Series]) -> dict[datetime, float]` — je Viertelstunde die Summe der drei Phasen; Viertelstunden ohne alle drei Phasen fallen weg
+  - `def load_basis(loads: Mapping[datetime, float], today: date) -> LoadBasis` — Tage `today−7 … today−1` (lokal), Tag = alle Viertelstunden, Nacht = mit lokalem Beginn 00:00–04:45; `day_w` nur ab `MIN_DAY_SLOTS = 192`, `night_w` ab `MIN_NIGHT_SLOTS = 40`, sonst `None`.
   - `@dataclass(frozen=True) class BackupRange: now_h: float | None; reserve_h: float | None; load_w: float | None; load_source: Literal["tag", "ausfall"] | None; night_h: float | None`
   - `def backup_range(*, soc_pct: float | None, reserve_pct: float, floor_pct: float, usable_kwh: float, roundtrip_pct: float, basis: LoadBasis, outage_load_w: float | None) -> BackupRange`
   - `def hours_text(hours: float | None) -> str` — „≈ 7,5 h“, „≈ 31 h“, `None` → „zu wenig Daten“
-  - `class BackupRangeService` mit `refresh() -> None` (liest `load_basis` im Thread), `basis() -> LoadBasis | None`, `async run() -> None` (beim Start und täglich 00:20 lokal, über `next_local` aus `bindaems.app.schedule`).
+  - `class BackupRangeService(influx: InfluxReader, clock)` mit `async refresh() -> None` (Abfrage über 7 Tage, dann `load_basis`; bei `InfluxQueryError` bleibt die letzte Grundlage bis 48 h), `basis() -> LoadBasis | None`, `async run() -> None` (beim Start und täglich 00:20 lokal, über `next_local` aus `bindaems.app.schedule`).
 
-- [ ] **Step 1: Failing tests** (`test_backup_range.py`, Ledger als Fake mit `LedgerSlot`s, `covered_s=900`):
-  - `test_day_and_night_mean` → 7 Tage, Hauslast tagsüber 800 W, nachts 400 W → `night_w == 400`, `day_w == pytest.approx((20*400 + 76*800)/96)`.
-  - `test_too_few_slots_gives_none` → 191 vollständige Slots → `day_w is None`; Slots mit `covered_s=800` zählen nicht.
-  - `test_today_is_excluded` → Slots von heute ändern das Ergebnis nicht.
+- [ ] **Step 1: Failing tests** (`test_backup_range.py`, `Series` als Fake mit Spalten `time`, `mean` und Tag `phase`):
+  - `test_query_targets_ac_out` → `ac_out_query` enthält `'consumption_output'`, `"long"."power"`, `GROUP BY time(15m)` und keine Hauslast.
+  - `test_slot_needs_three_phases` → L1 und L2 je 200 W, L3 fehlt → Viertelstunde fällt weg; mit L3 100 W → 500 W.
+  - `test_day_and_night_mean` → 7 Tage, Last an AC-Out tagsüber 800 W, nachts 400 W → `night_w == 400`, `day_w == pytest.approx((20*400 + 76*800)/96)`.
+  - `test_too_few_slots_gives_none` → 191 Viertelstunden → `day_w is None`.
+  - `test_influx_error_keeps_last_basis` → erste Abfrage gut, zweite wirft `InfluxQueryError` → `basis()` unverändert; 49 h nach der letzten guten → `None`.
+  - `test_today_is_excluded` → Viertelstunden von heute ändern das Ergebnis nicht.
   - `test_formula` → SOC 60, Reserve 20, Untergrenze 5, 96 kWh, 88 %, `day_w=700`: `now_h == pytest.approx(0.55*96*sqrt(0.88)*1000/700)`, `reserve_h == pytest.approx(0.15*96*sqrt(0.88)*1000/700)`.
   - `test_soc_below_floor_is_zero` → SOC 3, Untergrenze 5 → `now_h == 0.0`.
   - `test_soc_unknown` → `soc_pct=None` → `now_h is None`, `reserve_h` trotzdem gesetzt.
@@ -114,24 +120,24 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 - Test: `tests/unit/app/monitoring/test_outages.py`, `tests/unit/app/test_db.py` (Migration auf/ab)
 
 **Interfaces:**
-- Consumes: `LiveState` (`connected`, `value("system.active_in_source")`, `value("battery.soc_pct")`, `derived()["house_load_w"]`), `Clock`
+- Consumes: `LiveState` (`connected`, `value("system.active_in_source")`, `value("battery.soc_pct")`, `value("consumption_output.l{1,2,3}.power_w")`), `Clock`
 - Produces:
-  - Tabelle `grid_outage`: `id` Integer PK, `start` UtcDateTime, `end` UtcDateTime NULL, `end_estimated` Boolean, `soc_start` Float NULL, `soc_end` Float NULL, `soc_min` Float NULL, `house_wh` Float, `covered_s` Float (Zeit mit Lastwert), Index auf `start`.
+  - Tabelle `grid_outage`: `id` Integer PK, `start` UtcDateTime, `end` UtcDateTime NULL, `end_estimated` Boolean, `soc_start` Float NULL, `soc_end` Float NULL, `soc_min` Float NULL, `load_wh` Float (Energie an AC-Out), `covered_s` Float (Zeit mit Lastwert aller drei Phasen), Index auf `start`.
   - `ISLAND_SOURCE = 240` (eigene Konstante in der app; `app` importiert den core nicht)
-  - `@dataclass(frozen=True) class Outage: id: int; start: datetime; end: datetime | None; end_estimated: bool; soc_start: float | None; soc_end: float | None; soc_min: float | None; house_wh: float; covered_s: float` mit `mean_w -> float | None` (`house_wh × 3600 / covered_s`, `None` unter 900 s)
+  - `@dataclass(frozen=True) class Outage: id: int; start: datetime; end: datetime | None; end_estimated: bool; soc_start: float | None; soc_end: float | None; soc_min: float | None; load_wh: float; covered_s: float` mit `mean_w -> float | None` (`load_wh × 3600 / covered_s`, `None` unter 900 s)
   - `class OutageTracker(engine, live, clock, *, poll_s: float = 10.0)`: `async run()`, `def poll() -> None` (ein Schritt, für Tests), `current() -> Outage | None`, `recent(limit: int = 20) -> list[Outage]`.
 
 - [ ] **Step 1: Failing tests** (Fake-`LiveState` und -Uhr, SQLite in `tmp_path`):
   - `test_island_starts_outage` → Quelle 240, SOC 62 → eine offene Zeile, `soc_start == 62`.
   - `test_return_closes_outage` → danach Quelle 1 (Netz) → `end` = Zeit der Beobachtung, `soc_end`, `end_estimated is False`.
   - `test_unknown_source_changes_nothing` → `value(...)` ist `None` (getrennt oder veraltet) mitten im Ausfall → Zeile bleibt offen, keine neue.
-  - `test_house_energy_and_min_soc` → 3 Polls à 10 s mit 1200 W, SOC 62/61/60 → `house_wh == pytest.approx(1200*20/3600)`, `soc_min == 60`; ein Abstand über 30 s zählt höchstens 30 s.
+  - `test_ac_out_energy_and_min_soc` → 3 Polls à 10 s mit L1/L2/L3 = 500/400/300 W, SOC 62/61/60 → `load_wh == pytest.approx(1200*20/3600)`, `soc_min == 60`; ein Abstand über 30 s zählt höchstens 30 s; fehlt eine Phase, zählt der Abschnitt nicht (`covered_s` wächst nicht).
   - `test_restart_during_outage_continues` → offene Zeile in der DB, neuer Tracker, Quelle 240 → dieselbe `id`, keine zweite Zeile.
   - `test_restart_after_return_closes_estimated` → offene Zeile, neuer Tracker, Quelle 1 → `end` = erste Beobachtung, `end_estimated is True`.
   - `test_recent_newest_first` → 25 Ausfälle → `recent()` liefert 20, neuester zuerst.
   - In `test_db.py`: `test_migration_0016_creates_grid_outage` (auf und ab, Tabelle danach da bzw. weg); `test_migrations_match_schema` bleibt grün.
 - [ ] **Step 2:** Tests → FAIL.
-- [ ] **Step 3:** Umsetzen. Speichern: Beginn und Ende sofort, laufende Werte höchstens alle 60 s (`house_wh`, `covered_s`, `soc_min`). DB-Zugriffe über `asyncio.to_thread` wie in den anderen Diensten.
+- [ ] **Step 3:** Umsetzen. Speichern: Beginn und Ende sofort, laufende Werte höchstens alle 60 s (`load_wh`, `covered_s`, `soc_min`). DB-Zugriffe über `asyncio.to_thread` wie in den anderen Diensten.
 - [ ] **Step 4:** Tests grün, Migration in `tests/unit/app/test_db.py` grün.
 - [ ] **Step 5:** Commit `feat(app): Protokoll der Netzausfälle`
 
@@ -183,7 +189,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
     {"now_h": 31.2, "reserve_h": 14.1, "night_h": 40.3, "load_w": 712.0, "load_source": "tag",
      "floor_soc_pct": 5.0, "basis": {"first_day": "2026-10-28", "last_day": "2026-11-03", "day_slots": 672, "night_slots": 140, "night_w": 551.0},
      "outage": null | {"start": "...", "soc_start": 62.0, "mean_w": 1180.0},
-     "outages": [{"start": "...", "end": "...", "end_estimated": false, "duration_s": 840, "soc_start": 62.0, "soc_end": 60.5, "soc_min": 60.5, "mean_w": 1180.0, "house_kwh": 0.28}],
+     "outages": [{"start": "...", "end": "...", "end_estimated": false, "duration_s": 840, "soc_start": 62.0, "soc_end": 60.5, "soc_min": 60.5, "mean_w": 1180.0, "load_kwh": 0.28}],
      "ping": {"configured": true, "ok": true, "last_sent": "...", "text": "in Ordnung · …"}}
     ```
 
@@ -193,7 +199,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
   - `test_backup_has_no_url` → Antworttext enthält die Ping-URL nicht.
   - `test_runtime_jobs` (Integration) → Jobs `backup-range`, `outages`, `heartbeat` laufen unter `_supervise`; `/api/system` nennt die Komponente „Lebenszeichen“.
 - [ ] **Step 2:** Tests → FAIL.
-- [ ] **Step 3:** Umsetzen; Heartbeat bekommt `inputs` als Closure über `live`, `outages.current()` und `backup_range()`. Tests mit `CoreRuntime`-Daten nur unter `tmp_path` (Lehre 19.10.).
+- [ ] **Step 3:** Umsetzen; `BackupRangeService` bekommt den vorhandenen `AppRuntime.reader` (InfluxDB). Heartbeat bekommt `inputs` als Closure über `live`, `outages.current()` und `backup_range()`. Tests mit `CoreRuntime`-Daten nur unter `tmp_path` (Lehre 19.10.).
 - [ ] **Step 4:** Tests grün.
 - [ ] **Step 5:** Commit `feat(app): USV-Reichweite und Netzausfälle in der API`
 
@@ -255,7 +261,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-08-bindaems-design.md` (Nachtrag „Stand Plan Lebenszeichen und USV-Reichweite“ bei Akku-Kachel und bei HA-Entitäten; 1.4 bleibt: das Lebenszeichen fährt nichts herunter)
-- Modify: `docs/betrieb.md` (Abschnitt „Lebenszeichen einrichten“: Konto bei healthchecks.io, Check „BindaEMS“ mit Periode 5 min und Karenz 10 min, Benachrichtigung aufs Handy, URL in `.env` als `BINDAEMS_PING_URL`, `docker compose up -d ems-app` nach dem Sammel-Pull, Test: app stoppen → Meldung nach ≤ 15 min; `battery.outage_floor_soc_pct` prüfen)
+- Modify: `docs/betrieb.md` (Abschnitt „Lebenszeichen einrichten“: Konto bei healthchecks.io, Check „BindaEMS“ mit Periode 5 min und Karenz 10 min, Benachrichtigung aufs Handy, URL in `.env` als `BINDAEMS_PING_URL`, `docker compose up -d ems-app` nach dem Sammel-Pull, Test: app stoppen → Meldung nach ≤ 15 min; `battery.outage_floor_soc_pct` prüfen; vor dem Ausrollen auf der Seite System in der Signaltabelle nachsehen, dass `consumption_output.l1..l3.power_w` Werte haben, sonst bleibt die Reichweite „zu wenig Daten“)
 - Modify: `docs/uebergabe.md` (Stand, „Offen an der Anlage“: mit dem Sammel-Pull, nicht vor dem 23.11.)
 - Test: `tests/unit/test_docs.py` (bestehend)
 
