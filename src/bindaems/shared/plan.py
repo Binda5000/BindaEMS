@@ -274,8 +274,9 @@ class StormWarning(_Model):
 
 class PlanStorm(_Model):
     """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): ``target_pct`` ist die
-    Untergrenze des Laufs in % (``min(Ziel, soc_max_pct)``), ``warnings`` sind die passenden
-    Warnungen, aus denen die Fenster stammen."""
+    Ziel der Untergrenze in % (``min(Ziel, soc_max_pct)``), ``warnings`` sind die bekannten
+    passenden Warnungen (Art und Stufe nach den Einstellungen, Ende in der Zukunft), auch wenn
+    ihr Fenster nicht im Horizont liegt; die Fenster je Slot stehen in ``storm_reserve_pct``."""
 
     target_pct: Finite
     warnings: list[StormWarning]
@@ -305,8 +306,8 @@ class Plan(_Model):
     vehicles: list[PlanVehicle] = Field(default_factory=list)
     # ``None`` ohne Klimaanlage der Art ``coe_offset``; alte Pläne laden mit ``None`` (Plan 5c)
     thermal: PlanThermal | None = None
-    # gesetzt, sobald der Lauf passende Unwetterwarnungen mit Fenster im Horizont hat; alte Pläne
-    # laden mit ``None`` (Plan Unwetter-Reserve)
+    # gesetzt, sobald passende Unwetterwarnungen bekannt sind (Schalter an), auch ohne Fenster im
+    # Horizont; alte Pläne laden mit ``None`` (Plan Unwetter-Reserve)
     storm: PlanStorm | None = None
     slots: Annotated[list[PlanSlot], Field(min_length=1)]
 

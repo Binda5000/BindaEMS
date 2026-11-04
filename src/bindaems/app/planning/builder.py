@@ -250,12 +250,13 @@ def support_thresholds(
 
 
 def plan_storm(inputs: PlanInputs) -> PlanStorm | None:
-    """Unwetter-Reserve des Plans (Entscheidung 12): die höchste Untergrenze des Laufs und die
-    passenden Warnungen; ``None`` ohne Warnung oder ohne Slot mit Untergrenze."""
-    floors = [slot.storm_floor_pct for slot in inputs.slots if slot.storm_floor_pct is not None]
-    if not inputs.storm_warnings or not floors:
+    """Unwetter-Reserve des Plans (Entscheidung 12, Ruling R12): das Ziel ``min(Ziel,
+    soc_max_pct)`` und die passenden Warnungen, sobald welche bekannt sind, auch wenn kein Slot
+    des Horizonts eine Untergrenze hat; ``None`` ohne Warnung (Schalter aus eingeschlossen)."""
+    if not inputs.storm_warnings:
         return None
-    return PlanStorm(target_pct=max(floors), warnings=list(inputs.storm_warnings))
+    target = float(min(inputs.planning.storm.target_soc_pct, inputs.battery.soc_max_pct))
+    return PlanStorm(target_pct=target, warnings=list(inputs.storm_warnings))
 
 
 def build_plan(

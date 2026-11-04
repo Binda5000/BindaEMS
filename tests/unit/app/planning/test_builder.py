@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -461,6 +462,23 @@ def test_plan_carries_storm() -> None:
     )
     assert bare.storm is None
     assert all(s.storm_reserve_pct is None for s in bare.slots)
+
+
+def test_plan_carries_storm_without_a_floor_in_the_horizon() -> None:
+    # Ruling R12: Eine bekannte Warnung nach dem Horizont zeigt der Plan trotzdem (ohne Slot mit
+    # Untergrenze ist das Ziel das der Einstellung)
+    later = STORM_WARNING.model_copy(
+        update={
+            "begin": STORM_WARNING.begin + timedelta(days=3),
+            "end": STORM_WARNING.end + timedelta(days=3),
+        }
+    )
+    inputs = storm_scenario(soc_pct=45.0, warning=later)
+    assert all(s.storm_floor_pct is None for s in inputs.slots)
+    plan = build_plan(inputs, [EV] * 96, source="fallback", solver_status=None)
+    assert plan.storm is not None
+    assert plan.storm.target_pct == 40.0
+    assert plan.storm.warnings == [later]
 
 
 def test_an_old_plan_without_storm_loads_with_none() -> None:
