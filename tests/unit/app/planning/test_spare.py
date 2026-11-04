@@ -134,3 +134,18 @@ def test_now_battery_off_while_grid_energy_from_before_the_horizon_is_in_the_bat
         True,
     ]
     assert now_battery_flags(inputs, [EIGEN] * 3, _steps_never_full()) == [False] * 3
+
+
+def test_no_now_battery_in_storm_slots() -> None:
+    # Entscheidung 7: In Slots mit Untergrenze der Unwetter-Reserve gibt es kein Sofort aus dem Akku
+    inputs = _inputs(import_ct=[25, 25, 25], end_value_ct=10, car_battery_allowed=True)
+    floored = inputs.model_copy(
+        update={
+            "slots": [
+                slot.model_copy(update={"storm_floor_pct": 40.0 if index == 1 else None})
+                for index, slot in enumerate(inputs.slots)
+            ]
+        }
+    )
+    assert now_battery_flags(inputs, [EIGEN] * 3, _steps_never_full()) == [True] * 3
+    assert now_battery_flags(floored, [EIGEN] * 3, _steps_never_full()) == [True, False, True]

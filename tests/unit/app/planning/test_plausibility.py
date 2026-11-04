@@ -24,12 +24,13 @@ from tests.plan_helpers import (
     virtual,
 )
 
-from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots, simulate
+from bindaems.app.planning.battery_model import SLOT_H, SimStep, eta, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
+    STORM_TOL_PCT,
     charged_window_end,
     check_plan,
     export_while_charged_kwh,
@@ -156,6 +157,55 @@ def test_storm_charge_then_export_is_no_r1_finding() -> None:
         i.startswith("Regel R verletzt: Netzladen um 02:00")
         for i in check_plan(switched, result, plain, resimulate(switched, plain))
     )
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 10)
+
+
+def _storm_slot(soc_pct: float, *, drop_pct: float, floor_pct: float | None = 40.0) -> PlanInputs:
+    """Ein Slot um 14:15 Ortszeit mit Untergrenze ``floor_pct``, Akku 10 kWh ab ``soc_pct``; das
+    Haus braucht so viel, dass der Akku bei Eigenverbrauch ``drop_pct`` Prozentpunkte entlädt."""
+    load_w = drop_pct / 100 * 10.0 / SLOT_H * 1000 * eta(88.0)
+    return scenario(
+        prices=[20.0],
+        pv=[0.0],
+        load=[load_w],
+        soc_pct=soc_pct,
+        battery=small_battery(),
+        start="2026-10-16T12:15:00+00:00",
+        storm_floors=[floor_pct],
+    )
+
+
+def test_discharge_below_floor_is_finding() -> None:
+    inputs = _storm_slot(40.2, drop_pct=1.2)
+    assert inputs.planning.roundtrip_pct == 88.0
+    intents = [BatteryIntent()]
+    steps = resimulate(inputs, intents)
+    assert steps[0].soc_end_kwh == pytest.approx(3.9)
+    issues = check_plan(inputs, flows_of(steps, inputs), intents, steps)
+    assert issues == ["Akku entlädt um 14:15 unter die Unwetter-Reserve"]
+
+
+def test_discharge_within_the_tolerance_is_no_finding() -> None:
+    assert STORM_TOL_PCT == 0.5
+    inputs = _storm_slot(40.2, drop_pct=0.6)  # endet bei 39,6 %
+    intents = [BatteryIntent()]
+    steps = resimulate(inputs, intents)
+    assert check_plan(inputs, flows_of(steps, inputs), intents, steps) == []
+
+
+def test_unreachable_floor_is_no_finding() -> None:
+    # 30 % im Fenster: das Ziel ist nicht zu erreichen; wer hält, entlädt nicht darunter
+    inputs = _storm_slot(30.0, drop_pct=1.2)
+    held = [BatteryIntent(kind=BatteryIntentKind.HALTEN)]
+    steps = resimulate(inputs, held)
+    assert check_plan(inputs, flows_of(steps, inputs), held, steps) == []
+    # ohne Untergrenze ist dasselbe Entladen kein Befund
+    plain = _storm_slot(40.2, drop_pct=1.2, floor_pct=None)
+    intents = [BatteryIntent()]
+    steps = resimulate(plain, intents)
+    assert check_plan(plain, flows_of(steps, plain), intents, steps) == []
 
 
 def test_r1_allows_grid_charge_used_up_before_pv() -> None:

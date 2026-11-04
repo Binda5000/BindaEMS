@@ -617,6 +617,44 @@ describe('Planung in den Einstellungen', () => {
 	});
 });
 
+describe('Unwetter-Reserve im Plan', () => {
+	const demo = files['./contract/plan.json'] as {
+		plan: { slots: Record<string, unknown>[] } & Record<string, unknown>;
+	};
+
+	it('liest Warnung, Untergrenze und den Grundcode', () => {
+		const warning = {
+			warn_id: 7,
+			version: 1,
+			kind: 'gewitter',
+			level: 2,
+			begin: '2026-10-16T12:00:00+00:00',
+			end: '2026-10-16T14:00:00+00:00',
+			text: 'Gewitter'
+		};
+		const [first, ...rest] = demo.plan.slots;
+		const slots = [{ ...first, storm_reserve_pct: 40, codes: ['UNWETTER_RESERVE'] }, ...rest];
+		const stormy = { ...demo.plan, storm: { target_pct: 40, warnings: [warning] }, slots };
+		const plan = v.parse(s.PlanSchema, stormy);
+		expect(plan.storm?.warnings[0].kind).toBe('gewitter');
+		expect(plan.slots[0].storm_reserve_pct).toBe(40);
+		expect(plan.slots[0].codes).toEqual(['UNWETTER_RESERVE']);
+	});
+
+	it('liest ältere Pläne ohne Unwetter-Reserve', () => {
+		const slots = demo.plan.slots.map((slot) => {
+			const older = { ...slot };
+			delete older.storm_reserve_pct;
+			return older;
+		});
+		const older = { ...demo.plan, slots } as Record<string, unknown>;
+		delete older.storm;
+		const plan = v.parse(s.PlanSchema, older);
+		expect(plan.storm).toBeNull();
+		expect(plan.slots[0].storm_reserve_pct).toBeNull();
+	});
+});
+
 describe('Vorheizen und Vorkühlen im Plan', () => {
 	const demo = files['./contract/plan.json'] as {
 		plan: { thermal: unknown; slots: Record<string, unknown>[] } & Record<string, unknown>;

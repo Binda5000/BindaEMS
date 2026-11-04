@@ -30,6 +30,9 @@ Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 6): ``gr_s`` zählt in Lad
 Phasengrenze wie ``gr_r``. Ein ``NETZLADEN`` mit ``reserve_recharge`` (Nachladen und Aufladen für
 die Unwetter-Reserve) setzt im Optimierer kein ``z_t``; Regel R1 prüft es deshalb nicht
 (``r1_applies``), sonst wäre jede Einspeisung nach dem Aufladen über die Reserve ein Befund.
+Entlädt die Nachrechnung in einem Slot mit Untergrenze (``SlotInput.storm_floor_pct``) mit
+mindestens ``HOLD_MIN_W`` und endet mehr als ``STORM_TOL_PCT`` Prozentpunkte darunter, ist das ein
+Befund (Entscheidung 10); ein Ziel, das der Akku nicht erreicht, ohne zu entladen, ist keiner.
 
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
@@ -73,6 +76,8 @@ EMPTY_TOL_KWH: Final = R1_TOL_KWH  # so nah an der Reserve gilt der Akku der Nac
 # jede Entladung über der Toleranz der Bilanz; der Optimierer kennt keine Mindestentladung).
 USED_ABOVE_W: Final = BALANCE_TOL_W
 MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss oder Netzbezug
+HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
+STORM_TOL_PCT: Final = 0.5  # so weit darf die Nachrechnung unter der Unwetter-Reserve enden
 
 PaysOffBy = Literal["discharge", "import"]
 
@@ -342,12 +347,19 @@ def check_plan(
                     f"Auto {car.name} lädt außerhalb seiner Grenzen um {at}",
                 )
 
-    for index, (item, slot) in enumerate(zip(steps, slots, strict=True)):
+    for index, (item, slot, inp) in enumerate(zip(steps, slots, inputs.slots, strict=True)):
         at = _local_time(inputs, index)
         if item.charge_pv_w + item.charge_grid_w > slot.max_charge_w + BALANCE_TOL_W:
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(item.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
+        floor_pct = inp.storm_floor_pct
+        if (
+            floor_pct is not None
+            and item.discharge_w >= HOLD_MIN_W
+            and item.soc_end_kwh < (floor_pct - STORM_TOL_PCT) / 100 * params.capacity_kwh
+        ):
+            report("storm", index, f"Akku entlädt um {at} unter die Unwetter-Reserve")
 
     switch = inputs.planning.grid_charge_allowed
     for index, intent in enumerate(intents):

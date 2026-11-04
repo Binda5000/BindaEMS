@@ -28,6 +28,7 @@ from bindaems.app.planning.inputs import (
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.planning.vehicles import PlanVehicleInput, need_kwh
 from bindaems.app.settings.service import SettingsService
+from bindaems.app.storm.windows import storm_floors
 from bindaems.shared.plan import (
     PLAN_VALID,
     BatteryIntent,
@@ -37,7 +38,12 @@ from bindaems.shared.plan import (
     Reason,
     StormWarning,
 )
-from bindaems.shared.settings import PlanningSettings, PowerComponent, TariffSettings
+from bindaems.shared.settings import (
+    PlanningSettings,
+    PowerComponent,
+    StormSettings,
+    TariffSettings,
+)
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
 
 DAY = "2026-10-16"
@@ -359,6 +365,56 @@ def scenario(
             )
             for i, (ct, pv_w, load_w) in enumerate(zip(prices, pv, load, strict=True))
         ],
+    )
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve): Gewitter (orange) von 14:00 bis 16:00 Ortszeit am
+# 16. 10. 2026; mit einer Stunde Vorlauf gilt die Untergrenze in den Slots 44 bis 55 des Szenarios
+STORM_WARNING: Final = StormWarning(
+    warn_id=7,
+    version=1,
+    kind="gewitter",
+    level=2,
+    begin=at("2026-10-16T12:00:00+00:00"),
+    end=at("2026-10-16T14:00:00+00:00"),
+    text="Gewitter",
+)
+STORM_WINDOW: Final = range(44, 56)  # 13:00 bis 16:00 Ortszeit
+STORM_KWH: Final = 96.0  # Akku der Szenarien mit Unwetter-Reserve
+
+
+def storm_scenario(
+    *,
+    soc_pct: float,
+    prices: list[float] | None = None,
+    load: list[float] | None = None,
+    pv: list[float] | None = None,
+    warning: StormWarning | None = STORM_WARNING,
+    **overrides: Any,
+) -> PlanInputs:
+    """``scenario`` mit Unwetter-Reserve: Akku 96 kWh, Reserve 20 %, Ziel 40 %, ohne PV; 96 Slots
+    ab 02:00 Ortszeit, Haus 600 W, 10 ct von 02:00 bis 04:00, sonst 30 ct; mit ``warning`` (Standard
+    ``STORM_WARNING``) und den Untergrenzen je Slot wie ``assemble_inputs``. ``overrides`` gehen an
+    ``scenario``."""
+    prices = prices if prices is not None else [10.0] * 8 + [30.0] * 88
+    count = len(prices)
+    starts = [at(SCENARIO_START) + i * SLOT for i in range(count)]
+    warnings = [warning] if warning is not None else []
+    floors = storm_floors(
+        starts, warnings, StormSettings(enabled=True), reserve_pct=20.0, soc_max_pct=100.0
+    )
+    values: dict[str, Any] = {
+        "battery": state(usable_kwh=STORM_KWH),
+        "storm_floors": floors,
+        "storm_warnings": warnings,
+    }
+    values.update(overrides)
+    return scenario(
+        prices=prices,
+        pv=pv if pv is not None else [0.0] * count,
+        load=load if load is not None else [600.0] * count,
+        soc_pct=soc_pct,
+        **values,
     )
 
 

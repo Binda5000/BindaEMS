@@ -17,6 +17,12 @@ angesteckt ist.
 Liegt der SOC zu Beginn unter der Reserve, lädt er ihn zuerst auf die Reserve nach, auch ohne den
 Schalter (Plan Netzgrenze je Phase, Entscheidung 9, ``_recharge``), und hält danach, was
 nachgeladen ist.
+
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 11): Bis zum letzten Slot mit Untergrenze
+entlädt der Akku nie unter die Untergrenze des Fensters, in dem oder vor dem der Slot liegt
+(``_keep_storm``). Fehlt zu Beginn eines Fensters trotzdem etwas, lädt der Plan nach dem
+Nachladen auf die Reserve in den billigsten Slots davor dafür auf (``_storm``), auch ohne den
+Schalter.
 """
 
 from __future__ import annotations
@@ -38,11 +44,16 @@ from bindaems.app.planning.battery_model import (
 )
 from bindaems.app.planning.grid_phases import PHASES, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.optimizer import grid_charge_cap_w, recharge_caps_w
+from bindaems.app.planning.optimizer import (
+    grid_charge_cap_w,
+    recharge_caps_w,
+    storm_charge_caps_w,
+)
 from bindaems.app.planning.plausibility import (
     R1_TOL_KWH,
     SOC_TOL_KWH,
     export_while_charged_kwh,
+    r1_applies,
     spread_pays,
 )
 from bindaems.app.planning.vehicles import KWH_EPS, cars_charging, slots_before
@@ -302,6 +313,112 @@ def _recharge(
     return intents
 
 
+def _storm_lines_kwh(inputs: PlanInputs, capacity_kwh: float) -> list[float | None]:
+    """Untergrenze je Slot, die ``_keep_storm`` hält, in kWh: im Fenster seine eigene, davor die
+    des nächsten Fensters; nach dem letzten Slot mit Untergrenze ``None``."""
+    result: list[float | None] = [None] * len(inputs.slots)
+    line: float | None = None
+    for index in range(len(inputs.slots) - 1, -1, -1):
+        floor_pct = inputs.slots[index].storm_floor_pct
+        if floor_pct is not None:
+            line = floor_pct / 100 * capacity_kwh
+        result[index] = line
+    return result
+
+
+def _keep_storm(
+    inputs: PlanInputs,
+    slots: Sequence[SimSlot],
+    intents: Sequence[BatteryIntent],
+    params: BatteryParams,
+) -> list[BatteryIntent]:
+    """``intents`` mit ``HALTEN`` in jedem Slot ``EIGENVERBRAUCH`` bis zum letzten mit
+    Untergrenze, der in der Nachrechnung unter die Untergrenze seines Fensters (davor: des
+    nächsten) entlüde (Entscheidung 11). So bleibt, was der Akku hat und was er dafür auflädt, bis
+    zum Ende des Fensters darin, wie ``unwetter_gehalten`` im Optimierer. Ohne Untergrenze
+    unverändert."""
+    lines = _storm_lines_kwh(inputs, params.capacity_kwh)
+    if all(line is None for line in lines):
+        return list(intents)
+    result = list(intents)
+    soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    for index, slot in enumerate(slots):
+        item = step(soc_kwh, slot, result[index], params)
+        line = lines[index]
+        if (
+            line is not None
+            and result[index].kind is BatteryIntentKind.EIGENVERBRAUCH
+            and item.discharge_w > 0
+            and item.soc_end_kwh < line - SOC_TOL_KWH
+        ):
+            result[index] = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+            item = step(soc_kwh, slot, result[index], params)
+        soc_kwh = item.soc_end_kwh
+    return result
+
+
+def _keep(
+    inputs: PlanInputs,
+    slots: Sequence[SimSlot],
+    intents: Sequence[BatteryIntent],
+    params: BatteryParams,
+) -> list[BatteryIntent]:
+    """Hält, was nachgeladen ist (``_keep_recharged``), und die Unwetter-Reserve
+    (``_keep_storm``)."""
+    return _keep_storm(inputs, slots, _keep_recharged(inputs, slots, intents, params), params)
+
+
+def _storm(
+    inputs: PlanInputs,
+    ev_w: Sequence[Mapping[str, float]],
+    slots: Sequence[SimSlot],
+    intents: list[BatteryIntent],
+    run: Callable[[Sequence[BatteryIntent]], list[SimStep]],
+) -> list[BatteryIntent]:
+    """Aufladen für die Unwetter-Reserve (Entscheidung 11): Liegt die Nachrechnung zu Beginn eines
+    Fensters (erster Slot einer zusammenhängenden Folge mit Untergrenze) unter dessen Untergrenze,
+    lädt der Plan in den billigsten Slots davor (beim Gleichstand der frühere) ``NETZLADEN`` mit
+    ``reserve_recharge``, je Slot ``min(RESERVE_RECHARGE_MAX_W, storm_charge_caps_w, Platz)`` wie
+    ``_recharge``, der letzte nur den Rest, bis die Nachrechnung die Untergrenze erreicht oder die
+    Slots aus sind. Die Fenster der Reihe nach; ``run`` rechnet nach und hält (``_keep``)."""
+    floors = [slot.storm_floor_pct for slot in inputs.slots]
+    firsts = [
+        index
+        for index, floor_pct in enumerate(floors)
+        if floor_pct is not None and (index == 0 or floors[index - 1] is None)
+    ]
+    caps_w = storm_charge_caps_w(inputs)
+    if not firsts or not any(caps_w):
+        return intents
+    params = params_of(inputs)
+    steps = run(intents)
+    for first in firsts:
+        target_kwh = (floors[first] or 0.0) / 100 * params.capacity_kwh
+        for candidate in sorted(
+            range(first), key=lambda index: (inputs.slots[index].import_ct, index)
+        ):
+            missing = target_kwh - steps[first].soc_start_kwh
+            if missing <= SOC_TOL_KWH:
+                break
+            if intents[candidate].kind is not BatteryIntentKind.EIGENVERBRAUCH:
+                continue
+            cap_w = min(
+                RESERVE_RECHARGE_MAX_W,
+                caps_w[candidate],
+                _grid_headroom_w(inputs, ev_w, slots, steps, candidate),
+            )
+            need_w = missing / params.eta_ch / SLOT_H * 1000
+            power_w = min(ROUND_W * floor(cap_w / ROUND_W), ROUND_W * ceil(need_w / ROUND_W))
+            if power_w <= 0:
+                continue
+            intents = list(intents)
+            intents[candidate] = BatteryIntent(
+                kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w, reserve_recharge=True
+            )
+            steps = run(intents)
+    return intents
+
+
 def fallback_intents(
     inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()
 ) -> list[BatteryIntent]:
@@ -311,19 +428,21 @@ def fallback_intents(
     Grenze je Phase: ``3 · min_p (Grenze − max(0, Last − PV) / 3 − Σ Ladeleistung der Autos ·
     Anteil auf p)``; hier zählt die ganze Ladeleistung der Autos (Entscheidung 6). Vor allem
     anderen lädt er unter der Reserve nach (``_recharge``, auch ohne teure Slots und ohne
-    Schalter); was nachgeladen ist, hält er (``_keep_recharged``)."""
+    Schalter), dann für die Unwetter-Reserve (``_storm``); was nachgeladen ist und die
+    Unwetter-Reserve hält er (``_keep``)."""
     count = len(inputs.slots)
     params = params_of(inputs)
     slots = sim_slots(inputs, ev_w)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
 
     def run(plan: Sequence[BatteryIntent]) -> list[SimStep]:
-        return simulate(soc0_kwh, slots, _keep_recharged(inputs, slots, plan, params), params)
+        return simulate(soc0_kwh, slots, _keep(inputs, slots, plan, params), params)
 
     intents = _recharge(inputs, ev_w, slots, [BatteryIntent() for _ in range(count)], run)
+    intents = _storm(inputs, ev_w, slots, intents, run)
     expensive = expensive_today(inputs)
     if not expensive:
-        return _keep_recharged(inputs, slots, intents, params)
+        return _keep(inputs, slots, intents, params)
 
     planning = inputs.planning
     prices = [slot.import_ct for slot in inputs.slots]
@@ -350,7 +469,7 @@ def fallback_intents(
         steps = run(intents)
 
     if not planning.grid_charge_allowed:
-        return _keep_recharged(inputs, slots, intents, params)
+        return _keep(inputs, slots, intents, params)
 
     # Netzladen: noch immer knappe teure Slots, billige Slots davor laden aus dem Netz.
     for _ in range(count):
@@ -382,8 +501,9 @@ def fallback_intents(
                 continue  # kein Platz im Akku: das Netzladen brächte nichts
             # Regel R1 für jedes Netzladen: Ein früheres kann den Akku vor einem schon
             # angenommenen über die Leer-Grenze heben und dessen Fenster in die Einspeisung ziehen.
+            # Nachladen und Aufladen für die Unwetter-Reserve prüft sie nicht (Ruling R6).
             if any(
-                trial[i].kind is BatteryIntentKind.NETZLADEN
+                r1_applies(trial[i])
                 and export_while_charged_kwh(trial_steps, i, reserve_kwh(inputs)) > R1_TOL_KWH
                 for i in range(count)
             ):
@@ -392,4 +512,4 @@ def fallback_intents(
             break
         else:
             break
-    return _keep_recharged(inputs, slots, intents, params)
+    return _keep(inputs, slots, intents, params)

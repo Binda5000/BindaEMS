@@ -78,6 +78,7 @@ def recharge_without_switch(intent: BatteryIntent) -> bool:
 
 ReasonCode = Literal[
     "NACHLADEN_RESERVE",
+    "UNWETTER_RESERVE",
     "NETZLADEN_GUENSTIG",
     "HALTEN_FUER_SPITZE",
     "BUDGET_SPITZE",
@@ -161,6 +162,9 @@ class PlanSlot(_Model):
     thermal_w: Finite = 0.0
     thermal_grid_w: NonNegativeW = 0.0
     thermal_steps: int | None = None
+    # Untergrenze der Unwetter-Reserve am Slotende in % (Plan Unwetter-Reserve, Entscheidung 4);
+    # ``None`` außerhalb eines Fensters. Alte Pläne laden mit ``None``.
+    storm_reserve_pct: Finite | None = None
     reasons: list[Reason]
 
 
@@ -233,57 +237,6 @@ class PlanThermal(_Model):
     reason: ThermalReason
 
 
-class Plan(_Model):
-    id: int | None = None
-    created_at: AwareDatetime
-    trigger: PlanTrigger
-    source: PlanSource
-    solver_status: SolverStatus | None
-    fallback_reason: str | None
-    valid_until: AwareDatetime
-    settings_version: int
-    grid_charge_allowed: bool
-    reserve_pct: Finite
-    soc_max_pct: Finite
-    # Akku-SOC zu Beginn des Plans (gemessen); alte Pläne laden mit ``None`` und die Anzeige nimmt
-    # dann das Ende des ersten Slots
-    soc_start_pct: Finite | None = None
-    month_peak_kw: Finite | None
-    power_price: bool
-    expected_cost_ct: Finite
-    baseline_cost_ct: Finite
-    issues: list[str]
-    trimmed: bool = False
-    vehicles: list[PlanVehicle] = Field(default_factory=list)
-    # ``None`` ohne Klimaanlage der Art ``coe_offset``; alte Pläne laden mit ``None`` (Plan 5c)
-    thermal: PlanThermal | None = None
-    slots: Annotated[list[PlanSlot], Field(min_length=1)]
-
-    @model_validator(mode="after")
-    def _consistent(self) -> Self:
-        if self.valid_until <= self.created_at:
-            raise ValueError("valid_until muss nach created_at liegen")
-        starts = [slot.start for slot in self.slots]
-        if any(later <= earlier for earlier, later in pairwise(starts)):
-            raise ValueError("Die Slots müssen streng aufsteigend und eindeutig nach start sein")
-        return self
-
-    @property
-    def horizon_end(self) -> datetime:
-        """Ende des letzten Slots (exklusiv)."""
-        return self.slots[-1].start + SLOT
-
-    def valid_at(self, ts: datetime) -> bool:
-        """Gilt der Plan zum Zeitpunkt ``ts``? (``created_at ≤ ts < valid_until``)"""
-        moment = ensure_utc(ts)
-        return self.created_at <= moment < self.valid_until
-
-    def slot_at(self, ts: datetime) -> PlanSlot | None:
-        """Der Slot, in dem ``ts`` liegt; ``None``, wenn der Plan ihn nicht enthält."""
-        wanted = slot_start(ts)
-        return next((slot for slot in self.slots if slot.start == wanted), None)
-
-
 # Unwetterwarnung (Plan Unwetter-Reserve): Art in der Reihenfolge der ``warntypid`` 1–7 von
 # GeoSphere Austria, Stufe 1 gelb, 2 orange, 3 rot.
 StormKind = Literal["sturm", "regen", "schnee", "glatteis", "gewitter", "hitze", "kaelte"]
@@ -317,6 +270,69 @@ class StormWarning(_Model):
         if self.end <= self.begin:
             raise ValueError("end muss nach begin liegen")
         return self
+
+
+class PlanStorm(_Model):
+    """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): ``target_pct`` ist die
+    Untergrenze des Laufs in % (``min(Ziel, soc_max_pct)``), ``warnings`` sind die passenden
+    Warnungen, aus denen die Fenster stammen."""
+
+    target_pct: Finite
+    warnings: list[StormWarning]
+
+
+class Plan(_Model):
+    id: int | None = None
+    created_at: AwareDatetime
+    trigger: PlanTrigger
+    source: PlanSource
+    solver_status: SolverStatus | None
+    fallback_reason: str | None
+    valid_until: AwareDatetime
+    settings_version: int
+    grid_charge_allowed: bool
+    reserve_pct: Finite
+    soc_max_pct: Finite
+    # Akku-SOC zu Beginn des Plans (gemessen); alte Pläne laden mit ``None`` und die Anzeige nimmt
+    # dann das Ende des ersten Slots
+    soc_start_pct: Finite | None = None
+    month_peak_kw: Finite | None
+    power_price: bool
+    expected_cost_ct: Finite
+    baseline_cost_ct: Finite
+    issues: list[str]
+    trimmed: bool = False
+    vehicles: list[PlanVehicle] = Field(default_factory=list)
+    # ``None`` ohne Klimaanlage der Art ``coe_offset``; alte Pläne laden mit ``None`` (Plan 5c)
+    thermal: PlanThermal | None = None
+    # gesetzt, sobald der Lauf passende Unwetterwarnungen mit Fenster im Horizont hat; alte Pläne
+    # laden mit ``None`` (Plan Unwetter-Reserve)
+    storm: PlanStorm | None = None
+    slots: Annotated[list[PlanSlot], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.valid_until <= self.created_at:
+            raise ValueError("valid_until muss nach created_at liegen")
+        starts = [slot.start for slot in self.slots]
+        if any(later <= earlier for earlier, later in pairwise(starts)):
+            raise ValueError("Die Slots müssen streng aufsteigend und eindeutig nach start sein")
+        return self
+
+    @property
+    def horizon_end(self) -> datetime:
+        """Ende des letzten Slots (exklusiv)."""
+        return self.slots[-1].start + SLOT
+
+    def valid_at(self, ts: datetime) -> bool:
+        """Gilt der Plan zum Zeitpunkt ``ts``? (``created_at ≤ ts < valid_until``)"""
+        moment = ensure_utc(ts)
+        return self.created_at <= moment < self.valid_until
+
+    def slot_at(self, ts: datetime) -> PlanSlot | None:
+        """Der Slot, in dem ``ts`` liegt; ``None``, wenn der Plan ihn nicht enthält."""
+        wanted = slot_start(ts)
+        return next((slot for slot in self.slots if slot.start == wanted), None)
 
 
 # Hinweis des Plans für die Klimaanlage in einem Slot (Plan 6a, Entscheidung 7): „mehr“ erwartet

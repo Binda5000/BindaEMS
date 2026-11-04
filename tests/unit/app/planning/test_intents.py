@@ -30,7 +30,7 @@ from bindaems.app.planning.intents import (
     drop_held_battery,
 )
 from bindaems.app.planning.optimizer import OptimizerResult, solve
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
+from bindaems.app.planning.plausibility import R1_TOL_KWH, check_plan, export_while_charged_kwh
 from bindaems.app.planning.service import plan_once
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, IntentPlan, intent_plan
 from bindaems.shared.timeutil import SLOT
@@ -156,6 +156,35 @@ def test_unprofitable_grid_charge_keeps_its_storm_part() -> None:
     kinds = derive_intents(inputs, result)
     assert kinds[0] == _recharge(1500.0)
     assert kinds[1].kind is BatteryIntentKind.HALTEN
+
+
+def test_partial_discharge_in_storm_window_rounds_to_hold() -> None:
+    # Plan Unwetter-Reserve, Entscheidung 10: Der Optimierer entlädt im Fenster nur den Teil über
+    # der Untergrenze (1100 von 1800 W). Nach der Regel ohne Fenster wäre das Eigenverbrauch, und
+    # die Nachrechnung entlüde 0,5 kWh unter 40 % (Befund). Mit Untergrenze hält der Slot.
+    def inputs_with(floors: list[float | None]) -> PlanInputs:
+        return scenario(
+            prices=[20.0, 20.0],
+            pv=[0.0, 0.0],
+            load=[1800.0, 1800.0],
+            battery=small_battery(),
+            soc_pct=41.0,
+            start="2026-10-16T12:00:00+00:00",
+            storm_floors=floors,
+        )
+
+    result = flows_result(
+        [
+            flow(gr_h=700, bt_h=1100, soc_end_kwh=4.1 - 1100 * SLOT_H / 1000 / eta(88.0)),
+            flow(gr_h=1800, soc_end_kwh=4.1 - 1100 * SLOT_H / 1000 / eta(88.0)),
+        ]
+    )
+    plain = derive_intents(inputs_with([None, None]), result)
+    assert plain[0].kind is BatteryIntentKind.EIGENVERBRAUCH
+    storm = inputs_with([40.0, 40.0])
+    intents = derive_intents(storm, result)
+    assert intents == [BatteryIntent(kind=BatteryIntentKind.HALTEN)] * 2
+    assert check_plan(storm, result, intents, resimulate(storm, intents)) == []
 
 
 def test_storm_charge_is_not_trimmed_by_r1() -> None:

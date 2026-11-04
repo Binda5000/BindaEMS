@@ -6123,6 +6123,7 @@ Zahlen:
 | Code | Beispiel | Wann |
 |---|---|---|
 | `NACHLADEN_RESERVE` | Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt. | Absicht `Netzladen` als Nachladen auf die Reserve (seit dem Plan „Netzgrenze je Phase“, oben, „Wie ein Plan entsteht“) |
+| `UNWETTER_RESERVE` | Unwetter-Reserve: Gewitter (orange) bis 18:00 Uhr, der Akku hält mindestens 40 %. | der Slot liegt im Fenster einer Unwetterwarnung (seit dem Plan „Unwetter-Reserve“): eine Stunde vor ihrem Beginn bis zu ihrem Ende; „bis“ ist das Ende der Warnung, die Zahl die Untergrenze. Das Aufladen dafür heißt `NACHLADEN_RESERVE` |
 | `NETZLADEN_GUENSTIG` | Akku lädt 4,0 kW aus dem Netz: jetzt 12,3 ct, um 18:00 Uhr 31,5 ct. | Absicht `Netzladen`; „um“ ist der erste spätere Slot mit Entladung ab 100 W, für den sich das Laden auszahlt (gibt es keinen, der teuerste spätere Slot) |
 | `HALTEN_FUER_SPITZE` | Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden. | Absicht `Halten`; später folgt ein Block teurerer Slots mit Entladung |
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |

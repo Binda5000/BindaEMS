@@ -19,6 +19,7 @@ from bindaems.app.planning.battery_model import (
     reserve_kwh,
     sim_slots,
     simulate,
+    step,
 )
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import (
@@ -31,7 +32,9 @@ from bindaems.app.planning.optimizer import (
 )
 from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
+    HOLD_MIN_W,
     R1_TOL_KWH,
+    SOC_TOL_KWH,
     charged_window_end,
     export_while_charged_kwh,
     grid_charge_pays,
@@ -44,7 +47,6 @@ log = structlog.get_logger(__name__)
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
 ROUND_W: Final = 100.0  # Schritt der Netzladeleistung
 HOLD_SHARE: Final = 0.5  # Halten, wenn weniger als dieser Anteil des Eigenverbrauchs entlädt
-HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
 
 
 def drop_held_battery(
@@ -88,9 +90,10 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     Zuletzt hält ``_keep_rule_r1`` Regel R1 an der Nachrechnung ein, und
     ``_drop_unprofitable`` streicht Netzladen, das sich dort nicht rechnet; ein Nachladen bleibt
     stehen, und aus einem gestrichenen Slot mit Nachladen oder Aufladen ab ``GRID_CHARGE_MIN_W``
-    wird dieses allein. Die Nachrechnung kennt die Ladeleistung der Autos und ihren Akkuanteil
-    aus den Flüssen (``ev_power_w``, ``ev_battery_power_w``); der Eigenverbrauch, mit dem
-    ``HALTEN`` vergleicht, ist der des Hauses ohne Autos. Gibt der Akku den Autos im Slot
+    wird dieses allein. Danach hält ``_keep_storm`` die Unwetter-Reserve an der Nachrechnung.
+    Die Nachrechnung kennt die Ladeleistung der Autos und ihren Akkuanteil aus den Flüssen
+    (``ev_power_w``, ``ev_battery_power_w``); der Eigenverbrauch, mit dem ``HALTEN`` vergleicht,
+    ist der des Hauses ohne Autos. Gibt der Akku den Autos im Slot
     mindestens ``HOLD_MIN_W`` (Akku ins Auto), ist der Slot ``EIGENVERBRAUCH``, nie ``HALTEN``:
     Nur dann gibt die Nachrechnung den Autos etwas.
     """
@@ -136,13 +139,14 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
                 cap_w = min(cap_w, RESERVE_RECHARGE_MAX_W)
             charging = _grid_charge(flows.gr_b + reserve_w, cap_w, reserve_recharge=recharge)
             intents[-1] = charging or intents[-1]
-    return _drop_unprofitable(
+    kept = _drop_unprofitable(
         inputs,
         _keep_rule_r1(inputs, intents, ev_w, ev_battery_w),
         plain,
         ev_w,
         ev_battery_w,
     )
+    return _keep_storm(inputs, kept, ev_w, ev_battery_w)
 
 
 def _grid_charge(watts: float, cap_w: float, *, reserve_recharge: bool) -> BatteryIntent | None:
@@ -223,6 +227,40 @@ def _keep_rule_r1(
                 cut_kwh=round(cut_kwh, 3),
                 export_kwh=round(export_kwh, 3),
             )
+    return result
+
+
+def _keep_storm(
+    inputs: PlanInputs,
+    intents: list[BatteryIntent],
+    ev_w: Sequence[Mapping[str, float]] = (),
+    ev_battery_w: Sequence[Mapping[str, float]] = (),
+) -> list[BatteryIntent]:
+    """``HALTEN`` statt ``EIGENVERBRAUCH`` in jedem Slot mit Untergrenze der Unwetter-Reserve
+    (``storm_floor_pct``, Plan Unwetter-Reserve, Entscheidung 10), in dem die Nachrechnung mit
+    mindestens ``HOLD_MIN_W`` entlädt und unter der Untergrenze endet (``SOC_TOL_KWH``): Hält der
+    Optimierer den Akku dort an der Untergrenze und entlädt nur einen Teil, ist der Slot sonst
+    Eigenverbrauch und entlädt ganz. Ein Slot, in dem der Akku den Autos mindestens ``HOLD_MIN_W``
+    gibt, bleibt ``EIGENVERBRAUCH``. Ohne Untergrenze unverändert."""
+    if all(slot.storm_floor_pct is None for slot in inputs.slots):
+        return intents
+    params = params_of(inputs)
+    slots = sim_slots(inputs, ev_w, ev_battery_w)
+    result = list(intents)
+    soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    for index, (slot, inp) in enumerate(zip(slots, inputs.slots, strict=True)):
+        item = step(soc_kwh, slot, result[index], params)
+        floor_pct = inp.storm_floor_pct
+        if (
+            floor_pct is not None
+            and result[index].kind is BatteryIntentKind.EIGENVERBRAUCH
+            and slot.ev_battery_w < HOLD_MIN_W
+            and item.discharge_w >= HOLD_MIN_W
+            and item.soc_end_kwh < floor_pct / 100 * params.capacity_kwh - SOC_TOL_KWH
+        ):
+            result[index] = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+            item = step(soc_kwh, slot, result[index], params)
+        soc_kwh = item.soc_end_kwh
     return result
 
 

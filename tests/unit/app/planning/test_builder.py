@@ -8,6 +8,7 @@ import pytest
 from tests.plan_helpers import (
     NOW,
     SCENARIO_START,
+    STORM_WARNING,
     assemble,
     at,
     flat,
@@ -18,6 +19,7 @@ from tests.plan_helpers import (
     scenario,
     small_battery,
     state,
+    storm_scenario,
     virtual,
 )
 
@@ -418,6 +420,60 @@ def test_threshold_is_rounded_up_and_capped() -> None:
 
 def test_thresholds_of_an_empty_plan() -> None:
     assert support_thresholds([], 20.0) == []
+
+
+def test_support_threshold_rises_in_window() -> None:
+    # Entscheidung 7: ohne Entladung danach ist die Schwelle im Fenster die Untergrenze; davor
+    # braucht der Plan den Akku bis zum Fenster, danach gilt wieder die Reserve.
+    slots = slots_from(60, [0, 0, 0, 0, 0, 0])
+    floors = [None, None, 40.0, 40.0, None, None]
+    found = support_thresholds(slots, 20.0, floors)
+    assert [t for t, _ in found] == [40.0, 40.0, 40.0, 40.0, 20.0, 20.0]
+    # „bis“ ist das Ende des Fensters
+    assert {um for _, um in found[:4]} == {slots[4].start}
+    # eine Entladung im Fenster kommt auf die Untergrenze danach
+    found = support_thresholds(slots_from(60, [0, 0, 5, 5, 0, 0]), 20.0, floors)
+    assert [t for t, _ in found] == [45.0, 45.0, 45.0, 40.0, 20.0, 20.0]
+
+
+def test_support_threshold_without_floors_unchanged() -> None:
+    for drops in ([10, 10, 10, 10], [10, -30], [7.5, 7.5], [50, 50], [10.0000000001]):
+        slots = slots_from(60, drops)
+        assert support_thresholds(slots, 20.0, [None] * len(drops)) == support_thresholds(
+            slots, 20.0
+        )
+    with pytest.raises(ValueError):
+        support_thresholds(slots_from(60, [10, 10]), 20.0, [None])
+
+
+def test_plan_carries_storm() -> None:
+    inputs = storm_scenario(soc_pct=45.0)
+    plan = build_plan(inputs, [EV] * 96, source="fallback", solver_status=None)
+    assert plan.storm is not None
+    assert plan.storm.target_pct == 40.0
+    assert plan.storm.warnings == [STORM_WARNING]
+    assert [s.storm_reserve_pct for s in plan.slots] == [s.storm_floor_pct for s in inputs.slots]
+    # die Plan-Schwelle hebt sich im Fenster
+    assert plan.slots[50].support_soc_pct is not None and plan.slots[50].support_soc_pct >= 40.0
+    # ohne Warnung kein Block und keine Untergrenze
+    bare = build_plan(
+        storm_scenario(soc_pct=45.0, warning=None), [EV] * 96, source="fallback", solver_status=None
+    )
+    assert bare.storm is None
+    assert all(s.storm_reserve_pct is None for s in bare.slots)
+
+
+def test_an_old_plan_without_storm_loads_with_none() -> None:
+    plan = build_plan(
+        storm_scenario(soc_pct=45.0), [EV] * 96, source="fallback", solver_status=None
+    )
+    data = plan.model_dump(mode="json")
+    del data["storm"]
+    for slot in data["slots"]:
+        del slot["storm_reserve_pct"]
+    old = Plan.model_validate(data)
+    assert old.storm is None
+    assert all(s.storm_reserve_pct is None for s in old.slots)
 
 
 def evening(**overrides):

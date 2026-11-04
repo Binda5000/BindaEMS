@@ -9,12 +9,15 @@ from typing import Any
 import pytest
 from tests.plan_helpers import (
     SCENARIO_START,
+    STORM_KWH,
+    STORM_WINDOW,
     at,
     planned_car,
     resimulate,
     scenario,
     small_battery,
     state,
+    storm_scenario,
 )
 
 from bindaems.app.planning.battery_model import SLOT_H, eta, params_of
@@ -26,7 +29,7 @@ from bindaems.app.planning.fallback import (
 )
 from bindaems.app.planning.grid_phases import PHASES, phase_shares
 from bindaems.app.planning.inputs import BatteryState, PlanInputs, PlanVehicleInput
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
+from bindaems.app.planning.plausibility import R1_TOL_KWH, SOC_TOL_KWH, export_while_charged_kwh
 from bindaems.shared.config import Phase
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.timeutil import SLOT
@@ -506,3 +509,64 @@ def test_fallback_recharge_respects_phase_headroom() -> None:
     assert intents[4] == BatteryIntent(
         kind=BatteryIntentKind.NETZLADEN, grid_charge_w=1400.0, reserve_recharge=True
     )
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 11)
+
+_FLOOR_KWH = 0.4 * STORM_KWH
+_TOL_KWH = 0.005 * STORM_KWH  # 0,5 Prozentpunkte
+
+
+def test_fallback_charges_before_storm() -> None:
+    # Schalter aus, 25 %: der Ersatzplan lädt mit Flag in den billigsten Slots vor 13:00 (die acht
+    # zu 10 ct zuerst, dann die früheren zu 30 ct) und hält, was er hat, bis das Fenster endet.
+    inputs = storm_scenario(soc_pct=25.0)
+    intents = fallback_intents(inputs)
+    charging = [i for i, x in enumerate(intents) if x.kind is BatteryIntentKind.NETZLADEN]
+    assert charging[:8] == list(range(8))
+    assert max(charging) < STORM_WINDOW.start
+    assert all(intents[i].reserve_recharge for i in charging)
+    assert all(0 < intents[i].grid_charge_w <= 3000.0 for i in charging)
+    steps = resimulate(inputs, intents)
+    assert steps[STORM_WINDOW.start].soc_start_kwh >= _FLOOR_KWH - _TOL_KWH
+    assert all(steps[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH for t in STORM_WINDOW)
+    # nicht mehr als nötig: ohne das letzte Laden fehlte die Untergrenze
+    one_slot_kwh = 3000.0 * SLOT_H / 1000 * params_of(inputs).eta_ch
+    assert steps[STORM_WINDOW.start].soc_start_kwh <= _FLOOR_KWH + one_slot_kwh
+
+
+def test_fallback_holds_in_window() -> None:
+    # 45 %: Netzladen braucht es nicht. Im Fenster hält der Plan, wo Eigenverbrauch unter 40 %
+    # führte; vor dem Fenster gibt der Akku dem Haus nur, was über 40 % liegt.
+    inputs = storm_scenario(soc_pct=45.0)
+    intents = fallback_intents(inputs)
+    assert all(x.kind is not BatteryIntentKind.NETZLADEN for x in intents)
+    held = [t for t in STORM_WINDOW if intents[t].kind is BatteryIntentKind.HALTEN]
+    assert held
+    steps = resimulate(inputs, intents)
+    assert all(steps[t].soc_end_kwh >= _FLOOR_KWH - SOC_TOL_KWH for t in range(STORM_WINDOW.stop))
+    # nach dem Fenster entlädt der Akku wieder
+    assert all(x.kind is BatteryIntentKind.EIGENVERBRAUCH for x in intents[STORM_WINDOW.stop :])
+    assert steps[-1].soc_end_kwh < _FLOOR_KWH - 1.0
+    # ohne Warnung hielte er nirgends
+    plain = fallback_intents(storm_scenario(soc_pct=45.0, warning=None))
+    assert all(x.kind is BatteryIntentKind.EIGENVERBRAUCH for x in plain)
+
+
+def test_fallback_storm_charge_comes_after_the_reserve_recharge() -> None:
+    # 16 %: zuerst auf die Reserve nachladen, dann für die Unwetter-Reserve; alles mit Flag
+    inputs = storm_scenario(soc_pct=16.0)
+    intents = fallback_intents(inputs)
+    assert all(x.reserve_recharge for x in intents if x.kind is BatteryIntentKind.NETZLADEN)
+    steps = resimulate(inputs, intents)
+    assert steps[STORM_WINDOW.start].soc_start_kwh >= _FLOOR_KWH - _TOL_KWH
+
+
+def test_fallback_storm_charge_respects_the_grid_limit() -> None:
+    # Haus 2500 W, höchster Sollwert 4000 W: je Slot bleiben 1500 W fürs Laden
+    battery = state(usable_kwh=STORM_KWH, max_grid_charge_setpoint_w=4000.0)
+    inputs = storm_scenario(soc_pct=30.0, load=[2500.0] * 96, battery=battery)
+    intents = fallback_intents(inputs)
+    charging = [x for x in intents if x.kind is BatteryIntentKind.NETZLADEN]
+    assert charging
+    assert all(x.grid_charge_w <= 1500.0 for x in charging)

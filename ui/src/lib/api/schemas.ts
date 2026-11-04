@@ -1440,6 +1440,7 @@ export type BatteryIntentKind = v.InferOutput<typeof BatteryIntentKindSchema>;
 
 export const PlanReasonCodeSchema = v.picklist([
 	'NACHLADEN_RESERVE',
+	'UNWETTER_RESERVE',
 	'NETZLADEN_GUENSTIG',
 	'HALTEN_FUER_SPITZE',
 	'BUDGET_SPITZE',
@@ -1518,7 +1519,10 @@ export const PlanSlotSchema = v.object({
 	 */
 	thermal_w: v.optional(v.number(), 0),
 	thermal_steps: v.optional(NullableNumber, null),
-	thermal_grid_w: v.optional(v.number(), 0)
+	thermal_grid_w: v.optional(v.number(), 0),
+	/** Untergrenze der Unwetter-Reserve am Slotende in %; `null` außerhalb eines Fensters, ältere
+	 * Pläne haben das Feld nicht */
+	storm_reserve_pct: v.optional(NullableNumber, null)
 });
 export type PlanSlot = v.InferOutput<typeof PlanSlotSchema>;
 
@@ -1545,6 +1549,25 @@ export const PlanThermalSchema = v.object({
 	reason: v.picklist(['ok', 'off', 'no_model', 'mode', 'not_worth', 'solver'])
 });
 export type PlanThermal = v.InferOutput<typeof PlanThermalSchema>;
+
+/** Eine amtliche Unwetterwarnung im Plan; `begin` und `end` sind der Geltungszeitraum */
+export const PlanStormWarningSchema = v.object({
+	warn_id: v.number(),
+	version: v.number(),
+	kind: v.picklist(['sturm', 'regen', 'schnee', 'glatteis', 'gewitter', 'hitze', 'kaelte']),
+	level: v.picklist([1, 2, 3]),
+	begin: Iso,
+	end: Iso,
+	text: v.string()
+});
+export type PlanStormWarning = v.InferOutput<typeof PlanStormWarningSchema>;
+
+/** Unwetter-Reserve im Plan: Untergrenze in % und die passenden Warnungen */
+export const PlanStormSchema = v.object({
+	target_pct: v.number(),
+	warnings: v.array(PlanStormWarningSchema)
+});
+export type PlanStorm = v.InferOutput<typeof PlanStormSchema>;
 
 /** Zusammenfassung des Plans für ein geplantes Auto (Plan 4b) */
 export const PlanVehicleSchema = v.object({
@@ -1601,6 +1624,8 @@ export const PlanSchema = v.object({
 	vehicles: v.array(PlanVehicleSchema),
 	/** `null` ohne Klimaanlage; ältere Pläne haben das Feld nicht */
 	thermal: v.optional(v.nullable(PlanThermalSchema), null),
+	/** `null` ohne Unwetterwarnung im Horizont; ältere Pläne haben das Feld nicht */
+	storm: v.optional(v.nullable(PlanStormSchema), null),
 	slots: v.array(PlanSlotSchema)
 });
 export type Plan = v.InferOutput<typeof PlanSchema>;
