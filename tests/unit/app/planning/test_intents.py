@@ -367,12 +367,10 @@ def test_unprofitable_grid_charge_is_dropped(load0_w: float, kind: BatteryIntent
     assert derive_intents(inputs, flows_result(flows))[0] == BatteryIntent(kind=kind)
 
 
-@pytest.mark.parametrize("peak", [month("2026-10", 2.0), virtual("2026-10", 2.0)])
-def test_grid_charge_against_a_peak_is_kept(peak: PeakMonth) -> None:
-    # Mit Leistungspreis darf Netzladen einer Spitze ausweichen; wie in der Plausibilität bleibt es.
-    # Ein gedachter Monat ohne Leistungspreis gilt hier wie ein echter (Plan Netzgrenze je Phase,
-    # Entscheidung 8).
-    inputs = scenario(
+def _peak_charge(peak: PeakMonth) -> PlanInputs:
+    """Netzladen zu 20 ct, verbraucht im nächsten Slot zu 20 ct (rechnet sich nicht), im Monat
+    ``peak``."""
+    return scenario(
         prices=[20.0] * 2,
         pv=[0.0] * 2,
         load=[1000.0, 1000.0],
@@ -380,10 +378,23 @@ def test_grid_charge_against_a_peak_is_kept(peak: PeakMonth) -> None:
         grid_charge=True,
         peak_months=[peak],
     )
+
+
+def test_grid_charge_against_a_peak_is_kept() -> None:
+    # Mit Leistungspreis darf Netzladen einer Spitze ausweichen; wie in der Plausibilität bleibt es.
     flows = [flow(gr_b=2000.0, gr_h=1000.0), flow(bt_h=1000.0)]
-    assert derive_intents(inputs, flows_result(flows))[0] == BatteryIntent(
-        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000
-    )
+    assert derive_intents(_peak_charge(month("2026-10", 2.0)), flows_result(flows))[
+        0
+    ] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000)
+
+
+def test_grid_charge_against_a_virtual_peak_is_dropped() -> None:
+    # Der gedachte Satz ohne Leistungspreis ist ein Steuersignal, kein Geld (Ruling zu Task 5):
+    # Netzladen, das sich nicht rechnet, fällt weg wie ohne Monat (Halten ab 100 W Eigenverbrauch).
+    flows = [flow(gr_b=2000.0, gr_h=1000.0), flow(bt_h=1000.0)]
+    assert derive_intents(_peak_charge(virtual("2026-10", 2.0)), flows_result(flows))[
+        0
+    ] == BatteryIntent(kind=BatteryIntentKind.HALTEN)
 
 
 def test_grid_charge_spent_at_once_by_the_rounding_is_dropped() -> None:

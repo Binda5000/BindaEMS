@@ -5881,7 +5881,8 @@ Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit),
 (Spitze vermeiden), „Zahl von 50 bis 100“ (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“
 (Vorsichtsfaktor). Gespeicherte Einstellungen ohne Gruppe „Planung“ (aus der Zeit vor Plan 3b) laden
 mit den Standardwerten, ebenso solche ohne ein einzelnes Feld (etwa ohne `peak_soft_ct_per_kw`, vor
-dem Plan „Netzgrenze je Phase“: dann gilt 100).
+dem Plan „Netzgrenze je Phase“: dann gilt 100). Eine Änderung von Planung, Tarif, Einspeisung oder
+Vorheizen und Vorkühlen löst eine Neuplanung aus, eine andere Einstellung nicht.
 
 **Spitze vermeiden ohne Leistungspreis** (seit dem Plan „Netzgrenze je Phase“, Entscheidung 8 des
 Betreibers vom 3.11.2026: „Gedachter Satz, auch Wächter“): Gilt in einem Monat kein Leistungspreis
@@ -5889,16 +5890,16 @@ mit Satz (vor 2027 oder ohne eingetragenen Wert), rechnet der Optimierer für ih
 **gedachten** Satz: Netzbezug bis zur schon erreichten Monatsspitze kostet nichts, jedes kW darüber
 `planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und Monat; für einen späteren Monat im
 Horizont gilt als bisherige Spitze 0). So verteilt er etwa zwei Autos in einer Nacht mit gleichen
-Preisen über die Slots, statt beide zugleich mit voller Leistung laden zu lassen, und Netzladen des
-Akkus darf wie mit Leistungspreis einer Spitze ausweichen. Ein gedachter Monat bringt sein
-**Budget** wie ein echter an den core (unten, „Budget“), und der 15-min-Wächter hält es (Abschnitt
-„Akku und Spitzen“, „15-min-Wächter“). Er ist kein Preis: Er zählt in keiner Kostenanzeige, in
-keiner Statistik und nicht in den Mehrkosten eines Boosts, und der Plan meldet `power_price` nicht
-(die Seite „Zeitplan“ zeigt das Budget deshalb nicht, der Sensor „Budget“ in Home Assistant schon).
+Preisen über die Slots, statt beide zugleich mit voller Leistung laden zu lassen. Ein gedachter
+Monat bringt sein **Budget** wie ein echter an den core (unten, „Budget“), und der 15-min-Wächter
+hält es (Abschnitt „Akku und Spitzen“, „15-min-Wächter“). **Der gedachte Satz ist kein Geld**, nur
+ein Steuersignal: Er zählt in keiner Kostenanzeige, in keiner Statistik und nicht in den Mehrkosten
+eines Boosts, der Plan meldet `power_price` nicht (die Seite „Zeitplan“ zeigt das Budget deshalb
+nicht, der Sensor „Budget“ in Home Assistant schon), und Netzladen des Akkus, das sich nicht
+rechnet, bleibt nicht stehen, nur um einer gedachten Spitze auszuweichen (der Befund „Netzladen um
+HH:MM rechnet sich nicht“ gilt wie ohne Leistungspreis; nur ein echter Leistungspreis erlaubt das).
 Gilt ein echter Leistungspreis mit Satz, gilt nur dieser. Mit 0 ist alles wie vorher: kein gedachter
-Monat, kein Budget ohne Leistungspreis. Eine Änderung von
-Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen löst eine Neuplanung aus, eine andere
-Einstellung nicht.
+Monat, kein Budget ohne Leistungspreis.
 
 ### Auslöser
 
@@ -6064,8 +6065,9 @@ ladendes Auto nur bis zu seinem Mindeststrom drosseln und alarmieren. Willst du 
 Untergrenze, setze `control.peak_target_kw` oder `minimum_kw` im Tarif. Ohne Leistungspreis mit Satz
 hat ein Monat mit dem gedachten Satz (oben, „Einstellungen „Planung““, Spitze vermeiden ohne
 Leistungspreis) ein Budget nach derselben Regel; die bisherige Monatsspitze zählt dann ohne
-Mindestverrechnung. Mit `planning.peak_soft_ct_per_kw` 0 ist das Budget ohne Leistungspreis leer. Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel,
-solange der Slot gilt (Abschnitt „15-min-Wächter“).
+Mindestverrechnung. Mit `planning.peak_soft_ct_per_kw` 0 ist das Budget ohne Leistungspreis leer.
+Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel, solange der
+Slot gilt (Abschnitt „15-min-Wächter“).
 
 ### Plan gegen Ist
 

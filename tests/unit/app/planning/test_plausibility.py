@@ -20,6 +20,7 @@ from tests.plan_helpers import (
     sample_plan,
     scenario,
     small_battery,
+    virtual,
 )
 
 from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots, simulate
@@ -123,6 +124,11 @@ def test_unprofitable_grid_charge_is_reported_without_power_price() -> None:
     with_peak = inputs.model_copy(update={"peak_months": [month("2026-10", 2.0)]})
     assert "Netzladen um 02:00 rechnet sich nicht" not in check_plan(
         with_peak, flows_of(steps, with_peak), intents, steps
+    )
+    # Ein gedachter Monat ist kein Geld (Ruling zu Task 5): der Befund bleibt
+    with_virtual = inputs.model_copy(update={"peak_months": [virtual("2026-10", 2.0)]})
+    assert "Netzladen um 02:00 rechnet sich nicht" in check_plan(
+        with_virtual, flows_of(steps, with_virtual), intents, steps
     )
 
 

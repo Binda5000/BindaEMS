@@ -78,8 +78,8 @@ class PeakMonth(_Model):
 
     ``virtual``: ein gedachter Monat ohne Leistungspreis mit Satz (Plan Netzgrenze je Phase,
     Entscheidung 8) mit ``tier_kw`` 0, ``below_ct_per_kw`` 0 und ``above_ct_per_kw`` dem Satz
-    ``planning.peak_soft_ct_per_kw``. Optimierer, Budget und ``grid_charge_pays`` behandeln ihn wie
-    einen echten Monat; ``Plan.power_price`` zählt nur echte. Alte Eingangsdaten: echt.
+    ``planning.peak_soft_ct_per_kw``. Optimierer und Budget behandeln ihn wie einen echten Monat;
+    ``Plan.power_price`` und ``grid_charge_pays`` zählen nur echte. Alte Eingangsdaten: echt.
     """
 
     month: str  # JJJJ-MM, lokal

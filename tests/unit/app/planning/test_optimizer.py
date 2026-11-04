@@ -1033,6 +1033,15 @@ def _two_cars_flat_night(peaks: list[PeakMonth]) -> PlanInputs:
     )
 
 
+# nötiger Mittelwert des Bezugs in kW: 2 · 10 kWh in 2 h und das Haus
+_FLAT_NIGHT_MEAN_KW = (2 * 10.0 + 8 * 600.0 * SLOT_KWH) / (8 * SLOT_H)  # 10,6 kW
+
+
+def _peak_import_kw(result: OptimizerResult) -> float:
+    """Höchster Netzbezug des Plans in kW (Haus, Netzladen und Netz ins Auto)."""
+    return max(f.gr_h + f.gr_b + sum(g for _, g in f.ev.values()) for f in result.flows) / 1000
+
+
 def test_soft_peak_spreads_two_cars() -> None:
     starts = [at(SCENARIO_START)]
     peaks = peak_months(starts, TariffSettings(), 3.0, soft_ct_per_kw=100.0)
@@ -1040,11 +1049,9 @@ def test_soft_peak_spreads_two_cars() -> None:
     inputs = _two_cars_flat_night(peaks)
     result = solve(inputs)
     assert result.status == "optimal"
-    # nötiger Mittelwert: 2 · 10 kWh in 2 h und das Haus
-    mean_kw = (2 * 10.0 + 8 * 600.0 * SLOT_KWH) / (8 * SLOT_H / 1000)
-    assert max(f.gr_h + f.gr_b + sum(g for _, g in f.ev.values()) for f in result.flows) / 1000 <= (
-        max(3.0, mean_kw) + 0.1
-    )
+    mean_kw = _FLAT_NIGHT_MEAN_KW
+    assert mean_kw == pytest.approx(10.6)
+    assert _peak_import_kw(result) <= max(3.0, mean_kw) + 0.1
     assert not any(_both_at_max(result))
     assert all(value == pytest.approx(0.0, abs=1e-6) for value in result.shortfall_kwh.values())
     assert result.peaks_kw["2026-10"] <= max(3.0, mean_kw) + 0.1
@@ -1058,3 +1065,6 @@ def test_without_soft_rate_two_cars_charge_as_before() -> None:
     assert result.status == "optimal" and result.peaks_kw == {}
     before = solve(_two_cars_flat_night([]))
     assert result.flows == before.flows
+    # Ursache und Wirkung: ohne Satz bleibt die Spitze nicht beim nötigen Mittelwert (beobachtet:
+    # beide Autos zugleich mit voller Leistung, 19,0 kW), mit Satz schon (oben)
+    assert _peak_import_kw(result) > _FLAT_NIGHT_MEAN_KW + 0.1

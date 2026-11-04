@@ -207,12 +207,13 @@ def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -
 
     Das gilt mit einer späteren Entladung (``pays_off``) oder mit dem Restwert am Horizontende
     (``pays_off_at_end``); mit Leistungspreis immer, weil Netzladen dann auch einer Spitze
-    ausweichen darf. Das gilt auch für einen gedachten Monat ohne Leistungspreis
-    (``PeakMonth.virtual``, Plan Netzgrenze je Phase, Entscheidung 8). Plausibilität und Absichten
-    rechnen beide hiermit.
+    ausweichen darf. Ein gedachter Monat ohne Leistungspreis (``PeakMonth.virtual``, Plan
+    Netzgrenze je Phase, Entscheidung 8) zählt hier nicht: Sein Satz steuert, ist aber kein Geld,
+    und Netzladen, das sich nicht rechnet, soll nicht bleiben, nur um ihm auszuweichen (Ruling zu
+    Task 5). Plausibilität und Absichten rechnen beide hiermit.
     """
     return (
-        bool(inputs.peak_months)
+        any(not entry.virtual for entry in inputs.peak_months)
         or pays_off(inputs, steps, index) is not None
         or pays_off_at_end(inputs, steps, index)
     )
