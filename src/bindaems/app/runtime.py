@@ -313,6 +313,10 @@ class AppRuntime:
         )
         self._forecast_calibrated = asyncio.Event()  # gesetzt nach der ersten Kalibrierung
         self._ledger_backfilled = asyncio.Event()  # gesetzt nach dem ersten Nachtrag (auch Fehler)
+        # Reihenfolge beim Start: Nachtrag → Nachrechnung und Abgleich (``_ledger_checked``) →
+        # Nachholen der Auffälligkeiten (``_findings_caught_up``) → Tagesbericht; auch nach Fehler
+        self._ledger_checked = asyncio.Event()
+        self._findings_caught_up = asyncio.Event()
         # Zeitraum, den der Nachtrag lückenlos gelesen hat; nur dort schätzt die Nachrechnung
         self._backfill_covered: tuple[datetime, datetime] | None = None
         core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
@@ -708,7 +712,7 @@ class AppRuntime:
             ("forecast-nightly", self._forecast_nightly_loop),
             ("ledger-nightly", self._ledger_nightly_loop),
             ("ops-nightly", self._ops_nightly_loop),
-            ("ops-report", self.report_sender.run),
+            ("ops-report", self._ops_report_loop),
             ("consumer-energy", self._energy_loop),
         ]
         if self.thermal_model is not None:
@@ -1086,33 +1090,59 @@ class AppRuntime:
 
         Der Lauf beim Start wartet auf den ersten Nachtrag der Abrechnung (``_ledger_loop``), sonst
         prüft er Tage, die der Nachtrag noch füllt, und ihre Zeilen blieben bis zum nächsten Start
-        veraltet. Länger als ``LEDGER_BACKFILL_WAIT_S`` wartet er nicht.
+        veraltet. Länger als ``LEDGER_BACKFILL_WAIT_S`` wartet er nicht. Nach ihm (auch nach einem
+        Fehler) dürfen die Auffälligkeiten nachgeholt werden (``_ledger_checked``).
         """
+        await self._wait_start(
+            self._ledger_backfilled,
+            "Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn",
+        )
         try:
-            await asyncio.wait_for(self._ledger_backfilled.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
-        except TimeoutError:
-            log.warning("Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn")
-        days = LEDGER_CHECK_START_DAYS
-        start = True
+            await self._ledger_nightly(LEDGER_CHECK_START_DAYS, start=True)
+        finally:
+            self._ledger_checked.set()
         while True:
-            await self._ledger_nightly(days, start=start)
-            start = False
-            days = LEDGER_CHECK_NIGHTLY_DAYS
             now = self._clock.now()
             due = next_local(now, lambda t: (t.hour, t.minute) == LEDGER_NIGHTLY_AT)
             await asyncio.sleep((due - now).total_seconds())
+            await self._ledger_nightly(LEDGER_CHECK_NIGHTLY_DAYS)
 
     async def _ops_nightly_loop(self) -> None:
-        """Auffälligkeiten (``FindingsService.run``) erst nach dem ersten Nachtrag der Abrechnung,
-        höchstens ``LEDGER_BACKFILL_WAIT_S`` lang: sonst rechnete der Start die Tage, die der
-        Nachtrag noch füllt, und ``ops_day`` hielte sie für erledigt."""
+        """Auffälligkeiten erst nach dem ersten Nachtrag der Abrechnung und dem ersten Lauf von
+        Nachrechnung und Zählerabgleich, je höchstens ``LEDGER_BACKFILL_WAIT_S`` lang: sonst
+        rechnete der Start die Tage, die der Nachtrag noch füllt, und ``ops_day`` hielte sie für
+        erledigt. Nach dem Nachholen (auch nach einem Fehler) darf der Tagesbericht beginnen."""
+        await self._wait_start(
+            self._ledger_backfilled,
+            "Nachtrag der Abrechnung dauert zu lange, Auffälligkeiten beginnen ohne ihn",
+        )
+        await self._wait_start(
+            self._ledger_checked,
+            "Abgleich der Abrechnung dauert zu lange, Auffälligkeiten beginnen ohne ihn",
+        )
         try:
-            await asyncio.wait_for(self._ledger_backfilled.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
-        except TimeoutError:
-            log.warning(
-                "Nachtrag der Abrechnung dauert zu lange, Auffälligkeiten beginnen ohne ihn"
+            await self.findings.catch_up()
+        finally:
+            self._findings_caught_up.set()
+        await self.findings.nightly()
+
+    async def _ops_report_loop(self) -> None:
+        """Der Tagesbericht erst, wenn die Auffälligkeiten nachgeholt sind (die wiederum auf
+        Nachtrag und Abgleich warten): sonst rechnete er nach ``report_at`` gestern aus einer
+        unvollständigen Abrechnung und legte das Ergebnis ab. Jede Stufe wartet höchstens
+        ``LEDGER_BACKFILL_WAIT_S``."""
+        for event in (self._ledger_backfilled, self._ledger_checked, self._findings_caught_up):
+            await self._wait_start(
+                event, "Start des Tagesberichts wartet zu lange, er beginnt ohne Vorlauf"
             )
-        await self.findings.run()
+        await self.report_sender.run()
+
+    async def _wait_start(self, event: asyncio.Event, message: str) -> None:
+        """Wartet höchstens ``LEDGER_BACKFILL_WAIT_S`` auf einen Schritt der Startreihenfolge."""
+        try:
+            await asyncio.wait_for(event.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
+        except TimeoutError:
+            log.warning(message)
 
     async def _ledger_nightly(self, days: int, *, start: bool = False) -> None:
         """Rechnet die Lücken der letzten 7 Tage nach und gleicht dann die letzten ``days``

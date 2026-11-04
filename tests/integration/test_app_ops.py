@@ -63,16 +63,108 @@ async def test_maintenance_cleans_up_old_findings(runtime, monkeypatch) -> None:
     assert entry["findings"] == 4
 
 
+def spy_findings_start(runtime, monkeypatch) -> list[str]:
+    """Ersetzt Nachholen und Nachtlauf der Auffälligkeiten; zeichnet die Aufrufe auf."""
+    calls: list[str] = []
+
+    async def catch_up() -> None:
+        calls.append("catch_up")
+
+    async def nightly() -> None:
+        calls.append("nightly")
+
+    monkeypatch.setattr(runtime.findings, "catch_up", catch_up)
+    monkeypatch.setattr(runtime.findings, "nightly", nightly)
+    return calls
+
+
 async def test_ops_nightly_waits_for_the_first_backfill(runtime, monkeypatch) -> None:
+    calls = spy_findings_start(runtime, monkeypatch)
+    runtime._ledger_checked.set()
+    task = asyncio.create_task(runtime._ops_nightly_loop())
+    await asyncio.sleep(0.05)
+    assert calls == []  # der Nachtrag der Abrechnung fehlt noch
+    runtime._ledger_backfilled.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert calls == ["catch_up", "nightly"]
+
+
+async def test_findings_catch_up_waits_for_the_first_ledger_nightly_pass(
+    runtime, monkeypatch
+) -> None:
+    # sonst rechnete das Nachholen vor Nachrechnung der Lücken und Zählerabgleich
+    calls = spy_findings_start(runtime, monkeypatch)
+    runtime._ledger_backfilled.set()
+    task = asyncio.create_task(runtime._ops_nightly_loop())
+    await asyncio.sleep(0.05)
+    assert calls == []
+    assert not runtime._findings_caught_up.is_set()
+    runtime._ledger_checked.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert calls == ["catch_up", "nightly"]
+    assert runtime._findings_caught_up.is_set()
+
+
+async def test_first_ledger_nightly_pass_releases_the_findings(runtime, monkeypatch) -> None:
+    passes: list[bool] = []
+
+    async def nightly(days: int, *, start: bool = False) -> None:
+        assert not runtime._ledger_checked.is_set()
+        passes.append(start)
+
+    monkeypatch.setattr(runtime, "_ledger_nightly", nightly)
+    runtime._ledger_backfilled.set()
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_nightly_loop()
+    assert passes == [True]
+    assert runtime._ledger_checked.is_set()
+
+
+async def test_failed_findings_catch_up_still_releases_the_report(runtime, monkeypatch) -> None:
+    async def catch_up() -> None:
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.findings, "catch_up", catch_up)
+    runtime._ledger_backfilled.set()
+    runtime._ledger_checked.set()
+    with pytest.raises(RuntimeError):
+        await runtime._ops_nightly_loop()
+    assert runtime._findings_caught_up.is_set()
+
+
+async def test_ops_report_waits_for_the_start_order(runtime, monkeypatch) -> None:
+    # Nachtrag → Nachrechnung und Zählerabgleich → Nachholen der Auffälligkeiten → Tagesbericht:
+    # sonst rechnete der Bericht gestern aus einer unvollständigen Abrechnung (und legte es ab)
     started = asyncio.Event()
 
     async def run() -> None:
         started.set()
 
-    monkeypatch.setattr(runtime.findings, "run", run)
-    task = asyncio.create_task(runtime._ops_nightly_loop())
+    monkeypatch.setattr(runtime.report_sender, "run", run)
+    task = asyncio.create_task(runtime._ops_report_loop())
+    for event in (runtime._ledger_backfilled, runtime._ledger_checked):
+        await asyncio.sleep(0.05)
+        assert not started.is_set()
+        event.set()
     await asyncio.sleep(0.05)
-    assert not started.is_set()  # der Nachtrag der Abrechnung fehlt noch
-    runtime._ledger_backfilled.set()
+    assert not started.is_set()  # die Auffälligkeiten sind noch nicht nachgeholt
+    runtime._findings_caught_up.set()
     await asyncio.wait_for(task, timeout=1)
     assert started.is_set()
+
+
+async def test_ops_report_does_not_wait_forever(runtime, monkeypatch) -> None:
+    started = asyncio.Event()
+
+    async def run() -> None:
+        started.set()
+
+    monkeypatch.setattr(runtime.report_sender, "run", run)
+    monkeypatch.setattr("bindaems.app.runtime.LEDGER_BACKFILL_WAIT_S", 0.02)
+    with capture_logs() as logs:
+        await asyncio.wait_for(runtime._ops_report_loop(), timeout=1)
+    assert started.is_set()
+    assert "Start des Tagesberichts wartet zu lange, er beginnt ohne Vorlauf" in [
+        e["event"] for e in logs
+    ]

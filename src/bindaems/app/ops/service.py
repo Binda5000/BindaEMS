@@ -215,8 +215,14 @@ class FindingsService:
     # --- Betrieb ----------------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Beim Start die fehlenden Tage der letzten 7 bis gestern, dann täglich um 03:05 Uhr
-        Ortszeit den Vortag. Ein Fehler wird protokolliert, der Rhythmus läuft weiter."""
+        """Beim Start die fehlenden Tage der letzten 7 bis gestern (``catch_up``), dann täglich
+        um 03:05 Uhr Ortszeit den Vortag (``nightly``)."""
+        await self.catch_up()
+        await self.nightly()
+
+    async def catch_up(self) -> None:
+        """Rechnet die fehlenden Tage der letzten 7 bis gestern; ein Fehler je Tag wird
+        protokolliert, die übrigen Tage laufen weiter."""
         today = self._today()
         first = today - timedelta(days=START_DAYS)
         computed = await asyncio.to_thread(self._computed, first, today - timedelta(days=1))
@@ -224,6 +230,10 @@ class FindingsService:
             day = today - timedelta(days=back)
             if day not in computed:
                 await self._run_logged(day)
+
+    async def nightly(self) -> None:
+        """Täglich um 03:05 Uhr Ortszeit den Vortag. Ein Fehler wird protokolliert, der Rhythmus
+        läuft weiter."""
         while True:
             now = self._clock.now()
             due = next_local(now, lambda t: (t.hour, t.minute) == OPS_NIGHTLY_AT)
