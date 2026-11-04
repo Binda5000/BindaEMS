@@ -409,6 +409,53 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   ältere app Standardwerte.
   Gehst du zugleich hinter Akku ins Auto zurück (Rollback weiter oben, dann mit core und app), löschst
   du in Schritt 2 beide Schlüssel, `wallbox_default_modes` und `planning.car_battery_allowed`.
+- **Update mit Betrieb im Blick:** Der Plan ändert nur die app, der core bleibt. Du ziehst und startest
+  nur `ems-app` (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`); der
+  Regelbetrieb bleibt an. Die app bringt die Migration `0016` (Tabellen `ops_finding` und
+  `ops_day`; die app führt sie beim Start aus). Sichere vorher die Datenbank wie im Sammel-Pull
+  (`cp /data/bindaems.sqlite3 /backup/vor-betrieb-im-blick.sqlite3`). Der Tagesbericht ist ab Werk
+  täglich um 07:30 an; die Seite Betrieb und der Sensor „Betriebscheck“ brauchen nichts weiter.
+- **Rollback auf einen Stand vor Betrieb im Blick:** Die Einstellungen der app haben den neuen
+  Schlüssel `ops`, und eine ältere app kennt ihn nicht. Er steht in jeder Version der Einstellungen,
+  die die neue app speichert, also nach jedem Speichern, Import oder sonstigen Ändern seit dem Update.
+  Eine solche Version liest die ältere app nicht mehr und fällt auf die Standardwerte zurück: Dann
+  gilt auch ein leerer **Tarif**, bis du die Einstellungen wiederherstellst. Gehe so vor:
+  1. **Vor dem Rollback**, noch mit dem neuen Image: **Einstellungen** → „Export und Import“ →
+     „Exportieren (YAML)“ (oder `GET /api/settings/export`, Abschnitt 8, „Alternative für Skripte
+     (curl)“) und die Datei sichern.
+  2. In der Datei die Zeile `ops:` samt allen eingerückten Zeilen darunter löschen.
+  3. Die Datenbank zurücknehmen, noch mit dem neuen Image und bevor du das Tag änderst (eine ältere
+     app kennt die Migration `0016` nicht und startet mit dieser Datenbank nicht):
+
+     ```bash
+     cd /opt/bindaems
+     docker compose stop ems-app
+     docker compose run --rm --no-deps --entrypoint python ems-app -c '
+     from pathlib import Path
+     from alembic import command
+     from alembic.config import Config
+     from bindaems.app.db.engine import MIGRATIONS_DIR, open_database
+     engine = open_database(Path("/data/bindaems.sqlite3"))
+     config = Config()
+     config.set_main_option("script_location", str(MIGRATIONS_DIR))
+     with engine.begin() as connection:
+         config.attributes["connection"] = connection
+         command.downgrade(config, "0015")
+     engine.dispose()
+     print("Datenbank auf Stand 0015")'
+     ```
+
+     Der Befehl nimmt nur die beiden Tabellen weg; gehen kann stattdessen auch die Kopie vom
+     Ausrollen (Abschnitt 9), dann allerdings mit der ganzen Datenbank.
+  4. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d --no-deps ems-app`.
+  5. **Nach dem Rollback** die geänderte Datei importieren: **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“ (oder `POST /api/settings/import`). Das legt eine neue
+     Version ohne den Schlüssel an; Tarif und übrige Einstellungen sind danach wieder da.
+
+  Der core ist nicht betroffen. Die Auffälligkeiten und Berichttage gehen mit der Tabelle verloren
+  (sie lassen sich für 30 Tage aus den Plänen neu rechnen, danach nicht mehr). In Home Assistant
+  bleibt der Sensor „Betriebscheck“ als nicht mehr gepflegte Entität stehen, bis du ihn dort
+  entfernst; eine stehende Meldung `bindaems_tagesbericht` löschst du dort von Hand.
 - **Update mit dem Plan Vorklimatisieren:** Der Plan ändert core und app; beide rollen
   **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`):
   der core sendet neue Grund-Codes („Vorklimatisieren“, „Geladen, bleibt an“), und die app kennt ihren
@@ -901,6 +948,18 @@ homeassistant:
     bleibt aber stehen.
 - **Abgelehnte Befehle** aus Home Assistant erscheinen als persistente Meldung `bindaems_ha_command`
   (oben).
+- Der **Tagesbericht** (Plan Betrieb im Blick) kommt jeden Morgen um 07:30 Uhr als persistente Meldung
+  `bindaems_tagesbericht` mit dem Titel „BindaEMS Tagesbericht“ und über `notify_service`; der Bericht
+  von heute ersetzt den von gestern. Er nennt Netzbezug und Netzladen gegen den Plan, Kosten und
+  Ersparnis von gestern (wie in der Statistik), die wichtigsten Auffälligkeiten und den
+  Betriebscheck; an ruhigen Tagen steht „Keine Auffälligkeiten“. Einstellungen → „Tagesbericht“ stellt
+  ihn auf „nur bei Auffälligkeiten“ oder „aus“ und wählt die Uhrzeit. Er zählt nicht zum Budget der
+  Warnungen. Der Blueprint für die Handys (`bindaems_benachrichtigungen.yaml`) zeigt ihn mit dem Titel
+  „Tagesbericht“ statt als Warnung. Ohne Home Assistant steht der Bericht nur auf der Seite Betrieb
+  (Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“).
+- Der Sensor **Betriebscheck** (`sensor.bindaems_ops_check`, Zustand `ok`, `warnung`, `fehler` oder
+  `unbekannt`, Attribut `befunde` mit den Texten der gelben und roten Prüfungen) ist derselbe Check
+  wie auf der Seite Betrieb. Er löst keine Meldung aus; eine Automation darauf ist deine Sache.
 - Höchstens **10 Meldungen je Minute** über alle Alarme, Warnungen und Ablehnungen zusammen, davon
   höchstens **4 für Ablehnungen**: Den Alarmen und Warnungen bleiben so immer mindestens 6, auch wenn
   eine Automation eine Flut ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht nur im Log
@@ -1629,6 +1688,7 @@ gilt für diesen Browser.
 | Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Erlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten (deutsche Namen, gestörte zuerst, dazu „{x} von {n} in Ordnung“), Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
+| Betrieb | der Betriebscheck („Alles in Ordnung?“), die Auffälligkeiten der letzten Tage mit dem Tagesbericht und alle Schalter mit Stand (unten, „Betrieb: Check, Auffälligkeiten, Schalter“); für alle Rollen sichtbar |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
 | Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Lastmodell (Schalter und Sensoren aus Home Assistant), Vorheizen und Vorkühlen (seit Plan 5c), Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
@@ -1907,6 +1967,55 @@ Die Karte **Komponenten** nennt jede Komponente mit deutschem Namen („Preise�
 Ordnung“. Beginnt die Meldung mit dem Namen der Komponente („Fahrverhalten aktuell“), steht der Name nur
 einmal, die Meldung ohne ihn rechts („aktuell“); jede andere Meldung bleibt unverändert. Die Texte
 der Meldungen in diesem Handbuch („Lastmodell aktiv“, …) sind die ganzen Meldungen der app.
+
+### Betrieb: Check, Auffälligkeiten, Schalter
+
+Die Seite **Betrieb** (Navigation nach „System“, für alle Rollen sichtbar) ersetzt die `core … | jq`-Befehle
+aus den Listen B2 und B6 der Anlage. Sie liest nur; gestellt wird weiter dort, wo der Schalter steht.
+Der core ist dafür unverändert. Auf der Seite **System** steht ganz oben eine Zeile „Betriebscheck: …“
+mit Link hierher.
+
+- **Betriebscheck („Alles in Ordnung?“):** Grün, gelb oder rot für die ganze Anlage, darunter jede
+  Prüfung mit einem Satz und, wo es passt, einem Link (zu den Entscheidungen der letzten Stunde, zur
+  Seite „Laden“). Die Prüfungen: core verbunden, Betriebszustand, je Aktor (angefordert gegen
+  wirksam, Sperren), Watchdog am Cerbo, Alarme, Zuordnung Auto und Wallbox, Tessie-Befehle je Stunde
+  (gelb über 16, dann greift die Reserve), Entscheidungen der letzten Stunde für die Wallbox EVCS
+  (gelb über 20, „Hysterese prüfen“) und den Victron (gelb über 60, „Totband prüfen“), Plan, Akku,
+  Eingangsdaten, Adapter, Selbstprüfung und die Bausteine der app. Ein Aktor, den du bewusst im
+  Dry-Run lässt (heute die Klimaanlage), ist grün mit „Dry-Run (so gewünscht)“; gelb oder rot wird nur,
+  was anders läuft als gewünscht. Ist der core nicht erreichbar, steht er allein rot und alle
+  weiteren Prüfungen „unbekannt“. Fehlt dem Health eines älteren core ein Feld, ist die Prüfung
+  „unbekannt“ („vom core nicht gemeldet“). Die Schwellen sind feste Werte, keine Einstellungen.
+  Abruf: `GET /api/ops/check`.
+- **Auffälligkeiten:** Was die app selbst über die Tage findet, die letzten 14 Tage, neueste zuerst; je
+  Treffer Zeit, ein Satz und ein Link zu den Entscheidungen dieses Tages. Sieben Regeln: Akku lädt aus
+  dem Netz ohne Plan (mit dem Zusatz „Vermutlich lud Victron selbst nach“, wenn der SOC dabei unter der
+  Reserve lag), Akku unter der Reserve, neue Monatsspitze, Netzbezug weicht vom Plan ab, Auto hat das
+  Ziel verfehlt, gescheiterte Befehle, vom Zählerabgleich markiert. Die app rechnet nachts um 03:05
+  Uhr den Vortag und holt beim Start die fehlenden Tage der letzten 7 nach; ältere Tage lassen sich
+  nicht mehr rechnen (Pläne werden 30 Tage gehalten). Ein Tag ohne Lauf steht als „nicht berechnet“
+  da. Auffälligkeiten und Tage bleiben 400 Tage. Einen Live-Alarm gibt es dafür nicht: Was sofort
+  zählt, melden die Alarme des core. Abruf: `GET /api/ops/findings?days=14`.
+- **Tagesbericht:** Oben auf der Karte steht der Bericht von gestern: Netzbezug und Netzladen gegen den
+  Plan, Kosten und Ersparnis, Monatsspitze, die wichtigsten Auffälligkeiten und der Betriebscheck von
+  jetzt. Kosten und Ersparnis stehen wie in der Statistik (gegen „ohne PV und Akku“); eine gemessene
+  Ersparnis gegen „Victron allein“ gibt es hier nicht, sie folgt später als eigener Plan. In Home
+  Assistant kommt derselbe Text jeden Morgen um **07:30 Uhr** (Abschnitt 7, „Benachrichtigungen“).
+- **Schalter:** Jeder Schalter mit Stand, Wert ab Werk („ab Werk“ ist der Wert ohne dein Zutun, eine
+  Abweichung ist markiert), seit wann und von wem (Benutzer, Home Assistant oder System) und einem Link
+  zur Seite, auf der du ihn stellst. Das sind der Regelbetrieb, je Aktor die Freigabe zum Live-Schalten,
+  „Netzladen des Akkus“, „Akku ins Auto“, „Akku-Unterstützung fürs Auto“, „Lernen der Hauslast“,
+  „Vorheizen und Vorkühlen“, je Fahrzeug die Automatik für Ziel und Abfahrt, je Ladestation der
+  Lademodus nach dem Abstecken und der Tagesbericht. „Seit wann und wer“ ist der jüngste passende
+  Eintrag im Änderungsprotokoll (Seite „Protokoll“); ohne Eintrag steht „seit Einrichtung“. Lademodus,
+  Ziel und Abfahrt je Auto sind Bedienungen und keine Schalter, sie fehlen hier. Abruf:
+  `GET /api/ops/switches`.
+- **Einstellungen:** Einstellungen → „Tagesbericht“ (nur Admin) wählt „täglich“ (ab Werk), „nur bei
+  Auffälligkeiten“ oder „aus“ und die Uhrzeit (ab Werk 07:30). Die Werte stehen unter dem Schlüssel
+  `ops` in den Einstellungen (`ops.report`, `ops.report_at`) und wandern mit Export und Import.
+- **Ausrollen und zurück:** nur `ems-app`, mit Stufe 2 des Sammel-Pulls; der core läuft weiter. Die app
+  bringt die Migration `0016` (Tabellen für Auffälligkeiten und Berichttage). Der Rückweg steht in
+  Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“.
 
 ### Namen der Ladestationen
 

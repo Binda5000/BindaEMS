@@ -2071,6 +2071,8 @@ pv:
 
 ---
 
+**Stand Plan Betrieb im Blick** (`docs/superpowers/plans/2026-11-04-betrieb-im-blick.md`, Entscheidungen 5 und 6 vom Betreiber am 04.11.2026; Betrieb: `docs/betrieb.md`, Abschnitt 7, „Benachrichtigungen“): Der Sensor „Betriebscheck“ (`sensor.bindaems_ops_check`, Geräteklasse `enum`) zeigt die Gesamtstufe des Betriebschecks der app (`app/ops/check.py`) als `ok`, `warnung`, `fehler` oder `unbekannt`; das Attribut `befunde` nennt die Texte der gelben und roten Prüfungen („Name: Satz“). Der Check ist derselbe wie auf der Seite Betrieb (`current_check` mit den Entscheidungen der letzten Stunde) und wird im Worker-Thread der HA-Eingaben gerechnet; scheitert er, bleibt der Sensor „unbekannt“. Der Sensor löst keine Meldung aus. Der Tagesbericht über gestern kommt jeden Morgen um 07:30 Uhr (einstellbar unter `ops.report`, `ops.report_at`) als persistente Meldung `bindaems_tagesbericht`, die den des Vortags ersetzt, und über `notify_service`; Kosten und Ersparnis stehen wie in der Statistik, eine gemessene Ersparnis gegen „Victron allein“ folgt als eigener Plan. Der Blueprint der Handys zeigt die Meldung mit dem Titel „Tagesbericht“ statt als Warnung. Der core ruft weiter nie Dienste in Home Assistant auf.
+
 ## 13. Web-UI
 
 - **Technik:**
@@ -2165,6 +2167,8 @@ pv:
 - **Schemas:** `ev_battery_w` und `now_battery` je Slot von `GET /api/plan`, `car_battery_allowed` der Einstellungen und `battery.spare`/`battery.spare_w` aus Health sind optional (`{}`, `false`, `null`), damit ältere Pläne, Einstellungen und ein älterer core lesbar bleiben.
 
 ---
+
+**Stand Plan Betrieb im Blick** (`docs/superpowers/plans/2026-11-04-betrieb-im-blick.md`, Entscheidungen 1 bis 8; Betrieb: `docs/betrieb.md`, Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“): Die Seite **Betrieb** (`/betrieb`, nach „System“, für alle Rollen) hat drei Karten, alle nur lesend: den **Betriebscheck** („Alles in Ordnung?“, `GET /api/ops/check`: je Prüfung ein Satz und, wo es passt, ein Link; ein bewusst im Dry-Run gehaltener Aktor ist grün mit „Dry-Run (so gewünscht)“), die **Auffälligkeiten** der letzten 14 Tage mit dem Tagesbericht von gestern (`GET /api/ops/findings`; sieben Regeln, nachts um 03:05 Uhr für den Vortag gerechnet, beim Start die fehlenden Tage der letzten 7, 400 Tage aufbewahrt, Tabellen `ops_finding` und `ops_day`, Migration `0016`) und die **Schalter** mit Stand, Wert ab Werk, seit wann und wer aus dem Änderungsprotokoll (`GET /api/ops/switches`; Stellen bleibt dort, wo der Schalter heute steht, die Karte verlinkt). Die Seite System zeigt oben eine Zeile „Betriebscheck: …“ mit Link. Einstellungen → „Tagesbericht“ (`ops.report`: täglich, nur bei Auffälligkeiten, aus; `ops.report_at`, ab Werk 07:30). Nur app und UI; der core und sein Health bleiben unverändert. Eine ältere app kennt den Schlüssel `ops` nicht; der Rückweg steht im Betriebshandbuch, Abschnitt 4.
 
 ## 14. Login und Anwendungssicherheit
 

@@ -284,6 +284,18 @@ freigegeben. Autarkie und Eigenverbrauch sind auf 0 bis 100 % begrenzt (`app/led
 keine Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**; ausgerollt wird mit Stufe 2 des Sammel-Pulls, nie allein (Punkt 18).
 Nicht umgesetzt (Entscheidung 2 des Plans): einen Netzanteil des Akkuinhalts mitführen, der solchen Tagen eine Autarkie über 0 gäbe.
 
+**Stand Betrieb im Blick (04.11.2026):** Plan `docs/superpowers/plans/2026-11-04-betrieb-im-blick.md`, Entscheidungen 5 und 6 vom Betreiber am
+04.11.2026 (Tagesbericht täglich um 07:30; Ersparnis wie in der Statistik, die gemessene Ersparnis gegen „Victron allein“ später als eigener Plan), Branch
+`claude/project-thread-mo9vcj`, **noch nicht auf `main`**, **nicht ausgerollt**. Neu ist die Seite **Betrieb** (`/betrieb`, Navigation nach „System“, für alle Rollen):
+der Betriebscheck („Alles in Ordnung?“, ersetzt die `jq`-Befehle aus B2 und B6), die Auffälligkeiten der letzten 14 Tage mit dem Tagesbericht von gestern und die
+Schalter-Übersicht (Stand, ab Werk, seit wann, wer; nur lesend). Dazu der Sensor „Betriebscheck“ in Home Assistant (`sensor.bindaems_ops_check`: `ok`, `warnung`,
+`fehler`, `unbekannt`; Attribut `befunde`) und der Tagesbericht als Meldung `bindaems_tagesbericht`; der Blueprint der Handys zeigt sie mit dem Titel „Tagesbericht“.
+Die app rechnet die Auffälligkeiten nachts um 03:05 Uhr (beim Start die fehlenden Tage der letzten 7) in `ops_finding` und `ops_day` (**Migration `0016`**). **Nur app und UI,
+nur `ems-app` neu**, der core bleibt unverändert, keine ACL-Zeile, kein Schritt an `config.yaml`; ausgerollt wird mit Stufe 2 des Sammel-Pulls (ab 23.11.2026).
+Rückweg: Einstellungen als YAML exportieren, den Schlüssel `ops` löschen, Datenbank auf `0015` zurücknehmen, nach dem Rollback importieren (Betrieb: `docs/betrieb.md`,
+Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“). Betrieb: Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“, und Abschnitt 7, „Benachrichtigungen“.
+Nicht dabei: Live-Alarm für Auffälligkeiten, Schwellen in den Einstellungen, Ersparnis gegen „Victron allein“, Schalter auf der Seite Betrieb stellen.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -1337,6 +1349,11 @@ Nicht umgesetzt (Entscheidung 2 des Plans): einen Netzanteil des Akkuinhalts mit
     `driving_quality.py` (Trefferquote), alle rein bis auf das Lesen; dazu `driving_service.py` (Berechnung,
     Ablage in `driving_profile`, Status, Komponente `driving`) und `driving_auto.py` (die Automatik). Erwartete
     Autos baut `planning/vehicles.py` (`expected_vehicles`).
+  - seit „Betrieb im Blick“: `ops/` (`check.py`: der Betriebscheck aus Health, Bausteinen und Entscheidungsraten; `findings.py`: die
+    Regeln der Auffälligkeiten, `report.py`: der Text des Tagesberichts, `switches.py`: die Schalter-Übersicht, alle rein; dazu
+    `service.py`: Sammeln, nachts rechnen und ablegen in `ops_finding`/`ops_day` (Migration `0016`), Versand des Tagesberichts, und
+    `routes.py`: `/api/ops/check`, `/findings`, `/switches` sowie `current_check`, den Check, den Route, Tagesbericht und der HA-Sensor
+    gemeinsam nutzen)
   - liefert das UI unter `/` aus
 - **`src/bindaems/shared`:** Konfiguration, Domänentypen (auch `control.py`: Befehle, Betriebsarten,
   Absicht; `decisions.py`: Entscheidung und ihr deutscher Text; seit 3b `plan.py`: Plan, Slot,

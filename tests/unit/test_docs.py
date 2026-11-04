@@ -1877,3 +1877,19 @@ def test_app_only_commands_in_the_guide_keep_the_core_running() -> None:
     for doc in ("docs/betrieb.md", "docs/uebergabe.md"):
         text = Path(doc).read_text(encoding="utf-8")
         assert not re.search(r"up -d(?: --build)? ems-app", text), doc
+
+
+def test_betrieb_doc_names_ops_page() -> None:
+    # Plan „Betrieb im Blick“: Seite, Tagesbericht, Sensor und der Rückweg stehen im Handbuch.
+    text = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    for topic in (
+        "### Betrieb: Check, Auffälligkeiten, Schalter",
+        "Tagesbericht",
+        "Betriebscheck",
+        "Schalter",
+        "sensor.bindaems_ops_check",
+        "Rollback auf einen Stand vor Betrieb im Blick",
+        "`ops:`",
+        "0016",
+    ):
+        assert topic in text, topic
