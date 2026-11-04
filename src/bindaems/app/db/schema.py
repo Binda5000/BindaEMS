@@ -404,3 +404,28 @@ planned_charge = Table(
     Column("outcome", String(10), nullable=False),
     Index("ix_planned_charge_departure_at", "departure_at"),
 )
+
+# Auffälligkeiten je lokalem Tag (Betrieb im Blick): ``ops_finding`` hält die Treffer der Regeln,
+# ``ops_day`` die gerechneten Tage; ``report_sent_at`` setzt der Tagesbericht
+ops_finding = Table(
+    "ops_finding",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("day", String(10), nullable=False),  # lokales Datum, ISO
+    Column("rule", String(32), nullable=False),
+    Column("level", String(8), nullable=False),  # info | warn
+    Column("start", UtcDateTime(), nullable=True),
+    Column("end", UtcDateTime(), nullable=True),
+    Column("text", Text, nullable=False),
+    Column("link", String(200), nullable=True),
+    Column("data", JSON, nullable=False),
+    Index("ix_ops_finding_day", "day"),
+)
+
+ops_day = Table(
+    "ops_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("computed_at", UtcDateTime(), nullable=False),
+    Column("report_sent_at", UtcDateTime(), nullable=True),
+)

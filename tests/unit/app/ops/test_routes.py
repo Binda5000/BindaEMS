@@ -1,5 +1,5 @@
 import copy
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from tests.app_helpers import login_as
@@ -8,6 +8,7 @@ from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionStore
 from bindaems.app.core_link import LiveState
+from bindaems.app.history.influx import InfluxQueryError
 from bindaems.app.ops.routes import ops_router
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.timeutil import ManualClock
@@ -27,12 +28,19 @@ def store(engine, clock: ManualClock) -> DecisionStore:
 
 
 @pytest.fixture
-def client(make_client, live, guard, store, clock):
+def client(make_client, live, guard, store, clock, findings):
     def ok_source() -> ComponentStatus:
         return ComponentStatus("prices", True, "Preise bis 10.10. 23:45")
 
     return make_client(
-        ops_router(live=live, guard=guard, sources=[ok_source], decisions=store, clock=clock)
+        ops_router(
+            live=live,
+            guard=guard,
+            sources=[ok_source],
+            decisions=store,
+            clock=clock,
+            findings=findings,
+        )
     )
 
 
@@ -77,3 +85,44 @@ def test_check_route_survives_a_database_error(client, auth, store, monkeypatch)
     assert response.status_code == 200
     items = {i["id"]: i for i in response.json()["items"]}
     assert items["evcs_rate"]["level"] == "unknown"
+
+
+async def test_findings_route_groups_by_day(client, auth, findings, influx) -> None:
+    # heute ist der 9. 10. 2026: gestern gerechnet, vorgestern nicht
+    influx.error = InfluxQueryError("InfluxDB nicht erreichbar")
+    await findings.run_day(date(2026, 10, 8))
+    assert client.get("/api/ops/findings").status_code == 401
+    login_as(client, auth, "viewer")
+    body = client.get("/api/ops/findings?days=3").json()
+    assert body == {
+        "days": [
+            {
+                "day": "2026-10-08",
+                "computed": True,
+                "findings": [
+                    {
+                        "rule": "not_checked",
+                        "level": "info",
+                        "start": None,
+                        "end": None,
+                        "text": "Akku-SOC nicht geprüft: InfluxDB nicht erreichbar.",
+                        "link": None,
+                        "data": {},
+                    }
+                ],
+            },
+            {"day": "2026-10-07", "computed": False, "findings": []},
+            {"day": "2026-10-06", "computed": False, "findings": []},
+        ],
+        "report": None,
+    }
+    days = client.get("/api/ops/findings").json()["days"]
+    assert [d["day"] for d in days][::13] == ["2026-10-08", "2026-09-25"]  # 14 Tage
+    assert len(days) == 14
+
+
+def test_findings_route_rejects_days_over_60(client, auth) -> None:
+    login_as(client, auth, "viewer")
+    assert client.get("/api/ops/findings?days=61").status_code == 422
+    assert client.get("/api/ops/findings?days=0").status_code == 422
+    assert client.get("/api/ops/findings?days=60").status_code == 200

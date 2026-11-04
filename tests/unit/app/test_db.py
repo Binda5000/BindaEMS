@@ -22,12 +22,14 @@ from bindaems.app.db.schema import (
     ledger_cost,
     metadata,
     model_registry,
+    ops_day,
+    ops_finding,
     planned_charge,
     settings_version,
     thermal_model,
 )
 
-HEAD = "0015"  # neueste Migration
+HEAD = "0016"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -737,3 +739,63 @@ def test_migration_0015_downgrade_removes_the_thermal_settings(tmp_path: Path) -
         ]
     finally:
         engine.dispose()
+
+
+def test_migration_0016_up_and_down(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "ops_finding") == {
+        "id": False,
+        "day": False,
+        "rule": False,
+        "level": False,
+        "start": True,
+        "end": True,
+        "text": False,
+        "link": True,
+        "data": False,
+    }
+    assert inspector.get_pk_constraint("ops_finding")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("ops_finding")] == [
+        ("ix_ops_finding_day", ["day"])
+    ]
+    lengths = {
+        c["name"]: c["type"].length
+        for c in inspector.get_columns("ops_finding")
+        if c["name"] in ("day", "rule", "level", "link")
+    }
+    assert lengths == {"day": 10, "rule": 32, "level": 8, "link": 200}
+    assert _columns(inspector, "ops_day") == {
+        "day": False,
+        "computed_at": False,
+        "report_sent_at": True,
+    }
+    assert inspector.get_pk_constraint("ops_day")["constrained_columns"] == ["day"]
+    t = datetime(2026, 11, 4, 2, 5, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(ops_finding).values(
+                day="2026-11-03",
+                rule="grid_charge_unplanned",
+                level="warn",
+                start=t,
+                end=None,
+                text="Akku lud",
+                link=None,
+                data={"kwh": 4.4},
+            )
+        )
+        conn.execute(insert(ops_day).values(day="2026-11-03", computed_at=t))
+        stored = conn.execute(select(ops_finding)).mappings().one()
+        day = conn.execute(select(ops_day)).mappings().one()
+    assert (stored["start"], stored["data"]) == (t, {"kwh": 4.4})
+    assert (day["computed_at"], day["report_sent_at"]) == (t, None)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
+    _downgrade(engine, "0015")
+    tables = inspect(engine).get_table_names()
+    assert "ops_finding" not in tables and "ops_day" not in tables
+    assert "thermal_model" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0015"
+    migrate(engine)
+    assert {"ops_finding", "ops_day"} <= set(inspect(engine).get_table_names())

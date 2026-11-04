@@ -405,6 +405,20 @@ def test_month_peak_month_edges_follow_local_time_in_winter(ledger) -> None:
     )
 
 
+def test_month_peak_before_ends_at_local_midnight_of_the_day(ledger) -> None:
+    ingest(ledger, "2026-09-30T21:45:00+00:00", {"grid>house": 3000})  # 30. 9. 23:45 lokal
+    ingest(ledger, "2026-10-01T06:00:00+00:00", {"grid>house": 1500})
+    ingest(ledger, "2026-10-07T21:45:00+00:00", {"grid>house": 1600})  # 7. 10. 23:45 lokal
+    ingest(ledger, "2026-10-07T22:00:00+00:00", {"grid>house": 5000})  # 8. 10. 00:00 lokal
+    assert ledger.month_peak_before(date(2026, 10, 8)) == MonthPeak(
+        6.4, datetime(2026, 10, 7, 21, 45, tzinfo=UTC)
+    )
+    assert ledger.month_peak_before(date(2026, 10, 9)) == MonthPeak(
+        20.0, datetime(2026, 10, 7, 22, 0, tzinfo=UTC)
+    )
+    assert ledger.month_peak_before(date(2026, 10, 1)) is None  # Monatserster: nichts davor
+
+
 def test_month_peaks_per_month(ledger) -> None:
     ingest(ledger, "2026-09-30T21:45:00+00:00", {"grid>house": 3000})  # 30. 9. 23:45 lokal
     ingest(ledger, "2026-10-01T06:00:00+00:00", {"grid>house": 1500})

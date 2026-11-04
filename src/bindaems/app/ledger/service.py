@@ -490,6 +490,17 @@ class LedgerService:
         Gleichstand); ohne Slot im Monat ``None``."""
         first = datetime.combine(day.replace(day=1), time(0), tzinfo=LOCAL_TZ)
         after = (first + timedelta(days=32)).replace(day=1)  # erster Tag des Folgemonats
+        return self._peak(first, after)
+
+    def month_peak_before(self, day: date) -> MonthPeak | None:
+        """Wie ``month_peak``, aber nur die Slots vom Monatsersten bis vor den Ortstag ``day``;
+        am Monatsersten ``None``."""
+        first = datetime.combine(day.replace(day=1), time(0), tzinfo=LOCAL_TZ)
+        return self._peak(first, datetime.combine(day, time(0), tzinfo=LOCAL_TZ))
+
+    def _peak(self, first: datetime, after: datetime) -> MonthPeak | None:
+        """Höchster Netzbezug einer Viertelstunde in ``[first, after)`` (früherer Slot bei
+        Gleichstand); ohne Slot ``None``."""
         query = (
             select(ledger_slot.c.slot_start, ledger_slot.c.import_wh)
             .where(ledger_slot.c.slot_start >= first.astimezone(UTC))

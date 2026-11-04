@@ -86,6 +86,7 @@ from bindaems.app.ledger.estimate import GapEstimator
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.ops.routes import ops_router
+from bindaems.app.ops.service import FindingsService, actuator_labels
 from bindaems.app.planning.routes import planning_router
 from bindaems.app.planning.sender import PlanSender
 from bindaems.app.planning.service import PlanningService
@@ -379,6 +380,18 @@ class AppRuntime:
         )
         self._planned_wake = asyncio.Event()
         self.live_feed.health_handlers.append(self._planned_wake.set)
+        # Auffälligkeiten je Tag (Betrieb im Blick); Namen der Aktoren aus dem letzten Health
+        self.findings = FindingsService(
+            self.engine,
+            self._clock,
+            cfg,
+            self.ledger,
+            self.plan_store,
+            self.decisions,
+            self.planned_charges,
+            self.reader,
+            lambda: actuator_labels(self.live.health),
+        )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
@@ -476,6 +489,7 @@ class AppRuntime:
                     sources=sources,
                     decisions=self.decisions,
                     clock=self._clock,
+                    findings=self.findings,
                 ),
                 history_router(
                     self.reader, build_catalog(cfg), self._clock, guard, self._series_labels
@@ -652,6 +666,7 @@ class AppRuntime:
             ("backup", self._backup_loop),
             ("forecast-nightly", self._forecast_nightly_loop),
             ("ledger-nightly", self._ledger_nightly_loop),
+            ("ops-nightly", self._ops_nightly_loop),
             ("consumer-energy", self._energy_loop),
         ]
         if self.thermal_model is not None:
@@ -929,6 +944,12 @@ class AppRuntime:
                     log.info("Alte Pläne aufgeräumt", deleted=deleted, trimmed=trimmed)
             except Exception:
                 log.exception("Pflege der Pläne fehlgeschlagen")
+            try:
+                removed = await asyncio.to_thread(self.findings.cleanup)
+                if removed:
+                    log.info("Alte Auffälligkeiten gelöscht", findings=removed)
+            except Exception:
+                log.exception("Pflege der Auffälligkeiten fehlgeschlagen")
             await asyncio.sleep(HOUR_S)
 
     async def _backup_loop(self) -> None:
@@ -1038,6 +1059,18 @@ class AppRuntime:
             now = self._clock.now()
             due = next_local(now, lambda t: (t.hour, t.minute) == LEDGER_NIGHTLY_AT)
             await asyncio.sleep((due - now).total_seconds())
+
+    async def _ops_nightly_loop(self) -> None:
+        """Auffälligkeiten (``FindingsService.run``) erst nach dem ersten Nachtrag der Abrechnung,
+        höchstens ``LEDGER_BACKFILL_WAIT_S`` lang: sonst rechnete der Start die Tage, die der
+        Nachtrag noch füllt, und ``ops_day`` hielte sie für erledigt."""
+        try:
+            await asyncio.wait_for(self._ledger_backfilled.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
+        except TimeoutError:
+            log.warning(
+                "Nachtrag der Abrechnung dauert zu lange, Auffälligkeiten beginnen ohne ihn"
+            )
+        await self.findings.run()
 
     async def _ledger_nightly(self, days: int, *, start: bool = False) -> None:
         """Rechnet die Lücken der letzten 7 Tage nach und gleicht dann die letzten ``days``
