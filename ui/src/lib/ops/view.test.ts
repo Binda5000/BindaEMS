@@ -14,9 +14,10 @@ function item(id: string, level: OpsCheckItem['level']): OpsCheckItem {
 	return { id, label: id, level, text: `${id} Text`, link: null };
 }
 
+/** Gesamtstufe wie der Server: Fehler vor Warnung, „unbekannt“ allein bleibt „ok“ */
 function check(...levels: OpsCheckItem['level'][]): OpsCheck {
 	return {
-		level: 'ok',
+		level: levels.includes('error') ? 'error' : levels.includes('warn') ? 'warn' : 'ok',
 		checked_at: '2026-11-04T08:00:00+00:00',
 		items: levels.map((level, index) => item(`p${index}`, level))
 	};
@@ -53,6 +54,11 @@ it('fasst den Betriebscheck in einer Zeile zusammen', () => {
 	expect(checkHeadline(check('warn'))).toBe('1 Warnung');
 	expect(checkHeadline(check('error', 'error'))).toBe('2 Fehler');
 	expect(checkHeadline(check('unknown', 'warn'))).toBe('1 Warnung, 1 unbekannt');
+});
+
+it('nennt bei Stufe ok „Alles in Ordnung“, auch mit unbekannten Prüfungen', () => {
+	expect(checkHeadline(check('ok', 'unknown'))).toBe('Alles in Ordnung');
+	expect(checkLine(check('unknown'))).toBe('Betriebscheck: alles in Ordnung');
 });
 
 it('nennt den Betriebscheck auf der Seite System mit kleinem „alles“', () => {

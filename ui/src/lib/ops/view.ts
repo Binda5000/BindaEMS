@@ -34,8 +34,12 @@ function counted(count: number, one: string, many: string): string {
 	return `${count} ${count === 1 ? one : many}`;
 }
 
-/** „Alles in Ordnung“ oder die Zahl der Befunde: „2 Warnungen, 1 Fehler“ (und „1 unbekannt“) */
-export function checkHeadline(check: Pick<OpsCheck, 'items'>): string {
+/**
+ * „Alles in Ordnung“ bei Stufe ok (auch mit unbekannten Prüfungen: der Punkt ist grün), sonst die
+ * Zahl der Befunde: „2 Warnungen, 1 Fehler“ (und „1 unbekannt“)
+ */
+export function checkHeadline(check: Pick<OpsCheck, 'level' | 'items'>): string {
+	if (check.level === 'ok') return 'Alles in Ordnung';
 	const count = (level: OpsLevel) => check.items.filter((item) => item.level === level).length;
 	const parts = [
 		[count('warn'), 'Warnung', 'Warnungen'],
@@ -47,7 +51,7 @@ export function checkHeadline(check: Pick<OpsCheck, 'items'>): string {
 }
 
 /** Die Zeile oben auf der Seite System: „Betriebscheck: alles in Ordnung“ */
-export function checkLine(check: Pick<OpsCheck, 'items'>): string {
+export function checkLine(check: Pick<OpsCheck, 'level' | 'items'>): string {
 	const headline = checkHeadline(check);
 	return `Betriebscheck: ${headline === 'Alles in Ordnung' ? 'alles in Ordnung' : headline}`;
 }
