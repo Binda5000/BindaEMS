@@ -8,6 +8,7 @@ Reserve ist die sichere Richtung (Plan Unwetter-Reserve, Entscheidungen 1, 8 und
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Final
@@ -15,7 +16,7 @@ from typing import Final
 import httpx
 import structlog
 
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import SettingsService, SettingsVersion
 from bindaems.app.status import ComponentStatus
 from bindaems.app.storm.geosphere import WarningsUnavailable, fetch_warnings
 from bindaems.app.storm.windows import relevant
@@ -53,6 +54,24 @@ class StormService:
         self._last_ok: datetime | None = None
         self._first_try: datetime | None = None
         self._failing = False
+        # Das Einschalten weckt ``run``; ``on_change`` kommt aus Worker-Threads
+        self._wake = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._was_enabled = settings.current().settings.planning.storm.enabled
+        settings.on_change(self._on_settings)
+
+    def _on_settings(self, version: SettingsVersion) -> None:
+        enabled = version.settings.planning.storm.enabled
+        was, self._was_enabled = self._was_enabled, enabled
+        if enabled == was:
+            return
+        # Ein- wie Ausschalten verwirft den alten Stand: nichts davon darf später durchscheinen
+        self._known = []
+        self._last_ok = self._first_try = None
+        self._failing = False
+        if enabled and self._loop is not None:
+            with contextlib.suppress(RuntimeError):  # Schleife schon geschlossen
+                self._loop.call_soon_threadsafe(self._wake.set)
 
     def warnings(self) -> list[StormWarning]:
         """Bekannte, noch nicht zu Ende gegangene Warnungen, die nach den Einstellungen zählen."""
@@ -88,12 +107,24 @@ class StormService:
 
     async def run(self) -> None:
         """Sofort abrufen, dann alle ``POLL``; ausgeschaltet wird nur gewartet."""
+        self._loop = asyncio.get_running_loop()
         while True:
+            self._wake.clear()
             try:
                 await self.refresh()
             except Exception:  # die Schleife darf nie stehen bleiben
                 log.exception("Unwetterwarnungen fehlgeschlagen")
-            await self._sleep(POLL.total_seconds())
+            waiting = asyncio.ensure_future(self._sleep(POLL.total_seconds()))
+            woken = asyncio.ensure_future(self._wake.wait())
+            try:
+                await asyncio.wait({waiting, woken}, return_when=asyncio.FIRST_COMPLETED)
+                if waiting.done():
+                    waiting.result()  # ein Abbruch im Warten (Test) geht weiter
+            finally:
+                for task in (waiting, woken):
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
 
     def component_status(self) -> ComponentStatus:
         if not self._settings.current().settings.planning.storm.enabled:

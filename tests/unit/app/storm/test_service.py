@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -151,3 +152,43 @@ async def test_run_survives_unexpected_error(cfg, settings_service, clock) -> No
     with pytest.raises(StopScheduler):
         await service.run()
     assert len(sleeps) == 1
+
+
+async def test_switch_cycle_drops_old_state(cfg, settings_service, clock) -> None:
+    _enable(settings_service)
+    fetch = FakeFetch([_w(14, 16)], [])
+    service = _service(cfg, settings_service, clock, fetch)
+    await service.refresh()
+    assert len(service.warnings()) == 1
+    _enable(settings_service, enabled=False)
+    assert service.warnings() == [] and service.component_status().message == "aus"
+    _enable(settings_service)
+    # vor dem frischen Abruf scheint nichts Altes durch
+    assert service.warnings() == [] and service.component_status().message == "keine Warnung"
+    await service.refresh()
+    assert service.warnings() == [] and service.component_status().ok
+
+
+async def test_switch_on_fetches_once_without_waiting_for_poll(
+    cfg, settings_service, clock
+) -> None:
+    fetch = FakeFetch([])
+    gate = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        await gate.wait()  # der Ablauf der Wartezeit kommt in diesem Test nie
+
+    service = _service(cfg, settings_service, clock, fetch, sleep=sleep)
+    task = asyncio.create_task(service.run())
+    try:
+        await asyncio.sleep(0.05)
+        assert fetch.calls == 0  # aus: kein Abruf
+        _enable(settings_service)
+        await asyncio.sleep(0.05)
+        assert fetch.calls == 1
+        await asyncio.sleep(0.05)
+        assert fetch.calls == 1
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
