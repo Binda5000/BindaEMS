@@ -38,8 +38,10 @@ DEVIATION_MIN_SHARE: Final = 0.25
 MAX_GAP_SLOTS: Final = (
     1  # Slots derselben Regel mit höchstens so vielen Slots dazwischen: ein Treffer
 )
+COVERAGE_MIN_SHARE: Final = 0.9  # darunter ist die Abrechnung des Tages unvollständig
 
 _PER_HOUR: Final = 4  # Wh je Viertelstunde → mittlere W
+_SLOT_S: Final = SLOT.total_seconds()
 _WH_PER_KWH: Final = 1000.0
 _RULE_ORDER: Final[tuple[Rule, ...]] = (
     "grid_charge_unplanned",
@@ -183,20 +185,24 @@ def _grid_charge(inputs: DayInputs) -> list[Finding]:
     return findings
 
 
+def _not_checked(inputs: DayInputs, text: str, data: Mapping[str, Any]) -> Finding:
+    return Finding(
+        day=inputs.day,
+        rule="not_checked",
+        level="info",
+        start=None,
+        end=None,
+        text=text,
+        link=None,
+        data=data,
+    )
+
+
 def _below_reserve(inputs: DayInputs) -> list[Finding]:
     if inputs.soc_min is None:
-        return [
-            Finding(
-                day=inputs.day,
-                rule="not_checked",
-                level="info",
-                start=None,
-                end=None,
-                text="Akku-SOC nicht geprüft: InfluxDB nicht erreichbar.",
-                link=None,
-                data={},
-            )
-        ]
+        return [_not_checked(inputs, "Akku-SOC nicht geprüft: InfluxDB nicht erreichbar.", {})]
+    if not inputs.soc_min:  # InfluxDB antwortet, hat aber keinen Wert: kein ruhiger Tag
+        return [_not_checked(inputs, "Akku-SOC nicht geprüft: keine Werte in InfluxDB.", {})]
     limit = inputs.reserve_soc_pct - RESERVE_MARGIN_PCT
     low = {start: soc for start, soc in inputs.soc_min.items() if soc < limit}
     findings: list[Finding] = []
@@ -379,6 +385,23 @@ def _counter_check(inputs: DayInputs) -> list[Finding]:
     return findings
 
 
+def _coverage(inputs: DayInputs) -> list[Finding]:
+    """Fehlen der Abrechnung mehr als 10 % der Viertelstunden des Tages (oder ihrer Zeit), sind
+    die Regeln über sie nur teilweise geprüft; ein leerer Tag ist kein ruhiger Tag."""
+    expected = len(local_day_slots(inputs.day))
+    present = len(inputs.slots)
+    covered_s = sum(item.covered_s for item in inputs.slots)
+    least = COVERAGE_MIN_SHARE * expected
+    if present >= least and covered_s >= least * _SLOT_S:
+        return []
+    quarters = min(present, round(covered_s / _SLOT_S))  # volle Viertelstunden
+    text = (
+        f"Abrechnung unvollständig ({quarters} von {expected} Viertelstunden), "
+        "Auffälligkeiten nur teilweise geprüft."
+    )
+    return [_not_checked(inputs, text, {"slots": quarters, "expected": expected})]
+
+
 _RULES: Final[tuple[Callable[[DayInputs], list[Finding]], ...]] = (
     _grid_charge,
     _below_reserve,
@@ -387,6 +410,7 @@ _RULES: Final[tuple[Callable[[DayInputs], list[Finding]], ...]] = (
     _target_missed,
     _command_failures,
     _counter_check,
+    _coverage,
 )
 
 

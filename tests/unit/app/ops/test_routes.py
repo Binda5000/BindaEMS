@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import pytest
 from tests.app_helpers import login_as
 from tests.unit.app.ops.test_check import _health
+from tests.unit.app.ops.test_service import full_ledger
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionStore
@@ -129,8 +130,9 @@ def test_check_route_survives_a_database_error(client, auth, store, monkeypatch)
     assert items["evcs_rate"]["level"] == "unknown"
 
 
-async def test_findings_route_groups_by_day(client, auth, findings, influx) -> None:
+async def test_findings_route_groups_by_day(client, auth, findings, influx, ledger) -> None:
     # heute ist der 9. 10. 2026: gestern gerechnet, vorgestern nicht
+    full_ledger(ledger)
     influx.error = InfluxQueryError("InfluxDB nicht erreichbar")
     await findings.run_day(date(2026, 10, 8))
     assert client.get("/api/ops/findings").status_code == 401

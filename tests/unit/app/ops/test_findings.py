@@ -64,6 +64,23 @@ def inputs(**changes: Any) -> DayInputs:
     return DayInputs(**values)
 
 
+def full_day(day: date = DAY, covered_s: float = 900.0) -> list[LedgerSlot]:
+    """Die Abrechnung des ganzen Ortstags, ohne Flüsse."""
+    return [
+        LedgerSlot(
+            slot_start=start,
+            covered_s=covered_s,
+            flows_wh={},
+            counters={},
+            import_wh=0.0,
+            export_wh=0.0,
+            import_price_ct=20.0,
+            origin="stream",
+        )
+        for start in local_day_slots(day)
+    ]
+
+
 def only(findings: list[Finding], rule: str) -> list[Finding]:
     return [item for item in findings if item.rule == rule]
 
@@ -156,11 +173,52 @@ def test_below_reserve_with_margin() -> None:
 
 
 def test_soc_unknown_gives_not_checked() -> None:
-    found = find(inputs(soc_min=None))
+    found = find(inputs(soc_min=None, slots=full_day()))
     [item] = only(found, "not_checked")
     assert item.text == "Akku-SOC nicht geprüft: InfluxDB nicht erreichbar."
+    assert item.level == "info"
     assert item.start is None
     assert only(found, "below_reserve") == []
+
+
+def test_soc_without_values_gives_not_checked() -> None:
+    # InfluxDB antwortet, hat aber keinen SOC des Tages: das ist kein ruhiger Tag
+    found = find(inputs(soc_min={}, slots=full_day()))
+    [item] = only(found, "not_checked")
+    assert item.text == "Akku-SOC nicht geprüft: keine Werte in InfluxDB."
+    assert item.level == "info"
+    assert only(found, "below_reserve") == []
+
+
+def test_complete_day_has_no_not_checked() -> None:
+    soc = {start: 50.0 for start in local_day_slots(DAY)}
+    assert find(inputs(soc_min=soc, slots=full_day())) == []
+    dst = date(2026, 10, 25)  # 100 Viertelstunden
+    soc = {start: 50.0 for start in local_day_slots(dst)}
+    assert find(inputs(day=dst, soc_min=soc, slots=full_day(dst))) == []
+
+
+def test_incomplete_ledger_gives_not_checked() -> None:
+    soc = {start: 50.0 for start in local_day_slots(DAY)}
+    slots = full_day()
+    [item] = find(inputs(soc_min=soc, slots=slots[:82]))
+    assert (item.rule, item.level, item.start) == ("not_checked", "info", None)
+    assert item.text == (
+        "Abrechnung unvollständig (82 von 96 Viertelstunden), "
+        "Auffälligkeiten nur teilweise geprüft."
+    )
+    assert item.data == {"slots": 82, "expected": 96}
+    assert find(inputs(soc_min=soc, slots=slots[:87])) == []  # 90 % sind 86,4 Viertelstunden
+    [empty] = find(inputs(soc_min=soc, slots=[]))
+    assert empty.text.startswith("Abrechnung unvollständig (0 von 96 Viertelstunden)")
+
+
+def test_partly_covered_slots_count_as_incomplete_ledger() -> None:
+    soc = {start: 50.0 for start in local_day_slots(DAY)}
+    [item] = find(inputs(soc_min=soc, slots=full_day(covered_s=600.0)))  # je 10 von 15 min
+    assert item.rule == "not_checked"
+    assert item.text.startswith("Abrechnung unvollständig (64 von 96 Viertelstunden)")
+    assert find(inputs(soc_min=soc, slots=full_day(covered_s=820.0))) == []  # über 90 %
 
 
 def test_month_peak_rise_with_split() -> None:
@@ -310,4 +368,5 @@ def test_findings_sorted_by_start_then_day_rules() -> None:
         "grid_charge_unplanned",
         "command_failures",
         "counter_check",
+        "not_checked",  # nur zwei Viertelstunden in der Abrechnung
     ]

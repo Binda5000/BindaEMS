@@ -24,6 +24,7 @@ from bindaems.app.ops.report import DaySummary
 from bindaems.app.ops.service import OPS_NIGHTLY_AT, actuator_labels, day_summary
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.influx.lineprotocol import epoch_ms
+from bindaems.shared.timeutil import local_day_slots
 
 DAY = date(2026, 10, 8)  # Sommerzeit, lokal = UTC + 2; die Uhr steht am 9. 10. 10:00 lokal
 SENT = datetime(2026, 10, 9, 5, 30, tzinfo=UTC)
@@ -48,6 +49,12 @@ def grid_charge(ledger, plan_store) -> None:
     plan_store.save(
         plan.model_copy(update={"valid_until": utc("05:00", "2026-10-09")}), sample_inputs()
     )
+
+
+def full_ledger(ledger, day: date = DAY) -> None:
+    """Die Abrechnung des ganzen Ortstags, ohne Netzbezug: kein Treffer „unvollständig“."""
+    for start in local_day_slots(day):
+        ingest(ledger, start, {"pv>house": 100.0})
 
 
 def stored_count(engine) -> int:
@@ -85,7 +92,10 @@ async def test_run_day_stores_and_replaces(
 
 
 @pytest.mark.parametrize("broken", ["no_reader", "error"])
-async def test_run_day_without_influx_gives_not_checked(make_findings, influx, broken: str) -> None:
+async def test_run_day_without_influx_gives_not_checked(
+    make_findings, influx, ledger, broken: str
+) -> None:
+    full_ledger(ledger)
     if broken == "no_reader":
         service = make_findings(reader=None)
     else:
@@ -173,6 +183,12 @@ async def test_run_day_collects_the_inputs_of_the_day(
         ("command_failures", "2 Befehle an Victron gescheitert."),
         ("counter_check", "Abrechnung und Zähler weichen bei Netzbezug um 4,2 % ab."),
         ("counter_check", "Abrechnung und Zähler weichen bei Wallbox Garage um 4,2 % ab."),
+        ("not_checked", "Akku-SOC nicht geprüft: keine Werte in InfluxDB."),
+        (
+            "not_checked",
+            "Abrechnung unvollständig (1 von 96 Viertelstunden), "
+            "Auffälligkeiten nur teilweise geprüft.",
+        ),
     ]
     checks = [item.data["signal"] for item in found if item.rule == "counter_check"]
     assert checks == ["import", "wb:evcs"]  # der Schlüssel bleibt in den Daten
@@ -345,7 +361,11 @@ async def test_report_sent_once_per_day_across_restart(
     assert len(ha_calls.reports) == 1
 
 
-async def test_report_computes_a_missing_day_first(make_sender, ha_calls, engine) -> None:
+async def test_report_computes_a_missing_day_first(
+    make_sender, ha_calls, engine, ledger, influx
+) -> None:
+    full_ledger(ledger)
+    influx.series = [soc_series({"10:00": 50.0})]
     await make_sender().check()
     assert ha_calls.reports[0] == (
         "Donnerstag 8.10.: Netzbezug 14,2 kWh (geplant 9,8), "
@@ -353,6 +373,18 @@ async def test_report_computes_a_missing_day_first(make_sender, ha_calls, engine
         "Monatsspitze 9,1 kW. Keine Auffälligkeiten. Betriebscheck jetzt: alles in Ordnung."
     )
     assert report_sent_at(engine) is not None
+
+
+async def test_report_on_a_day_without_data_is_not_quiet(
+    make_sender, ha_calls, engine, settings_service
+) -> None:
+    # ohne Abrechnung und ohne SOC ist der Tag nicht geprüft, nicht ruhig
+    await make_sender().check()
+    assert (
+        "2 Auffälligkeiten: Akku-SOC nicht geprüft: keine Werte in InfluxDB. "
+        in (ha_calls.reports[0])
+    )
+    assert "Abrechnung unvollständig (0 von 96 Viertelstunden)" in ha_calls.reports[0]
 
 
 async def test_findings_mode_skips_quiet_day(
