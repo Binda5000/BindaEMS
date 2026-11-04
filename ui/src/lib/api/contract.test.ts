@@ -617,6 +617,37 @@ describe('Planung in den Einstellungen', () => {
 	});
 });
 
+describe('Unwetter-Reserve in den Einstellungen', () => {
+	const demo = files['./contract/settings.json'] as {
+		settings: { planning: Record<string, unknown> };
+	};
+
+	it('liest planning.storm, ältere Einstellungen ohne mit den Standardwerten', () => {
+		const standard = {
+			enabled: false,
+			target_soc_pct: 40,
+			min_level: 2,
+			kinds: ['sturm', 'gewitter']
+		};
+		expect(demo.settings.planning.storm).toEqual(standard);
+		expect(v.parse(s.PlanningSettingsSchema, demo.settings.planning).storm).toEqual(standard);
+		const older = { ...demo.settings.planning };
+		delete older.storm;
+		expect(v.parse(s.PlanningSettingsSchema, older).storm).toEqual(standard);
+	});
+
+	it('lehnt eine unbekannte Warnart und eine Stufe außerhalb 1 bis 3 ab', () => {
+		const storm = demo.settings.planning.storm as Record<string, unknown>;
+		const planning = (changes: Record<string, unknown>) => ({
+			...demo.settings.planning,
+			storm: { ...storm, ...changes }
+		});
+		expect(issues(s.PlanningSettingsSchema, planning({ kinds: ['hagel'] }))).not.toEqual([]);
+		expect(issues(s.PlanningSettingsSchema, planning({ min_level: 4 }))).not.toEqual([]);
+		expect(issues(s.PlanningSettingsSchema, planning({ kinds: ['kaelte'] }))).toEqual([]);
+	});
+});
+
 describe('Unwetter-Reserve im Plan', () => {
 	const demo = files['./contract/plan.json'] as {
 		plan: { slots: Record<string, unknown>[] } & Record<string, unknown>;

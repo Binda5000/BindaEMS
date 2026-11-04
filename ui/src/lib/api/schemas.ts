@@ -583,6 +583,32 @@ export const PriceSettingsSchema = v.looseObject({
 });
 export type PriceSettings = v.InferOutput<typeof PriceSettingsSchema>;
 
+/** Arten der amtlichen Warnungen von GeoSphere Austria (Plan Unwetter-Reserve) */
+export const StormKindSchema = v.picklist([
+	'sturm',
+	'regen',
+	'schnee',
+	'glatteis',
+	'gewitter',
+	'hitze',
+	'kaelte'
+]);
+export type StormKind = v.InferOutput<typeof StormKindSchema>;
+/** Warnstufe: 1 gelb, 2 orange, 3 rot */
+export const StormLevelSchema = v.picklist([1, 2, 3]);
+export type StormLevel = v.InferOutput<typeof StormLevelSchema>;
+
+export const StormSettingsSchema = v.looseObject({
+	enabled: v.boolean(),
+	/** Untergrenze des Akkus während einer Warnung in %, ganze Zahl 10 bis 100 */
+	target_soc_pct: v.number(),
+	/** ab dieser Stufe zählt eine Warnung */
+	min_level: StormLevelSchema,
+	/** Warnarten, die zählen (mindestens eine) */
+	kinds: v.array(StormKindSchema)
+});
+export type StormSettings = v.InferOutput<typeof StormSettingsSchema>;
+
 export const PlanningSettingsSchema = v.looseObject({
 	grid_charge_allowed: v.boolean(),
 	/** Akku ins Auto, wenn übrig; ältere Einstellungen kennen den Schalter nicht */
@@ -596,15 +622,12 @@ export const PlanningSettingsSchema = v.looseObject({
 	 * ältere Einstellungen kennen ihn nicht */
 	peak_soft_ct_per_kw: v.optional(v.number(), 100),
 	/** Unwetter-Reserve; ältere Einstellungen kennen sie nicht */
-	storm: v.optional(
-		v.looseObject({
-			enabled: v.boolean(),
-			target_soc_pct: v.number(),
-			min_level: v.picklist([1, 2, 3]),
-			kinds: v.array(v.string())
-		}),
-		{ enabled: false, target_soc_pct: 40, min_level: 2, kinds: ['sturm', 'gewitter'] }
-	)
+	storm: v.optional(StormSettingsSchema, () => ({
+		enabled: false,
+		target_soc_pct: 40,
+		min_level: 2 as const,
+		kinds: ['sturm' as const, 'gewitter' as const]
+	}))
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 
@@ -1554,8 +1577,8 @@ export type PlanThermal = v.InferOutput<typeof PlanThermalSchema>;
 export const PlanStormWarningSchema = v.object({
 	warn_id: v.number(),
 	version: v.number(),
-	kind: v.picklist(['sturm', 'regen', 'schnee', 'glatteis', 'gewitter', 'hitze', 'kaelte']),
-	level: v.picklist([1, 2, 3]),
+	kind: StormKindSchema,
+	level: StormLevelSchema,
 	begin: Iso,
 	end: Iso,
 	text: v.string()

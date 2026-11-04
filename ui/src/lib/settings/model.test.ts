@@ -399,7 +399,8 @@ it('shows the planning numbers with a decimal comma', () => {
 		wearCt: '2',
 		endValueFactor: '0,9',
 		inertiaCt: '0,5',
-		peakSoftCt: '100'
+		peakSoftCt: '100',
+		storm: { enabled: false, targetSocPct: '40', minLevel: 2, kinds: ['sturm', 'gewitter'] }
 	});
 });
 
@@ -413,7 +414,8 @@ it('takes over edited planning numbers', () => {
 		wearCt: '1,5',
 		endValueFactor: '0,8',
 		inertiaCt: '0',
-		peakSoftCt: '50,5'
+		peakSoftCt: '50,5',
+		storm: { enabled: false, targetSocPct: '40', minLevel: 2, kinds: ['sturm', 'gewitter'] }
 	};
 	const result = applyDraft(settings(), draft);
 	expect('settings' in result && result.settings.planning).toEqual({
@@ -447,6 +449,61 @@ it('checks the planning numbers', () => {
 	});
 	draft.planning.roundtripPct = '49,9';
 	expect(errorsOf(draft)['planning.roundtrip_pct']).toBe('Zahl von 50 bis 100');
+});
+
+describe('Unwetter-Reserve', () => {
+	it('sendet Schalter, Ziel, Stufe und Warnarten als planning.storm', () => {
+		const draft = draftFrom(settings());
+		// die Warnarten in der Reihenfolge der Auswahl; gespeichert wird in fester Reihenfolge
+		draft.planning.storm = {
+			enabled: true,
+			targetSocPct: '55',
+			minLevel: 3,
+			kinds: ['glatteis', 'sturm', 'kaelte']
+		};
+		const result = applyDraft(settings(), draft);
+		expect('settings' in result && result.settings.planning.storm).toEqual({
+			enabled: true,
+			target_soc_pct: 55,
+			min_level: 3,
+			kinds: ['sturm', 'glatteis', 'kaelte']
+		});
+	});
+
+	it('behält unbekannte Felder der Gruppe', () => {
+		const current = settings();
+		const storm = { ...current.planning.storm, future: 'x' };
+		const withFuture = { ...current, planning: { ...current.planning, storm } };
+		const result = applyDraft(withFuture, draftFrom(withFuture));
+		expect('settings' in result && result.settings.planning.storm).toEqual(storm);
+	});
+
+	it('prüft das Ziel (ganze Zahl von 10 bis 100) und mindestens eine Warnart', () => {
+		for (const text of ['9', '101', '40,5', '', 'abc']) {
+			const draft = draftFrom(settings());
+			draft.planning.storm.targetSocPct = text;
+			expect(errorsOf(draft)['planning.storm.target_soc_pct'], text).toBe(
+				'Ganze Zahl von 10 bis 100'
+			);
+		}
+		const draft = draftFrom(settings());
+		draft.planning.storm.kinds = [];
+		expect(errorsOf(draft)).toEqual({ 'planning.storm.kinds': 'Mindestens eine Warnart wählen' });
+		draft.planning.storm.kinds = ['regen'];
+		draft.planning.storm.targetSocPct = '10';
+		expect('settings' in applyDraft(settings(), draft)).toBe(true);
+	});
+
+	it('ordnet Fehler des Servers der Gruppe den Feldern zu', () => {
+		const detail = [
+			{
+				type: 'too_short',
+				loc: ['body', 'settings', 'planning', 'storm', 'kinds'],
+				msg: 'List should have at least 1 item after validation, not 0'
+			}
+		];
+		expect(editorFieldErrors(detail, settings())).toHaveProperty('planning.storm.kinds');
+	});
 });
 
 it('maps server errors of the planning fields to the editor keys', () => {

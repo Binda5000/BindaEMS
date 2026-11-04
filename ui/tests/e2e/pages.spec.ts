@@ -149,7 +149,7 @@ test('System zählt die Komponenten und zeigt die gestörte zuerst, Wallboxen be
 	const components = page.locator('section', {
 		has: page.getByRole('heading', { name: 'Komponenten' })
 	});
-	await expect(components.getByText('10 von 11 in Ordnung')).toBeVisible();
+	await expect(components.getByText('11 von 12 in Ordnung')).toBeVisible();
 	const first = components.getByRole('listitem').first();
 	await expect(first).toContainText('Home Assistant');
 	await expect(first).toContainText('MQTT noch nicht verbunden');

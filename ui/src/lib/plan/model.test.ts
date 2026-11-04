@@ -6,11 +6,14 @@ import {
 	RESERVE_RECHARGE_LABEL,
 	blockLabel,
 	intentLabel,
+	STORM_KIND_LABELS,
+	STORM_LEVEL_LABELS,
 	planBlocks,
-	socRange
+	socRange,
+	stormWarningLines
 } from './model';
-import type { PlanVehicle } from '$lib/api/schemas';
-import { PLAN, iso, slot } from '$lib/testing/plan';
+import type { PlanStormWarning, PlanVehicle } from '$lib/api/schemas';
+import { NOW, PLAN, iso, slot } from '$lib/testing/plan';
 
 it('groups slots into blocks by intent, power and main code', () => {
 	const blocks = planBlocks([
@@ -78,6 +81,82 @@ it('nennt ein Nachladen auf die Reserve „Nachladen“, mit dem Satz des Server
 	expect(intentLabel('NETZLADEN', 1500, true)).toBe('Nachladen 1,5 kW');
 	expect(intentLabel('NETZLADEN', 1500, false)).toBe('Netzladen 1,5 kW');
 	expect(intentLabel('NETZLADEN', 1500)).toBe('Netzladen 1,5 kW');
+});
+
+it('zeigt im Fenster der Unwetter-Reserve den Satz des Servers als eigenen Block', () => {
+	const text = 'Unwetter-Reserve: Gewitter (orange) bis 16:00 Uhr, der Akku hält mindestens 40 %.';
+	const storm = { storm_reserve_pct: 40, text };
+	const blocks = planBlocks([
+		slot('13:00', 'HALTEN', 0, 'HALTEN_FUER_SPITZE'),
+		slot('13:15', 'HALTEN', 0, 'UNWETTER_RESERVE', storm),
+		slot('13:30', 'HALTEN', 0, 'UNWETTER_RESERVE', storm),
+		slot('16:00', 'EIGENVERBRAUCH', 0, 'EIGENVERBRAUCH')
+	]);
+	expect(blocks.map((b) => [b.start, blockLabel(b), b.text])).toEqual([
+		[iso('13:00'), 'Halten', 'Satz HALTEN_FUER_SPITZE'],
+		[iso('13:15'), 'Halten', text],
+		[iso('16:00'), 'Eigenverbrauch', 'Satz EIGENVERBRAUCH']
+	]);
+});
+
+const warning = (changes: Partial<PlanStormWarning> = {}): PlanStormWarning => ({
+	warn_id: 7,
+	version: 1,
+	kind: 'gewitter',
+	level: 2,
+	begin: iso('14:00'),
+	end: iso('16:00'),
+	text: 'Gewitter mit Sturmböen',
+	...changes
+});
+
+it('nennt Arten und Stufen der Unwetterwarnungen auf Deutsch', () => {
+	expect(STORM_KIND_LABELS).toEqual({
+		sturm: 'Sturm',
+		regen: 'Regen',
+		schnee: 'Schnee',
+		glatteis: 'Glatteis',
+		gewitter: 'Gewitter',
+		hitze: 'Hitze',
+		kaelte: 'Kälte'
+	});
+	expect(STORM_LEVEL_LABELS).toEqual({ 1: 'gelb', 2: 'orange', 3: 'rot' });
+});
+
+it('zeigt jede Unwetterwarnung des Plans mit Beginn und Ende, an einem anderen Tag mit Tag', () => {
+	const now = new Date(NOW); // 09.10. 10:00 in Wien
+	expect(stormWarningLines(null, now)).toEqual([]);
+	expect(stormWarningLines({ target_pct: 40, warnings: [] }, now)).toEqual([]);
+	const warnings = [
+		warning(),
+		// morgen, über Mitternacht und an einem späteren Tag (auch hinter dem Horizont, Ruling R12)
+		warning({
+			warn_id: 8,
+			kind: 'sturm',
+			level: 3,
+			begin: '2026-10-10T04:00:00+00:00',
+			end: '2026-10-10T08:30:00+00:00'
+		}),
+		warning({
+			warn_id: 9,
+			kind: 'kaelte',
+			level: 1,
+			begin: '2026-10-09T20:00:00+00:00',
+			end: '2026-10-10T06:00:00+00:00'
+		}),
+		warning({
+			warn_id: 10,
+			kind: 'glatteis',
+			begin: '2026-10-12T06:00:00+00:00',
+			end: '2026-10-12T10:00:00+00:00'
+		})
+	];
+	expect(stormWarningLines({ target_pct: 40, warnings }, now)).toEqual([
+		'Unwetterwarnung: Gewitter (orange) 14:00–16:00',
+		'Unwetterwarnung: Sturm (rot) morgen 06:00–10:30',
+		'Unwetterwarnung: Kälte (gelb) 22:00–morgen 08:00',
+		'Unwetterwarnung: Glatteis (orange) Mo 12.10. 08:00–12:00'
+	]);
 });
 
 it('returns no blocks without slots', () => {

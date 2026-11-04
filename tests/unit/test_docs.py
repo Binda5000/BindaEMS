@@ -1062,6 +1062,18 @@ def _ts_labels(source: str, name: str) -> dict[str, str]:
     return dict(re.findall(r"(\w+): '([^']*)'", found[1]))
 
 
+def test_storm_labels_in_the_ui_match_the_app() -> None:
+    # Arten und Stufen der Unwetterwarnungen heißen im Zeitplan wie im Satz der Erklärung und im
+    # Status der Komponente (Plan Unwetter-Reserve, Entscheidung 12).
+
+    from bindaems.shared.plan import STORM_KIND_LABELS, STORM_LEVEL_LABELS
+
+    model = Path("ui/src/lib/plan/model.ts").read_text(encoding="utf-8")
+    assert _ts_labels(model, "STORM_KIND_LABELS") == STORM_KIND_LABELS
+    levels = {int(key): label for key, label in _ts_labels(model, "STORM_LEVEL_LABELS").items()}
+    assert levels == STORM_LEVEL_LABELS
+
+
 def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
     # Auslöser und Quellen stehen mit dem Wortlaut aus ``ui/src/lib/plan/model.ts`` im Abschnitt.
 

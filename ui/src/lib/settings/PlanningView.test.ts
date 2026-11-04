@@ -39,3 +39,26 @@ it('zeigt den gedachten Satz für die Monatsspitze, bei 0 „aus“', () => {
 	render(PlanningView, { planning: { ...planning, peak_soft_ct_per_kw: 0 } });
 	expect(screen.getByText(label).nextElementSibling).toHaveTextContent('aus');
 });
+
+it('zeigt die Unwetter-Reserve: aus, Ziel, Stufe und Warnarten', () => {
+	const planning = settingsCurrent().settings.planning;
+	const { unmount } = render(PlanningView, { planning });
+	expect(screen.getByRole('heading', { name: 'Unwetter-Reserve' })).toBeInTheDocument();
+	const value = (label: string) => screen.getByText(label).nextElementSibling;
+	expect(value('Eingeschaltet')).toHaveTextContent('nein');
+	expect(value('Ziel-SOC')).toHaveTextContent('40 %');
+	expect(value('Warnstufe')).toHaveTextContent('ab orange');
+	expect(value('Warnarten')).toHaveTextContent('Sturm, Gewitter');
+	unmount();
+	const storm = {
+		enabled: true,
+		target_soc_pct: 55,
+		min_level: 3 as const,
+		kinds: ['kaelte' as const]
+	};
+	render(PlanningView, { planning: { ...planning, storm } });
+	expect(value('Eingeschaltet')).toHaveTextContent('ja');
+	expect(value('Ziel-SOC')).toHaveTextContent('55 %');
+	expect(value('Warnstufe')).toHaveTextContent('nur rot');
+	expect(value('Warnarten')).toHaveTextContent('Kälte');
+});

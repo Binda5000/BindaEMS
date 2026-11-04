@@ -2,12 +2,21 @@
 	// Planung in der Leseansicht der Einstellungen
 	import type { PlanningSettings } from '$lib/api/schemas';
 	import { formatNumber, formatNumberMax, NBSP } from '$lib/format';
+	import { STORM_KIND_LABELS } from '$lib/plan/model';
+	import { STORM_KINDS, STORM_MIN_LEVEL_LABELS } from './model';
 
 	interface Props {
 		planning: PlanningSettings;
 	}
 
 	let { planning }: Props = $props();
+
+	const storm = $derived(planning.storm);
+	const kinds = $derived(
+		STORM_KINDS.filter((kind) => storm.kinds.includes(kind))
+			.map((kind) => STORM_KIND_LABELS[kind])
+			.join(', ')
+	);
 </script>
 
 <dl class="facts">
@@ -32,3 +41,23 @@
 			: 'aus'}
 	</dd>
 </dl>
+
+<h3>Unwetter-Reserve</h3>
+<dl class="facts">
+	<dt>Eingeschaltet</dt>
+	<dd>{storm.enabled ? 'ja' : 'nein'}</dd>
+	<dt>Ziel-SOC</dt>
+	<dd>{formatNumber(storm.target_soc_pct, 0)}{NBSP}%</dd>
+	<dt>Warnstufe</dt>
+	<dd>{STORM_MIN_LEVEL_LABELS[storm.min_level]}</dd>
+	<dt>Warnarten</dt>
+	<dd>{kinds}</dd>
+</dl>
+
+<style>
+	h3 {
+		margin: 1rem 0 0.25rem;
+		font-size: 0.9375rem;
+		font-weight: 600;
+	}
+</style>

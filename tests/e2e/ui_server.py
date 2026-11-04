@@ -7,6 +7,7 @@ Start aus dem Repository-Wurzelverzeichnis (sonst fehlt ``tests`` im Importpfad)
 
 Ohne ``--data-dir`` beginnt jeder Start mit einem neuen Temp-Verzeichnis (frischer Stand).
 Die Uhr steht auf dem 09.10.2026, 10:00 Ortszeit; die Messwerte schwanken jede Sekunde leicht.
+Die Unwetter-Reserve ist an, mit einer Gewitterwarnung (orange) von 18:00 bis 21:00 Uhr.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import tempfile
 from pathlib import Path
 
 import uvicorn
-from tests.ui_world import DEMO_PASSWORD, World, build_world, demo_thermal_stage
+from tests.ui_world import DEMO_PASSWORD, World, build_world, demo_storm, demo_thermal_stage
 
 from bindaems.shared.config import load_config
 
@@ -50,6 +51,8 @@ async def serve(args: argparse.Namespace) -> None:
         f"und gast, Passwort {DEMO_PASSWORD}",
         flush=True,
     )
+    # vor dem Planungsdienst: schon sein erster Lauf kennt die Warnung
+    await demo_storm(world.app)
     ticker = asyncio.create_task(_tick(world))
     # Der Planungsdienst läuft wie in der app (lifespan ist aus): „Neu planen“ geht durch ihn.
     # Seine Pläne zeigen wie der erste die Vorschau von Vorheizen und Vorkühlen.
