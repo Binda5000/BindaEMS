@@ -85,6 +85,7 @@ from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.estimate import GapEstimator
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.ops.routes import ops_router
 from bindaems.app.planning.routes import planning_router
 from bindaems.app.planning.sender import PlanSender
 from bindaems.app.planning.service import PlanningService
@@ -469,6 +470,13 @@ class AppRuntime:
                 audit_router(self.audit, guard),
                 settings_router(self.settings, cfg, guard),
                 live_router(self.live, guard, sources, self._warnings),
+                ops_router(
+                    live=self.live,
+                    guard=guard,
+                    sources=sources,
+                    decisions=self.decisions,
+                    clock=self._clock,
+                ),
                 history_router(
                     self.reader, build_catalog(cfg), self._clock, guard, self._series_labels
                 ),

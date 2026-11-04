@@ -197,6 +197,37 @@ class DecisionStore:
         with self._engine.connect() as conn:
             return [_stored(row) for row in conn.execute(statement)]
 
+    def counts(self, since: datetime, until: datetime | None = None) -> dict[str, int]:
+        """Die Zahl der Entscheidungen je Aktor ab ``since`` (bis ``until`` ausgeschlossen),
+        Dry-Run eingeschlossen."""
+        table = decision_table
+        conditions = [table.c.ts >= since]
+        if until is not None:
+            conditions.append(table.c.ts < until)
+        return self._grouped(conditions)
+
+    def failures(self, since: datetime, until: datetime) -> dict[str, int]:
+        """Je Aktor die gescheiterten Befehle in ``[since, until)``: nicht Dry-Run, Ergebnis
+        ``error``, ``timeout`` oder ``not_sent``."""
+        table = decision_table
+        failed = (DecisionResult.ERROR, DecisionResult.TIMEOUT, DecisionResult.NOT_SENT)
+        return self._grouped(
+            [
+                table.c.ts >= since,
+                table.c.ts < until,
+                table.c.dry_run.is_(False),
+                table.c.result.in_([str(r) for r in failed]),
+            ]
+        )
+
+    def _grouped(self, conditions: Sequence[Any]) -> dict[str, int]:
+        table = decision_table
+        statement = (
+            select(table.c.actuator, func.count()).where(*conditions).group_by(table.c.actuator)
+        )
+        with self._engine.connect() as conn:
+            return {row[0]: int(row[1]) for row in conn.execute(statement)}
+
     def cleanup(self, keep_days: int) -> int:
         """Löscht Entscheidungen, die älter als ``keep_days`` Tage sind; liefert ihre Zahl."""
         cutoff = self._clock.now() - timedelta(days=keep_days)
