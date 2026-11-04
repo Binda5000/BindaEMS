@@ -1,0 +1,129 @@
+{
+  "days": [
+    {
+      "day": "2026-10-08",
+      "computed": true,
+      "findings": [
+        {
+          "rule": "grid_charge_unplanned",
+          "level": "warn",
+          "start": "2026-10-08T00:00:00+00:00",
+          "end": "2026-10-08T03:00:00+00:00",
+          "text": "Akku lud 02:00–05:00 mit bis zu 5,0 kW aus dem Netz (15,0 kWh), der Plan sah kein Netzladen vor.",
+          "link": "/entscheidungen?range=2026-10-08&actuator=victron",
+          "data": {
+            "kwh": 15.0,
+            "max_kw": 5.0,
+            "soc_min": 25.0
+          }
+        },
+        {
+          "rule": "plan_deviation",
+          "level": "info",
+          "start": null,
+          "end": null,
+          "text": "Netzbezug 17,4 kWh statt geplant 28,1 kWh (-10,7 kWh).",
+          "link": "/zeitplan",
+          "data": {
+            "actual_kwh": 17.4091,
+            "planned_kwh": 28.082443650507805
+          }
+        }
+      ]
+    },
+    {
+      "day": "2026-10-07",
+      "computed": true,
+      "findings": []
+    },
+    {
+      "day": "2026-10-06",
+      "computed": true,
+      "findings": []
+    },
+    {
+      "day": "2026-10-05",
+      "computed": true,
+      "findings": []
+    },
+    {
+      "day": "2026-10-04",
+      "computed": true,
+      "findings": [
+        {
+          "rule": "month_peak",
+          "level": "warn",
+          "start": "2026-10-04T02:45:00+00:00",
+          "end": "2026-10-04T03:00:00+00:00",
+          "text": "Neue Monatsspitze 5,5 kW um 04:45 (vorher 1,0 kW): Akku 5,0 kW, Haus 0,5 kW.",
+          "link": null,
+          "data": {
+            "kw": 5.499,
+            "previous_kw": 0.9736
+          }
+        },
+        {
+          "rule": "counter_check",
+          "level": "info",
+          "start": null,
+          "end": null,
+          "text": "Abrechnung und Zähler weichen bei import um -3,4 % ab.",
+          "link": "/statistik",
+          "data": {
+            "signal": "import",
+            "deviation_pct": -3.3857102191861914
+          }
+        }
+      ]
+    },
+    {
+      "day": "2026-10-03",
+      "computed": true,
+      "findings": []
+    },
+    {
+      "day": "2026-10-02",
+      "computed": true,
+      "findings": []
+    },
+    {
+      "day": "2026-10-01",
+      "computed": false,
+      "findings": []
+    },
+    {
+      "day": "2026-09-30",
+      "computed": false,
+      "findings": []
+    },
+    {
+      "day": "2026-09-29",
+      "computed": false,
+      "findings": []
+    },
+    {
+      "day": "2026-09-28",
+      "computed": false,
+      "findings": []
+    },
+    {
+      "day": "2026-09-27",
+      "computed": false,
+      "findings": []
+    },
+    {
+      "day": "2026-09-26",
+      "computed": false,
+      "findings": []
+    },
+    {
+      "day": "2026-09-25",
+      "computed": false,
+      "findings": []
+    }
+  ],
+  "report": {
+    "day": "2026-10-08",
+    "text": "Donnerstag 8.10.: Netzbezug 17,4 kWh (geplant 28,1), davon Netzladen 15,0 kWh (geplant 0,0). Kosten 0,96 €, Ersparnis 6,28 €. Monatsspitze 5,5 kW. 2 Auffälligkeiten: Akku lud 02:00–05:00 mit bis zu 5,0 kW aus dem Netz (15,0 kWh), der Plan sah kein Netzladen vor. Netzbezug 17,4 kWh statt geplant 28,1 kWh (-10,7 kWh). Betriebscheck jetzt: 4 Befunde."
+  }
+}

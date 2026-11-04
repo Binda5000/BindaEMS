@@ -632,6 +632,13 @@ export const LearningSettingsSchema = v.looseObject({
 });
 export type LearningSettings = v.InferOutput<typeof LearningSettingsSchema>;
 
+/** Tagesbericht: täglich, nur bei Auffälligkeiten oder aus; Uhrzeit `HH:MM` (Ortszeit) */
+export const OpsSettingsSchema = v.looseObject({
+	report: v.picklist(['daily', 'findings', 'off']),
+	report_at: v.string()
+});
+export type OpsSettings = v.InferOutput<typeof OpsSettingsSchema>;
+
 export const RuntimeSettingsSchema = v.looseObject({
 	prices: PriceSettingsSchema,
 	tariff: v.looseObject({
@@ -650,7 +657,9 @@ export const RuntimeSettingsSchema = v.looseObject({
 	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
 	wallbox_names: v.optional(v.record(v.string(), v.string()), {}),
 	/** Modus, den die App nach dem Abstecken setzt; ohne Eintrag bleibt der Modus unverändert */
-	wallbox_default_modes: v.optional(v.record(v.string(), ChargeModeSchema), {})
+	wallbox_default_modes: v.optional(v.record(v.string(), ChargeModeSchema), {}),
+	/** Tagesbericht in Home Assistant; ältere Stände haben den Abschnitt nicht */
+	ops: v.optional(OpsSettingsSchema, { report: 'daily', report_at: '07:30' })
 });
 export type RuntimeSettings = v.InferOutput<typeof RuntimeSettingsSchema>;
 
@@ -1666,3 +1675,72 @@ export const GridChargeReplySchema = v.object({
 	settings_version: v.number()
 });
 export type GridChargeReply = v.InferOutput<typeof GridChargeReplySchema>;
+
+// --- Betrieb im Blick --------------------------------------------------------------------
+
+/** Stufe einer Prüfung des Betriebschecks und des ganzen Checks */
+export const OpsLevelSchema = v.picklist(['ok', 'warn', 'error', 'unknown']);
+export type OpsLevel = v.InferOutput<typeof OpsLevelSchema>;
+
+/** Eine Prüfung: Satz deutsch vom Server, `link` zu der Seite, die mehr zeigt */
+export const OpsCheckItemSchema = v.object({
+	id: v.string(),
+	label: v.string(),
+	level: OpsLevelSchema,
+	text: v.string(),
+	link: v.nullable(v.string())
+});
+export type OpsCheckItem = v.InferOutput<typeof OpsCheckItemSchema>;
+
+/** Antwort von `GET /api/ops/check` */
+export const OpsCheckSchema = v.object({
+	level: OpsLevelSchema,
+	checked_at: Iso,
+	items: v.array(OpsCheckItemSchema)
+});
+export type OpsCheck = v.InferOutput<typeof OpsCheckSchema>;
+
+/** Eine Auffälligkeit; `rule` bleibt Text, damit neue Regeln die Seite nicht brechen */
+export const OpsFindingSchema = v.object({
+	rule: v.string(),
+	level: v.picklist(['info', 'warn']),
+	start: v.nullable(Iso),
+	end: v.nullable(Iso),
+	text: v.string(),
+	link: v.nullable(v.string()),
+	data: Details
+});
+export type OpsFinding = v.InferOutput<typeof OpsFindingSchema>;
+
+/** Antwort von `GET /api/ops/findings`: die Tage bis gestern, neueste zuerst, und der Bericht über gestern */
+export const OpsFindingsSchema = v.object({
+	days: v.array(
+		v.object({
+			day: DateText,
+			/** falsch, solange der Tag nicht gerechnet ist */
+			computed: v.boolean(),
+			findings: v.array(OpsFindingSchema)
+		})
+	),
+	report: v.nullable(v.object({ day: DateText, text: v.string() }))
+});
+export type OpsFindings = v.InferOutput<typeof OpsFindingsSchema>;
+
+/** Ein Schalter; `since`, `actor` und `source` fehlen, wenn das Protokoll keine Änderung kennt */
+export const OpsSwitchSchema = v.object({
+	id: v.string(),
+	label: v.string(),
+	group: v.string(),
+	value: v.string(),
+	factory: v.string(),
+	changed: v.boolean(),
+	since: v.nullable(Iso),
+	actor: v.nullable(v.string()),
+	source: v.nullable(Source),
+	link: v.string()
+});
+export type OpsSwitch = v.InferOutput<typeof OpsSwitchSchema>;
+
+/** Antwort von `GET /api/ops/switches` */
+export const OpsSwitchesSchema = v.object({ switches: v.array(OpsSwitchSchema) });
+export type OpsSwitches = v.InferOutput<typeof OpsSwitchesSchema>;

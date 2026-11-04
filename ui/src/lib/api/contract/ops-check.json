@@ -1,0 +1,132 @@
+{
+  "level": "warn",
+  "checked_at": "2026-10-09T08:00:00+00:00",
+  "items": [
+    {
+      "id": "core",
+      "label": "core",
+      "level": "ok",
+      "text": "core verbunden",
+      "link": null
+    },
+    {
+      "id": "mode",
+      "label": "Betriebszustand",
+      "level": "warn",
+      "text": "DEGRADED: Tessie für „Tesla Model 3“ nicht erreichbar.",
+      "link": null
+    },
+    {
+      "id": "actuator.victron",
+      "label": "Victron (ESS)",
+      "level": "ok",
+      "text": "Dry-Run (so gewünscht)",
+      "link": null
+    },
+    {
+      "id": "actuator.wallbox.evcs",
+      "label": "EVCS „evcs“",
+      "level": "ok",
+      "text": "Dry-Run (so gewünscht)",
+      "link": null
+    },
+    {
+      "id": "actuator.vehicle.tesla",
+      "label": "Tesla Model 3",
+      "level": "ok",
+      "text": "Dry-Run (so gewünscht)",
+      "link": null
+    },
+    {
+      "id": "actuator.thermal.klima",
+      "label": "Klimaanlage",
+      "level": "ok",
+      "text": "Dry-Run (so gewünscht)",
+      "link": null
+    },
+    {
+      "id": "watchdog",
+      "label": "Watchdog",
+      "level": "ok",
+      "text": "nicht nötig",
+      "link": null
+    },
+    {
+      "id": "alarms",
+      "label": "Alarme",
+      "level": "ok",
+      "text": "keine Alarme",
+      "link": null
+    },
+    {
+      "id": "assignment",
+      "label": "Zuordnung",
+      "level": "ok",
+      "text": "alle Zuordnungen klar",
+      "link": null
+    },
+    {
+      "id": "tesla_commands",
+      "label": "Tesla-Befehle",
+      "level": "ok",
+      "text": "höchstens 16 je Stunde",
+      "link": null
+    },
+    {
+      "id": "evcs_rate",
+      "label": "Wallbox-Entscheidungen",
+      "level": "ok",
+      "text": "2 Entscheidungen je Stunde",
+      "link": null
+    },
+    {
+      "id": "victron_rate",
+      "label": "Victron-Entscheidungen",
+      "level": "ok",
+      "text": "2 Entscheidungen je Stunde",
+      "link": null
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "level": "warn",
+      "text": "kein Plan",
+      "link": null
+    },
+    {
+      "id": "battery",
+      "label": "Akku-Sollwert",
+      "level": "warn",
+      "text": "Akku-Stand unbekannt",
+      "link": null
+    },
+    {
+      "id": "inputs",
+      "label": "Eingänge",
+      "level": "ok",
+      "text": "alle Eingänge in Ordnung",
+      "link": null
+    },
+    {
+      "id": "adapters",
+      "label": "Adapter",
+      "level": "ok",
+      "text": "alle verbunden",
+      "link": null
+    },
+    {
+      "id": "selfcheck",
+      "label": "Selbsttest",
+      "level": "ok",
+      "text": "bestanden",
+      "link": null
+    },
+    {
+      "id": "app",
+      "label": "app-Bausteine",
+      "level": "warn",
+      "text": "gestört: ha",
+      "link": null
+    }
+  ]
+}

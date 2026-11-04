@@ -279,5 +279,13 @@ export const api = {
 		await request('POST', '/api/plan/replan'); // 202 {queued: true}
 	},
 	setGridCharge: (on: boolean): Promise<s.GridChargeReply> =>
-		request('PUT', '/api/plan/grid-charge', { body: { on }, schema: s.GridChargeReplySchema })
+		request('PUT', '/api/plan/grid-charge', { body: { on }, schema: s.GridChargeReplySchema }),
+
+	// Betrieb im Blick (ab „Lesen“)
+	opsCheck: (o?: Load): Promise<s.OpsCheck> => get('/api/ops/check', s.OpsCheckSchema, o),
+	/** Auffälligkeiten der letzten `days` Tage bis gestern (1–60) mit dem Bericht über gestern */
+	opsFindings: (days = 14, o?: Load): Promise<s.OpsFindings> =>
+		get(withQuery('/api/ops/findings', { days: String(days) }), s.OpsFindingsSchema, o),
+	opsSwitches: (o?: Load): Promise<s.OpsSwitches> =>
+		get('/api/ops/switches', s.OpsSwitchesSchema, o)
 };

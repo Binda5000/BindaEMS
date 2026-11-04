@@ -15,6 +15,9 @@ import thermal from './contract/learning-thermal.json';
 import qualityDaily from './contract/forecast-quality-daily.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
+import opsCheck from './contract/ops-check.json';
+import opsFindings from './contract/ops-findings.json';
+import opsSwitches from './contract/ops-switches.json';
 
 const fetchMock = vi.fn();
 
@@ -320,4 +323,23 @@ it('schaltet die Automatik eines Autos und prüft ihren Zustand', async () => {
 		csrf: 'tok-123'
 	});
 	expect(state.state).toBe('inactive');
+});
+
+it('liest Betriebscheck, Auffälligkeiten und Schalter mit GET', async () => {
+	reply(opsCheck);
+	const check = await api.opsCheck();
+	expect(sent()).toMatchObject({ url: '/api/ops/check', method: 'GET' });
+	expect(check.items.length).toBeGreaterThan(0);
+
+	fetchMock.mockReset();
+	reply(opsFindings);
+	const findings = await api.opsFindings(14);
+	expect(sent()).toMatchObject({ url: '/api/ops/findings?days=14', method: 'GET' });
+	expect(findings.days).toHaveLength(14);
+
+	fetchMock.mockReset();
+	reply(opsSwitches);
+	const switches = await api.opsSwitches();
+	expect(sent()).toMatchObject({ url: '/api/ops/switches', method: 'GET' });
+	expect(switches.switches.some((entry) => entry.changed)).toBe(true);
 });

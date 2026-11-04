@@ -53,6 +53,9 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	plan: s.PlanResponseSchema,
 	'plan-review': s.PlanReviewSchema,
 	'plan-grid-charge': s.GridChargeReplySchema,
+	'ops-check': s.OpsCheckSchema,
+	'ops-findings': s.OpsFindingsSchema,
+	'ops-switches': s.OpsSwitchesSchema,
 	'error-422': s.ValidationErrorSchema
 };
 
@@ -648,5 +651,38 @@ describe('Vorheizen und Vorkühlen im Plan', () => {
 		const intent = v.parse(s.IntentSchema, { ...control.intent, plan });
 		expect(intent.plan?.slots.map((slot) => slot.thermal_steps)).toEqual([1, null]);
 		expect(v.parse(s.IntentSchema, control.intent).plan).toBeNull();
+	});
+});
+
+describe('Betrieb im Blick', () => {
+	const findings = files['./contract/ops-findings.json'] as {
+		days: { day: string; computed: boolean; findings: { rule: string; link: string | null }[] }[];
+		report: { day: string; text: string } | null;
+	};
+	const switches = files['./contract/ops-switches.json'] as {
+		switches: { changed: boolean; since: string | null }[];
+	};
+
+	it('die Demo-Welt hat Auffälligkeiten mit Link, ruhige Tage und einen Bericht', () => {
+		const all = findings.days.flatMap((day) => day.findings);
+		const grid = all.find((item) => item.rule === 'grid_charge_unplanned');
+		expect(grid?.link).toMatch(/^\/entscheidungen\?range=\d{4}-\d{2}-\d{2}&actuator=victron$/);
+		expect(findings.days.some((day) => day.computed && day.findings.length === 0)).toBe(true);
+		expect(findings.days.some((day) => !day.computed)).toBe(true);
+		expect(findings.report?.day).toBe(findings.days[0]?.day);
+	});
+
+	it('die Demo-Welt hat geänderte Schalter, mit und ohne Eintrag im Protokoll', () => {
+		expect(switches.switches.some((item) => item.changed)).toBe(true);
+		expect(switches.switches.some((item) => item.since !== null)).toBe(true);
+		expect(switches.switches.some((item) => item.since === null)).toBe(true);
+	});
+
+	it('akzeptiert Einstellungen ohne ops (ältere Stände) mit dem Standard', () => {
+		const settings = files['./contract/settings.json'] as { settings: Record<string, unknown> };
+		const older = { ...settings.settings };
+		delete older.ops;
+		const parsed = v.parse(s.RuntimeSettingsSchema, older);
+		expect(parsed.ops).toEqual({ report: 'daily', report_at: '07:30' });
 	});
 });

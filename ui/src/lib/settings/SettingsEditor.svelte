@@ -78,7 +78,7 @@
 		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
 	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
 	const SHOWN_KEYS = [
-		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes)\./,
+		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes|ops)\./,
 		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
 		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
 		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
@@ -299,6 +299,33 @@
 			{/each}
 		</fieldset>
 	{/if}
+
+	<fieldset>
+		<legend>Tagesbericht</legend>
+		<p class="hint">
+			Jeden Morgen eine Meldung in Home Assistant über gestern: Netzbezug, Kosten, Auffälligkeiten
+			und Betriebscheck. Ohne Home Assistant steht er nur auf der Seite Betrieb.
+		</p>
+		<div class="field">
+			<label for="{uid}-ops-report">Bericht in Home Assistant</label>
+			<select id="{uid}-ops-report" bind:value={draft.ops.report}>
+				<option value="daily">Täglich</option>
+				<option value="findings">Nur bei Auffälligkeiten</option>
+				<option value="off">Aus</option>
+			</select>
+		</div>
+		<div class="field">
+			<label for="{uid}-ops-report-at">Uhrzeit</label>
+			<input
+				id="{uid}-ops-report-at"
+				type="time"
+				bind:value={draft.ops.reportAt}
+				aria-invalid={errors['ops.report_at'] ? 'true' : undefined}
+				aria-describedby={describedBy('ops.report_at')}
+			/>
+			{@render fieldError('ops.report_at')}
+		</div>
+	</fieldset>
 
 	<div class="field">
 		<label for="{uid}-comment">Kommentar (optional)</label>

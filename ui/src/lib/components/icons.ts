@@ -67,6 +67,8 @@ export const ICONS: Record<IconName, Shape[]> = {
 	// Kalender mit Balken: der Zeitplan
 	// Achsen, Verlauf und gepunktete Fortsetzung
 	forecast: [{ d: 'M3 3v18h18' }, { d: 'M7 16l4-5 3 2 2-3' }, { d: 'M18.5 8.5h.01M21 6h.01' }],
+	// Kreis mit Haken: der Betrieb ist in Ordnung
+	check: [{ cx: 12, cy: 12, r: 9 }, { d: 'M8 12.5l2.75 2.75L16 9.5' }],
 	plan: [
 		{ x: 3, y: 5, width: 18, height: 16, rx: 2 },
 		{ d: 'M8 3v4M16 3v4M3 10h18' },

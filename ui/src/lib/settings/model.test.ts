@@ -147,6 +147,47 @@ it('ordnet Fehler zum Standard-Lademodus dem Feld der Ladestation zu', () => {
 	).toEqual({ 'wallboxDefaultModes.evcs': 'ungültig' });
 });
 
+it('Tagesbericht: Hin- und Rückweg von ops, ältere Stände bekommen täglich um 07:30', () => {
+	const current = settings();
+	const draft = draftFrom(current);
+	expect(draft.ops).toEqual({ report: 'daily', reportAt: '07:30' });
+	const unchanged = applyDraft(current, draft);
+	if (!('settings' in unchanged)) throw new Error(JSON.stringify(unchanged.errors));
+	expect(unchanged.settings.ops).toEqual({ report: 'daily', report_at: '07:30' });
+
+	draft.ops = { report: 'findings', reportAt: ' 06:45 ' };
+	const changed = applyDraft(current, draft);
+	if (!('settings' in changed)) throw new Error(JSON.stringify(changed.errors));
+	expect(changed.settings.ops).toEqual({ report: 'findings', report_at: '06:45' });
+	expect(changed.tariffChanged).toBe(false);
+
+	const stored = { ...current, ops: { report: 'off' as const, report_at: '21:15', extra: 1 } };
+	const back = draftFrom(stored);
+	expect(back.ops).toEqual({ report: 'off', reportAt: '21:15' });
+	const kept = applyDraft(stored, back);
+	if (!('settings' in kept)) throw new Error(JSON.stringify(kept.errors));
+	expect(kept.settings.ops).toEqual({ report: 'off', report_at: '21:15', extra: 1 });
+});
+
+it('Tagesbericht: die Uhrzeit ist HH:MM wie beim Server', () => {
+	const draft = draftFrom(settings());
+	for (const text of ['7:30', '24:00', '07:60', '', 'abc']) {
+		draft.ops.reportAt = text;
+		expect(errorsOf(draft)).toEqual({ 'ops.report_at': 'Uhrzeit als HH:MM, z. B. 07:30' });
+	}
+	draft.ops.reportAt = '23:59';
+	expect('settings' in applyDraft(settings(), draft)).toBe(true);
+});
+
+it('ordnet Fehler zum Tagesbericht dem Feld zu', () => {
+	expect(
+		editorFieldErrors(
+			[{ loc: ['body', 'settings', 'ops', 'report_at'], msg: 'ungültig', type: 'x' }],
+			settings()
+		)
+	).toEqual({ 'ops.report_at': 'ungültig' });
+});
+
 it('builds ids from names, unique and fixed', () => {
 	expect(componentId('Grundgebühr Lieferant', ['spot'])).toBe('grundgebuehr_lieferant');
 	expect(componentId('Netz', ['netz'])).toBe('netz_2');

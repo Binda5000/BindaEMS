@@ -29,7 +29,8 @@ const { api, user } = vi.hoisted(() => ({
 		control: vi.fn(),
 		setRegulation: vi.fn(),
 		setActuators: vi.fn(),
-		acknowledge: vi.fn()
+		acknowledge: vi.fn(),
+		opsCheck: vi.fn()
 	},
 	user: { role: 'admin' as Role }
 }));
@@ -66,6 +67,7 @@ beforeEach(() => {
 	api.forecastQuality.mockReturnValue(new Promise(() => {}));
 	api.limits.mockReturnValue(new Promise(() => {}));
 	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
+	api.opsCheck.mockReturnValue(new Promise(() => {}));
 });
 
 it('zeigt gleichlautende Hinweise und Preisfehler ohne abzustürzen', async () => {
@@ -89,6 +91,25 @@ it('zeigt die Karten Lastprognose und Prognosegüte', async () => {
 	expect(screen.getByRole('heading', { level: 2, name: 'Prognosegüte' })).toBeInTheDocument();
 	expect(api.loadForecast).toHaveBeenCalledTimes(1);
 	expect(api.forecastQuality).toHaveBeenCalledWith(14, expect.anything());
+});
+
+it('verweist ganz oben mit dem Ergebnis des Betriebschecks auf die Seite Betrieb', async () => {
+	api.opsCheck.mockResolvedValue({
+		level: 'warn',
+		checked_at: '2026-10-09T08:00:00+00:00',
+		items: [
+			{ id: 'core', label: 'core', level: 'ok', text: 'core verbunden', link: null },
+			{ id: 'plan', label: 'Plan', level: 'warn', text: 'kein Plan', link: null }
+		]
+	});
+	showSystem(system());
+	const link = await screen.findByRole('link', { name: 'Betriebscheck: 1 Warnung' });
+	expect(link).toHaveAttribute('href', '/betrieb');
+	expect(within(link.closest('p')!).getByRole('img', { name: 'Warnung' })).toBeInTheDocument();
+	// die Zeile steht vor der ersten Karte
+	const first = screen.getByRole('heading', { level: 2, name: 'Komponenten' });
+	expect(link.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	expect(api.opsCheck).toHaveBeenCalledTimes(1);
 });
 
 // --- Komponenten und Selbstprüfung ---------------------------------------------------------

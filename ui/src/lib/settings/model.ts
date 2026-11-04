@@ -9,6 +9,7 @@ import type {
 	PowerComponent,
 	PriceComponent,
 	LearningSettings,
+	OpsSettings,
 	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
@@ -136,7 +137,14 @@ export interface SettingsDraft {
 	wallboxNames: Record<string, string>;
 	/** Standard-Lademodus nach dem Abstecken nach Schlüssel; leer = unverändert */
 	wallboxDefaultModes: Record<string, ChargeMode | ''>;
+	ops: OpsDraft;
 	comment: string;
+}
+
+/** Tagesbericht in Home Assistant: wann er kommt und um welche Uhrzeit (`HH:MM`, Ortszeit) */
+export interface OpsDraft {
+	report: OpsSettings['report'];
+	reportAt: string;
 }
 
 export type DraftResult =
@@ -168,6 +176,9 @@ const DECIMAL_RE = /^-?\d+(?:[.,]\d+)?$/;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^(\d{2}):(\d{2})(?::00)?$/;
+/** Uhrzeit des Tagesberichts wie `OpsSettings.report_at` der app */
+const REPORT_AT_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const REPORT_AT_ERROR = 'Uhrzeit als HH:MM, z. B. 07:30';
 const NAME_MAX = 80;
 const ID_MAX = 40;
 const QUARTER_ERROR = 'Uhrzeit auf einer Viertelstunde, z. B. 10:15';
@@ -405,6 +416,7 @@ export function draftFrom(
 			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
 			...settings.wallbox_default_modes
 		},
+		ops: { report: settings.ops.report, reportAt: settings.ops.report_at },
 		comment: ''
 	};
 }
@@ -866,6 +878,9 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		if (mode !== '') wallboxDefaultModes[key] = mode; // ohne Wahl bleibt der Modus unverändert
 	}
 
+	const reportAt = draft.ops.reportAt.trim();
+	if (!REPORT_AT_RE.test(reportAt)) errors['ops.report_at'] = REPORT_AT_ERROR;
+
 	if (
 		Object.keys(errors).length > 0 ||
 		vatPct === null ||
@@ -889,7 +904,8 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 			planning: { ...settings.planning, ...planning },
 			learning: { ...settings.learning, ...learning },
 			wallbox_names: wallboxNames,
-			wallbox_default_modes: wallboxDefaultModes
+			wallbox_default_modes: wallboxDefaultModes,
+			ops: { ...settings.ops, report: draft.ops.report, report_at: reportAt }
 		},
 		tariffChanged: importPricesChanged(settings.tariff, tariff)
 	};

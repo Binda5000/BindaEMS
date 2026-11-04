@@ -11,6 +11,7 @@ const PAGES = [
 	'/zeitplan',
 	'/prognosen',
 	'/system',
+	'/betrieb',
 	'/entscheidungen',
 	'/entscheidungen?range=2026-10-09', // Tag der Demo-Uhr: die Tabelle ist gefüllt
 	'/einstellungen',

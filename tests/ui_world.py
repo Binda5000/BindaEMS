@@ -99,7 +99,7 @@ from bindaems.shared.settings import (
     PowerComponent,
     TariffSettings,
 )
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock, local_day_slots
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, ManualClock, local_day_slots
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
 DEMO_PASSWORD = "demo-passwort-1"
@@ -347,6 +347,11 @@ _HA_ENERGY = re.compile(
 HA_ENERGY_STEP_MS = 900_000  # HA schreibt bei Änderung; hier alle 15 min
 _ENTITY = re.compile(r"\"domain\"='(?P<domain>[^']*)' AND \"entity_id\"='(?P<object_id>[^']*)'")
 _SHOW_SERIES = re.compile(r'^SHOW SERIES FROM "W","kW"$')
+# kleinster Akku-SOC je Viertelstunde (Auffälligkeiten, ``soc_min_query``)
+_SOC_MIN = re.compile(
+    r'^SELECT min\("pct"\) AS "v" FROM "[^"]+"\."soc" WHERE .*time >= (?P<start>\d+)ms '
+    r"AND time < (?P<end>\d+)ms GROUP BY time\((?P<step>\d+)s\)"
+)
 
 
 def measurements(tick: int) -> dict[str, float]:
@@ -479,6 +484,10 @@ def _influx(request: httpx.Request) -> httpx.Response:
     query = influx_q(request)
     if (energy := _energy_influx(query)) is not None:
         return energy
+    if soc := _SOC_MIN.search(query):
+        start, end, step = int(soc["start"]), int(soc["end"]), int(soc["step"]) * 1000
+        values = [[ms, _curve("soc", ms, "battery")] for ms in range(start, end, step)]
+        return _influx_result([{"name": "soc", "columns": ["time", "v"], "values": values}])
     if mean := _MEAN.search(query):
         start, end = int(mean["start"]), int(mean["end"])
         interval = max(int(mean["step"]), 900) * 1000
@@ -1139,6 +1148,44 @@ async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
     app.planning._store.save(plan_once(earlier, await solve_inline(earlier)), earlier)
 
 
+async def _yesterday_plan(app: AppRuntime, plan: Plan) -> None:
+    """Ein Plan für gestern (08.10.) ohne Netzladen: Gegen ihn fällt das Netzladen des Verlaufs
+    von 02:00 bis 05:00 als „ohne Plan“ auf, und der Tagesbericht vergleicht mit dem Plan.
+
+    Er entsteht aus den Eingangsdaten des Plans von 10:00, auf Mitternacht von gestern
+    zurückgesetzt, und gilt der Einfachheit halber den ganzen Tag (im Betrieb plant die app alle
+    paar Minuten neu); seine Slots enden um Mitternacht, „Plan gegen Ist“ von heute sieht ihn nicht.
+    """
+    assert plan.id is not None
+    inputs = app.planning._store.inputs_of(plan.id)
+    assert inputs is not None
+    first, *_, last = local_day_slots(LAST_DAY)
+    back = T_DEMO - first
+    earlier = inputs.model_copy(
+        update={
+            "created_at": first,
+            "slots": [
+                slot.model_copy(update={"start": slot.start - back}) for slot in inputs.slots
+            ],
+        }
+    )
+    solved = plan_once(earlier, await solve_inline(earlier))
+    assert not any(slot.charge_grid_w > 0 for slot in solved.slots)  # Netzladen ist aus
+    day = solved.model_copy(
+        update={
+            "valid_until": last + SLOT,
+            "slots": [slot for slot in solved.slots if slot.start <= last],
+        }
+    )
+    app.planning._store.save(day, earlier)
+
+
+async def _findings(app: AppRuntime) -> None:
+    """Auffälligkeiten der letzten 7 Tage bis gestern, wie die app sie beim Start nachholt."""
+    for back in range(7, 0, -1):
+        await app.findings.run_day(T_DEMO.astimezone(LOCAL_TZ).date() - timedelta(days=back))
+
+
 def _demo_tariff(app: AppRuntime) -> TariffSettings:
     """Standardtarif mit Netznutzungsentgelt, einem (erfundenen) Leistungspreis, der schon im
     Oktober 2026 gilt (60 €/kW/Jahr netto, Stufe bei 10 kW): „Laden“ zeigt die Mehrkosten, und
@@ -1337,6 +1384,8 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
             plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
+        await _yesterday_plan(app, plan)
+        await _findings(app)
         await _driving(app)
         # erst nach dem Plan: er bleibt mit dem Profil gerechnet, die Ausgabe nennt das Modell
         await app.load_forecast.refresh()

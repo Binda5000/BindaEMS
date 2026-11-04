@@ -69,6 +69,9 @@ GET_ENDPOINTS = {
     "decisions-latest": "/api/decisions/latest",
     "plan": "/api/plan",
     "plan-review": "/api/plan/review",
+    "ops-check": "/api/ops/check",
+    "ops-findings": "/api/ops/findings?days=14",
+    "ops-switches": "/api/ops/switches",
 }
 OTHER = {
     "live-hello",
@@ -387,6 +390,24 @@ async def test_demo_world_has_a_thermal_model(cfg, tmp_path) -> None:
     steps = [slot["thermal_steps"] for slot in plan["slots"]]
     assert max(steps) > 0 > min(steps)  # vorheizen und absenken
     assert all("KLIMA_MEHR" not in slot["codes"] for slot in plan["slots"])  # nur Vorschau
+
+
+async def test_demo_world_has_operations_data(cfg, tmp_path) -> None:
+    # Grundlage der Seite „Betrieb“: Auffälligkeiten der letzten 7 Tage wie nach dem Start der
+    # app, darunter das Netzladen ohne Plan in der Nacht auf gestern, und ruhige Tage
+    world = await build_world(cfg, tmp_path)
+    try:
+        by_day = world.app.findings.days(FIRST_DAY, LAST_DAY)
+    finally:
+        world.close()
+    assert sorted(by_day) == [LAST_DAY - timedelta(days=n) for n in range(6, -1, -1)]
+    rules = {day: [item.rule for item in found] for day, found in by_day.items()}
+    assert "grid_charge_unplanned" in rules[LAST_DAY]
+    assert "not_checked" not in {rule for found in rules.values() for rule in found}
+    assert [] in rules.values()
+    grid = next(item for item in by_day[LAST_DAY] if item.rule == "grid_charge_unplanned")
+    assert grid.link == "/entscheidungen?range=2026-10-08&actuator=victron"
+    assert grid.text.startswith("Akku lud 02:00–05:00 ")
 
 
 async def test_reprice_keeps_the_demo_costs(cfg, tmp_path) -> None:

@@ -11,6 +11,7 @@ it('zeigt Lesenden und Bedienenden dieselben Seiten', () => {
 		['/statistik', 'Statistik'],
 		['/verbraucher', 'Verbraucher'],
 		['/system', 'System'],
+		['/betrieb', 'Betrieb'],
 		['/entscheidungen', 'Entscheidungen'],
 		['/einstellungen', 'Einstellungen'],
 		['/konto', 'Konto']
@@ -28,6 +29,7 @@ it('zeigt Admins zusätzlich Benutzer und Protokoll', () => {
 		'/statistik',
 		'/verbraucher',
 		'/system',
+		'/betrieb',
 		'/entscheidungen',
 		'/einstellungen',
 		'/benutzer',
@@ -46,6 +48,7 @@ it('zeigt Laden und Entscheidungen für alle Rollen mit ihren Symbolen', () => {
 		'/statistik',
 		'/verbraucher',
 		'/system',
+		'/betrieb',
 		'/entscheidungen',
 		'/einstellungen',
 		'/konto'
@@ -78,6 +81,19 @@ it('zeigt Prognosen für alle Rollen nach dem Zeitplan, mit dem Symbol forecast'
 			href: '/prognosen',
 			label: 'Prognosen',
 			icon: 'forecast'
+		});
+	}
+});
+
+it('zeigt Betrieb für alle Rollen nach System, mit dem Symbol check', () => {
+	for (const role of ['viewer', 'operator', 'admin'] as const) {
+		const items = navItems(role);
+		const hrefs = items.map((item) => item.href);
+		expect(hrefs.indexOf('/betrieb')).toBe(hrefs.indexOf('/system') + 1);
+		expect(items.find((item) => item.href === '/betrieb')).toEqual({
+			href: '/betrieb',
+			label: 'Betrieb',
+			icon: 'check'
 		});
 	}
 });

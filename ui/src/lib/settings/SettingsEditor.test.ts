@@ -483,3 +483,38 @@ it('zeigt Serverfehler des Komfortbands am Feld', async () => {
 		await within(THERMAL()).findByText('Das Komfortband geht in Schritten von 0,5 K.')
 	).toBeVisible();
 });
+
+it('stellt den Tagesbericht ein: Auswahl und Uhrzeit', async () => {
+	const current = settingsCurrent();
+	const save = vi.fn().mockResolvedValueOnce(current);
+	render(SettingsEditor, { current, save, onSaved: vi.fn(), onReload: vi.fn() });
+	const group = screen.getByRole('group', { name: 'Tagesbericht' });
+	const select = within(group).getByLabelText('Bericht in Home Assistant') as HTMLSelectElement;
+	expect(select.value).toBe('daily');
+	expect(
+		Array.from(select.options).map((option) => [option.value, option.textContent?.trim()])
+	).toEqual([
+		['daily', 'Täglich'],
+		['findings', 'Nur bei Auffälligkeiten'],
+		['off', 'Aus']
+	]);
+	const time = within(group).getByLabelText('Uhrzeit');
+	expect(time).toHaveValue('07:30');
+	await fireEvent.change(select, { target: { value: 'findings' } });
+	await fireEvent.input(time, { target: { value: '06:45' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	await vi.waitFor(() => expect(save).toHaveBeenCalled());
+	expect(save.mock.calls[0][1].ops).toEqual({ report: 'findings', report_at: '06:45' });
+});
+
+it('zeigt Serverfehler zur Uhrzeit des Tagesberichts am Feld', async () => {
+	const save = reject422({ loc: ['ops', 'report_at'], msg: 'Uhrzeit ungültig' });
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Uhrzeit ungültig')).toBeInTheDocument();
+	const time = within(screen.getByRole('group', { name: 'Tagesbericht' })).getByLabelText(
+		'Uhrzeit'
+	);
+	expect(time).toHaveAttribute('aria-invalid', 'true');
+	expect(screen.queryByText(/ops\.report_at/)).toBeNull();
+});

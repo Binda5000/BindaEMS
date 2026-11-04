@@ -11,6 +11,7 @@
 	import { DASH, formatDateTime, formatDay, formatEnergy, formatNumber, NBSP } from '$lib/format';
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
+	import { checkLine, levelLabel } from '$lib/ops/view';
 	import { canOperate, hasRole } from '$lib/roles';
 	import { Acknowledgement } from '$lib/system/acknowledge.svelte';
 	import ControlCard from '$lib/system/ControlCard.svelte';
@@ -44,15 +45,24 @@
 	const appHealth = new Resource((o) => api.health(o));
 	const control = new Resource((o) => api.control(o), { intervalMs: 15_000 });
 	const limits = new Resource((o) => api.limits(o), { intervalMs: 300_000 });
+	const opsCheck = new Resource((o) => api.opsCheck(o), { intervalMs: 15_000 });
 
 	let nowMs = $state(Date.now()); // Alter der Signale zählt jede Sekunde weiter
 	let filter = $state('');
 	let followUp: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, prices, forecast, loadForecast, quality, appHealth, control, limits].map(
-			(resource) => resource.start()
-		);
+		const stops = [
+			system,
+			prices,
+			forecast,
+			loadForecast,
+			quality,
+			appHealth,
+			control,
+			limits,
+			opsCheck
+		].map((resource) => resource.start());
 		const clock = setInterval(() => (nowMs = Date.now()), 1000);
 		return () => {
 			clearTimeout(followUp);
@@ -133,6 +143,12 @@
 </script>
 
 <div class="system">
+	{#if opsCheck.data}
+		<p class="ops">
+			<StatusDot state={opsCheck.data.level} label={levelLabel(opsCheck.data.level)} />
+			<a href="/betrieb">{checkLine(opsCheck.data)}</a>
+		</p>
+	{/if}
 	{#if system.error}
 		<Notice level="error">{system.error.detail}</Notice>
 	{/if}
@@ -487,6 +503,15 @@
 <style>
 	.facts {
 		margin: 0 0 0.75rem;
+	}
+
+	/* Zeile ganz oben: Ergebnis des Betriebschecks mit Link auf die Seite Betrieb */
+	.ops {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0;
+		font-weight: 600;
 	}
 
 	.system {
