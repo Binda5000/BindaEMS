@@ -1408,6 +1408,35 @@ def test_storm_charge_stays_until_the_window_ends() -> None:
     assert result.flows[-1].soc_end_kwh < _FLOOR_KWH - 5.0  # danach nimmt es das Haus
 
 
+def test_storm_charge_boundary_between_reserve_and_floor() -> None:
+    # Ruling I1: Liegt der SOC zu Beginn zwischen Reserve und Untergrenze, hält der Plan das
+    # Aufgeladene nur über ``min(SOC₀, Reserve)``, nicht über dem SOC₀. Die Probe: nachts 5,6 kWh
+    # zu 10 ct aufladen (höchstens 3 kW, höchstens bis zur Untergrenze), und der Akku gibt vor dem
+    # Fenster Energie über der Reserve ans Haus ab (SOC fällt unter SOC₀ + Aufgeladenes), die PV
+    # und das Aufladen füllen ihn zum Fenster auf.
+    inputs = _storm(
+        soc_pct=30.0,
+        prices=_MORNING_PRICES,
+        load=[1500.0] * 96,
+        pv=pv_arc(SCENARIO_START, 96, 2500.0),
+    )
+    soc0 = 0.30 * _BIG_KWH
+    result = solve(inputs)
+    assert result.status == "optimal"
+    eta_ch = params_of(inputs).eta_ch
+    charged = 0.0
+    gave_house = False
+    for t, f in enumerate(result.flows[: _WINDOW[-1] + 1]):
+        assert f.gr_s + f.gr_r <= RESERVE_RECHARGE_MAX_W + 1e-6, t
+        charged += eta_ch * f.gr_s * SLOT_KWH
+        assert f.soc_end_kwh >= _RESERVE_KWH + charged - 1e-6, t  # die Basis ist die Reserve
+        if t < _WINDOW[0] and f.soc_end_kwh < soc0 + charged - 0.5:
+            gave_house = True
+    assert 1.0 < charged <= _FLOOR_KWH - soc0 + 1e-6  # nie mehr als bis zur Untergrenze
+    assert gave_house  # Entladung über der Reserve vor dem Fenster ist erlaubt
+    assert all(result.flows[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH for t in _WINDOW)
+
+
 def test_no_battery_to_car_with_storm_charge() -> None:
     # Ruling R7: Kann der Plan für die Unwetter-Reserve aufladen, gibt der Akku keinem Auto etwas;
     # die Plausibilität zählt das Aufladen als Netzenergie im Akku (``car_grid``). Ohne Warnung
@@ -1548,3 +1577,4 @@ def test_old_inputs_without_storm_unchanged(monkeypatch: pytest.MonkeyPatch) -> 
     assert all(f.gr_s == 0 for f in result.flows) and result.storm_shortfall_kwh == 0.0
     names = [v.name for v in seen[0].variables()] + [c.name for c in seen[0].constraints()]
     assert not [n for n in names if "unwetter" in n or n.startswith(("gr_s", "fehl_s"))]
+
