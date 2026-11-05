@@ -273,7 +273,7 @@ class StormWarning(_Model):
 
 
 class PlanStorm(_Model):
-    """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): ``target_pct`` ist die
+    """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): ``target_pct`` ist das
     Ziel der Untergrenze in % (``min(Ziel, soc_max_pct)``), ``warnings`` sind die bekannten
     passenden Warnungen (Art und Stufe nach den Einstellungen, Ende in der Zukunft), auch wenn
     ihr Fenster nicht im Horizont liegt; die Fenster je Slot stehen in ``storm_reserve_pct``."""
