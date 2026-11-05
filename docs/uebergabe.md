@@ -291,7 +291,7 @@ Betrieb: `docs/betrieb.md`, „Planung“, „Wie ein Plan entsteht“ („Nachl
 
 **Stand Unwetter-Reserve (4.11.2026):** Plan `docs/superpowers/plans/2026-11-04-unwetter-reserve.md` (Entscheidungen 1 bis 13; Ziel 40 % und
 ab Orange als Standard, beides im UI einstellbar, Wunsch des Betreibers vom 4.11.2026), Branch `claude/project-thread-74t3bg`, **noch nicht auf
-`main`**, **nicht ausgerollt**. Die sechs Tasks sind umgesetzt, 1 bis 5 je Task geprüft; der Review von Task 6 und der Gesamtreview stehen aus. Während einer amtlichen
+`main`**, **nicht ausgerollt**. Die sechs Tasks sind umgesetzt und je Task geprüft; der Gesamtreview ist durchgeführt, die Fix-Welle erledigt. Während einer amtlichen
 Unwetterwarnung von GeoSphere Austria (Warn-API `getWarningsForCoords`, alle 15 min, nur mit Schalter) hält der Planer den Akku von einer Stunde
 vor Beginn bis zum Ende mindestens auf dem Ziel (`planning.storm`: Schalter ab Werk aus, Ziel 40 %, ab Orange, Sturm und Gewitter) und lädt vorher
 dafür auf: PV zuerst, sonst höchstens 3 kW aus dem Netz, auch bei ausgeschaltetem „Netzladen erlaubt“; das Aufgeladene bleibt bis zum Ende des
@@ -4203,11 +4203,18 @@ Entschieden in Plan „Unwetter-Reserve“ (Rulings des Controllers bei der Umse
 - **R7 (Autos):** Gibt es im Lauf Aufladen für die Unwetter-Reserve, plant der Optimierer kein Akku ins Auto (`bt_ev = 0` im ganzen
   Horizont), damit der Befund `car_grid` den Plan nicht in den Ersatzplan schiebt und Regel R2 ohne Binärvariable hält.
 - **R9 (Aufgeladenes bleibt):** Das Aufgeladene bleibt bis zum letzten Slot mit Untergrenze im Akku (gemeinsame Bedingung mit dem
-  Nachladen), sonst wäre Netzladen am Schalter vorbei für Preisarbitrage möglich.
+  Nachladen), sonst wäre Netzladen am Schalter vorbei für Preisarbitrage möglich. **Grenze (Gesamtreview I1, Ruling: Code bleibt):** Die Basis
+  ist `min(SOC₀, Reserve)`; liegt der SOC zu Beginn zwischen Reserve und Untergrenze, darf der Akku vor dem Fenster Energie über der Reserve
+  ans Haus abgeben, das Netzladen bleibt auf `F_max − max(SOC₀, Reserve)` und 3 kW begrenzt (Test
+  `test_storm_charge_boundary_between_reserve_and_floor`, Betrieb: „Aufladen“).
+- **I2 (Regel R nach der Unwetterladung, Ruling: nur Doku):** Aufgeladenes zählt in Folgeläufen wie Netzenergie im Akku
+  (`plausibility.grid_in_battery_at_start`): Einspeisung kostet `CARRIED_EXPORT_CT`, Akku ins Auto bleibt gesperrt, bis der Akku an der
+  Reserve ist; wie beim Nachladen auf die Reserve. Die Betriebsdoku sagte zuerst das Gegenteil und ist richtiggestellt.
 - **R10 (Ersatzplan):** Der Ersatzplan hält schon ab Slot 0 nicht unter die Untergrenze des nächsten Fensters.
 - **R11 (Absichten):** Eine Teilentladung in einem Slot mit Untergrenze wird `HALTEN`; sonst fielen einzelne Zufallspläne durch den
   Befund `storm` in den Ersatzplan.
-- **R12 (Anzeige):** Der Kopf des Zeitplans zeigt alle Warnungen aus `Plan.storm`, auch eine, die erst hinter dem Horizont beginnt.
+- **R12 (Anzeige):** Der Kopf des Zeitplans zeigt alle Warnungen aus `Plan.storm`, auch eine, die erst hinter dem Horizont beginnt; `Plan.storm` ist
+  gesetzt, sobald passende Warnungen bekannt sind (`target_pct` dann `min(Ziel, soc_max_pct)`), nicht nur mit einem Fenster im Horizont.
 - **Ablauf ohne Wirkung auf das Verhalten:** R1 (Übergabe der Warnungen an `assemble_inputs` erst mit Task 4), R2 (der HA-Sensor rechnet
   die Untergrenze aus Warnungen und Einstellungen, nicht aus dem Plan, und zeigt sie so auch ohne Plan), R3 (Vertragsdateien und
   `schemas.ts` je Task minimal), R4 (lokal nur die betroffenen Testordner, die volle Suite auf der CI), R5 (Komponente `storm`, Anzeige
@@ -4218,16 +4225,16 @@ Entschieden in Plan „Unwetter-Reserve“ (Rulings des Controllers bei der Umse
 
 Aufgeschobene Kleinigkeiten aus Plan „Unwetter-Reserve“ (Deferred minors Unwetter-Reserve), aus den Reviews der Tasks 1 bis 6. Keine
 davon gefährdet die Anlage: Der Schalter ist ab Werk aus, die Untergrenze kann den Akku nur höher halten, und die USV-Reserve und die
-Safety-Schicht sind unverändert. Der Gesamtreview steht aus; Punkte, die er aufgreift, werden hier durchgestrichen.
+Safety-Schicht sind unverändert. Der Gesamtreview ist durchgeführt; was die Fix-Welle erledigt hat, steht mit „erledigt“ dabei.
 
-- **Quelle (Task 1):** Ein Eintrag, der kein Objekt ist und keine `warnid` hat, wird ohne Log übersprungen (`geosphere.py`, Zeile 111);
+- **Quelle (Task 1):** Ein Eintrag, der kein Objekt ist und keine `warnid` hat, wird mit der Warnung „Unwetterwarnung übersprungen“ (`code=storm_warning_skipped`) übersprungen (`geosphere.py`, `parse_warnings`);
   der Test der übersprungenen Warnungen pinnt nicht `"abc"` als Zeit, einen falschen Typ von `rawinfo`, einen Eintrag, der kein Objekt
   ist, eine unbekannte `warnstufeid` und eine fehlende `warnid`; eine Zeit wie `"…0.0"` wird übersprungen (wie in der Doku der API).
 - **Einstellung und Fenster (Task 2):** `test_docs` übergeht die Standardwerte verschachtelter Modelle (die Zeile `planning.storm` im
   Betriebshandbuch wird nicht gegen 40, 2 und aus geprüft); `storm/windows.py` definiert `SLOT` neu statt `shared.timeutil.SLOT`; lokale
   Imports in `tests/unit/shared/test_settings.py`; kein Test für `min_level` 3 und leere Startzeiten.
-- **Dienst und Auslöser (Task 3):** Eine unerwartete Ausnahme in `refresh` lässt den Status grün (nur `WarningsUnavailable` setzt ihn
-  auf gestört); der Fingerabdruck ist nur nach `begin` sortiert (bei gleichem Beginn zählt die Reihenfolge der Antwort,
+- **Dienst und Auslöser (Task 3):** Eine unerwartete Ausnahme in `run` lässt den Status grün (erledigt: `run` setzt jetzt den Ausfall; eine Antwort, deren Warnungen alle beim
+  Parsen übersprungen werden, bleibt grün, offen); der Fingerabdruck ist nur nach `begin` sortiert (erledigt: nach `(begin, warn_id)` in
   `planning/service.py` und `StormService.fingerprint`); eine Änderung von `planning.storm` löst `settings` **und** `storm` aus (ein Lauf
   zu viel); `self._storm()` in `_watch` und `_storm_ha` in der Laufzeit haben keinen eigenen Schutz (würfen sie, stünden alle Auslöser,
   gegen „ein Ausfall darf keinen Plan verhindern“; für den Gesamtreview markiert); `StormService.fingerprint()` ist ungenutzt, die
@@ -4237,8 +4244,8 @@ Safety-Schicht sind unverändert. Der Gesamtreview steht aus; Punkte, die er auf
   wenn der Optimierer `gr_s = 0` wählt (bewusst).
 - **Ersatzplan, Prüfung, Erklärung (Task 5):** Ein Lauf von pytest über planning, shared, docs, layout und storm in einem Aufruf gibt
   11 Fixture-Fehler in `storm/test_service` (auch auf `3552fb1`, der Volllauf der CI ist grün; Testisolation prüfen);
-  `Plan.storm.warnings` enthält auch Warnungen ohne Fenster im Horizont, der Docstring von `PlanStorm` sagt anderes (für die Anzeige
-  gewollt, Ruling R12); der Parameter `soc` ist eine Gleitkommazahl (40.0), der Satz stimmt; `r1_applies` in der Schleife mit
+  `Plan.storm.warnings` enthält auch Warnungen ohne Fenster im Horizont (für die Anzeige gewollt, Ruling R12; erledigt: `plan_storm` und der
+  Docstring von `PlanStorm` stimmen jetzt überein); der Parameter `soc` ist eine Gleitkommazahl (40.0), der Satz stimmt; `r1_applies` in der Schleife mit
   eingeschaltetem Schalter des Ersatzplans hat keinen eigenen Test (ohne Warnung praktisch ohne Wirkung); Tests des Ersatzplans fehlen
   für Schalter an, ein Fenster ab Slot 0 und mehrere Fenster (die Proben des Reviewers waren grün); eine kurze Zeile im Docstring von
   `derive_intents` (`intents.py`, etwa Zeile 95).

@@ -289,6 +289,9 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
      „YAML-Datei importieren“ → „Importieren“. Bis dahin rechnet die ältere app mit den
      Standardwerten; speichere die Einstellungen in dieser Zeit nicht von Hand. Dann den
      **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
+  5. **Die Home-Assistant-Entität entfernen:** `sensor.bindaems_unwetter_reserve` kennt die ältere
+     app nicht mehr und aktualisiert sie nicht; sie bleibt in Home Assistant ohne Werte stehen.
+     Unter **Einstellungen** → **Geräte & Dienste** → **Entitäten** entfernst du sie von Hand.
 
   Hast du vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
   gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
@@ -5975,13 +5978,23 @@ Schalter ist **ab Werk aus**; Binda schaltet ihn vor der Gewittersaison ein (bis
   Von 20 auf 40 % sind das bei 96 kWh 19,2 kWh, mit 3 kW rund 7 h; was bis zum Beginn fehlt, fehlt.
   Das Aufgeladene **bleibt bis zum Ende des letzten Fensters im Akku** (sonst wäre es Netzladen am
   Schalter vorbei, etwa billig laden und vor der Warnung teuer entladen); danach darf das Haus es
-  verbrauchen. Es trägt keinen Restwert, setzt keine Sperre von Regel R (nach dem Fenster darf die
-  PV einspeisen) und ist im Ablauf ein „Nachladen 3 kW“ mit dem Satz von `NACHLADEN_RESERVE`; der
-  core nimmt es wie jedes Nachladen bis 3000 W auch ohne Schalter an.
+  verbrauchen. **Die Grenze:** Netzenergie kommt höchstens bis zur Untergrenze in den Akku und mit
+  höchstens 3 kW, auch wenn der Akku vorher eigene Energie abgegeben hat: Liegt der SOC zu Beginn
+  zwischen Reserve und Untergrenze, darf er vor dem Fenster Energie über der Reserve ans Haus
+  geben, nur das Aufgeladene bleibt. Die PV oder das Netz füllen ihn bis zum Fenster wieder auf,
+  und was bis zum Beginn fehlt, fehlt (weich, 200 ct je kWh und Slot). Das Aufgeladene trägt keinen
+  Restwert und ist im Ablauf ein „Nachladen 3 kW“ mit dem Satz von `NACHLADEN_RESERVE`; der core
+  nimmt es wie jedes Nachladen bis 3000 W auch ohne Schalter an. **Regel R:** Wie nach einem
+  Netzladen kann danach Netzenergie im Akku sein; solange sie nicht verbraucht ist (Akku an der
+  Reserve), kostet die Einspeisung in Folgeläufen 200 ct je kWh, und der Akku gibt keinem Auto
+  etwas (unten, „Autos“).
 - **Autos:** Die Plan-Schwelle der Akku-Unterstützung rechnet mit der Untergrenze je Slot statt mit
   der Reserve, „Sofort aus dem Akku“ ist in Slots mit Untergrenze aus, und solange der Plan für die
   Warnung aufladen darf, gibt der Akku keinem Auto in „Geplant“ etwas (kein Akku ins Auto im ganzen
   Horizont; sonst flösse Netzstrom aus dem Aufladen über den Akku ins Auto, an Regel R2 vorbei).
+  Auch in den Folgeläufen bleibt die Sperre, bis die Netzenergie verbraucht ist: Der Plan nimmt sie
+  wie nach einem Netzladen an (`grid_in_battery_at_start`, Akku ins Auto gesperrt, Einspeisung kostet
+  200 ct je kWh), genau wie beim Nachladen auf die Reserve.
 - **Prüfung und Ersatzplan:** Entlädt die Nachrechnung in einem Slot mit Untergrenze (mindestens
   100 W) und liegt am Slotende mehr als 0,5 Prozentpunkte darunter, meldet die Prüfung „Akku entlädt
   um HH:MM unter die Unwetter-Reserve“, und es gilt der Ersatzplan; ein Ziel, das ohne Entladen nicht
@@ -6019,12 +6032,12 @@ steigt die Linie „Reserve“ im Fenster auf die Untergrenze.
 |---|---|
 | „aus“ | der Schalter ist aus (in Ordnung) |
 | „keine Warnung“ | der letzte Abruf fand keine passende Warnung (in Ordnung) |
-| „Gewitter (orange) bis 18:00“ | passende Warnungen mit Art, Stufe und Ende, mehrere durch „; “ getrennt (in Ordnung) |
+| „Gewitter (orange) bis 18:00“ | passende Warnungen mit Art, Stufe und Ende, mehrere durch „; “ getrennt; endet eine nicht heute, steht das Datum dabei („bis 10.10. 06:00“) (in Ordnung) |
 | „Warnungen seit HH:MM nicht abrufbar“ | die Abrufe scheitern, und der letzte Erfolg (sonst der erste Versuch) liegt mehr als 1 h zurück (gestört); bekannte Warnungen gelten weiter |
 
 **Home Assistant:** Der Sensor „Unwetter-Reserve“ (`sensor.bindaems_unwetter_reserve`, unten, „Home
 Assistant“) zeigt die Untergrenze des laufenden Slots in %, ohne Warnung `0`, mit den Attributen `bis`
-(Ende des Fensters) und `warnung` (Text der Warnung). Er rechnet aus den Warnungen und den
+(Ende der Warnung) und `warnung` (ihr Text). Er rechnet aus den Warnungen und den
 Einstellungen, nicht aus dem Plan, und zeigt die Untergrenze darum auch, wenn gerade kein Plan gilt.
 
 **Was die Unwetter-Reserve nicht tut:**
