@@ -711,8 +711,8 @@ def _add_storm(
         # Basis ``min(SOC₀, Reserve)``, nicht ``SOC₀`` (Ruling I1): Der Akku darf vor dem Fenster
         # Energie über der Reserve ans Haus abgeben, auch wenn er mit SOC₀ < F startet; nur das
         # Aufgeladene und das Nachgeladene bleiben. Netzladen ist so höchstens bis ``F_max`` und
-        # mit 3 kW möglich, nie mehr (``unwetter_menge``). Eine Basis SOC₀ hielte auch die Eigenenergie
-        # fest, die nur die Untergrenze im Fenster schützen muss.
+        # mit 3 kW möglich, nie mehr (``unwetter_menge``). Eine Basis SOC₀ hielte auch die
+        # Eigenenergie fest, die nur die Untergrenze im Fenster schützen muss.
         base = min(soc0, reserve)
         stored = _running(prob, "unwetter_s", gr_s, params.eta_ch, max(floors) + 1)
         for t, total in stored.items():

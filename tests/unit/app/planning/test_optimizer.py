@@ -1577,4 +1577,3 @@ def test_old_inputs_without_storm_unchanged(monkeypatch: pytest.MonkeyPatch) -> 
     assert all(f.gr_s == 0 for f in result.flows) and result.storm_shortfall_kwh == 0.0
     names = [v.name for v in seen[0].variables()] + [c.name for c in seen[0].constraints()]
     assert not [n for n in names if "unwetter" in n or n.startswith(("gr_s", "fehl_s"))]
-
