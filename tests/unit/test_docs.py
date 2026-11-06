@@ -750,6 +750,8 @@ BATTERY_SETTINGS = {
     "tesla_reserve_commands",
     "tesla_against_s",
     "tesla_against_retry_s",
+    "evcs_against_s",
+    "evcs_against_retry_s",
 }
 
 

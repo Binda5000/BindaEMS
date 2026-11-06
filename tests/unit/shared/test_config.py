@@ -429,6 +429,8 @@ FINITE_CONTROL_FIELDS = (
     "peak_margin_kw",
     "tesla_against_s",
     "tesla_against_retry_s",
+    "evcs_against_s",
+    "evcs_against_retry_s",
 )
 
 
@@ -690,7 +692,14 @@ def test_self_start_defaults_to_120_s_and_10_min() -> None:
     assert (control.tesla_against_s, control.tesla_against_retry_s) == (120.0, 600.0)
 
 
-@pytest.mark.parametrize("field", ["tesla_against_s", "tesla_against_retry_s"])
+def test_evcs_self_start_defaults() -> None:
+    control = load_config(EXAMPLE).control
+    assert (control.evcs_against_s, control.evcs_against_retry_s) == (60.0, 300.0)
+
+
+@pytest.mark.parametrize(
+    "field", ["tesla_against_s", "tesla_against_retry_s", "evcs_against_s", "evcs_against_retry_s"]
+)
 @pytest.mark.parametrize("value", [0, -1])
 def test_self_start_times_must_be_positive(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
