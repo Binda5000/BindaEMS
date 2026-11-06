@@ -70,14 +70,19 @@ Dazu legt die Regelung fest:
   wenn er dringend ist. Ist der Ist-Strom unbekannt, hält die Reserve nichts zurück. Starts samt
   ihrem Strom, Stopps und der Höchststrom an der EVCS sind davon frei. Ein zurückgehaltener
   Strombefehl erscheint nicht im Log.
-- Selbststart (Plan 2d, Präzisierung 10): Lädt ein Fahrzeug mit Tessie laut Tessie (mit mindestens
-  1 A) an einem geregelten Ladepunkt, obwohl sein Modus nicht laden will, und ist die Zuordnung
-  klar, vergisst die Regelung nach ``control.tesla_against_s`` ohne Unterbrechung ihren letzten Wert
-  für ``charging`` des Aktors: „Laden aus“ geht erneut hinaus, mit dem Grund ``self_start`` nach dem
-  Modus, höchstens alle ``control.tesla_against_retry_s`` je Fahrzeug. Das gilt nur für Zyklen, in
-  denen der Stopp hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die
-  Zeit weiter. Dringend ist es nur im Modus „Aus“ wie jeder Stopp dort. Ein neuer Vorgang und
-  ``idle`` beginnen die Zeiten neu.
+- Selbststart (Plan 2d, Präzisierung 10; Plan EVCS-Selbststart): Lädt ein Auto an einem geregelten
+  Ladepunkt, obwohl sein Modus nicht laden will, und ist die Zuordnung klar, vergisst die Regelung
+  nach einer Zeit ohne Unterbrechung ihren letzten Wert für ``charging`` des Aktors: „Laden aus“
+  geht erneut hinaus, mit dem Grund ``self_start`` nach dem Modus. An einer EVCS gilt das für jedes
+  Auto (Fahrzeug mit oder ohne Tessie, Gast) mit ihrem Rücklesen „Laden an“ als Signal, solange das
+  Auto angesteckt ist: nach ``control.evcs_against_s``, höchstens alle
+  ``control.evcs_against_retry_s`` je Auto. So stoppt die Regelung auch eine EVCS, die ein anderer
+  einschaltet, etwa ihr Autostart nach dem Wiederanstecken. Am Wall Connector gilt es für ein
+  Fahrzeug mit Tessie, das laut Tessie mit mindestens 1 A lädt: nach ``control.tesla_against_s``,
+  höchstens alle ``control.tesla_against_retry_s`` je Fahrzeug. Das gilt nur für Zyklen, in denen
+  der Stopp hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die Zeit
+  weiter. Dringend ist es nur im Modus „Aus“ wie jeder Stopp dort. Ein neuer Vorgang, ein Zyklus
+  ohne Regelung des Ladepunkts und ``idle`` beginnen die Zeiten neu.
 - Vorklimatisieren (Regel K1; Plan Vorklimatisieren, Entscheidungen 1 bis 3 und 6 bis 9): Meldet
   Tessie ein Fahrzeug klimatisierend und ladend, obwohl sein Modus nicht laden will
   (``climate_hold``), gilt das Urteil seiner ``ModeMachine`` in diesem Zyklus als „laden“: Es
@@ -92,9 +97,9 @@ Dazu legt die Regelung fest:
   (``_paused``), und solange die Grenze des 15-min-Wächters den Mindeststrom nicht trägt, ruht sie
   ebenso. Das Fahrzeug stoppt dann wie ohne die Regel (Selbststart). Während der Regel und einmal
   an ihrem Ende beginnen die Zeiten des Selbststarts neu: Lädt das Fahrzeug danach weiter, stoppt
-  es ``control.tesla_against_s`` nach dem Ende, nicht erst ``tesla_against_retry_s`` nach einem
-  Neuversuch davor. Für ``unmet_surplus_w`` zählt ein Fahrzeug, das die Regel hält, wie eines bei
-  „Laden aus“.
+  es ``control.tesla_against_s`` (an einer EVCS ``evcs_against_s``) nach dem Ende, nicht erst
+  ``tesla_against_retry_s`` (``evcs_against_retry_s``) nach einem Neuversuch davor. Für
+  ``unmet_surplus_w`` zählt ein Fahrzeug, das die Regel hält, wie eines bei „Laden aus“.
 - Geladen, bleibt an (Regel K2; Plan Vorklimatisieren, Entscheidungen 4 bis 8): War ein Fahrzeug
   an einer EVCS im Ansteckvorgang „geladen“ (``keep_on_complete``), gilt das Urteil seiner
   ``ModeMachine`` als „laden“, bis zum Abstecken: Die EVCS bleibt mit dem Mindeststrom des
@@ -107,7 +112,8 @@ Dazu legt die Regelung fest:
   Regelung die Mindestpause ``control.min_off_s`` selbst ein (``_paused``), denn die Maschine sagt
   für ein „geladenes“ Auto ohnehin „aus“; wie in der Maschine heben ein Moduswechsel, ein neuer
   Ansteckvorgang und ``idle`` sie auf. Trägt die Grenze des 15-min-Wächters den Mindeststrom
-  nicht, geht die EVCS aus wie ohne die Regel. Gilt auch K1, geht K1 vor.
+  nicht, geht die EVCS aus wie ohne die Regel. Gilt auch K1, geht K1 vor. Während der Regel beginnen
+  die Zeiten des Selbststarts neu wie bei K1.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
@@ -439,7 +445,8 @@ class _Situation:
       (``None`` ohne)
     - ``level``: die Überlast; ``unclear``: die Zuordnung ist unklar
     - ``resume``: die erste Startfolge nach einer Pause steht noch aus
-    - ``self_start``: Das Fahrzeug lädt seit ``control.tesla_against_s`` gegen seinen Modus, und
+    - ``self_start``: Das Auto lädt gegen seinen Modus, an einer EVCS laut ihrem Rücklesen „Laden
+      an“ seit ``control.evcs_against_s``, sonst laut Tessie seit ``control.tesla_against_s``, und
       ein Neuversuch ist fällig; der Stopp trägt dann den Grund ``self_start``
     - ``firm``: in „Geplant“ der Grund des festen Bedarfs (``plan_power``, ``latest_start``),
       sonst ``None``; ``reached``: in „Geplant“ ist das Ziel erreicht, ein Stopp trägt dann
@@ -509,8 +516,12 @@ class ChargeController:
         timers = ModeTimers.from_config(cfg.control)
         self._machines = {key: ModeMachine(timers) for key in self._fleet}
         self._tesla = {key: TeslaPolicy(cfg.control, v.wake) for key, v in cfg.vehicles.items()}
-        # Selbststart: je Fahrzeug mit Tessie, wie lange es gegen seinen Modus lädt
+        # Selbststart: je Fahrzeug mit Tessie, wie lange es gegen seinen Modus lädt, und je Auto an
+        # der EVCS, wie lange ihr Rücklesen gegen seinen Modus „Laden an“ zeigt
         self._against = AgainstMode(cfg.control.tesla_against_s, cfg.control.tesla_against_retry_s)
+        self._against_evcs = AgainstMode(
+            cfg.control.evcs_against_s, cfg.control.evcs_against_retry_s
+        )
         # Vorklimatisieren: die Fahrzeuge, die die Regel K1 im letzten Zyklus hielt
         self._climate: set[str] = set()
         # Regeln K1 und K2: je Auto der letzte Stopp der Überlast (``force_stop``) und der Modus
@@ -659,6 +670,7 @@ class ChargeController:
                 if vehicle.new_session:
                     self._unseen_sessions.add(key)
                 self._against.due(key, now, False)  # ohne Regelung gilt es als unterbrochen
+                self._against_evcs.due(key, now, False)
                 continue
             mode, target = modes[key], cycle.targets[key][1]
             # Die Grenze des 15-min-Wächters: Liegt sie unter dem freien Strom, gilt sie an dessen
@@ -684,13 +696,15 @@ class ChargeController:
             if holds and climate_hold(self._cfg, key, tessie, vehicle, mode, decision):
                 decision, hold = ModeDecision(True, None), CLIMATE
                 climate.add(key)
-                self._against.clear(key)
+                self._clear_against(key)
             else:
                 if key in self._climate:
-                    self._against.clear(key)
-                # Regel K2: Die EVCS bleibt für ein „geladenes“ Auto an. K1 geht vor.
+                    self._clear_against(key)
+                # Regel K2: Die EVCS bleibt für ein „geladenes“ Auto an. K1 geht vor. Wie unter
+                # K1 zählt der Selbststart nicht, seine Zeiten beginnen neu.
                 if holds and keep_on_complete(self._cfg, key, point, vehicle, mode):
                     decision, hold = ModeDecision(True, None), KEEP_ON_COMPLETE
+                    self._clear_against(key)
             if point.evcs:
                 wanted = cycle.wanted.get(key, 0)
                 limit = point.min_a if free_a is None else math.floor(free_a)
@@ -713,7 +727,7 @@ class ChargeController:
                 carries=not locked
                 and free_a is not None
                 and limit + self._extra_a(mode) >= point.min_a,
-                self_start=self._self_start(now, key, actuator, vehicle, decision, inputs),
+                self_start=self._self_start(now, key, actuator, point, vehicle, decision, inputs),
                 firm=None if plan is None else plan.code,
                 reached=plan is not None and plan.reached,
                 uncapped_a=(uncapped[key].max_a if point.max_a < uncapped[key].max_a else None),
@@ -821,8 +835,8 @@ class ChargeController:
             self._resume = set(self._fleet)
         for tesla in self._tesla.values():
             tesla.restart()
-        for key in self._tesla:
-            self._against.clear(key)
+        for key in self._fleet:
+            self._clear_against(key)
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE
         # Erst die Version, dann die Ansichten: Ein Health, das die Version liest, nachdem die
@@ -1342,9 +1356,9 @@ class ChargeController:
         reached = remembered and vehicle.plugged is not None  # der gemerkte Vorgang kommt an
         if (vehicle.new_session or reached) and key in self._tesla:
             self._tesla[key].restart()
-            self._against.clear(key)
         if vehicle.new_session or reached:  # die Pause des alten Vorgangs verfällt (``_paused``)
             self._forced.pop(key, None)
+            self._clear_against(key)
         if back or vehicle.new_session or reached:
             self._last.forget({actuator})
         if vehicle.plugged is not None:  # bei unbekanntem bleibt er für den nächsten Schritt
@@ -1454,45 +1468,70 @@ class ChargeController:
         now: datetime,
         key: str,
         actuator: str,
+        point: ChargePoint,
         vehicle: VehicleState,
         decision: ModeDecision,
         inputs: ChargeInputs,
     ) -> bool:
-        """Ob das Fahrzeug lange genug gegen seinen Modus lädt, damit der Stopp erneut hinausgeht.
+        """Ob das Auto lange genug gegen seinen Modus lädt, damit der Stopp erneut hinausgeht.
 
-        Gegen den Modus lädt ein Fahrzeug mit Tessie, wenn Tessie es mit mindestens 1 A ladend
-        meldet, der Modus nicht laden will (``decision.charge`` falsch), der Ansteckzustand bekannt
-        und die Zuordnung klar ist. ``AgainstMode`` wird nur befragt, wenn der Stopp in diesem
-        Zyklus hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die
-        Zeit weiter und der Neuversuch bleibt unverbraucht. Ist ``due`` wahr, vergisst die Regelung
-        den letzten Wert für ``charging`` des Aktors (nur diese Art, nicht den Strom und dessen
-        ``not_taken_retry``), damit „Laden aus“ erneut hinausgeht.
+        An einer EVCS (``point.evcs``) gilt für jedes Auto, auch für einen Gast und für ein
+        Fahrzeug mit Tessie, nur ihr Rücklesen: Gegen den Modus lädt es, wenn die EVCS „Laden an“
+        meldet (``present`` für ``charging`` ist wahr; fehlt der Wert, unterbricht das die Zeit),
+        der Modus nicht laden will (``decision.charge`` falsch), das Auto angesteckt und die
+        Zuordnung klar ist; die Zeiten führt ``_against_evcs`` mit ``control.evcs_against_s`` und
+        ``evcs_against_retry_s`` (Plan EVCS-Selbststart). Sonst, am Wall Connector, lädt ein
+        Fahrzeug mit Tessie gegen den Modus, wenn Tessie es mit mindestens 1 A ladend meldet, der
+        Modus nicht laden will, der Ansteckzustand bekannt und die Zuordnung klar ist; die Zeiten
+        führt ``_against`` mit ``control.tesla_against_s`` und ``tesla_against_retry_s``.
+
+        ``AgainstMode`` wird nur befragt, wenn der Stopp in diesem Zyklus hinausgehen kann (Aktor
+        steuerbar, ``charging`` nicht blockiert); sonst läuft die Zeit weiter und der Neuversuch
+        bleibt unverbraucht. Ist ``due`` wahr, vergisst die Regelung den letzten Wert für
+        ``charging`` des Aktors (nur diese Art, nicht den Strom und dessen ``not_taken_retry``),
+        damit „Laden aus“ erneut hinausgeht.
         """
-        if key not in self._tesla or self._cfg.vehicles[key].tessie is None:
+        clear = vehicle.kind is not AssignmentKind.UNCLEAR
+        if point.evcs:
+            against_mode = self._against_evcs
+            against = (
+                inputs.present.get((actuator, _CHARGING)) is True
+                and not decision.charge
+                and vehicle.plugged is True
+                and clear
+            )
+        elif key in self._tesla and self._cfg.vehicles[key].tessie is not None:
+            against_mode = self._against
+            tessie = inputs.vehicles.get(key, NO_VEHICLE_DATA)
+            current_a = finite_number(tessie.actual_current_a)
+            against = (
+                tessie.reachable
+                and tessie.charging is True
+                and current_a is not None
+                and current_a >= _SELF_START_MIN_A
+                and not decision.charge
+                and vehicle.plugged is not None
+                and clear
+            )
+        else:
             return False
-        tessie = inputs.vehicles.get(key, NO_VEHICLE_DATA)
-        current_a = finite_number(tessie.actual_current_a)
-        against = (
-            tessie.reachable
-            and tessie.charging is True
-            and current_a is not None
-            and current_a >= _SELF_START_MIN_A
-            and not decision.charge
-            and vehicle.plugged is not None
-            and vehicle.kind is not AssignmentKind.UNCLEAR
-        )
         if not against:
-            self._against.due(key, now, False)  # unterbricht die Zeit
+            against_mode.due(key, now, False)  # unterbricht die Zeit
             return False
         sendable = inputs.controllable.get(actuator) is True and (
             (actuator, _CHARGING) not in inputs.blocked
         )
         if not sendable:  # der Stopp kann diesen Zyklus nicht hinaus: die Zeit läuft weiter
             return False
-        due = self._against.due(key, now, True)
+        due = against_mode.due(key, now, True)
         if due:
             self._last.forget_key((actuator, _CHARGING))
         return due
+
+    def _clear_against(self, key: str) -> None:
+        """Die Zeiten des Selbststarts für ``key`` beginnen neu, an der EVCS wie mit Tessie."""
+        self._against.clear(key)
+        self._against_evcs.clear(key)
 
     def _paused(self, key: str, now: datetime, vehicle: VehicleState, mode: Effective) -> bool:
         """Ob das Auto in der Mindestpause nach einem Stopp der Überlast steht (Regeln K1 und K2).
