@@ -1387,6 +1387,7 @@ def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> Non
         300,
         make=tesla_inputs,
         intent=EVCS_OFF,
+        dry_run=False,  # der Selbststart an der EVCS zählt nur nach live gesendetem „Laden aus“
         twc_obs=twc(),
         evcs_obs=lambda s: evcs_charging if started(s) else evcs(),
         tesla_obs=lambda s: (
