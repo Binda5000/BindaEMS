@@ -826,6 +826,22 @@ def test_stops_within_finds_a_late_stop(cfg) -> None:
     assert found(stop(2705, DRY_RUN)) == [] and found(stop(2705, ERROR)) == []
 
 
+def test_the_autostart_check_requires_the_reason_self_start(cfg) -> None:
+    within = check("egolf-autostart", 0)
+    assert within.text.startswith("„wallbox.evcs“ bekommt „Laden aus“ (Grund „self_start“) binnen ")
+
+    def found(*decisions: Decision) -> list[str]:
+        return within.find(result_of(cfg, "egolf-autostart", decisions=list(decisions)))
+
+    def evcs_stop(seconds: float, *codes: str) -> Decision:
+        return with_codes(decision(seconds, "wallbox.evcs", CHARGING, False, OK), *codes)
+
+    on_s = 300 + 10 + 3
+    assert found(evcs_stop(on_s + 60, "mode_pv", "self_start")) == []
+    # Ein Stopp aus einem anderen Grund im Fenster genügt mit dem Filter nicht.
+    assert len(found(evcs_stop(on_s + 60, "mode_pv"))) == 1
+
+
 def test_the_selfstart_stop_has_210_s(cfg) -> None:
     within = check("tesla-selbststart", 0)
     assert within.text == "„vehicle.tesla“ bekommt „Laden aus“ binnen 210 s nach 5 min."
