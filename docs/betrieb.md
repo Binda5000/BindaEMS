@@ -3550,8 +3550,9 @@ den ersten Tagen:
   `control.tesla_against_retry_s` (600 s). Der Befehl zählt im Start/Stopp-Budget, außer im Modus
   „Aus“ (dort ist er dringend). Startet das Auto also selbst, etwa aus der Tesla-App, stoppt die
   Regelung es binnen rund 3,5 min wieder (Szenario `tesla-selbststart`).
-  **An der EVCS** gilt dasselbe für jedes Fahrzeug, auch einen Gast und einen Tesla an der EVCS, nur
-  ohne Tessie: Das Signal ist das Rücklesen „Laden an“ der EVCS (`start_stop`). Zeigt es
+  **An der EVCS** gilt dasselbe für jedes Fahrzeug, auch einen Gast und einen Tesla an der EVCS;
+  das Signal kommt dort nicht von Tessie, sondern aus dem Rücklesen „Laden an“ der EVCS
+  (`start_stop`). Zeigt es
   `control.evcs_against_s` (60 s) ohne Unterbrechung „Laden an“, obwohl der Modus „nicht laden“
   ergibt, sendet die Regelung „Laden aus“ erneut (Grund `self_start`), je Fahrzeug höchstens alle
   `control.evcs_against_retry_s` (300 s). Sie tut das nur, wenn das Fahrzeug angesteckt und die
@@ -3559,7 +3560,12 @@ den ersten Tagen:
   wenn ihr letztes „Laden an/aus“ an dieser EVCS wirklich gesendet wurde (nicht im Dry-Run). Anlass
   war der 05.11.2026: Der e-Golf wurde kurz abgesteckt, und nach dem Wiederanstecken schaltete der
   „Autostart“ der EVCS sie selbst ein; sie lud gut drei Stunden mit rund 3,2 kW aus dem Netz
-  (Szenario `egolf-autostart`).
+  (Szenario `egolf-autostart`). Dringend ist der Stopp nur im Modus „Aus“. Ein Stundenlimit für
+  Start/Stopp hat die EVCS nicht (Stundenlimits gelten nur für Tesla-Aktoren, an der EVCS gilt nur
+  der Mindestabstand zwischen Befehlen); der Neuversuch alle 300 s verbraucht also kein Budget.
+  **Rückweg:** Wer `control.evcs_against_s` oder `control.evcs_against_retry_s` in `config.yaml`
+  einträgt, entfernt sie vor einem Rollback des core, denn ein älterer Stand kennt die Schlüssel
+  nicht und startet mit ihnen nicht (`extra="forbid"`).
 - **Vorklimatisieren** (Plan Vorklimatisieren, Grund `climate`): Startet die Klimatisierung am
   Kabel, beginnt der Tesla oft selbst zu laden. Meldet Tessie `climate_state.is_climate_on` oder
   `is_preconditioning` (Signal `vehicle.<Schlüssel>.climate_on`), ist das Auto erreichbar, angesteckt

@@ -2127,7 +2127,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   20. **Selbststart an der EVCS (Plan EVCS-Selbststart) ausrollen:** core **und** app gemeinsam (die app liest `config.yaml` mit, die neuen
       Schlüssel `control.evcs_against_s` und `control.evcs_against_retry_s` kennt ein alter Stand nicht, `extra="forbid"`), **keine Migration,
       keine ACL-Zeile, kein Schritt an `config.yaml`** (ohne Eintrag gelten 60 s und 300 s), mit Stufe 2 des Sammel-Pulls (ab 23.11.2026),
-      nie allein. **Vorher prüft Binda in Grafana/Influx** (Explore, InfluxDB, Zeitraum 05.11.2026 14:00 bis 20:30), dass
+      nie allein. **Rückweg:** Wer `control.evcs_against_s`/`evcs_against_retry_s` in `config.yaml` einträgt, entfernt sie vor einem Rollback des core (`extra="forbid"`). **Vorher prüft Binda in Grafana/Influx** (Explore, InfluxDB, Zeitraum 05.11.2026 14:00 bis 20:30), dass
       `wallbox.evcs.start_stop` um ~16:19 von 0 auf 1 sprang (`mode` bleibt 0):
       `SELECT last("value_num") FROM "status" WHERE "id" =~ /^wallbox\..+\.(start_stop|gx_start_stop|mode|gx_mode|status)$/ AND $timeFilter GROUP BY time(1m), "id" fill(previous)`.
       Bleibt `start_stop` auf 0, gilt die Annahme des Plans (Entscheidung 1) nicht: Dann wird der Fix nicht ausgerollt, und ein eigener Plan
