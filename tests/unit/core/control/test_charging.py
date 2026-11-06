@@ -3662,6 +3662,29 @@ def test_autostart_after_replug_gets_charging_off(cfg) -> None:
     assert stops[0][1].reasons[-1] == "self_start"
 
 
+def test_autostart_after_replug_with_an_unchanged_live_verdict(cfg) -> None:
+    # Festschreibungstest des Vorfalls vom 05.11.2026: Nach dem Wiederanstecken (ab 55) fragt die
+    # Regelung „aus“ erneut an, die Safety-Schicht antwortet live mit ``UNCHANGED`` (das Rücklesen
+    # zeigt noch aus). Springt es bei 58 auf „an“, folgt 60 s später der Stopp mit ``self_start``.
+    def evcs_obs(s):
+        if 50 <= s < 55:
+            return evcs(connected=False)
+        return evcs() if s < 58 else EVCS_ON
+
+    found = evcs_self_start_run(
+        cfg,
+        EVCS_PV,
+        300,
+        on_from=58,
+        evcs_obs=evcs_obs,
+        dry_run=False,
+        outcome=lambda s: Outcome.UNCHANGED if s >= 55 else Outcome.ACCEPTED,
+    )
+    stops = stops_of(found)
+    assert [t for t, _ in stops] == [0, 55, 118]
+    assert stops[-1][1].reasons[-1] == "self_start"
+
+
 def test_a_guest_at_the_evcs_gets_self_start_too(cfg) -> None:
     guest_pv = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.PV))
     found = evcs_self_start_run(cfg, guest_pv, 200, homes={"egolf": False})
