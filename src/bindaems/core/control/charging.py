@@ -77,7 +77,10 @@ Dazu legt die Regelung fest:
   Auto (Fahrzeug mit oder ohne Tessie, Gast) mit ihrem Rücklesen „Laden an“ als Signal, solange das
   Auto angesteckt ist: nach ``control.evcs_against_s``, höchstens alle
   ``control.evcs_against_retry_s`` je Auto. So stoppt die Regelung auch eine EVCS, die ein anderer
-  einschaltet, etwa ihr Autostart nach dem Wiederanstecken. Am Wall Connector gilt es für ein
+  einschaltet, etwa ihr Autostart nach dem Wiederanstecken. Das gilt nur, wenn das letzte Urteil
+  über „Laden an/aus“ der EVCS live war (``note_verdict``); ohne ein Urteil zählt es nicht. Im
+  Dry-Run schaltet BindaEMS die EVCS nicht, ihr Rücklesen zeigt einen fremden Regler, und eine
+  wiederholte Entscheidung füllte nur das Log. Am Wall Connector gilt es für ein
   Fahrzeug mit Tessie, das laut Tessie mit mindestens 1 A lädt: nach ``control.tesla_against_s``,
   höchstens alle ``control.tesla_against_retry_s`` je Fahrzeug. Das gilt nur für Zyklen, in denen
   der Stopp hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die Zeit
@@ -243,7 +246,7 @@ from bindaems.core.control.timing import lasted
 from bindaems.core.control.vehicle_soc import SocReading, SocTracker
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
-from bindaems.shared.config import Config
+from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.control import (
     Command,
     CommandKind,
@@ -253,6 +256,7 @@ from bindaems.shared.control import (
     SurplusPriority,
     VehicleIntent,
     vehicle_actuator,
+    wallbox_actuator,
 )
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import ensure_utc
@@ -522,6 +526,14 @@ class ChargeController:
         self._against_evcs = AgainstMode(
             cfg.control.evcs_against_s, cfg.control.evcs_against_retry_s
         )
+        # je EVCS-Aktor, ob das letzte Urteil über „Laden an/aus“ im Dry-Run war: Der Selbststart
+        # an der EVCS zählt nur, wenn es live war
+        self._evcs_actuators = {
+            wallbox_actuator(name)
+            for name, wallbox in cfg.wallboxes.items()
+            if isinstance(wallbox, EvcsConfig)
+        }
+        self._evcs_dry_run: dict[str, bool] = {}
         # Vorklimatisieren: die Fahrzeuge, die die Regel K1 im letzten Zyklus hielt
         self._climate: set[str] = set()
         # Regeln K1 und K2: je Auto der letzte Stopp der Überlast (``force_stop``) und der Modus
@@ -787,7 +799,9 @@ class ChargeController:
         ``step``. Ein Ladelimit, das den letzten eigenen Wert setzt, ist für seinen Ansteckvorgang
         und sein Ziel erledigt (``ChargeLimits``). Setzt das Urteil einen Start oder einen höheren
         Strom als den letzten eigenen, beginnt mit der Zeit des letzten ``step`` der Anlauf des
-        Aktors (``RAMP_UP_S``, ``unmet_surplus_w``).
+        Aktors (``RAMP_UP_S``, ``unmet_surplus_w``). Für „Laden an/aus“ einer EVCS merkt sie sich,
+        ob das Urteil im Dry-Run war: Der Selbststart dort zählt nur nach einem live gesendeten
+        (``_self_start``); ohne Urteil (``None``) bleibt der gemerkte Wert.
         """
         started = command.kind is _CHARGING and command.value is True
         before = self._last.requested((command.actuator, command.kind))
@@ -798,6 +812,12 @@ class ChargeController:
             self._resume -= {key for key, actor in self._regulated if actor == command.actuator}
         if judged and command.kind is _LIMIT:
             self._charge_limits.judged(command.actuator, command.value)
+        if (
+            verdict is not None
+            and command.kind is _CHARGING
+            and command.actuator in self._evcs_actuators
+        ):
+            self._evcs_dry_run[command.actuator] = verdict.dry_run
         if command.wake and verdict is not None and verdict.sendable:
             self._tesla[self._vehicles[command.actuator]].note_wake(self._now, self._wall_now)
 
@@ -1478,9 +1498,11 @@ class ChargeController:
         An einer EVCS (``point.evcs``) gilt für jedes Auto, auch für einen Gast und für ein
         Fahrzeug mit Tessie, nur ihr Rücklesen: Gegen den Modus lädt es, wenn die EVCS „Laden an“
         meldet (``present`` für ``charging`` ist wahr; fehlt der Wert, unterbricht das die Zeit),
-        der Modus nicht laden will (``decision.charge`` falsch), das Auto angesteckt und die
-        Zuordnung klar ist; die Zeiten führt ``_against_evcs`` mit ``control.evcs_against_s`` und
-        ``evcs_against_retry_s`` (Plan EVCS-Selbststart). Sonst, am Wall Connector, lädt ein
+        das letzte Urteil der Safety-Schicht über ihr ``charging`` live war (ohne eines zählt es
+        nicht: Im Dry-Run schaltet BindaEMS die EVCS nicht, eine wiederholte Entscheidung füllte nur
+        das Log), der Modus nicht laden will (``decision.charge`` falsch), das Auto angesteckt und
+        die Zuordnung klar ist; die Zeiten führt ``_against_evcs`` mit ``control.evcs_against_s``
+        und ``evcs_against_retry_s`` (Plan EVCS-Selbststart). Sonst, am Wall Connector, lädt ein
         Fahrzeug mit Tessie gegen den Modus, wenn Tessie es mit mindestens 1 A ladend meldet, der
         Modus nicht laden will, der Ansteckzustand bekannt und die Zuordnung klar ist; die Zeiten
         führt ``_against`` mit ``control.tesla_against_s`` und ``tesla_against_retry_s``.
@@ -1496,6 +1518,7 @@ class ChargeController:
             against_mode = self._against_evcs
             against = (
                 inputs.present.get((actuator, _CHARGING)) is True
+                and self._evcs_dry_run.get(actuator) is False
                 and not decision.charge
                 and vehicle.plugged is True
                 and clear

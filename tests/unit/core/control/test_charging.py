@@ -3545,9 +3545,10 @@ EVCS_ON = evcs(charging=True, phase_a={"L1": 7.0, "L2": 7.0, "L3": 0.0}, power_w
 EVCS_PV = egolf_in(ChargeMode.PV)
 
 
-def evcs_self_start_run(cfg, intent, seconds, *, on_from=60, **kw):
+def evcs_self_start_run(cfg, intent, seconds, *, on_from=60, dry_run=False, **kw):
     """Der e-Golf steht an der EVCS, ohne Überschuss; bis ``on_from`` ist die EVCS aus
-    (Rücklesen 7 A, aus), ab da meldet sie „Laden an“ und lädt mit 7 A auf zwei Phasen."""
+    (Rücklesen 7 A, aus), ab da meldet sie „Laden an“ und lädt mit 7 A auf zwei Phasen. Die
+    Urteile sind ohne Angabe live (``dry_run``)."""
     off = {"present": at_evcs(7.0, False), "evcs_obs": evcs(), "grid_obs": NO_SHARE}
     on = {"present": at_evcs(7.0, True), "evcs_obs": EVCS_ON, "grid_obs": grid(grid_w=3200.0)}
 
@@ -3559,6 +3560,7 @@ def evcs_self_start_run(cfg, intent, seconds, *, on_from=60, **kw):
         cfg,
         seconds,
         intent=intent,
+        dry_run=dry_run,
         **{**{key: chosen(key) for key in off}, **kw},
     )
 
@@ -3579,6 +3581,13 @@ def test_an_evcs_switched_on_against_pv_gets_charging_off_again(cfg) -> None:
     reasons = stops[0][1].reasons
     assert reasons[0] == "mode_pv"
     assert reasons[-1] == "self_start"
+
+
+def test_dry_run_evcs_gets_no_self_start(cfg) -> None:
+    # Im Dry-Run schaltet BindaEMS die EVCS nicht; das Rücklesen zeigt einen fremden Regler. Eine
+    # wiederholte Entscheidung füllte nur das Log: kein Stopp nach dem ersten.
+    found = evcs_self_start_run(cfg, EVCS_PV, 700, dry_run=True)
+    assert [t for t, _ in stops_of(found)] == [0]
 
 
 def test_evcs_self_start_is_retried_at_most_every_5_min(cfg) -> None:
@@ -3700,21 +3709,21 @@ GUEST_OFF = {
 
 @pytest.mark.parametrize("car", [{"intent": egolf_in(ChargeMode.OFF)}, GUEST_OFF])
 def test_idle_starts_the_evcs_self_start_times_anew(cfg, car) -> None:
-    # Im Modus Aus: Stopp bei 60, Selbststart bei 120, ``idle`` bei 130. Ab 140 beginnen die Zeiten
-    # neu, samt dem Abstand zum Neuversuch, auch für den Gast: Der nächste Stopp mit Grund folgt
-    # 60 s danach, nicht erst bei 420.
+    # Im Modus Aus: Stopp bei 60; erst mit seinem live Urteil zählt die Zeit, ab 61, Selbststart bei
+    # 121. ``idle`` bei 130: Ab 140 beginnen die Zeiten neu, samt dem Abstand zum Neuversuch, auch
+    # für den Gast. Der nächste Stopp mit Grund folgt 60 s danach, nicht erst bei 421.
     c = controller(cfg)
     on = {"present": at_evcs(7.0, True), "evcs_obs": EVCS_ON, "grid_obs": grid(grid_w=3200.0)}
 
     def step(s):
         commands = c.step(inputs(cfg, s=s, **car, **on))
-        accept(c, commands)
+        accept(c, commands, dry_run=False)
         return [(s, x) for x in commands]
 
     found = [x for s in range(60, 130) for x in step(s)]
     c.idle(T0 + timedelta(seconds=130))
     found += [x for s in range(140, 300) for x in step(s)]
-    assert self_started(found) == [120, 200]
+    assert self_started(found) == [121, 200]
 
 
 @pytest.mark.parametrize(
@@ -3725,8 +3734,11 @@ def test_idle_starts_the_evcs_self_start_times_anew(cfg, car) -> None:
     ],
 )
 def test_no_evcs_self_start_unclear_or_off_the_evcs(cfg, point, kind) -> None:
-    # Das Rücklesen zeigt 200 s lang „Laden an“ gegen den Modus: kein Selbststart
+    # Das letzte „Laden aus“ ging live hinaus, das Rücklesen zeigt 200 s lang „Laden an“ gegen den
+    # Modus: kein Selbststart
     c = controller(cfg)
+    stop = Command("wallbox.evcs", CHARGING, False)
+    c.note_verdict(stop, Verdict(stop, Outcome.ACCEPTED, False, (), False))
     vehicle = replace(AT_THE_EVCS, kind=kind, charging=True)
     off = ModeDecision(charge=False, reason=None)
 
@@ -3735,3 +3747,27 @@ def test_no_evcs_self_start_unclear_or_off_the_evcs(cfg, point, kind) -> None:
         return c._self_start(inp.now, "egolf", "wallbox.evcs", point, vehicle, off, inp)
 
     assert not any(due(s) for s in range(0, 200, 10))
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "expected"),
+    [
+        ((False,), True),  # live: zählt
+        ((False, None), True),  # ohne Urteil bleibt der gemerkte Wert
+        ((False, True), False),  # zuletzt im Dry-Run
+        ((), False),  # noch kein Urteil
+    ],
+)
+def test_the_evcs_self_start_needs_a_live_verdict(cfg, verdicts, expected) -> None:
+    c = controller(cfg)
+    stop = Command("wallbox.evcs", CHARGING, False)
+    for dry_run in verdicts:
+        verdict = None if dry_run is None else Verdict(stop, Outcome.ACCEPTED, False, (), dry_run)
+        c.note_verdict(stop, verdict)
+    off = ModeDecision(charge=False, reason=None)
+
+    def due(s: int) -> bool:
+        inp = inputs(cfg, s=s, present=at_evcs(7.0, True), evcs_obs=EVCS_ON)
+        return c._self_start(inp.now, "egolf", "wallbox.evcs", EVCS_POINT, AT_THE_EVCS, off, inp)
+
+    assert any(due(s) for s in range(0, 200, 10)) is expected
