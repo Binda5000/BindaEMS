@@ -905,6 +905,13 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Simulator:** Die Szenarien `tesla-vorklimatisieren` und `egolf-voll-bleibt-an` (16, jetzt 45).
 - **Ausrollen und Rückweg:** core und app gemeinsam mit dem nächsten gemeinsamen Pull (der core sendet neue Grund-Codes, die app kennt ihren Text); keine Migration, keine Änderung der Absicht, keine ACL-Zeile, kein Schritt an `config.yaml` (der Schalter ist ab Werk an). Hat jemand `climate_via_wallbox` in `config.yaml` eingetragen, muss er es vor einem Rollback des core entfernen (`extra="forbid"`). An der Anlage zu bestätigen (Annahme im Plan): Bei einem Vorheizen zeigt das Log „Vorklimatisieren“ und keinen Stopp „Selbststart“, und mit einem vollen e-Golf bleibt die EVCS an („Geladen, bleibt an“).
 
+**Stand Plan EVCS-Selbststart** (`docs/superpowers/plans/2026-11-05-evcs-selbststart.md`, Entscheidungen 1 bis 8; Betrieb: `docs/betrieb.md`, „Laderegelung“, „Tesla“, „Selbststart“): Der Selbststart (oben) gilt auch an der EVCS. Anlass war der 05.11.2026: Nach dem Wiederanstecken des e-Golf schaltete der „Autostart“ der EVCS sie selbst ein, und sie lud bis ~20:00 mit rund 3,2 kW aus dem Netz; die Regelung hatte „Laden aus“ nur angefragt, solange das Rücklesen noch 0 zeigte (die Safety-Schicht antwortet `UNCHANGED`, kein Log), und danach geschwiegen, weil „aus“ wieder ihr letzter Wert war. Gegenüber dem Selbststart oben gilt:
+- **Signal:** das Rücklesen „Laden an“ der EVCS (`EvcsActuator.present`, Register `start_stop`, ersatzweise `gx_start_stop`), nicht Ladestatus und nicht Leistung. Ohne Tessie.
+- **Auslösung:** Zeigt das Rücklesen `control.evcs_against_s` (Standard 60 s) ohne Unterbrechung „Laden an“, obwohl das Urteil nicht laden will (nicht unter K1 und K2), das Fahrzeug angesteckt und die Zuordnung klar ist, sendet die Regelung „Laden aus“ erneut (Grund `self_start`), je Fahrzeug höchstens alle `control.evcs_against_retry_s` (Standard 300 s). Es gilt für jedes Auto an einer geregelten EVCS (auch Gäste und ein Tesla an der EVCS); für den Tesla am Wall Connector bleibt der Zweig über Tessie. Dringend ist der Befehl nur im Modus „Aus“.
+- **Nur nach einem live gesendeten Urteil:** Der Neuversuch gilt nur, wenn das letzte „Laden an/aus“ an dieser EVCS live gesendet wurde, nicht im Dry-Run.
+- **Zeiten:** Zeit und Neuversuch beginnen neu bei einem neuen Ansteckvorgang, beim gemerkten Vorgang, bei `idle`, in einem ungeregelten Zyklus und während K1 und K2.
+- **Simulator:** Das Szenario `egolf-autostart` (16, jetzt 48). **Ausrollen:** core und app gemeinsam, mit Stufe 2 des Sammel-Pulls (ab 23.11.2026), nie allein; keine Migration, keine ACL-Zeile, kein Schritt an `config.yaml`. Vorher prüft der Betreiber in Influx, dass `wallbox.evcs.start_stop` am 05.11. um ~16:19 auf 1 sprang. Stand der Anlage: Autostart der EVCS aus seit 05.11.2026.
+
 ### 7.6 Akku-Unterstützung beim Autoladen
 
 - **Parameter (Defaults):**
@@ -2321,6 +2328,9 @@ pv:
 **Stand Plan Vorklimatisieren** (`docs/superpowers/plans/2026-10-28-vorklimatisieren-ueber-wallbox.md`, Entscheidungen 1, 4 und 9; Szenarien: `docs/betrieb.md`, „Simulator“): Der Anlagensimulator hat zwei Szenarien mehr (jetzt 45), das Modell des Tesla (`tools/sim/cars.py`) meldet die Klimatisierung über Tessie (`climate_state`, Stellgröße `climate_on`; ein Ereignis des Szenarios startet dabei das Laden im Auto, wie es das Auto am Kabel selbst tut):
 - **`tesla-vorklimatisieren`** (40 min): Der Tesla am Wall Connector in PV-Überschuss ohne PV klimatisiert ab 5 min und lädt dabei selbst; bis 25 min bekommt er kein „Laden aus“ (Regel „Vorklimatisieren“), ab 7 min fordert die Regelung höchstens 5 A, und nach dem Ende der Klimatisierung stoppt ihn der Selbststart binnen 210 s.
 - **`egolf-voll-bleibt-an`** (30 min): Der e-Golf an der EVCS wird „geladen“ (Status 3); danach bekommt die EVCS kein „Laden aus“ (Regel „Geladen, bleibt an“), und ihr letzter Strombefehl fordert 6 A (`min_a`).
+
+**Stand Plan EVCS-Selbststart** (Szenarien: `docs/betrieb.md`, „Simulator“): Der Anlagensimulator hat ein Szenario mehr (jetzt 48):
+- **`egolf-autostart`** (30 min): Der e-Golf an der EVCS wird bei 5 min abgesteckt, 10 s später wieder angesteckt, und 3 s danach schaltet die EVCS „Laden an“ selbst ein (Autostart); sie bekommt binnen 90 s „Laden aus“ (Selbststart, Grund `self_start`), und ab 2 min danach lädt der e-Golf nicht mehr.
 
 ---
 

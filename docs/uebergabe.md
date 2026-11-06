@@ -300,6 +300,17 @@ bleiben stehen. Lösche sie je Fahrzeug mit `mosquitto_pub -r -n -t homeassistan
 `bindaems/state/<objekt-id>_charge_estimate` und `bindaems/state/<objekt-id>_charge_estimate/attributes` (wie bei der Abfahrtszeit, `betrieb.md`).
 Betrieb: `docs/betrieb.md`, Abschnitt 7 („Ladeschätzung“); Blueprint: `LIESMICH.md` im Projektordner, „Knöpfe beim Anstecken (Stand 2026-11)“.
 
+**Stand EVCS-Selbststart (06.11.2026):** Plan `docs/superpowers/plans/2026-11-05-evcs-selbststart.md`. Anlass war der 05.11.2026: Der e-Golf
+war gegen 16:19 kurz abgesteckt; nach dem Wiederanstecken schaltete der „Autostart“ der EVCS sie selbst ein, und sie lud bis ~20:00 mit
+rund 3,2 kW aus dem Netz (Binda hat Autostart am 05.11. um 20:55 ausgeschaltet). Die Regelung hatte „Laden aus“ erneut angefragt, solange das
+Rücklesen noch 0 zeigte (die Safety-Schicht antwortet `UNCHANGED`, kein Log), und danach geschwiegen. Jetzt sendet sie „Laden aus“ erneut
+(Grund `self_start`), wenn das Rücklesen `control.evcs_against_s` (60 s) lang „Laden an“ zeigt, obwohl der Modus nicht laden will, je Fahrzeug
+höchstens alle `control.evcs_against_retry_s` (300 s), für jedes Auto an einer geregelten EVCS (auch Gäste), nicht unter K1/K2 und nur,
+wenn das letzte „Laden an/aus“ dort live gesendet wurde. Neu ist das Simulator-Szenario `egolf-autostart` (jetzt 48). **Ausgerollt werden
+core und app gemeinsam**, mit Stufe 2 des Sammel-Pulls (ab 23.11.2026), nie allein; **keine Migration, keine ACL-Zeile, kein Schritt an
+`config.yaml`**. Vorher prüft Binda in Influx, dass `wallbox.evcs.start_stop` am 05.11. um ~16:19 auf 1 sprang (Punkt 20 unter „Offen an
+der Anlage“). Betrieb: `docs/betrieb.md`, „Laderegelung“, „Tesla“, „Selbststart“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -1576,6 +1587,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   6a, 3d und 5a und seit dem 21.10.2026 5b; alle rollen gemeinsam aus. Laut Betreiber
   sind die Schritte zum Ausrollen erledigt (HA-Token, Mosquitto-ACL, `config.yaml`) und Leistungspreis
   und Planung eingerichtet.
+- **EVCS: Autostart aus seit 05.11.2026** (VictronConnect, 20:55; Modus manuell wie bisher). Der Autostart hatte am 05.11. nach dem
+  Wiederanstecken des e-Golf gut drei Stunden Netzladen ausgelöst (Stand EVCS-Selbststart oben, Punkt 20 unter „Offen an der Anlage“).
 - Wallbox (`wallbox.evcs`) und Tesla laut Betreiber seit dem 17.10.2026 **live**, evcc abgeschaltet;
   der Dry-Run neben evcc ist dabei übersprungen worden. Die Zuordnung der Autos hat der Betreiber am
   19.10.2026 in mehreren Konstellationen im Live-Betrieb geprüft, ohne Befund. Offen ist Teil 2
@@ -2111,6 +2124,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       bleibt der Sensor stehen, lösche je Fahrzeug die gehaltenen Topics mit `mosquitto_pub -r -n -t
       homeassistant/sensor/bindaems/<objekt-id>_charge_estimate/config`, ebenso `bindaems/state/<objekt-id>_charge_estimate` und
       `bindaems/state/<objekt-id>_charge_estimate/attributes`.
+  20. **Selbststart an der EVCS (Plan EVCS-Selbststart) ausrollen:** core **und** app gemeinsam (die app liest `config.yaml` mit, die neuen
+      Schlüssel `control.evcs_against_s` und `control.evcs_against_retry_s` kennt ein alter Stand nicht, `extra="forbid"`), **keine Migration,
+      keine ACL-Zeile, kein Schritt an `config.yaml`** (ohne Eintrag gelten 60 s und 300 s), mit Stufe 2 des Sammel-Pulls (ab 23.11.2026),
+      nie allein. **Vorher prüft Binda in Grafana/Influx** (Explore, InfluxDB, Zeitraum 05.11.2026 14:00 bis 20:30), dass
+      `wallbox.evcs.start_stop` um ~16:19 von 0 auf 1 sprang (`mode` bleibt 0):
+      `SELECT last("value_num") FROM "status" WHERE "id" =~ /^wallbox\..+\.(start_stop|gx_start_stop|mode|gx_mode|status)$/ AND $timeFilter GROUP BY time(1m), "id" fill(previous)`.
+      Bleibt `start_stop` auf 0, gilt die Annahme des Plans (Entscheidung 1) nicht: Dann wird der Fix nicht ausgerollt, und ein eigener Plan
+      klärt, wie die EVCS trotz „aus“ laden konnte. Stand der Anlage: **EVCS: Autostart aus seit 05.11.2026** (20:55, in VictronConnect;
+      Betrieb: `docs/betrieb.md`, „Laderegelung“, „Hinweise für die Anlage“); der Fix bleibt das Sicherheitsnetz.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
