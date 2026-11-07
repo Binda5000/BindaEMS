@@ -66,8 +66,17 @@ def test_core_down_text_uses_down_since() -> None:
 
 
 def test_outage_fails() -> None:
-    v = _verdict(outage=_outage(), soc_pct=62.0, range_now=18.0)
-    assert v == Verdict(False, f"Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18{NBSP}h ohne PV")
+    expected = Verdict(False, f"Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18{NBSP}h ohne PV")
+    assert _verdict(outage=_outage(), soc_pct=62.0, range_now=18.0) == expected
+    # im echten Ausfall steht der core im sicheren Zustand: der Netzausfall-Text gewinnt
+    safe = _verdict(
+        outage=_outage(),
+        soc_pct=62.0,
+        range_now=18.0,
+        mode="SAFE",
+        reasons=["Netzausfall (Inselbetrieb)."],
+    )
+    assert safe == expected
 
 
 def test_safe_fails() -> None:

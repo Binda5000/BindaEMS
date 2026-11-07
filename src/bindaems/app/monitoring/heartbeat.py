@@ -68,11 +68,9 @@ def verdict(
     soc_pct: float | None,
     range_now: float | None,
 ) -> Verdict:
-    """Urteil in der Reihenfolge core weg, Sicherer Zustand, Netzausfall, sonst in Ordnung."""
+    """Urteil in der Reihenfolge core weg, Netzausfall, Sicherer Zustand, sonst in Ordnung."""
     if not connected and down_since is not None and now - down_since >= CORE_GRACE:
         return Verdict(False, f"core nicht erreichbar seit {_hhmm(down_since)}")
-    if mode == "SAFE":
-        return Verdict(False, "Sicherer Zustand: " + " ".join(reasons))
     soc = _soc_text(soc_pct)
     if outage is not None:
         parts = [f"Netzausfall seit {_hhmm(outage.start)}"]
@@ -81,6 +79,8 @@ def verdict(
         if range_now is not None:
             parts.append(f"reicht {hours_text(range_now)} ohne PV")
         return Verdict(False, SEP.join(parts))
+    if mode == "SAFE":
+        return Verdict(False, "Sicherer Zustand: " + " ".join(reasons))
     parts = ["in Ordnung"]
     if mode is not None:
         parts.append(mode)
