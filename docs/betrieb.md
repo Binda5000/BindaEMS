@@ -849,6 +849,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Fertig um, Ziel erreichbar (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug im Modus „Geplant“ (Unterabschnitt „Geplantes Laden“) |
 | Vorschlag Abfahrt, Vorschlag Ziel-SOC, Nächste Abfahrt (Gerät „BindaEMS <Fahrzeug>“) | –, %, – | je Fahrzeug der gelernte Vorschlag und die nächste Abfahrt (Abschnitt „Fahrverhalten (Phase 5b)“, „Home Assistant“); „Unbekannt“ ohne Vorschlag |
 | Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
+| Ladeschätzung (Gerät „BindaEMS <Fahrzeug>“) | EUR | je Fahrzeug, das steckt, die geschätzten Kosten bis zur nächsten Abfahrt, wenn es nach „Geplant“ lädt (Geräteklasse „Geld“, zwei Nachkommastellen). Attribute `soc_pct` (Ladestand jetzt), `target_soc_pct` (Ziel von „Geplant“: das der Absicht, ohne Abgleich des Ladelimits höchstens das Ladelimit des Autos, wie im core), `departure_at`, `until` (Ende des gerechneten Fensters, Ortszeit: die Abfahrt oder das frühere Ende des Plans), `need_kwh` (Bedarf bis zum Ziel von „Geplant“), `price_estimated` (ein Preis ist geschätzt) und je Modus `planned`, `now`, `pv`, `min_pv` ein Objekt mit `target_soc_pct` (wo das Laden in diesem Modus stoppt: bei „Geplant“ das Ziel, in den anderen Modi das Ladelimit des Autos, ohne bekanntes Limit 100 %), `energy_kwh`, `cost_eur`, `finish_at`, `soc_pct` (Ladestand bei `until`, nie unter dem jetzigen) und `reachable` (dieser Stopp wird bis `until` erreicht); bei `now` zusätzlich `power_cost_eur` (Mehrkosten des Leistungspreises bei voller Leistung, `null`, wenn keiner gilt). Zeiten sind auf die volle Minute aufgerundet. „Unbekannt“ (Attribute `null`) ohne gültigen Plan, ohne gemessenen oder geschätzten Ladestand, wenn das Auto nicht steckt oder an keiner Wallbox der Konfiguration. Alle Zahlen sind „ca.“: Die Rechnung nimmt den Hausakku nicht mit, Preise können geschätzt sein, und „Geplant“ kann vom Plan um einige Cent abweichen. Gehst du mit `ems-app` auf einen Stand ohne diesen Sensor zurück, bleiben seine gehaltenen Topics stehen; lösche sie je Fahrzeug mit `mosquitto_pub -r -n -t homeassistant/sensor/bindaems/<objekt-id>_charge_estimate/config`, ebenso `bindaems/state/<objekt-id>_charge_estimate` und `bindaems/state/<objekt-id>_charge_estimate/attributes` |
 | Klima Versatz (`thermal_<Schlüssel>_offset`) | K | je Klimaanlage (Abschnitt „Klimaanlage (Phase 6a)“) der Versatz, den die UVR anwendet (das Echo), ersatzweise der zuletzt gesendete; eine Nachkommastelle. „Klima“ steht für den Namen der Klimaanlage (`label`): bei einem eigenen Namen steht er ganz davor, etwa „Büro Versatz“ |
 | Klima Betriebsart (`thermal_<Schlüssel>_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
 | Klima Leistung (`thermal_<Schlüssel>_power`) | W | elektrische Leistung der Klimaanlage laut UVR; „unbekannt“ ohne Wert |
@@ -1917,6 +1918,9 @@ und dem Abgleich (Abschnitt 8).
   Anlage, ohne Grundgebühren und Leistungspreis, denn die fielen auch ohne Anlage an) und „Erlös“
   (der Einspeiseerlös). Die Fußnote darunter erklärt beides: „* gegenüber Fixtarif ohne Anlage.
   „Erlös“ ist der Einspeiseerlös.“ Was nicht feststeht, weil etwa ein Preis fehlt, steht als „–“.
+  Autarkie (`1 − Bezug ÷ Verbrauch`) und Eigenverbrauch liegen immer zwischen 0 und 100 %: Lädt der
+  Akku an einem Tag mehr aus dem Netz, als er abgibt, kann der Bezug über dem Verbrauch liegen; der
+  Tag zeigt dann 0 % Autarkie (auch in der Tagesbilanz und in „Autarkie heute“).
 - **Diagramm „Energie“:** PV, Bezug und Einspeisung als Balken, Verbrauch als Linie; je Stunde (Tag, mit
   23 oder 25 Stunden an der Zeitumstellung), je Tag (Woche, Monat) oder je Monat (Jahr).
 - **„Kosten“:** die Zeilen „Bezug“, „Einspeiseerlös“, „Netto“, „Grundgebühren“, „Leistungspreis“ (nur
@@ -3647,6 +3651,22 @@ den ersten Tagen:
   `control.tesla_against_retry_s` (600 s). Der Befehl zählt im Start/Stopp-Budget, außer im Modus
   „Aus“ (dort ist er dringend). Startet das Auto also selbst, etwa aus der Tesla-App, stoppt die
   Regelung es binnen rund 3,5 min wieder (Szenario `tesla-selbststart`).
+  **An der EVCS** gilt dasselbe für jedes Fahrzeug, auch einen Gast und einen Tesla an der EVCS;
+  das Signal kommt dort nicht von Tessie, sondern aus dem Rücklesen „Laden an“ der EVCS
+  (`start_stop`). Zeigt es
+  `control.evcs_against_s` (60 s) ohne Unterbrechung „Laden an“, obwohl der Modus „nicht laden“
+  ergibt, sendet die Regelung „Laden aus“ erneut (Grund `self_start`), je Fahrzeug höchstens alle
+  `control.evcs_against_retry_s` (300 s). Sie tut das nur, wenn das Fahrzeug angesteckt und die
+  Zuordnung klar ist, nicht unter den Regeln „Vorklimatisieren“ und „Geladen, bleibt an“, und nur,
+  wenn ihr letztes „Laden an/aus“ an dieser EVCS wirklich gesendet wurde (nicht im Dry-Run). Anlass
+  war der 05.11.2026: Der e-Golf wurde kurz abgesteckt, und nach dem Wiederanstecken schaltete der
+  „Autostart“ der EVCS sie selbst ein; sie lud gut drei Stunden mit rund 3,2 kW aus dem Netz
+  (Szenario `egolf-autostart`). Dringend ist der Stopp nur im Modus „Aus“. Ein Stundenlimit für
+  Start/Stopp hat die EVCS nicht (Stundenlimits gelten nur für Tesla-Aktoren, an der EVCS gilt nur
+  der Mindestabstand zwischen Befehlen); der Neuversuch alle 300 s verbraucht also kein Budget.
+  **Rückweg:** Wer `control.evcs_against_s` oder `control.evcs_against_retry_s` in `config.yaml`
+  einträgt, entfernt sie vor einem Rollback des core, denn ein älterer Stand kennt die Schlüssel
+  nicht und startet mit ihnen nicht (`extra="forbid"`).
 - **Vorklimatisieren** (Plan Vorklimatisieren, Grund `climate`): Startet die Klimatisierung am
   Kabel, beginnt der Tesla oft selbst zu laden. Meldet Tessie `climate_state.is_climate_on` oder
   `is_preconditioning` (Signal `vehicle.<Schlüssel>.climate_on`), ist das Auto erreichbar, angesteckt
@@ -3768,7 +3788,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `assignment_unclear` | Zuordnung unklar | Die Zuordnung Auto–Wallbox ist unklar (oben). |
 | `assignment_detected` | Zuordnung erkannt | Der Befehl folgt aus einer neuen Erkennung: Der core hat ein Auto an seiner Wallbox erkannt, etwa den Höchststrom an den Tesla an der EVCS (oben). |
 | `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
-| `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
+| `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus, oder eine EVCS zeigt `control.evcs_against_s` lang „Laden an“ gegen den Modus des Fahrzeugs; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
 | `plan_power` | Plan: Laden | Im Modus „Geplant“ folgt der Strom der Ladeleistung, die der Plan für das Auto im laufenden Slot nennt. |
 | `latest_start` | Späteste Startzeit | Im Modus „Geplant“ gibt es keinen gültigen Plan-Slot und die späteste Startzeit ist erreicht: Das Auto lädt mit voller Leistung bis zum Ziel. |
 | `target_reached` | Ziel-SOC erreicht | Im Modus „Geplant“ hat das Auto den Ziel-SOC erreicht; die Regelung stoppt das Laden. |
@@ -3867,6 +3887,11 @@ Zurück zu evcc: beide Aktoren im UI mit „Auf Dry-Run…“ auf Dry-Run stelle
 - **„Complete“ ohne Ladelimit (EVCS, Tesla):** Meldet die EVCS „geladen“, ohne dass das Ladelimit
   bekannt ist, behält der core das Limit, das Tessie im selben Ansteckvorgang schon gemeldet hat. Ein
   später höheres Limit für „Geplant“ hebt „geladen“ also weiterhin auf.
+- **Autostart der EVCS bleibt aus:** In VictronConnect steht bei der EVCS der Modus auf manuell und
+  **„Autostart“ aus** (an der Anlage seit 05.11.2026 20:55). Mit Autostart lädt die EVCS nach dem
+  Anstecken von selbst, bis der Selbststart-Stopp nach 60 s plus Lesetakt greift (Abschnitt
+  „Tesla“, „Selbststart“); der Stopp ist nur das Sicherheitsnetz. Nach einem Firmware-Update oder
+  Zurücksetzen der EVCS den Schalter prüfen.
 
 **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen; die
 Punkte 1 bis 3 hat Plan 2d umgesetzt, 5 und 8 mit einer Entscheidung abgeschlossen (je mit Befund und
@@ -4017,6 +4042,8 @@ Die Einstellungen stehen in `config.yaml` unter `control` und haben Standardwert
 | `control.tesla_reserve_commands` | 4 | So viele Befehle je Stunde hält die Regelung für den Tesla frei; ist das Stundenbudget bis auf diese Reserve verbraucht, ändert sie seinen Strom nur noch, wenn der Phasenwächter es verlangt (Abschnitt „Laderegelung“, „Tesla“). Ganze Zahl, kleiner als `commands.per_hour` jedes Fahrzeugs mit Tessie. |
 | `control.tesla_against_s` | 120 | So lange in s lädt ein Fahrzeug mit Tessie ohne Unterbrechung gegen seinen Modus, bevor die Regelung „Laden aus“ erneut sendet (Selbststart). |
 | `control.tesla_against_retry_s` | 600 | Frühestens so viele s später folgt je Fahrzeug der nächste Versuch, solange es gegen den Modus lädt. |
+| `control.evcs_against_s` | 60 | So lange in s zeigt das Rücklesen der EVCS ohne Unterbrechung Laden an, obwohl der Modus des Fahrzeugs nicht laden will, bevor die Regelung „Laden aus“ erneut sendet (Selbststart an der EVCS). |
+| `control.evcs_against_retry_s` | 300 | Frühestens so viele s später folgt je Fahrzeug der nächste Versuch, solange die EVCS gegen den Modus lädt. |
 
 Negative, unendliche und ungültige Werte lehnt der core beim Start ab; `support_soc_pct` liegt
 zwischen 0 und 100, `setpoint_deadband_w` und `peak_target_kw` über 0 (ohne Totband entstünde auch
@@ -7087,7 +7114,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der siebenundvierzig Szenarien bei jedem Push
+In der CI läuft jedes der achtundvierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -7115,7 +7142,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der siebenundvierzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der achtundvierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -7131,7 +7158,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  siebenundvierzig zusammen rund 5 min.
+  achtundvierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -7220,6 +7247,8 @@ Szenarien für „Geplant“ kommen Ziel und Abfahrt zu Beginn als Version 2 der
 für die Klimaanlage, ab `klima-pv-kuehlen`, entscheidet Victron im Dry-Run mit; dort steckt zu
 Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Auto, ab
 `akku-uebrig-sofort`, ist er wieder live, und nur ein Auto steckt an.
+Im Szenario für den Selbststart der EVCS, `egolf-autostart`, entscheidet er im Dry-Run mit; nur der
+e-Golf steckt an.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -7270,6 +7299,7 @@ Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Aut
 | `egolf-voll-bleibt-an` | e-Golf geladen, die EVCS bleibt an, 30 min | 21.6.2026 ab 09:00, sonniger Morgen, Akku 60 %, e-Golf an der EVCS mit 98 % SOC, in PV-Überschuss; Tesla abgesteckt | Der e-Golf wird „geladen“ (Status 3); ab da bekommt die EVCS kein „Laden aus“ (Regel „Geladen, bleibt an“), und ihr letzter Strombefehl fordert 6 A (`min_a` des e-Golf). |
 | `akku-uebrig-sofort` | Sofort am Abend mit übrigem Akku, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 72 %, nur der Tesla, in Sofort mit höchstens 10 A (`now_max_a`); zu Beginn ein Plan mit `EIGENVERBRAUCH` über 2 Slots, übrigem Akku für Sofort (`now_battery`) und der Plan-Schwelle 70 % (`support_soc_pct`), gültig 30 min | Solange der SOC über 70 % liegt, ab 2 min kein Override: Netzbezug höchstens Haus und Autos über der Entladegrenze des Modells (12000 W) plus 300 W; ab 2 min, nachdem der SOC 70 % erreicht hat, Netzbezug mindestens die Leistung der Autos minus 300 W (der Akku gibt dem Auto nichts mehr); vor der ersten Entscheidung mit „battery_comp“ zeigt die Gesundheit `battery.spare` „on“ mit einem Anteil über 0 W. |
 | `akku-uebrig-geplant` | Geplant in der Nacht aus dem Akku, 45 min | 13.10.2026 ab 02:00, keine PV, Akku 60 %, nur der e-Golf, in Geplant, Ziel 80 %, Abfahrt 07:00; zu Beginn ein Plan mit `EIGENVERBRAUCH` über 3 Slots, der den e-Golf mit 2800 W nennt, alle aus dem Akku (`ev_battery_w`), geplanter SOC am Ende 55, 52 und 51 %, gültig 45 min | Ab 2 min, bis der SOC das geplante Ende seines Slots erreicht (im dritten Slot), höchstens 300 W Netzbezug; ab 2 min danach Netzbezug mindestens die Leistung der Autos minus 300 W; der SOC fällt nie unter 50 % (kleinstes SOC am Ende minus 1 Punkt). |
+| `egolf-autostart` | e-Golf neu angesteckt, EVCS startet selbst, 30 min | 12.10.2026 ab 18:00, Akku 30 %, e-Golf an der EVCS mit 50 % SOC, in PV-Überschuss; Tesla abgesteckt; bei 5 min wird der e-Golf abgesteckt, nach 10 s wieder angesteckt, und 3 s später schaltet die EVCS „Laden an“ selbst (Autostart; der core sendet nichts dazu) | Die EVCS bekommt binnen 90 s (60 s plus Lesetakt und Verzug) nach dem Selbststart „Laden aus“ (Grund `self_start`); ab 2 min danach lädt der e-Golf nicht mehr. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

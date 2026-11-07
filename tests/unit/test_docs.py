@@ -750,6 +750,8 @@ BATTERY_SETTINGS = {
     "tesla_reserve_commands",
     "tesla_against_s",
     "tesla_against_retry_s",
+    "evcs_against_s",
+    "evcs_against_retry_s",
 }
 
 
@@ -863,8 +865,8 @@ def test_simulator_section_matches_the_tool(capsys: pytest.CaptureFixture[str]) 
     assert documented == known - {"--help"}
     scenarios = re.findall(r"^\| `([a-z0-9-]+)` \|", section, re.MULTILINE)
     assert scenarios == list(SCENARIOS)
-    assert len(SCENARIOS) == 47 and "fünfundvierzig" not in section  # die Zahl im Text zieht mit
-    assert section.count("siebenundvierzig") == 3
+    assert len(SCENARIOS) == 48 and "siebenundvierzig" not in section  # die Zahl im Text zieht mit
+    assert section.count("achtundvierzig") == 3
 
 
 def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:

@@ -3,7 +3,8 @@
 Die Kennzahlen eines Zeitraums entstehen aus den Summen der Tage, nie als Mittel der
 Tageskennzahlen: Autarkie ``1 − Bezug ÷ Verbrauch``, Eigenverbrauch ``(PV − Einspeisung) ÷ PV``,
 Ersparnis wie in ``ledger.service.summarize_slots``. Ein Geldbetrag ist ``None``, sobald ein Tag ihn
-nicht kennt; ein Verhältnis ist ``None``, wenn der Nenner 0 ist (z. B. in der Zukunft).
+nicht kennt; ein Verhältnis ist ``None``, wenn der Nenner 0 ist (z. B. in der Zukunft), und liegt
+sonst zwischen 0 und 1 (``ledger.service.share``; Netzladung des Akkus macht sonst Tage negativ).
 
 Grundgebühren zählen anteilig je Tag bis einschließlich heute; der Leistungspreis zählt je Monat mit
 Abrechnungsdaten aus der Monatsspitze, nur in Monat und Jahr und nur, wo ein Leistungspreis mit Satz
@@ -37,7 +38,13 @@ from bindaems.app.consumers.days import NO_DAY, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.ledger.checks import LedgerChecks
-from bindaems.app.ledger.service import DaySummary, LedgerService, LedgerSlot, summarize_slots
+from bindaems.app.ledger.service import (
+    DaySummary,
+    LedgerService,
+    LedgerSlot,
+    share,
+    summarize_slots,
+)
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.tariff.calc import monthly_fees_eur, power_cost_eur, power_rate
 from bindaems.shared.config import Config
@@ -148,8 +155,8 @@ def _sums(days: Sequence[DaySummary], fixed_eur: float) -> _Sums:
         cost_eur=_sum_known([d.cost_eur for d in days]),
         revenue_eur=revenue,
         net_eur=net,
-        autarky=1 - imported / consumption if consumption > 0 else None,
-        self_consumption=(pv - exported) / pv if pv > 0 else None,
+        autarky=share(consumption - imported, consumption),
+        self_consumption=share(pv - exported, pv),
         savings_no_plant_eur=consumption * fixed_eur - net if net is not None else None,
         savings_same_import_eur=(
             imported * fixed_eur - revenue - net

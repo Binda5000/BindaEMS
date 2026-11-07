@@ -11,7 +11,7 @@ from tests.app_helpers import (
     set_grid_usage,
 )
 
-from bindaems.app.ledger.service import MonthPeak, parse_slot_flows
+from bindaems.app.ledger.service import MonthPeak, parse_slot_flows, share
 from bindaems.shared.domain import SlotFlows
 from bindaems.shared.settings import FeedInComponent, TimeWindow
 from bindaems.shared.timeutil import SLOT
@@ -187,6 +187,28 @@ def test_day_summary_on_dst_day_expects_100_slots(ledger, clock) -> None:
     [day] = ledger.days(date(2026, 10, 25), date(2026, 10, 25))
     assert (day.expected_slots, day.slots, day.coverage, day.complete) == (100, 0, 0.0, True)
     assert day.autarky is None and day.self_consumption is None
+
+
+def test_share_stays_between_zero_and_one() -> None:
+    assert share(-1.0, 35.1) == 0.0
+    assert share(36.0, 35.1) == 1.0
+    assert share(1.0, 4.0) == pytest.approx(0.25)
+    assert share(1.0, 0.0) is None and share(1.0, -1.0) is None
+
+
+def test_autarky_is_zero_when_the_battery_charges_from_the_grid(ledger) -> None:
+    # 02.11.2026: Bezug 36,1 kWh über Verbrauch 35,1 kWh, weil der Akku aus dem Netz lud
+    ingest(ledger, S, {"grid>house": 1000.0, "grid>battery": 500.0})
+    [day] = ledger.days(date(2026, 10, 9), date(2026, 10, 9))
+    assert (day.import_kwh, day.consumption_kwh) == (1.5, 1.0)
+    assert day.autarky == 0.0
+
+
+def test_self_consumption_is_zero_when_export_exceeds_pv(ledger) -> None:
+    ingest(ledger, S, {"pv>grid": 1000.0, "battery>grid": 100.0})  # Messrauschen
+    [day] = ledger.days(date(2026, 10, 9), date(2026, 10, 9))
+    assert day.export_kwh == pytest.approx(1.1) and day.pv_kwh == 1.0
+    assert day.self_consumption == 0.0
 
 
 def test_cost_unknown_when_import_slot_has_no_price(ledger) -> None:

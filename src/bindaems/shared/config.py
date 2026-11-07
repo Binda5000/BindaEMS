@@ -80,6 +80,7 @@ HA_VEHICLE_SUFFIXES = (
     "boost_stop",
     "wallbox",
     "charge_energy",
+    "charge_estimate",
     "target_soc",
     "now_max_a",
     "departure",
@@ -637,6 +638,13 @@ class ControlConfig(_Model):
       klar), bevor die Regelung „Laden aus“ erneut sendet.
     - ``tesla_against_retry_s``: Frühestens so viele s später folgt je Fahrzeug ein weiterer
       Versuch, solange es gegen den Modus lädt.
+
+    Selbststart an der EVCS (Plan EVCS-Selbststart):
+
+    - ``evcs_against_s``: So lange in s zeigt das Rücklesen der EVCS ohne Unterbrechung Laden an,
+      obwohl der Modus des Fahrzeugs nicht laden will, bevor die Regelung „Laden aus“ erneut sendet.
+    - ``evcs_against_retry_s``: Frühestens so viele s später folgt je Fahrzeug ein weiterer
+      Versuch, solange die EVCS gegen den Modus lädt.
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0
@@ -661,6 +669,8 @@ class ControlConfig(_Model):
     tesla_reserve_commands: Annotated[int, Field(ge=0)] = 4
     tesla_against_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 120.0
     tesla_against_retry_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 600.0
+    evcs_against_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 60.0
+    evcs_against_retry_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 300.0
 
 
 class CoreConfig(_Model):

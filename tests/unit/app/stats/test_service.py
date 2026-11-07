@@ -426,6 +426,15 @@ def test_today_stats_for_home_assistant(stats, price_all, feed_in_7ct) -> None:
     assert result.autarky_month == pytest.approx(1 - 1.0 / 4.0)
 
 
+def test_autarky_never_drops_below_zero(stats) -> None:
+    # der Akku lädt aus dem Netz: Bezug 1,5 kWh, Verbrauch 1,0 kWh
+    ingest(stats._ledger, T0, {"grid>house": 1000.0, "grid>battery": 500.0})
+    assert stats.period("day", TODAY)["ratios"]["autarky"] == 0.0
+    assert stats.period("month", TODAY)["ratios"]["autarky"] == 0.0
+    result = stats.today()
+    assert result.autarky_today == 0.0 and result.autarky_month == 0.0
+
+
 def test_today_stats_are_unknown_without_data_or_prices(stats) -> None:
     empty = stats.today()
     assert empty == TodayStats(0.0, 0.0, 0.0, 0.0, None, None)

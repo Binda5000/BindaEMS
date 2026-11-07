@@ -38,6 +38,7 @@ from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.values import HaRef, HaValueCache
+from bindaems.app.control.boost_cost import boost_cost
 from bindaems.app.control.decisions import DecisionCollector, DecisionStore
 from bindaems.app.control.intent import CoreDown, IntentService
 from bindaems.app.control.routes import control_router
@@ -591,6 +592,11 @@ class AppRuntime:
         now = self._clock.now()
         settings = self.settings.current().settings
         cached = self._stats_inputs  # Statistik: nur der Cache, keine Abfrage im 5-s-Takt
+        today = now.astimezone(LOCAL_TZ).date()
+        month_peak = self.ledger.month_peak(today)
+        costs = boost_cost(
+            self._cfg, settings.tariff, None if month_peak is None else month_peak.kw, today
+        )
         return build_inputs(
             self.live,
             self.prices,
@@ -599,7 +605,7 @@ class AppRuntime:
             now,
             intent,
             settings.wallbox_names,
-            self.ledger.month_peak(now.astimezone(LOCAL_TZ).date()),
+            month_peak,
             self.planning.current(),
             settings.planning.grid_charge_allowed,
             support_default_pct=self._cfg.control.support_soc_pct,
@@ -610,6 +616,12 @@ class AppRuntime:
             auto_target=self._auto_targets(),
             thermal_plan_enabled=settings.learning.thermal.enabled,
             **self._storm_ha(now),
+            # die Mehrkosten des Leistungspreises nur, wenn im Monat einer gilt
+            boost_cost_eur=(
+                {item["id"]: item["cost_eur"] for item in costs["vehicles"]}
+                if costs["applies"]
+                else {}
+            ),
         )
 
     def _storm_ha(self, now: datetime) -> dict[str, Any]:

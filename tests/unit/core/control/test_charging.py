@@ -19,7 +19,7 @@ from tests.unit.core.control.charge_helpers import (
 from tests.unit.core.safety.conftest import make_ctx
 
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
-from bindaems.core.control.charge_modes import Effective
+from bindaems.core.control.charge_modes import Effective, ModeDecision
 from bindaems.core.control.charge_points import ChargePoint
 from bindaems.core.control.charging import (
     FOLLOW_HOLD_S,
@@ -1216,7 +1216,7 @@ def test_after_an_overload_stop_the_minimum_pause_holds(cfg) -> None:  # Präzis
         607,
         intent=egolf_in(ChargeMode.NOW),
         evcs_obs=AT_16_A,
-        present=at_evcs(16.0, True),
+        present=lambda s: at_evcs(16.0, s <= 6),  # das Rücklesen folgt dem Stopp
         grid_obs=lambda s: grid(l1=34.0, l2=20.0) if s < 7 else grid(l1=20.0, l2=18.0),
     )
     # Stopp bei 6, die Überlast endet bei 67; Sofort startet erst nach min_off_s
@@ -3335,7 +3335,7 @@ def test_peak_guard_goes_before_keep_on(cfg) -> None:  # Entscheidung 8, Gesamtr
         cfg,
         120,
         evcs_obs=COMPLETE,
-        present=at_evcs(6.0, True),
+        present=lambda s: at_evcs(6.0, s > 100),  # das Rücklesen folgt „Laden aus/an“
         grid_obs=NO_SHARE,
         peak=lambda s: capped if s < 100 else NO_LIMITS,
     )
@@ -3383,7 +3383,7 @@ def test_overload_stops_a_kept_evcs(cfg) -> None:  # Entscheidung 8
         cfg,
         700,
         evcs_obs=COMPLETE,
-        present=at_evcs(6.0, True),
+        present=lambda s: at_evcs(6.0, s <= 6 or s > 606),  # das Rücklesen folgt „aus/an“
         grid_obs=lambda s: grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE,
     )
     stop = cmd(6, CHARGING, False, ("mode_pv", "overload"), urgent=True)
@@ -3400,7 +3400,7 @@ def test_unplugging_ends_the_pause_of_keep_on(cfg) -> None:
         cfg,
         200,
         evcs_obs=lambda s: evcs(connected=False) if 100 <= s < 110 else COMPLETE,
-        present=at_evcs(6.0, True),
+        present=lambda s: at_evcs(6.0, s <= 6 or s > 110),  # das Rücklesen folgt „aus/an“
         grid_obs=lambda s: grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE,
     )
     assert charging_of(found) == [(6, False), (110, True)]
@@ -3415,7 +3415,7 @@ def test_a_mode_change_ends_the_pause_of_keep_on(cfg) -> None:  # Präzisierung 
         200,
         intent=lambda s: egolf_in(ChargeMode.PV) if s < 100 else egolf_in(ChargeMode.NOW, 2),
         evcs_obs=COMPLETE,
-        present=at_evcs(6.0, True),
+        present=lambda s: at_evcs(6.0, s <= 6 or s > 100),  # das Rücklesen folgt „aus/an“
         grid_obs=lambda s: grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE,
     )
     assert charging_of(found) == [(6, False), (100, True)]
@@ -3431,7 +3431,8 @@ def test_a_new_session_seen_unregulated_ends_the_pause_of_keep_on(cfg) -> None: 
             seen = evcs(connected=False) if s < 102 else COMPLETE
             return inputs(cfg, s=s, evcs_obs=seen, controllable={"wallbox.evcs": False})
         overload = grid(l1=34.0, l2=20.0, grid_w=0.0) if s < 7 else NO_SHARE
-        return inputs(cfg, s=s, evcs_obs=COMPLETE, present=at_evcs(6.0, True), grid_obs=overload)
+        on = at_evcs(6.0, s <= 6 or s > 105)  # das Rücklesen folgt „aus/an“
+        return inputs(cfg, s=s, evcs_obs=COMPLETE, present=on, grid_obs=overload)
 
     found = run(controller(cfg), cfg, 200, make=make)
     assert charging_of(found) == [(6, False), (105, True)]
@@ -3441,11 +3442,22 @@ def test_idle_ends_the_pause_of_keep_on(cfg) -> None:  # Präzisierung 9, Gesamt
     # Ein Zyklus ohne Regelung (``idle``) bei 100: Danach übernimmt die Regelung neu wie die
     # Maschine, ohne die Pause von vorher.
     c = controller(cfg)
-    kw = {"evcs_obs": COMPLETE, "present": at_evcs(6.0, True)}
     overload = grid(l1=34.0, l2=20.0, grid_w=0.0)
-    found = run(c, cfg, 100, grid_obs=lambda s: overload if s < 7 else NO_SHARE, **kw)
+
+    def present(s: int) -> dict:  # das Rücklesen folgt dem Stopp
+        return at_evcs(6.0, s <= 6)
+
+    found = run(
+        c,
+        cfg,
+        100,
+        evcs_obs=COMPLETE,
+        present=present,
+        grid_obs=lambda s: overload if s < 7 else NO_SHARE,
+    )
     c.idle(T0 + timedelta(seconds=100))
-    found += [(101, x) for x in c.step(inputs(cfg, s=101, grid_obs=NO_SHARE, **kw))]
+    step = inputs(cfg, s=101, evcs_obs=COMPLETE, present=present(101), grid_obs=NO_SHARE)
+    found += [(101, x) for x in c.step(step)]
     assert charging_of(found) == [(6, False), (101, True)]
 
 
@@ -3525,3 +3537,260 @@ def test_keep_on_complete_conditions(cfg, change, expected) -> None:
     if not args.pop("via_wallbox", True):
         cfg = with_vehicle(cfg, "egolf", climate_via_wallbox=False)
     assert keep_on_complete(cfg, **args) is expected
+
+
+# --- Selbststart an der EVCS (Plan EVCS-Selbststart) ---------------------------------------------
+
+EVCS_ON = evcs(charging=True, phase_a={"L1": 7.0, "L2": 7.0, "L3": 0.0}, power_w=3220.0)
+EVCS_PV = egolf_in(ChargeMode.PV)
+
+
+def evcs_self_start_run(cfg, intent, seconds, *, on_from=60, dry_run=False, **kw):
+    """Der e-Golf steht an der EVCS, ohne Überschuss; bis ``on_from`` ist die EVCS aus
+    (Rücklesen 7 A, aus), ab da meldet sie „Laden an“ und lädt mit 7 A auf zwei Phasen. Die
+    Urteile sind ohne Angabe live (``dry_run``)."""
+    off = {"present": at_evcs(7.0, False), "evcs_obs": evcs(), "grid_obs": NO_SHARE}
+    on = {"present": at_evcs(7.0, True), "evcs_obs": EVCS_ON, "grid_obs": grid(grid_w=3200.0)}
+
+    def chosen(key):
+        return lambda s: off[key] if s < on_from else on[key]
+
+    return run(
+        controller(cfg),
+        cfg,
+        seconds,
+        intent=intent,
+        dry_run=dry_run,
+        **{**{key: chosen(key) for key in off}, **kw},
+    )
+
+
+def stops_of(found, since: int = 0) -> list:
+    """Die Befehle „Laden aus“ an der EVCS ab ``since`` als ``(Sekunde, Befehl)``."""
+    return [
+        (t, c.command)
+        for t, c in found
+        if c.command.kind == CHARGING and c.command.value is False and t >= since
+    ]
+
+
+def test_an_evcs_switched_on_against_pv_gets_charging_off_again(cfg) -> None:
+    # Vorfall 05.11.2026: Die EVCS lädt nach dem Autostart aus dem Netz, im Modus PV
+    stops = stops_of(evcs_self_start_run(cfg, EVCS_PV, 200), 60)
+    assert [t for t, _ in stops] == [120]
+    reasons = stops[0][1].reasons
+    assert reasons[0] == "mode_pv"
+    assert reasons[-1] == "self_start"
+
+
+def test_dry_run_evcs_gets_no_self_start(cfg) -> None:
+    # Im Dry-Run schaltet BindaEMS die EVCS nicht; das Rücklesen zeigt einen fremden Regler. Eine
+    # wiederholte Entscheidung füllte nur das Log: kein Stopp nach dem ersten.
+    found = evcs_self_start_run(cfg, EVCS_PV, 700, dry_run=True)
+    assert [t for t, _ in stops_of(found)] == [0]
+
+
+def test_evcs_self_start_is_retried_at_most_every_5_min(cfg) -> None:
+    stops = stops_of(evcs_self_start_run(cfg, EVCS_PV, 700), 60)
+    assert [t for t, _ in stops] == [120, 420]
+
+
+def test_evcs_self_start_in_off_is_urgent(cfg) -> None:
+    stops = stops_of(evcs_self_start_run(cfg, egolf_in(ChargeMode.OFF), 200), 60)
+    assert stops == [
+        (
+            120,
+            Command(
+                "wallbox.evcs", CHARGING, False, urgent=True, reasons=("mode_off", "self_start")
+            ),
+        )
+    ]
+
+
+def test_own_stop_in_flight_is_no_self_start(cfg) -> None:
+    # Im Modus Aus stoppt die Regelung die ladende EVCS bei 0 selbst; das Rücklesen zeigt bis 30
+    # noch „an“, danach „aus“. Die 30 s reichen nicht für den Selbststart.
+    found = evcs_self_start_run(
+        cfg,
+        egolf_in(ChargeMode.OFF),
+        300,
+        on_from=0,
+        present=lambda s: at_evcs(7.0, s < 30),
+        evcs_obs=lambda s: EVCS_ON if s < 30 else evcs(),
+    )
+    assert [t for t, _ in stops_of(found)] == [0]
+
+
+def test_keep_on_complete_is_no_self_start(cfg) -> None:
+    # Regel K2: Die EVCS bleibt für den „geladenen“ e-Golf an, das Rücklesen zeigt „an“.
+    found = evcs_self_start_run(
+        cfg, EVCS_PV, 700, on_from=0, evcs_obs=evcs(complete=True), present=at_evcs(6.0, True)
+    )
+    assert stops_of(found) == []
+
+
+def test_now_resets_the_evcs_self_start_time(cfg) -> None:
+    now = egolf_in(ChargeMode.NOW)
+    found = evcs_self_start_run(cfg, lambda s: EVCS_PV if s < 90 else now, 400)
+    assert stops_of(found, 60) == []
+
+
+def test_unknown_evcs_readback_is_no_self_start(cfg) -> None:
+    unknown = {("wallbox.evcs", CURRENT): 7.0}
+    found = evcs_self_start_run(
+        cfg, EVCS_PV, 400, present=lambda s: at_evcs(7.0, False) if s < 60 else unknown
+    )
+    assert stops_of(found, 60) == []
+
+
+def test_unplugged_evcs_is_no_self_start(cfg) -> None:
+    found = evcs_self_start_run(cfg, EVCS_PV, 400, evcs_obs=evcs(connected=False))
+    assert stops_of(found)[1:] == []
+
+
+def test_autostart_after_replug_gets_charging_off(cfg) -> None:
+    # Bis 50 angesteckt und aus (Stopp bei 0), 50 bis 54 abgesteckt, ab 55 wieder angesteckt: Die
+    # Regelung fragt „aus“ erneut an. Ab 58 schaltet der Autostart der EVCS das Laden ein.
+    def evcs_obs(s):
+        if 50 <= s < 55:
+            return evcs(connected=False)
+        return evcs() if s < 58 else EVCS_ON
+
+    found = evcs_self_start_run(cfg, EVCS_PV, 300, on_from=58, evcs_obs=evcs_obs)
+    stops = stops_of(found, 58)
+    assert [t for t, _ in stops] == [118]
+    assert stops[0][1].reasons[-1] == "self_start"
+
+
+def test_autostart_after_replug_with_an_unchanged_live_verdict(cfg) -> None:
+    # Festschreibungstest des Vorfalls vom 05.11.2026: Nach dem Wiederanstecken (ab 55) fragt die
+    # Regelung „aus“ erneut an, die Safety-Schicht antwortet live mit ``UNCHANGED`` (das Rücklesen
+    # zeigt noch aus). Springt es bei 58 auf „an“, folgt 60 s später der Stopp mit ``self_start``.
+    def evcs_obs(s):
+        if 50 <= s < 55:
+            return evcs(connected=False)
+        return evcs() if s < 58 else EVCS_ON
+
+    found = evcs_self_start_run(
+        cfg,
+        EVCS_PV,
+        300,
+        on_from=58,
+        evcs_obs=evcs_obs,
+        dry_run=False,
+        outcome=lambda s: Outcome.UNCHANGED if s >= 55 else Outcome.ACCEPTED,
+    )
+    stops = stops_of(found)
+    assert [t for t, _ in stops] == [0, 55, 118]
+    assert stops[-1][1].reasons[-1] == "self_start"
+
+
+def test_a_guest_at_the_evcs_gets_self_start_too(cfg) -> None:
+    guest_pv = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.PV))
+    found = evcs_self_start_run(cfg, guest_pv, 200, homes={"egolf": False})
+    stops = stops_of(found, 60)
+    assert [t for t, _ in stops] == [120]
+    assert stops[0][1].reasons[0] == "mode_pv"
+    assert stops[0][1].reasons[-1] == "self_start"
+
+
+def self_started(found) -> list:
+    """Die Sekunden der Befehle mit dem Grund ``self_start``."""
+    return [t for t, c in found if "self_start" in c.command.reasons]
+
+
+def test_a_new_session_starts_the_evcs_self_start_times_anew(cfg) -> None:
+    # Selbststart bei 120; von 150 bis 154 abgesteckt, ab 158 lädt die EVCS wieder selbst: Der
+    # neue Vorgang beginnt die Zeiten neu, der nächste Stopp kommt 60 s danach, nicht erst bei 420.
+    def evcs_obs(s):
+        if 150 <= s < 155:
+            return evcs(connected=False)
+        return evcs() if s < 60 or 150 <= s < 158 else EVCS_ON
+
+    def present(s):
+        return at_evcs(7.0, 60 <= s < 150 or s >= 158)
+
+    found = evcs_self_start_run(cfg, EVCS_PV, 300, evcs_obs=evcs_obs, present=present)
+    assert self_started(found) == [120, 218]
+
+
+def test_an_unregulated_stretch_interrupts_the_evcs_self_start_time(cfg) -> None:
+    # Im Modus Aus ist die EVCS von 90 bis 99 nicht steuerbar, also nicht geregelt: Die 60 s
+    # beginnen bei 100 neu (dort geht mit der Übernahme ein „Laden aus“ nach dem Modus hinaus).
+    def controllable(s):
+        return {"wallbox.evcs": not 90 <= s < 100, "vehicle.tesla": False}
+
+    found = evcs_self_start_run(cfg, egolf_in(ChargeMode.OFF), 300, controllable=controllable)
+    assert self_started(found) == [160]
+
+
+GUEST_OFF = {
+    "intent": Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.OFF)),
+    "homes": {"egolf": False},
+}
+
+
+@pytest.mark.parametrize("car", [{"intent": egolf_in(ChargeMode.OFF)}, GUEST_OFF])
+def test_idle_starts_the_evcs_self_start_times_anew(cfg, car) -> None:
+    # Im Modus Aus: Stopp bei 60; erst mit seinem live Urteil zählt die Zeit, ab 61, Selbststart bei
+    # 121. ``idle`` bei 130: Ab 140 beginnen die Zeiten neu, samt dem Abstand zum Neuversuch, auch
+    # für den Gast. Der nächste Stopp mit Grund folgt 60 s danach, nicht erst bei 421.
+    c = controller(cfg)
+    on = {"present": at_evcs(7.0, True), "evcs_obs": EVCS_ON, "grid_obs": grid(grid_w=3200.0)}
+
+    def step(s):
+        commands = c.step(inputs(cfg, s=s, **car, **on))
+        accept(c, commands, dry_run=False)
+        return [(s, x) for x in commands]
+
+    found = [x for s in range(60, 130) for x in step(s)]
+    c.idle(T0 + timedelta(seconds=130))
+    found += [x for s in range(140, 300) for x in step(s)]
+    assert self_started(found) == [121, 200]
+
+
+@pytest.mark.parametrize(
+    ("point", "kind"),
+    [
+        (EVCS_POINT, AssignmentKind.UNCLEAR),  # unklare Zuordnung an der EVCS
+        (replace(EVCS_POINT, evcs=False), AssignmentKind.DEFAULT),  # ohne EVCS und ohne Tessie
+    ],
+)
+def test_no_evcs_self_start_unclear_or_off_the_evcs(cfg, point, kind) -> None:
+    # Das letzte „Laden aus“ ging live hinaus, das Rücklesen zeigt 200 s lang „Laden an“ gegen den
+    # Modus: kein Selbststart
+    c = controller(cfg)
+    stop = Command("wallbox.evcs", CHARGING, False)
+    c.note_verdict(stop, Verdict(stop, Outcome.ACCEPTED, False, (), False))
+    vehicle = replace(AT_THE_EVCS, kind=kind, charging=True)
+    off = ModeDecision(charge=False, reason=None)
+
+    def due(s: int) -> bool:
+        inp = inputs(cfg, s=s, present=at_evcs(7.0, True), evcs_obs=EVCS_ON)
+        return c._self_start(inp.now, "egolf", "wallbox.evcs", point, vehicle, off, inp)
+
+    assert not any(due(s) for s in range(0, 200, 10))
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "expected"),
+    [
+        ((False,), True),  # live: zählt
+        ((False, None), True),  # ohne Urteil bleibt der gemerkte Wert
+        ((False, True), False),  # zuletzt im Dry-Run
+        ((), False),  # noch kein Urteil
+    ],
+)
+def test_the_evcs_self_start_needs_a_live_verdict(cfg, verdicts, expected) -> None:
+    c = controller(cfg)
+    stop = Command("wallbox.evcs", CHARGING, False)
+    for dry_run in verdicts:
+        verdict = None if dry_run is None else Verdict(stop, Outcome.ACCEPTED, False, (), dry_run)
+        c.note_verdict(stop, verdict)
+    off = ModeDecision(charge=False, reason=None)
+
+    def due(s: int) -> bool:
+        inp = inputs(cfg, s=s, present=at_evcs(7.0, True), evcs_obs=EVCS_ON)
+        return c._self_start(inp.now, "egolf", "wallbox.evcs", EVCS_POINT, AT_THE_EVCS, off, inp)
+
+    assert any(due(s) for s in range(0, 200, 10)) is expected
