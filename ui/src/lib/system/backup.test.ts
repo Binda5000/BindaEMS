@@ -7,6 +7,13 @@ it('hoursText: unter 10 h eine Nachkommastelle, sonst ganze Stunden, mit geschü
 	expect(hoursText(null)).toBeNull();
 });
 
+it('hoursText: Grenzfälle kaufmännisch gerundet, wie hours_text im Server', () => {
+	expect(hoursText(0.04)).toBe('≈ 0 h');
+	expect(hoursText(9.96)).toBe('≈ 10 h');
+	expect(hoursText(10.5)).toBe('≈ 11 h');
+	expect(hoursText(12.5)).toBe('≈ 13 h');
+});
+
 it('durationText: Sekunden, Minuten, Stunden', () => {
 	expect(durationText(30)).toBe('30 s');
 	expect(durationText(840)).toBe('14 min');

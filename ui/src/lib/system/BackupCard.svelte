@@ -29,6 +29,12 @@
 		return `${base}${source}${night}`;
 	});
 
+	/** keine Lastgrundlage und kein laufender Ausfall: die Reichweiten fehlen */
+	const tooLittleData = $derived(!!data && data.load_w === null && data.outage === null);
+	const slotsText = $derived(
+		data?.basis ? ` (${data.basis.day_slots} von 192 Viertelstunden)` : ''
+	);
+
 	const pingText = $derived.by(() => {
 		if (!data) return '';
 		const { configured, last_sent, text, ok } = data.ping;
@@ -52,13 +58,13 @@
 		{/if}
 		<dl class="facts">
 			<dt>Reichweite jetzt</dt>
-			<dd>{hoursText(data.now_h) ?? DASH}</dd>
-			<dt>Reichweite bis Reserve</dt>
-			<dd>{hoursText(data.reserve_h) ?? DASH}</dd>
+			<dd>{hoursText(data.now_h) ?? (tooLittleData ? 'zu wenig Daten' : DASH)}</dd>
+			<dt>Reichweite ab Reserve</dt>
+			<dd>{hoursText(data.reserve_h) ?? (tooLittleData ? 'zu wenig Daten' : DASH)}</dd>
 			<dt>Reichweite nachts</dt>
-			<dd>{hoursText(data.night_h) ?? DASH}</dd>
+			<dd>{hoursText(data.night_h) ?? (tooLittleData ? 'zu wenig Daten' : DASH)}</dd>
 			<dt>Last an AC-Out</dt>
-			<dd>{loadText ?? DASH}</dd>
+			<dd>{loadText ?? (tooLittleData ? `zu wenig Daten${slotsText}` : DASH)}</dd>
 			<dt>Untergrenze</dt>
 			<dd>{formatSoc(data.floor_soc_pct)}</dd>
 			<dt>Lebenszeichen</dt>

@@ -1,10 +1,15 @@
 // Anzeigetexte zur USV-Reichweite und zu den Netzausfällen (GET /api/backup)
 import { formatNumber, formatNumberMax, NBSP } from '$lib/format';
 
-/** „≈ 7,5 h“ unter 10 h, sonst „≈ 31 h“ (wie `hours_text` im Server); ohne Wert `null` */
+/**
+ * „≈ 7,5 h“ unter 10 h, sonst „≈ 31 h“ (wie `hours_text` im Server); ohne Wert `null`.
+ * Kaufmännisch gerundet: erst auf Zehntel, ab 10 h (auch nach dem Runden) ganze Stunden.
+ */
 export function hoursText(h: number | null): string | null {
 	if (h === null) return null;
-	const value = h < 10 ? formatNumber(h, 1) : formatNumber(h, 0);
+	const tenths = Math.floor(h * 10 + 0.5) / 10;
+	const value =
+		tenths > 0 && tenths < 10 ? formatNumber(tenths, 1) : formatNumber(Math.floor(h + 0.5), 0);
 	return `≈ ${value}${NBSP}h`;
 }
 

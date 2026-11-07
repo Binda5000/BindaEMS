@@ -950,7 +950,7 @@ export const BackupOutageSchema = v.object({
 export type BackupOutage = v.InferOutput<typeof BackupOutageSchema>;
 
 export const BackupSchema = v.object({
-	/** Reichweite in Stunden ab jetzt bis zur Untergrenze, bis zur Reserve und bei Nachtlast */
+	/** Reichweite in Stunden ab jetzt bis zur Untergrenze, ab Reserve (was die Reserve allein trägt) und bei Nachtlast */
 	now_h: NullableNumber,
 	reserve_h: NullableNumber,
 	night_h: NullableNumber,
