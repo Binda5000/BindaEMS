@@ -1787,3 +1787,10 @@ async def test_runtime_supervises_monitoring_jobs(runtime, respx_mock) -> None:
     assert runtime.backup_range().now_h is None  # ohne SOC und Lastgrundlage
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
+
+
+async def test_heartbeat_reading_takes_the_disconnect_time_from_the_live_feed(runtime) -> None:
+    reading = runtime._heartbeat_reading()
+    assert reading.connected is False
+    assert reading.down_since == runtime.live_feed.disconnected_since
+    assert reading.down_since is not None  # nie verbunden: Start der app

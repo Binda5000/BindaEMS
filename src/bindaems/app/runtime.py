@@ -645,6 +645,7 @@ class AppRuntime:
             outage=self.outages.open_now(),
             soc_pct=float(soc) if isinstance(soc, int | float) else None,
             range_now=self.backup_range().now_h,
+            down_since=self.live_feed.disconnected_since,
         )
 
     def _influx_status(self) -> ComponentStatus:

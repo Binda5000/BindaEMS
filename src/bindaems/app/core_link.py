@@ -260,6 +260,7 @@ class LiveFeed:
         self._backoff = backoff or Backoff()
         self._status = StatusLog("core")
         self._since: datetime | None = None
+        self._started = clock.now()  # Beginn der Nicht-Erreichbarkeit, falls nie verbunden
         self._disconnects = 0  # Health aus einer Abfrage vor der letzten Trennung gilt nicht
 
     async def run(self) -> None:
@@ -270,6 +271,16 @@ class LiveFeed:
     def refresh_health(self) -> None:
         """Die nächste Health-Abfrage folgt sofort, ohne den Takt abzuwarten."""
         self._health_now.set()
+
+    @property
+    def disconnected_since(self) -> datetime | None:
+        """Seit wann der core nicht erreichbar ist; ``None`` solange er verbunden ist.
+
+        War er seit dem Start der app nie verbunden, gilt der Start als Beginn.
+        """
+        if self._live.connected:
+            return None
+        return self._since if self._since is not None else self._started
 
     def component_status(self) -> ComponentStatus:
         if self._live.connected:

@@ -96,6 +96,7 @@ def _reading(**over: object) -> Reading:
         "outage": None,
         "soc_pct": 55.0,
         "range_now": 31.2,
+        "down_since": None,
     }
     args.update(over)
     return Reading(**args)  # type: ignore[arg-type]
@@ -189,22 +190,65 @@ async def test_url_never_logged() -> None:
     await http.aclose()
 
 
-async def test_down_since_is_tracked_by_heartbeat() -> None:
+async def test_first_ping_after_long_outage_fails_with_real_start_time() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    # core seit 200 s weg (13:01:40 UTC = 14:01 lokal), erster Ping des Heartbeats
+    reading = _reading(connected=False, down_since=NOW - timedelta(seconds=200))
+    hb, http, _ = _hb(httpx.MockTransport(handler), reading)
+    await hb.send_once()
+    await http.aclose()
+    assert str(seen[0].url).endswith("/fail")
+    assert seen[0].content.decode() == "core nicht erreichbar seit 14:01"
+
+
+async def test_core_down_within_grace_is_ok() -> None:
     sent: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(str(request.url))
         return httpx.Response(200)
 
-    reading = _reading(connected=False)
+    reading = _reading(connected=False, down_since=NOW - timedelta(seconds=119))
     hb, http, clock = _hb(httpx.MockTransport(handler), reading)
-    await hb.send_once()  # erster Poll ohne Verbindung: Karenzzeit
-    clock.advance(119)
     await hb.send_once()
     clock.advance(1)
     await hb.send_once()
-    assert [u.endswith("/fail") for u in sent] == [False, False, True]
+    assert [u.endswith("/fail") for u in sent] == [False, True]
     await http.aclose()
+
+
+async def test_inputs_failure_sends_fail_and_logs_once_per_state_change() -> None:
+    seen: list[httpx.Request] = []
+    broken = True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    def inputs() -> Reading:
+        if broken:
+            raise RuntimeError("kaputt")
+        return _reading()
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    hb = Heartbeat(
+        SecretStr("https://hc-ping.com/abc"), http, ManualClock(NOW), interval_s=300, inputs=inputs
+    )
+    with structlog.testing.capture_logs() as logs:
+        assert await hb.send_once() is True
+        assert await hb.send_once() is True
+        assert len(logs) == 1
+    broken = False
+    assert await hb.send_once() is True
+    await http.aclose()
+    assert [str(r.url) for r in seen[:2]] == ["https://hc-ping.com/abc/fail"] * 2
+    assert seen[0].content.decode() == "Lebenszeichen: interner Fehler"
+    assert str(seen[2].url) == "https://hc-ping.com/abc"
 
 
 async def test_without_url_is_off() -> None:

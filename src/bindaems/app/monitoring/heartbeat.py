@@ -39,7 +39,7 @@ class Verdict:
 
 @dataclass(frozen=True)
 class Reading:
-    """Eingaben des Urteils, ohne den Verbindungsverlauf (den führt der Heartbeat selbst)."""
+    """Eingaben des Urteils; den Beginn eines core-Ausfalls liefert der LiveFeed."""
 
     connected: bool
     mode: str | None
@@ -47,6 +47,7 @@ class Reading:
     outage: Outage | None
     soc_pct: float | None
     range_now: float | None
+    down_since: datetime | None = None  # seit wann der core weg ist (Quelle: LiveFeed)
 
 
 @dataclass(frozen=True)
@@ -118,7 +119,7 @@ class Heartbeat:
         self._interval_s = interval_s
         self._inputs = inputs
         self._sleep = sleep
-        self._down_since: datetime | None = None
+        self._inputs_failed = False
         self._failed_since: datetime | None = None
         self._last_ok: datetime | None = None
         self._last_text: str | None = None
@@ -134,16 +135,18 @@ class Heartbeat:
             await self._sleep(self._interval_s)
 
     def _current(self) -> Verdict:
-        reading = self._inputs()
-        now = self._clock.now()
-        if reading.connected:
-            self._down_since = None
-        elif self._down_since is None:
-            self._down_since = now
+        try:
+            reading = self._inputs()
+        except Exception as exc:  # nie nach außen: der Ping meldet die Störung selbst
+            if not self._inputs_failed:
+                self._inputs_failed = True
+                log.error("Lebenszeichen: Eingaben nicht lesbar", fehler=type(exc).__name__)
+            return Verdict(False, "Lebenszeichen: interner Fehler")
+        self._inputs_failed = False
         return verdict(
             connected=reading.connected,
-            down_since=self._down_since,
-            now=now,
+            down_since=reading.down_since,
+            now=self._clock.now(),
             mode=reading.mode,
             reasons=reading.reasons,
             outage=reading.outage,
