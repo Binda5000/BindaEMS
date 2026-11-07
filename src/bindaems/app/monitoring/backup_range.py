@@ -162,10 +162,10 @@ def hours_text(hours: float | None) -> str:
     """„≈ 7,5 h“ unter 10 h, sonst ganze Stunden; ohne Wert „zu wenig Daten“."""
     if hours is None:
         return "zu wenig Daten"
-    tenths = round(hours, 1)
+    tenths = math.floor(hours * 10 + 0.5) / 10  # kaufmännisch gerundet, nicht zur geraden Zahl
     if 0 < tenths < _TEXT_LIMIT_H:
         return f"≈ {tenths:.1f}".replace(".", ",") + f"{NBSP}h"
-    return f"≈ {round(hours):d}{NBSP}h"
+    return f"≈ {math.floor(hours + 0.5):d}{NBSP}h"
 
 
 class BackupRangeService:

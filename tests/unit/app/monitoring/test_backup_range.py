@@ -156,6 +156,14 @@ def test_hours_text() -> None:
     assert hours_text(None) == "zu wenig Daten"
 
 
+def test_hours_text_boundaries_round_half_up() -> None:
+    # gleiche Erwartungen wie hoursText in ui/src/lib/system/backup.test.ts
+    assert hours_text(0.04) == f"≈ 0{NBSP}h"
+    assert hours_text(9.96) == f"≈ 10{NBSP}h"
+    assert hours_text(10.5) == f"≈ 11{NBSP}h"
+    assert hours_text(12.5) == f"≈ 13{NBSP}h"
+
+
 class FakeReader:
     def __init__(self) -> None:
         self.results: list[list[Series] | Exception] = []
