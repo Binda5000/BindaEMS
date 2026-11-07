@@ -384,6 +384,13 @@
       "details": {}
     },
     {
+      "name": "Lebenszeichen",
+      "ok": true,
+      "message": "aus (keine Ping-URL)",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "ha",
       "ok": false,
       "message": "MQTT noch nicht verbunden",

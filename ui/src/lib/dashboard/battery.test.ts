@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { CoreState, PlanResponse, PlanSlot } from '$lib/api/schemas';
 import { formatPower, formatSoc } from '$lib/format';
 import { parseIso } from '$lib/time';
+import { BACKUP } from '$lib/testing/backup';
 import { coreState, derived, limits, reading } from '$lib/testing/fixtures';
 import { RESPONSE, iso, slot } from '$lib/testing/plan';
 import {
 	batteryLabel,
+	backupLine,
 	batteryView,
 	energyText,
 	gridChargeText,
@@ -282,5 +284,38 @@ describe('reserveEnergyText', () => {
 		expect(reserveEnergyText({ ...base, pct: null })).toBeNull();
 		expect(reserveEnergyText({ ...base, reservePct: null })).toBeNull();
 		expect(reserveEnergyText({ ...base, usableKwh: null })).toBeNull();
+	});
+});
+
+describe('backupLine', () => {
+	const NB = '\u00a0';
+
+	it('zeigt Reichweite jetzt und bis zur Reserve', () => {
+		expect(backupLine(BACKUP, NOW)).toEqual({
+			text: `Netzausfall: ≈ 31${NB}h, ab Reserve ≈ 14${NB}h`,
+			outage: false
+		});
+	});
+
+	it('lässt ohne Reserve-Reichweite den Zusatz weg', () => {
+		expect(backupLine({ ...BACKUP, reserve_h: null }, NOW)?.text).toBe(`Netzausfall: ≈ 31${NB}h`);
+	});
+
+	it('nennt beim offenen Ausfall Beginn und Restdauer', () => {
+		const open = {
+			...BACKUP,
+			now_h: 18.2,
+			outage: { start: iso('12:03'), soc_start: 62, mean_w: 900 }
+		};
+		expect(backupLine(open, NOW)).toEqual({
+			text: `Netzausfall seit 12:03 · reicht noch ≈ 18${NB}h`,
+			outage: true
+		});
+	});
+
+	it('kommt ohne Reichweite und ohne Ausfall ohne Zeile aus', () => {
+		expect(backupLine({ ...BACKUP, now_h: null }, NOW)).toBeNull();
+		expect(backupLine(null, NOW)).toBeNull();
+		expect(backupLine(undefined, NOW)).toBeNull();
 	});
 });

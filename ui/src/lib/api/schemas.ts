@@ -932,6 +932,54 @@ export const LoadForecastSchema = v.object({
 });
 export type LoadForecast = v.InferOutput<typeof LoadForecastSchema>;
 
+// --- USV-Reichweite und Netzausfälle (GET /api/backup) ---------------------------------------
+
+export const BackupOutageSchema = v.object({
+	start: Iso,
+	end: v.nullable(Iso),
+	/** Ende aus dem Neustart geschätzt, nicht beobachtet */
+	end_estimated: v.boolean(),
+	duration_s: v.number(),
+	soc_start: NullableNumber,
+	soc_end: NullableNumber,
+	soc_min: NullableNumber,
+	/** mittlere Last an AC-Out; `null`, solange zu wenig Zeit mit Messwerten abgedeckt ist */
+	mean_w: NullableNumber,
+	load_kwh: v.number()
+});
+export type BackupOutage = v.InferOutput<typeof BackupOutageSchema>;
+
+export const BackupSchema = v.object({
+	/** Reichweite in Stunden ab jetzt bis zur Untergrenze, bis zur Reserve und bei Nachtlast */
+	now_h: NullableNumber,
+	reserve_h: NullableNumber,
+	night_h: NullableNumber,
+	/** angenommene Last an AC-Out in W; `load_source`: Tagesmittel oder laufender Ausfall */
+	load_w: NullableNumber,
+	load_source: v.nullable(v.picklist(['tag', 'ausfall'])),
+	floor_soc_pct: v.number(),
+	basis: v.nullable(
+		v.object({
+			first_day: DateText,
+			last_day: DateText,
+			day_slots: v.number(),
+			night_slots: v.number(),
+			night_w: NullableNumber
+		})
+	),
+	/** offener Netzausfall */
+	outage: v.nullable(v.object({ start: Iso, soc_start: NullableNumber, mean_w: NullableNumber })),
+	/** jüngster zuerst */
+	outages: v.array(BackupOutageSchema),
+	ping: v.object({
+		configured: v.boolean(),
+		ok: v.boolean(),
+		last_sent: v.nullable(Iso),
+		text: v.nullable(v.string())
+	})
+});
+export type Backup = v.InferOutput<typeof BackupSchema>;
+
 /** Art der Prognose: PV, die ausgegebene Last und die beiden Schatten (Profil, Modell) */
 export const QualityKindSchema = v.picklist(['pv', 'load', 'load_profile', 'load_model']);
 export type QualityKind = v.InferOutput<typeof QualityKindSchema>;

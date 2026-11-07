@@ -14,6 +14,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	settings: s.SettingsCurrentSchema,
 	'settings-versions': v.array(s.SettingsMetaSchema),
 	limits: s.LimitsSchema,
+	backup: s.BackupSchema,
 	consumers: s.ConsumersResponseSchema,
 	'consumer-candidates': s.CandidatesSchema,
 	'history-catalog': v.array(s.CatalogEntrySchema),
@@ -90,6 +91,45 @@ it('akzeptiert die Nullfälle der API', () => {
 			core: { connected: false, health: null },
 			components: [],
 			warnings: []
+		})
+	).toEqual([]);
+});
+
+it('akzeptiert die gefüllte Antwort von /api/backup', () => {
+	const outage = {
+		start: '2026-11-03T13:03:00+00:00',
+		end: null,
+		end_estimated: false,
+		duration_s: 1000,
+		soc_start: 62.0,
+		soc_end: null,
+		soc_min: 60.5,
+		mean_w: 1180.0,
+		load_kwh: 0.33
+	};
+	expect(
+		issues(s.BackupSchema, {
+			now_h: 31.2,
+			reserve_h: 14.1,
+			night_h: 40.3,
+			load_w: 712.0,
+			load_source: 'tag',
+			floor_soc_pct: 5.0,
+			basis: {
+				first_day: '2026-10-28',
+				last_day: '2026-11-03',
+				day_slots: 672,
+				night_slots: 140,
+				night_w: 551.0
+			},
+			outage: { start: outage.start, soc_start: 62.0, mean_w: 1180.0 },
+			outages: [outage, { ...outage, end: '2026-11-03T13:17:00+00:00', mean_w: null }],
+			ping: {
+				configured: true,
+				ok: true,
+				last_sent: '2026-11-03T13:05:00+00:00',
+				text: 'in Ordnung · CONTROL'
+			}
 		})
 	).toEqual([]);
 });

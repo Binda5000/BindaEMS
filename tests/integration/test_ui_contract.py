@@ -72,6 +72,7 @@ GET_ENDPOINTS = {
     "ops-check": "/api/ops/check",
     "ops-findings": "/api/ops/findings?days=14",
     "ops-switches": "/api/ops/switches",
+    "backup": "/api/backup",
 }
 OTHER = {
     "live-hello",

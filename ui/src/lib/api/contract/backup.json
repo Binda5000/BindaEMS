@@ -1,0 +1,17 @@
+{
+  "now_h": null,
+  "reserve_h": null,
+  "night_h": null,
+  "load_w": null,
+  "load_source": null,
+  "floor_soc_pct": 5.0,
+  "basis": null,
+  "outage": null,
+  "outages": [],
+  "ping": {
+    "configured": false,
+    "ok": true,
+    "last_sent": null,
+    "text": null
+  }
+}

@@ -12,7 +12,8 @@
     "reserve_soc_pct": 20.0,
     "max_charge_w": 10000.0,
     "max_discharge_w": 12000.0,
-    "soc_max_pct": 100.0
+    "soc_max_pct": 100.0,
+    "outage_floor_soc_pct": 5.0
   },
   "control": {
     "support_soc_pct": 70.0

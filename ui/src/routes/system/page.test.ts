@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { beforeEach, expect, it, vi } from 'vitest';
 import controlJson from '$lib/api/contract/control.json';
 import pricesJson from '$lib/api/contract/prices.json';
+import { BACKUP } from '$lib/testing/backup';
 import { ApiError } from '$lib/api/errors';
 import {
 	ControlResponseSchema,
@@ -24,6 +25,7 @@ const { api, user } = vi.hoisted(() => ({
 		loadForecast: vi.fn(),
 		forecastQuality: vi.fn(),
 		limits: vi.fn(),
+		backup: vi.fn(),
 		health: vi.fn(),
 		refreshPrices: vi.fn(),
 		control: vi.fn(),
@@ -66,6 +68,7 @@ beforeEach(() => {
 	api.loadForecast.mockReturnValue(new Promise(() => {}));
 	api.forecastQuality.mockReturnValue(new Promise(() => {}));
 	api.limits.mockReturnValue(new Promise(() => {}));
+	api.backup.mockReturnValue(new Promise(() => {}));
 	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
 	api.opsCheck.mockReturnValue(new Promise(() => {}));
 });
@@ -93,6 +96,16 @@ it('zeigt die Karten Lastprognose und Prognosegüte', async () => {
 	expect(api.forecastQuality).toHaveBeenCalledWith(14, expect.anything());
 });
 
+it('zeigt die Karte USV und Netzausfälle mit den Daten von /api/backup', async () => {
+	api.backup.mockResolvedValue(BACKUP);
+	showSystem(system());
+	expect(
+		await screen.findByRole('heading', { level: 2, name: 'USV und Netzausfälle' })
+	).toBeInTheDocument();
+	expect(await screen.findByText('Reichweite jetzt')).toBeInTheDocument();
+	expect(api.backup).toHaveBeenCalledTimes(1);
+});
+
 it('verweist ganz oben mit dem Ergebnis des Betriebschecks auf die Seite Betrieb', async () => {
 	api.opsCheck.mockResolvedValue({
 		level: 'warn',
@@ -117,9 +130,9 @@ it('verweist ganz oben mit dem Ergebnis des Betriebschecks auf die Seite Betrieb
 it('zählt die Komponenten in der Kopfzeile und stellt die gestörte nach vorn', async () => {
 	showSystem(system());
 	const components = card('Komponenten');
-	expect(await within(components).findByText('11 von 12 in Ordnung')).toBeInTheDocument();
+	expect(await within(components).findByText('12 von 13 in Ordnung')).toBeInTheDocument();
 	const rows = within(components).getAllByRole('listitem');
-	expect(rows).toHaveLength(12);
+	expect(rows).toHaveLength(13);
 	expect(within(rows[0]!).getByText('Home Assistant')).toBeInTheDocument();
 	expect(within(rows[0]!).getByRole('img', { name: 'gestört' })).toBeInTheDocument();
 	expect(rows[1]).toHaveTextContent(/^\s*core\s*verbunden\s*$/);

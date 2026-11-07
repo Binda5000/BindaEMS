@@ -1,6 +1,8 @@
 <script lang="ts">
+	import type { Backup } from '$lib/api/schemas';
 	import { formatSoc } from '$lib/format';
 	import {
+		backupLine,
 		batteryLabel,
 		energyText,
 		gridChargeText,
@@ -16,9 +18,11 @@
 		stale: boolean;
 		/** „jetzt“ für die Planzeile (heute oder „morgen“) */
 		nowMs: number;
+		/** Reichweite der USV; ohne Daten keine Zeile */
+		backup?: Backup | null;
 	}
 
-	let { view, stale, nowMs }: Props = $props();
+	let { view, stale, nowMs, backup = null }: Props = $props();
 
 	const dimmed = $derived(stale || view.quality === 'stale');
 	const fill = $derived(Math.min(100, Math.max(0, view.pct ?? 0)));
@@ -27,6 +31,7 @@
 	);
 	const energy = $derived(energyText(view));
 	const reserveEnergy = $derived(reserveEnergyText(view));
+	const backupInfo = $derived(backupLine(backup, nowMs));
 	const gridCharge = $derived(gridChargeText(view.gridChargeAllowed));
 </script>
 
@@ -65,6 +70,9 @@
 	</div>
 	{#if view.outlook}
 		<p class="plan">Plan: {outlookText(view.outlook, nowMs)}</p>
+	{/if}
+	{#if backupInfo}
+		<p class="backup" class:outage={backupInfo.outage}>{backupInfo.text}</p>
 	{/if}
 </section>
 
@@ -181,8 +189,18 @@
 		color: var(--muted);
 	}
 
-	.plan {
+	.plan,
+	.backup {
 		margin: 0;
 		font-size: 0.875rem;
+	}
+
+	.backup {
+		color: var(--muted);
+	}
+
+	.backup.outage {
+		color: var(--warn);
+		font-weight: 600;
 	}
 </style>

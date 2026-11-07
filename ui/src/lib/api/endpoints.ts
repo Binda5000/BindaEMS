@@ -142,6 +142,7 @@ export const api = {
 	forecast: (o?: Load): Promise<s.Forecast> => get('/api/forecast/pv', s.ForecastSchema, o),
 	loadForecast: (o?: Load): Promise<s.LoadForecast> =>
 		get('/api/forecast/load', s.LoadForecastSchema, o),
+	backup: (o?: Load): Promise<s.Backup> => get('/api/backup', s.BackupSchema, o),
 	forecastQuality: (days = 14, o?: Load): Promise<s.Quality> =>
 		get(withQuery('/api/forecast/quality', { days: String(days) }), s.QualitySchema, o),
 	forecastQualityDaily: (days = 28, o?: Load): Promise<s.QualityDaily> =>

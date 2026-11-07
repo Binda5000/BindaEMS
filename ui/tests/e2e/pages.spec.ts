@@ -142,6 +142,71 @@ test('Übersicht: Akku-Kachel zeigt kWh über der Reserve bei 360 px in einer Ze
 	expect(lines, 'bricht um').toBeLessThan(1.6);
 });
 
+const BACKUP = {
+	now_h: 31.4,
+	reserve_h: 14.1,
+	night_h: 40.3,
+	load_w: 712,
+	load_source: 'tag',
+	floor_soc_pct: 5,
+	basis: {
+		first_day: '2026-10-28',
+		last_day: '2026-11-03',
+		day_slots: 672,
+		night_slots: 140,
+		night_w: 551
+	},
+	outage: null,
+	outages: [
+		{
+			start: '2026-11-03T13:03:00+00:00',
+			end: '2026-11-03T13:17:00+00:00',
+			end_estimated: true,
+			duration_s: 840,
+			soc_start: 62,
+			soc_end: 60.5,
+			soc_min: 60.5,
+			mean_w: 1180,
+			load_kwh: 0.28
+		}
+	],
+	ping: { configured: true, ok: true, last_sent: '2026-11-03T13:05:00+00:00', text: 'in Ordnung' }
+};
+
+test('Übersicht: Reichweite bei Netzausfall steht in der Akku-Kachel bei 360 px ohne waagrechtes Scrollen', async ({
+	page
+}) => {
+	await page.setViewportSize({ width: 360, height: 740 });
+	// die Demo-Welt hat keine Last- und Ausfallhistorie: die Antwort kommt aus dem Test
+	const open = { start: '2026-10-09T09:03:00+00:00', soc_start: 62, mean_w: 1180 };
+	await page.route('**/api/backup', (route) =>
+		route.fulfill({ json: { ...BACKUP, now_h: 18.2, outage: open } })
+	);
+	await login(page, 'gast');
+	await page.goto('/');
+	const tile = page.getByRole('region', { name: 'Hausakku' });
+	const line = tile.getByText(/^Netzausfall seit .* · reicht noch ≈ 18\sh$/);
+	await expect(line).toBeVisible();
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+	);
+	expect(overflow).toBeLessThanOrEqual(0);
+	const box = await line.boundingBox();
+	expect(box!.x + box!.width).toBeLessThanOrEqual(360);
+});
+
+test('System zeigt die Karte USV und Netzausfälle', async ({ page }) => {
+	await page.route('**/api/backup', (route) => route.fulfill({ json: BACKUP }));
+	await login(page, 'gast');
+	await page.goto('/system');
+	const card = page.locator('section', {
+		has: page.getByRole('heading', { name: 'USV und Netzausfälle' })
+	});
+	await expect(card.getByText('≈ 712 W (Mittel 28.10.–3.11.), nachts ≈ 551 W')).toBeVisible();
+	await expect(card.getByText(/ohne PV/)).toBeVisible();
+	await expect(card.getByRole('cell', { name: /14 min/ })).toContainText('Ende geschätzt');
+});
+
 test('System zählt die Komponenten und zeigt die gestörte zuerst, Wallboxen beim Namen', async ({
 	page
 }) => {
@@ -150,7 +215,7 @@ test('System zählt die Komponenten und zeigt die gestörte zuerst, Wallboxen be
 	const components = page.locator('section', {
 		has: page.getByRole('heading', { name: 'Komponenten' })
 	});
-	await expect(components.getByText('11 von 12 in Ordnung')).toBeVisible();
+	await expect(components.getByText('12 von 13 in Ordnung')).toBeVisible();
 	const first = components.getByRole('listitem').first();
 	await expect(first).toContainText('Home Assistant');
 	await expect(first).toContainText('MQTT noch nicht verbunden');
