@@ -7,7 +7,10 @@ gemeinsame Fenster vom 26.10.2026 (`d1875af`). Damit laufen 3c, 3d, 4a, 4b, 4c, 
 „Warum?“-Fix. Wallbox und Tesla sind seit 17.10.2026 live (evcc aus), **Victron seit 3.11.2026, 19:45**
 (DESS aus seit 19.10.2026, „Netzladen erlaubt“ an), die Klimaanlage im Dry-Run, „Lastmodell verwenden“
 aus. Teil 2 ist vollständig (EVCS „Verbindung unterbrochen“ am 27.10.2026, Victron 17.2-4 am
-3.11.2026). Offen an der Anlage, in dieser Reihenfolge:
+3.11.2026).
+**Plan Lebenszeichen und USV-Reichweite** (`docs/superpowers/plans/2026-11-04-lebenszeichen-usv-reichweite.md`) ist umgesetzt: auf dem Branch
+`claude/project-thread-800wyz`, **nicht auf `main`, nicht ausgerollt** (Punkt 24 unter „Offen an der Anlage“). Nur app, UI und HA; der core
+bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
    nachts wie geplant).
@@ -2226,6 +2229,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       „Betriebscheck“, am nächsten Morgen um 07:30 kommt „BindaEMS Tagesbericht“ (Einstellungen → „Tagesbericht“). Vor einem Rollback die
       Einstellungen als YAML exportieren, den Schlüssel `ops` löschen, die Datenbank auf `0015` zurücknehmen und danach importieren
       (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“).
+  24. **Lebenszeichen und USV-Reichweite ausrollen:** nur mit dem Sammel-Pull, `ems-core` **und** `ems-app` zusammen, **nie `ems-app` allein**
+      (die app liest die neuen Felder aus der `config.yaml`, die der core mitliest), **nicht vor dem 23.11.2026** (mit Stufe 2). **Migration `0017`**
+      (Tabelle `grid_outage`, läuft beim Start der app von selbst; setzt `0016` aus Punkt 23 voraus). Vorher: (a) auf der Seite System in der
+      Signaltabelle prüfen, dass `consumption_output.l1..l3.power_w` Werte haben, sonst bleibt die Reichweite „zu wenig Daten“; (b) den Wert für
+      `battery.outage_floor_soc_pct` klären (SOC, bei dem das BMS im Inselbetrieb abschaltet; ab Werk 5 %) und erst nach dem Sammel-Pull in die
+      `config.yaml` schreiben; (c) bei healthchecks.io das Konto und den Check „BindaEMS“ anlegen (Periode 5 min, Karenz 10 min, Benachrichtigung
+      aufs Handy) und die URL als `BINDAEMS_PING_URL` in die `.env` eintragen, dann `docker compose up -d --no-deps ems-app`. Prüfen: Seite System, Karte
+      „USV und Netzausfälle“ und Baustein „Lebenszeichen“; app stoppen, nach höchstens 15 min kommt die Meldung. Das Protokoll der Netzausfälle
+      beginnt erst mit dem Ausrollen. Schritte im Einzelnen: `docs/betrieb.md`, Abschnitt 7, „Lebenszeichen einrichten“. Rückweg: die Felder
+      aus der `config.yaml` nehmen, die Datenbank auf `0016` zurücknehmen.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

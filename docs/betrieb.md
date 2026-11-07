@@ -1077,6 +1077,59 @@ homeassistant:
   Komponente `ha-notify` unter **System** zeigt dann „Benachrichtigungen aus: BINDAEMS_HA_TOKEN
   fehlt.“.
 
+### Lebenszeichen einrichten
+
+Das Lebenszeichen meldet aufs Handy, wenn BindaEMS nicht mehr antwortet: VM, Proxmox-Cluster, Internet,
+core oder Netz. Die app pingt dazu alle 5 Minuten (`app.ping_interval_s`, ab Werk 300 s) einen Dienst im
+Stil von healthchecks.io außerhalb des Clusters. Bleibt der Ping aus, meldet der Dienst das selbst. Es
+ist keine Sicherheitsfunktion: Es schaltet nichts und fährt nichts herunter; fällt der Dienst oder das
+Internet aus, läuft alles andere unverändert weiter. Ohne `BINDAEMS_PING_URL` ist es aus.
+
+**Was gemeldet wird:** `<url>` heißt „in Ordnung“ (mit Betriebsart, SOC und Reichweite im Text),
+`<url>/fail` eine Störung: der core ist seit mindestens 120 s nicht erreichbar, ein Netzausfall läuft
+(hat Vorrang; Text z. B. „Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18 h ohne PV“) oder der core ist
+im Zustand SAFE. OBSERVE und DEGRADED gelten als in Ordnung. Kehrt das Netz zurück, kommt mit dem
+nächsten Ping „in Ordnung“. Ist der Router nicht an der USV, bleibt der Ping ganz aus, und der Dienst
+meldet das nach der Karenz ebenfalls.
+
+**Einrichten:**
+
+1. Konto bei healthchecks.io anlegen (gratis bis 20 Checks; selbst gehostet geht auch).
+2. Check „BindaEMS“ anlegen: Periode 5 Minuten, Karenz 10 Minuten.
+3. Benachrichtigung aufs Handy einrichten (z. B. Telegram, ntfy oder Pushover).
+4. Die Ping-URL (`https://…`, nur https) in die `.env` eintragen: `BINDAEMS_PING_URL=https://hc-ping.com/<uuid>`.
+   Die URL ist ein Secret: Sie steht nie in `config.yaml`, im Log, in der API, in Home Assistant oder im
+   UI (dort nur „eingerichtet: ja/nein“).
+5. Nach dem Sammel-Pull (core und app zusammen) `docker compose up -d --no-deps ems-app`.
+6. **Test:** Seite **System**, Baustein „Lebenszeichen“ steht auf „zuletzt gesendet …“. Dann
+   `docker compose stop ems-app`: Nach höchstens 15 Minuten (Periode plus Karenz) kommt die Meldung aufs
+   Handy. Danach `docker compose start ems-app`.
+
+Scheitert ein Ping (Internet weg), meldet die app „nicht gesendet seit …“ beim Baustein und versucht es
+im Takt weiter; im Log steht eine Zeile je Wechsel, nicht je Versuch.
+
+**USV-Reichweite und Netzausfälle:**
+
+- Die Reichweite (Akku-Kachel, Seite System, Karte „USV und Netzausfälle“, `GET /api/backup`, in Home
+  Assistant `usv_reichweite` und `usv_reichweite_reserve`) gilt **nur für die Lasten an AC-Out der Multis**;
+  nur sie sind USV-versorgt (Hinweis vom 4.11.2026). Quelle ist `consumption_output.l1..l3.power_w`
+  (`Ac/ConsumptionOnOutput`), gerechnet immer **ohne PV**. Lastannahme ist das Mittel der letzten 7 vollen
+  Tage aus InfluxDB (Retention `long`); die Nacht von 00:00 bis 05:00 steht als zweite Zahl daneben.
+  Dazu braucht es mindestens 192 vollständige Viertelstunden (2 Tage, alle drei Phasen), sonst steht
+  „zu wenig Daten“.
+- **Vor dem Ausrollen** auf der Seite **System** in der Signaltabelle nachsehen, dass
+  `consumption_output.l1..l3.power_w` Werte haben; sonst bleibt die Reichweite „zu wenig Daten“.
+- **Untergrenze:** `battery.outage_floor_soc_pct` (ab Werk 5 %, höchstens `reserve_soc_pct`) ist der SOC,
+  bei dem das BMS im Inselbetrieb abschaltet. Trag den Wert deines Akkus ein. Neue Felder dürfen erst in
+  die `config.yaml` der Anlage, wenn core und app aus diesem Stand laufen (der core liest dieselbe Datei).
+- **Protokoll der Netzausfälle:** Ein Netzausfall ist Inselbetrieb (`system.active_in_source` = 240). Die
+  app erfasst jeden Ausfall, auch kurze, ab dem Ausrollen (kein Nachtragen), mit Beginn, Ende, Dauer,
+  SOC (Beginn, Ende, Minimum), mittlerer Last und Energie an AC-Out in der Tabelle `grid_outage`
+  (Migration `0017`). Nach einem Neustart der app mitten im Ausfall wird die offene Zeile fortgesetzt; ist
+  das Netz beim Start schon zurück, schließt sie mit „Ende geschätzt“.
+- **Ausrollen und zurück:** nur mit dem Sammel-Pull, nie `ems-app` allein; der core bleibt unverändert.
+  Zurück: die neuen Felder aus der `config.yaml` nehmen, die Datenbank auf `0016` zurücknehmen.
+
 ## 8. Tarif und Abrechnung
 
 Nach der Inbetriebnahme trägst du in den Laufzeit-Einstellungen nach, was die Spec bewusst
