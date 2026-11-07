@@ -285,7 +285,7 @@ keine Migration, keine ACL-Zeile, kein Schritt an `config.yaml`**; ausgerollt wi
 Nicht umgesetzt (Entscheidung 2 des Plans): einen Netzanteil des Akkuinhalts mitführen, der solchen Tagen eine Autarkie über 0 gäbe.
 
 **Stand Ladeauswahl beim Anstecken (04.11.2026):** Plan `docs/superpowers/plans/2026-11-04-ladeauswahl-beim-anstecken.md`, vom Betreiber am
-04.11.2026 freigegeben (Knöpfe nach Entscheidung 1: „Geplant, Sofort, PV + Passt“). Die app rechnet je angestecktem Fahrzeug eine einfache
+04.11.2026 freigegeben (Knöpfe nach Entscheidung 1: „Geplant, Sofort, PV + Passt“), umgesetzt und geprüft, **seit dem 07.11.2026 per Fast-Forward auf `main` (Zustimmung des Betreibers), nicht ausgerollt** (mit Stufe 2, Punkt 19). Die app rechnet je angestecktem Fahrzeug eine einfache
 Ladeschätzung für „Geplant“, „Sofort“, „PV-Überschuss“ und „Min+PV“ über die Viertelstunden des gültigen Plans (`app/charging/estimate.py`, alle
 Zahlen „ca.“, ohne Hausakku; „Geplant“ bis zum Ziel, die anderen Modi bis zum Ladelimit des Autos) und veröffentlicht sie als HA-Sensor „Ladeschätzung“ (`sensor.bindaems_<auto>_ladeschatzung`, Zustand die Kosten
 für „Geplant“). Der Blueprint `bindaems_benachrichtigungen.yaml` im Projektordner `ha-benachrichtigungen/` (nicht im Repo) nennt damit beim
