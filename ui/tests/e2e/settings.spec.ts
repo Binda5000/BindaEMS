@@ -151,6 +151,25 @@ test('Einstellungen der Planung melden ungültige Zahlen am Feld', async ({ page
 	await expect(page.getByLabel('Roundtrip-Wirkungsgrad (%)')).toBeFocused();
 });
 
+test('Unwetter-Reserve: Ansicht und ohne Warnart kein Speichern', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	// das Demo-Backend hat die Unwetter-Reserve eingeschaltet (Standardwerte sonst)
+	const view = page.getByRole('heading', { name: 'Planung' }).locator('..');
+	await expect(view.getByRole('heading', { name: 'Unwetter-Reserve' })).toBeVisible();
+	await expect(view.getByText('Warnstufe').locator('+ dd')).toHaveText('ab orange');
+	await expect(view.getByText('Warnarten').locator('+ dd')).toHaveText('Sturm, Gewitter');
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	const group = page.getByRole('group', { name: 'Unwetter-Reserve' });
+	await expect(group.getByRole('checkbox', { name: 'Unwetter-Reserve' })).toBeChecked();
+	await expect(group.getByLabel('Ziel-SOC (%)')).toHaveValue('40');
+	await group.getByRole('checkbox', { name: 'Sturm' }).uncheck();
+	await group.getByRole('checkbox', { name: 'Gewitter' }).uncheck();
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(group.getByText('Mindestens eine Warnart wählen')).toBeVisible();
+	await expect(page.getByText(/Version \d+ gespeichert/)).toHaveCount(0);
+});
+
 test('admin wählt einen Sensor für das Lastmodell und speichert ihn', async ({ page }) => {
 	await login(page, 'admin');
 	await page.goto('/einstellungen');

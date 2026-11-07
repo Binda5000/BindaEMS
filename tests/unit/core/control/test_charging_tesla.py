@@ -17,6 +17,7 @@ from tests.unit.core.control.charge_helpers import (
 
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_modes import Effective, ModeDecision
+from bindaems.core.control.charge_points import ChargePoint
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.charging_tesla import AgainstMode, climate_hold
 from bindaems.core.control.executor import WriteResult
@@ -1353,11 +1354,14 @@ def test_the_self_start_ignores_an_unclear_assignment(cfg) -> None:
     # 120 s beginnen erst mit der klaren Zuordnung (241), der Neuversuch ist nicht verbraucht.
     c = controller(cfg)
     decision = ModeDecision(charge=False, reason=None)
+    point = ChargePoint(
+        "tesla", "twc", "vehicle.tesla", False, ("L1", "L2", "L3"), 6, 16, None, True
+    )
 
     def due(s: int, kind: AssignmentKind) -> bool:
         state = VehicleState("twc", kind, True, True, False, False, None, False)
         inp = tesla_inputs(cfg, s, **SELF_STARTING)
-        return c._self_start(inp.now, "tesla", "vehicle.tesla", state, decision, inp)
+        return c._self_start(inp.now, "tesla", "vehicle.tesla", point, state, decision, inp)
 
     unclear, clear = AssignmentKind.UNCLEAR, AssignmentKind.DEFAULT
     assert [due(s, unclear) for s in (0, 119, 120, 240)] == [False] * 4
@@ -1372,7 +1376,9 @@ EVCS_OFF = Intent(
 
 
 def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> None:
-    # Geregelt wird die EVCS: Das erneute „Laden aus“ geht an den Aktor des Ladepunkts
+    # Geregelt wird die EVCS: Das erneute „Laden aus“ geht an den Aktor des Ladepunkts. An der EVCS
+    # gilt ihr Rücklesen mit ``control.evcs_against_s`` (60 s), nicht Tessie (Plan
+    # EVCS-Selbststart).
     evcs_charging = evcs(charging=True, phase_a=dict.fromkeys(PHASES, 16.0), power_w=11040.0)
     started = lambda s: s >= 60  # noqa: E731
     found = run(
@@ -1381,6 +1387,7 @@ def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> Non
         300,
         make=tesla_inputs,
         intent=EVCS_OFF,
+        dry_run=False,  # der Selbststart an der EVCS zählt nur nach live gesendetem „Laden aus“
         twc_obs=twc(),
         evcs_obs=lambda s: evcs_charging if started(s) else evcs(),
         tesla_obs=lambda s: (
@@ -1393,7 +1400,7 @@ def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> Non
     tagged = [(t, x.command) for t, x in found if "self_start" in x.command.reasons]
     assert tagged == [
         (
-            180,
+            120,
             Command(
                 "wallbox.evcs", CHARGING, False, urgent=True, reasons=("mode_off", "self_start")
             ),

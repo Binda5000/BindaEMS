@@ -7,6 +7,7 @@ from tests.plan_helpers import at, sample_plan, sample_slot
 from bindaems.shared.plan import (
     MAX_INTENT_PLAN_SLOTS,
     PLAN_VALID,
+    RESERVE_RECHARGE_MAX_W,
     BatteryIntent,
     BatteryIntentKind,
     IntentPlanSlot,
@@ -18,6 +19,7 @@ from bindaems.shared.plan import (
     expensive_import_ct,
     high_percentile,
     intent_plan,
+    recharge_without_switch,
     thermal_hint,
 )
 
@@ -116,6 +118,48 @@ def test_intent_plan_turns_grid_charge_into_self_consumption_when_switched_off()
     assert sent.grid_charge_allowed is False
     kept = intent_plan(plan, grid_charge_allowed=True)
     assert [s.intent for s in kept.slots] == [NETZLADEN_3000["intent"], HOLD["intent"]]
+
+
+# Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9)
+
+
+def recharge(watts: float) -> BatteryIntent:
+    return BatteryIntent(kind=NETZLADEN, grid_charge_w=watts, reserve_recharge=True)
+
+
+def test_reserve_recharge_only_with_netzladen() -> None:
+    assert RESERVE_RECHARGE_MAX_W == 3000.0
+    assert recharge(2500.0).reserve_recharge is True
+    with pytest.raises(ValidationError):
+        BatteryIntent(kind=EIGENVERBRAUCH, reserve_recharge=True)
+    with pytest.raises(ValidationError):
+        BatteryIntent(kind=HALTEN, reserve_recharge=True)
+
+
+def test_old_intent_json_loads_without_reserve_recharge() -> None:
+    raw = {"kind": "NETZLADEN", "grid_charge_w": 2000.0}
+    assert BatteryIntent.model_validate(raw).reserve_recharge is False
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"], intents=[NETZLADEN_3000])
+    stored = plan.model_dump(mode="json")
+    del stored["slots"][0]["intent"]["reserve_recharge"]
+    assert Plan.model_validate(stored).slots[0].intent.reserve_recharge is False
+
+
+def test_recharge_without_switch_up_to_the_limit() -> None:
+    assert recharge_without_switch(recharge(3000.0))
+    assert not recharge_without_switch(recharge(3100.0))
+    assert not recharge_without_switch(BatteryIntent(kind=NETZLADEN, grid_charge_w=2000.0))
+    assert not recharge_without_switch(BatteryIntent())
+
+
+def test_intent_plan_keeps_reserve_recharge_when_switched_off() -> None:
+    slots = ["10:00", "10:15", "10:30"]
+    big = {"intent": recharge(3100.0)}
+    plan = _stored(
+        DAY + "10:01:00+00:00", slots, intents=[{"intent": recharge(3000.0)}, NETZLADEN_3000, big]
+    )
+    sent = intent_plan(plan, grid_charge_allowed=False)
+    assert [s.intent for s in sent.slots] == [recharge(3000.0), BatteryIntent(), BatteryIntent()]
 
 
 def test_intent_plan_needs_a_stored_plan() -> None:

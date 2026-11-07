@@ -869,6 +869,34 @@ def test_grid_charge_slot_with_switch_off_is_invalid(tmp_path, limits) -> None:
     )
 
 
+def recharge(watts: float) -> BatteryIntent:
+    return BatteryIntent(kind=CHARGE, grid_charge_w=watts, reserve_recharge=True)
+
+
+def test_reserve_recharge_with_switch_off_is_valid(tmp_path, limits) -> None:
+    # Entscheidung 9: Nachladen auf die Reserve bis 3000 W auch bei ausgeschaltetem Schalter
+    kinds = [recharge(3000.0), recharge(1500.0), BatteryIntent(), BatteryIntent()]
+    plan = plan_at(at("10:01"), FOUR, kinds=kinds, grid_charge_allowed=False)
+    store = make_store(tmp_path, limits)
+    assert store.submit(Intent(version=1, plan=plan), at("10:01")) == IntentReply("accepted", 1)
+    assert store.current.plan is not None
+    assert store.current.plan.slots[0].intent == recharge(3000.0)
+
+
+@pytest.mark.parametrize("intent", [recharge(3100.0), grid_charge(3000.0)])
+def test_reserve_recharge_over_the_limit_or_without_flag_is_invalid(
+    tmp_path, limits, intent: BatteryIntent
+) -> None:
+    kinds = [recharge(3000.0), intent, BatteryIntent(), BatteryIntent()]
+    plan = plan_at(at("10:01"), FOUR, kinds=kinds, grid_charge_allowed=False)
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection, reply.details) == (
+        "rejected",
+        "invalid",
+        GRID_CHARGE_OFF,
+    )
+
+
 def test_plan_with_soc_end_outside_0_to_100_is_rejected(tmp_path, limits) -> None:
     # das Modell verbietet es; model_copy prüft nicht, wie eine Absicht aus einer beschädigten
     # Datei oder einem anderen Sender

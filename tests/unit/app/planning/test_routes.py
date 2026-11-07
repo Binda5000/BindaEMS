@@ -8,12 +8,18 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 from tests.app_helpers import ingest, login_as
-from tests.plan_helpers import planned_health, sample_inputs, sample_plan, vehicle_health
+from tests.plan_helpers import (
+    STORM_WARNING,
+    planned_health,
+    sample_inputs,
+    sample_plan,
+    vehicle_health,
+)
 
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.routes import planning_router
 from bindaems.app.settings.service import SettingsService, VersionConflictError
-from bindaems.shared.plan import PlanThermal
+from bindaems.shared.plan import PlanStorm, PlanThermal
 
 USERS = {"viewer": "gast", "operator": "bedienen", "admin": "admin"}
 
@@ -89,6 +95,7 @@ async def test_get_plan_shape(client_as, planning):
         "start",
         "intent",
         "grid_charge_w",
+        "reserve_recharge",
         "soc_pct",
         "pv_w",
         "load_w",
@@ -106,6 +113,7 @@ async def test_get_plan_shape(client_as, planning):
         "thermal_w",
         "thermal_steps",
         "thermal_grid_w",
+        "storm_reserve_pct",
         "codes",
         "text",
     }
@@ -129,12 +137,15 @@ async def test_get_plan_shape(client_as, planning):
         "issues",
         "vehicles",
         "thermal",
+        "storm",
         "slots",
     }
     assert plan["vehicles"] == [] and plan["slots"][0]["ev_w"] == {}
     assert plan["soc_start_pct"] is not None
     # ohne Klimaanlage: kein Block, keine Verschiebung in den Slots
     assert plan["thermal"] is None
+    # ohne Unwetterwarnung: kein Block, keine Untergrenze
+    assert plan["storm"] is None and plan["slots"][0]["storm_reserve_pct"] is None
     assert (plan["slots"][0]["thermal_w"], plan["slots"][0]["thermal_steps"]) == (0.0, None)
     assert plan["slots"][0]["thermal_grid_w"] == 0.0
 
@@ -202,6 +213,50 @@ async def test_slot_json_names_the_battery_share_of_the_cars(planning):
     )
     item = slot_json(slot)
     assert item["ev_battery_w"] == {"tesla": 2300.0} and item["now_battery"] is True
+
+
+async def test_slot_json_names_a_reserve_recharge(planning):
+    from bindaems.app.planning.routes import slot_json
+    from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+
+    stored = await planning.replan("manual")
+    assert stored is not None
+    assert slot_json(stored.slots[0])["reserve_recharge"] is False
+    recharge = BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000.0, reserve_recharge=True
+    )
+    item = slot_json(stored.slots[0].model_copy(update={"intent": recharge}))
+    assert (item["intent"], item["grid_charge_w"], item["reserve_recharge"]) == (
+        "NETZLADEN",
+        3000.0,
+        True,
+    )
+
+
+async def test_plan_carries_storm(client_as, planning, monkeypatch):
+    stored = await planning.replan("manual")
+    assert stored is not None
+    slots = [stored.slots[0].model_copy(update={"storm_reserve_pct": 40.0}), *stored.slots[1:]]
+    storm = PlanStorm(target_pct=40.0, warnings=[STORM_WARNING])
+    monkeypatch.setattr(
+        planning, "current", lambda: stored.model_copy(update={"slots": slots, "storm": storm})
+    )
+    plan = client_as("viewer").get("/api/plan").json()["plan"]
+    assert plan["storm"] == {
+        "target_pct": 40.0,
+        "warnings": [
+            {
+                "warn_id": 7,
+                "version": 1,
+                "kind": "gewitter",
+                "level": 2,
+                "begin": "2026-10-16T12:00:00+00:00",
+                "end": "2026-10-16T14:00:00+00:00",
+                "text": "Gewitter",
+            }
+        ],
+    }
+    assert [s["storm_reserve_pct"] for s in plan["slots"][:2]] == [40.0, None]
 
 
 async def test_get_plan_marks_expired_plan(client_as, planning, clock):

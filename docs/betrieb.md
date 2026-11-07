@@ -256,6 +256,105 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
     geschaltet.
 
+- **Update mit der Unwetter-Reserve:** Der Plan „Unwetter-Reserve“ ändert nur Code der app (der core
+  bekommt keinen geänderten Code), es gibt keine Migration, keine Zeile in der ACL des
+  Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Ausgerollt wird trotzdem wie
+  immer `ems-core` **und** `ems-app` zusammen, mit oder nach Stufe 2 (nicht vor dem 23.11.2026), mit
+  dem nächsten Sammel-Pull (`docker compose pull && docker compose up -d`). Der Schalter ist ab Werk
+  aus; was er tut, steht im Abschnitt „Planung“, „Unwetter-Reserve“.
+- **Rollback auf einen Stand vor der Unwetter-Reserve:** Core und app gehen wie immer gemeinsam auf
+  dasselbe Tag zurück; die Absicht des core (`intent.json`) trägt nichts Neues. Zwei Stellen der app
+  tragen neue Felder, und eine ältere app lehnt unbekannte Felder ab (`extra="forbid"`):
+  - **Die Einstellungen:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `planning.storm`, auch mit ausgeschaltetem Schalter. Eine ältere app lehnt eine solche Version ab
+    und rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“). Hast du seit dem Ausrollen nichts
+    gespeichert oder importiert, ist die letzte Version noch die alte, und hier ist nichts zu tun.
+  - **Pläne und Eingangsdaten seit dem Ausrollen** tragen `storm` und je Slot `storm_reserve_pct`
+    (auch mit `null`), die Eingangsdaten die Warnungen und die Untergrenze je Slot; Pläne mit dem
+    Anlass `storm` kennt eine ältere app auch nicht. Sie überspringt diese Pläne (im Log „Plan-Zeile
+    nicht lesbar“, `code=plan_row_unreadable`), bis sie nach 30 Tagen aus der Planablage fallen; bis
+    dahin fehlt der Zeitraum im Verlauf und im Vergleich Plan gegen Ist. Daran musst du nichts tun.
+
+  So gehst du zurück:
+
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
+     den Block `storm:` löschen, samt den eingerückten Zeilen darunter (`enabled`, `target_soc_pct`,
+     `min_level`, `kinds` und die Warnarten). Gehst du zugleich hinter Netzgrenze je Phase zurück,
+     löschst du auch `peak_soft_ct_per_kw:` (nächster Punkt).
+  2. **Regelbetrieb aus** (System → „Bedienung“), wie bei jedem Wechsel des core.
+  3. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  4. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“. Bis dahin rechnet die ältere app mit den
+     Standardwerten; speichere die Einstellungen in dieser Zeit nicht von Hand. Dann den
+     **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
+  5. **Die Home-Assistant-Entität entfernen:** `sensor.bindaems_unwetter_reserve` kennt die ältere
+     app nicht mehr und aktualisiert sie nicht; sie bleibt in Home Assistant ohne Werte stehen.
+     Unter **Einstellungen** → **Geräte & Dienste** → **Entitäten** entfernst du sie von Hand.
+
+  Hast du vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
+  gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
+  `key = "$.planning.storm"`. Die Datenbank hat keine Migration. Gehst du später wieder auf den Stand
+  mit der Unwetter-Reserve, gilt die Gruppe mit den Standardwerten (Schalter aus).
+
+- **Rollback auf einen Stand vor Netzgrenze je Phase:** Core und app gehen gemeinsam zurück, auf
+  dasselbe Tag (der Plan ändert die Planprüfung im core, Task 6). Zwei Stellen tragen neue Felder, und
+  ein älterer Stand lehnt unbekannte Felder ab (`extra="forbid"`):
+  - **Die Absicht des core** (`intent.json`, im Volume `core-data` `/data/intent.json`): Jeder Slot
+    des Plans trägt unter `intent` das Feld `reserve_recharge`, auch mit `false`. Ein älterer core
+    liest die Datei sonst nicht, startet ohne Absicht (Regelbetrieb aus) und meldet den Alarm
+    `intent.file`, wie beim Rollback vor Akku ins Auto (unten).
+  - **Die Einstellungen der app:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `planning.peak_soft_ct_per_kw`, auch mit `0`. Eine ältere app lehnt eine solche Version ab und
+    rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“). Hast du seit dem Ausrollen nichts
+    gespeichert oder importiert, ist die letzte Version noch die alte, und hier ist nichts zu tun.
+  - **Pläne und Eingangsdaten seit dem Ausrollen** tragen neue Felder (`reserve_recharge`,
+    `grid_phase_import_w`, `grid_phases`, `virtual`). Eine ältere app überspringt unlesbare Pläne
+    (im Log „Plan-Zeile nicht lesbar“), bis sie nach 30 Tagen aus der Planablage fallen; daran musst
+    du nichts tun.
+
+  So gehst du zurück:
+
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
+     die Zeile `peak_soft_ct_per_kw:` löschen. Ist die Unwetter-Reserve schon ausgerollt, löschst du
+     auch den Block `storm:` (Punkt oben). Gehst du zugleich hinter Akku ins Auto oder den
+     Standard-Lademodus zurück, löschst du auch deren Schlüssel (Punkte unten).
+  2. **Regelbetrieb aus** (System → „Bedienung“).
+  3. **Feld aus `intent.json` entfernen;** ein Slot mit Nachladen auf die Reserve wird dabei zu
+     Eigenverbrauch, damit ein älterer core bei ausgeschaltetem „Netzladen erlaubt“ kein Netzladen
+     ablehnt:
+
+     ```bash
+     cd /opt/bindaems
+     docker compose stop ems-core
+     docker compose run --rm --no-deps --entrypoint python ems-core -c '
+     import json
+     from pathlib import Path
+     path = Path("/data/intent.json")
+     document = json.loads(path.read_text())
+     plan = document["intent"].get("plan") or {}
+     for slot in plan.get("slots", []):
+         intent = slot["intent"]
+         if intent.pop("reserve_recharge", False):
+             intent["kind"] = "EIGENVERBRAUCH"
+             intent["grid_charge_w"] = 0.0
+     path.write_text(json.dumps(document))
+     print("reserve_recharge entfernt")'
+     ```
+
+  4. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  5. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“. Dann den **Regelbetrieb wieder an**, sobald **System**
+     core und app mit demselben Stand zeigt.
+
+  Lässt du Schritt 3 aus, setzt du die Absicht danach neu (Bedienung oder `PUT /v1/intent`). Hast du
+  vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
+  gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
+  `key = "$.planning.peak_soft_ct_per_kw"`. Die Datenbank hat keine Migration.
+
 - **Update mit Akku ins Auto:** Der Plan „Akku ins Auto, wenn er übrig ist“ ändert core und app; beide
   rollen **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose
   up -d`). Jeder Slot des Plans in der Absicht hat zwei neue Felder (`ev_battery_w`, `now_battery`),
@@ -798,6 +897,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Fertig um, Ziel erreichbar (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug im Modus „Geplant“ (Unterabschnitt „Geplantes Laden“) |
 | Vorschlag Abfahrt, Vorschlag Ziel-SOC, Nächste Abfahrt (Gerät „BindaEMS <Fahrzeug>“) | –, %, – | je Fahrzeug der gelernte Vorschlag und die nächste Abfahrt (Abschnitt „Fahrverhalten (Phase 5b)“, „Home Assistant“); „Unbekannt“ ohne Vorschlag |
 | Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
+| Ladeschätzung (Gerät „BindaEMS <Fahrzeug>“) | EUR | je Fahrzeug, das steckt, die geschätzten Kosten bis zur nächsten Abfahrt, wenn es nach „Geplant“ lädt (Geräteklasse „Geld“, zwei Nachkommastellen). Attribute `soc_pct` (Ladestand jetzt), `target_soc_pct` (Ziel von „Geplant“: das der Absicht, ohne Abgleich des Ladelimits höchstens das Ladelimit des Autos, wie im core), `departure_at`, `until` (Ende des gerechneten Fensters, Ortszeit: die Abfahrt oder das frühere Ende des Plans), `need_kwh` (Bedarf bis zum Ziel von „Geplant“), `price_estimated` (ein Preis ist geschätzt) und je Modus `planned`, `now`, `pv`, `min_pv` ein Objekt mit `target_soc_pct` (wo das Laden in diesem Modus stoppt: bei „Geplant“ das Ziel, in den anderen Modi das Ladelimit des Autos, ohne bekanntes Limit 100 %), `energy_kwh`, `cost_eur`, `finish_at`, `soc_pct` (Ladestand bei `until`, nie unter dem jetzigen) und `reachable` (dieser Stopp wird bis `until` erreicht); bei `now` zusätzlich `power_cost_eur` (Mehrkosten des Leistungspreises bei voller Leistung, `null`, wenn keiner gilt). Zeiten sind auf die volle Minute aufgerundet. „Unbekannt“ (Attribute `null`) ohne gültigen Plan, ohne gemessenen oder geschätzten Ladestand, wenn das Auto nicht steckt oder an keiner Wallbox der Konfiguration. Alle Zahlen sind „ca.“: Die Rechnung nimmt den Hausakku nicht mit, Preise können geschätzt sein, und „Geplant“ kann vom Plan um einige Cent abweichen. Gehst du mit `ems-app` auf einen Stand ohne diesen Sensor zurück, bleiben seine gehaltenen Topics stehen; lösche sie je Fahrzeug mit `mosquitto_pub -r -n -t homeassistant/sensor/bindaems/<objekt-id>_charge_estimate/config`, ebenso `bindaems/state/<objekt-id>_charge_estimate` und `bindaems/state/<objekt-id>_charge_estimate/attributes` |
 | Klima Versatz (`thermal_<Schlüssel>_offset`) | K | je Klimaanlage (Abschnitt „Klimaanlage (Phase 6a)“) der Versatz, den die UVR anwendet (das Echo), ersatzweise der zuletzt gesendete; eine Nachkommastelle. „Klima“ steht für den Namen der Klimaanlage (`label`): bei einem eigenen Namen steht er ganz davor, etwa „Büro Versatz“ |
 | Klima Betriebsart (`thermal_<Schlüssel>_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
 | Klima Leistung (`thermal_<Schlüssel>_power`) | W | elektrische Leistung der Klimaanlage laut UVR; „unbekannt“ ohne Wert |
@@ -1966,7 +2066,7 @@ nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“).
 
 Die Karte **Komponenten** nennt jede Komponente mit deutschem Namen („Preise“, „PV-Prognose“,
 „Lastprognose“, „Lastmodell“, „Fahrverhalten“, „Wärmemodell“, „Planer“, „Abrechnung“, „InfluxDB“,
-„Home Assistant“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
+„Home Assistant“, „Unwetterwarnungen“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
 (rot), die übrigen in der Reihenfolge der app. In der Kopfzeile der Karte steht „{x} von {n} in
 Ordnung“. Beginnt die Meldung mit dem Namen der Komponente („Fahrverhalten aktuell“), steht der Name nur
 einmal, die Meldung ohne ihn rechts („aktuell“); jede andere Meldung bleibt unverändert. Die Texte
@@ -3196,7 +3296,9 @@ wieder im PV-Überschuss. Für „Geplant“ hieße der Eintrag des Tesla etwa
     einmal nennen.`), ein unbekannter Aktor oder ein Plan, der nicht passt: `Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.`, `Plan: zu viele Slots
     (höchstens 8).`, `Plan: Gültigkeit passt nicht zu den Slots.` (es muss `slots[0].start ≤
     created_at < valid_until ≤` Ende des letzten Slots gelten, und höchstens 45 min zwischen
-    `created_at` und `valid_until` liegen), `Plan: Netzladen, obwohl ausgeschaltet.`, `Plan nennt
+    `created_at` und `valid_until` liegen), `Plan: Netzladen, obwohl ausgeschaltet.` (seit dem Plan
+    „Netzgrenze je Phase“ nicht für ein Nachladen auf die Reserve, `reserve_recharge`, mit höchstens
+    3000 W; Abschnitt „Planung“, „Nachladen auf die Reserve“), `Plan nennt
     unbekanntes Fahrzeug „x“.` oder `Plan hat negative Ladeleistung für „x“.`; dazu seit Plan 4b `Ein
     Gast kann nicht „Geplant“ laden.` für `guest.mode` `planned`
   - `rejected` mit Status 409: Die Version ist veraltet oder schon mit anderem Inhalt angenommen.
@@ -3666,6 +3768,22 @@ den ersten Tagen:
   `control.tesla_against_retry_s` (600 s). Der Befehl zählt im Start/Stopp-Budget, außer im Modus
   „Aus“ (dort ist er dringend). Startet das Auto also selbst, etwa aus der Tesla-App, stoppt die
   Regelung es binnen rund 3,5 min wieder (Szenario `tesla-selbststart`).
+  **An der EVCS** gilt dasselbe für jedes Fahrzeug, auch einen Gast und einen Tesla an der EVCS;
+  das Signal kommt dort nicht von Tessie, sondern aus dem Rücklesen „Laden an“ der EVCS
+  (`start_stop`). Zeigt es
+  `control.evcs_against_s` (60 s) ohne Unterbrechung „Laden an“, obwohl der Modus „nicht laden“
+  ergibt, sendet die Regelung „Laden aus“ erneut (Grund `self_start`), je Fahrzeug höchstens alle
+  `control.evcs_against_retry_s` (300 s). Sie tut das nur, wenn das Fahrzeug angesteckt und die
+  Zuordnung klar ist, nicht unter den Regeln „Vorklimatisieren“ und „Geladen, bleibt an“, und nur,
+  wenn ihr letztes „Laden an/aus“ an dieser EVCS wirklich gesendet wurde (nicht im Dry-Run). Anlass
+  war der 05.11.2026: Der e-Golf wurde kurz abgesteckt, und nach dem Wiederanstecken schaltete der
+  „Autostart“ der EVCS sie selbst ein; sie lud gut drei Stunden mit rund 3,2 kW aus dem Netz
+  (Szenario `egolf-autostart`). Dringend ist der Stopp nur im Modus „Aus“. Ein Stundenlimit für
+  Start/Stopp hat die EVCS nicht (Stundenlimits gelten nur für Tesla-Aktoren, an der EVCS gilt nur
+  der Mindestabstand zwischen Befehlen); der Neuversuch alle 300 s verbraucht also kein Budget.
+  **Rückweg:** Wer `control.evcs_against_s` oder `control.evcs_against_retry_s` in `config.yaml`
+  einträgt, entfernt sie vor einem Rollback des core, denn ein älterer Stand kennt die Schlüssel
+  nicht und startet mit ihnen nicht (`extra="forbid"`).
 - **Vorklimatisieren** (Plan Vorklimatisieren, Grund `climate`): Startet die Klimatisierung am
   Kabel, beginnt der Tesla oft selbst zu laden. Meldet Tessie `climate_state.is_climate_on` oder
   `is_preconditioning` (Signal `vehicle.<Schlüssel>.climate_on`), ist das Auto erreichbar, angesteckt
@@ -3787,7 +3905,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `assignment_unclear` | Zuordnung unklar | Die Zuordnung Auto–Wallbox ist unklar (oben). |
 | `assignment_detected` | Zuordnung erkannt | Der Befehl folgt aus einer neuen Erkennung: Der core hat ein Auto an seiner Wallbox erkannt, etwa den Höchststrom an den Tesla an der EVCS (oben). |
 | `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
-| `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
+| `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus, oder eine EVCS zeigt `control.evcs_against_s` lang „Laden an“ gegen den Modus des Fahrzeugs; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
 | `plan_power` | Plan: Laden | Im Modus „Geplant“ folgt der Strom der Ladeleistung, die der Plan für das Auto im laufenden Slot nennt. |
 | `latest_start` | Späteste Startzeit | Im Modus „Geplant“ gibt es keinen gültigen Plan-Slot und die späteste Startzeit ist erreicht: Das Auto lädt mit voller Leistung bis zum Ziel. |
 | `target_reached` | Ziel-SOC erreicht | Im Modus „Geplant“ hat das Auto den Ziel-SOC erreicht; die Regelung stoppt das Laden. |
@@ -3886,6 +4004,11 @@ Zurück zu evcc: beide Aktoren im UI mit „Auf Dry-Run…“ auf Dry-Run stelle
 - **„Complete“ ohne Ladelimit (EVCS, Tesla):** Meldet die EVCS „geladen“, ohne dass das Ladelimit
   bekannt ist, behält der core das Limit, das Tessie im selben Ansteckvorgang schon gemeldet hat. Ein
   später höheres Limit für „Geplant“ hebt „geladen“ also weiterhin auf.
+- **Autostart der EVCS bleibt aus:** In VictronConnect steht bei der EVCS der Modus auf manuell und
+  **„Autostart“ aus** (an der Anlage seit 05.11.2026 20:55). Mit Autostart lädt die EVCS nach dem
+  Anstecken von selbst, bis der Selbststart-Stopp nach 60 s plus Lesetakt greift (Abschnitt
+  „Tesla“, „Selbststart“); der Stopp ist nur das Sicherheitsnetz. Nach einem Firmware-Update oder
+  Zurücksetzen der EVCS den Schalter prüfen.
 
 **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen; die
 Punkte 1 bis 3 hat Plan 2d umgesetzt, 5 und 8 mit einer Entscheidung abgeschlossen (je mit Befund und
@@ -4036,6 +4159,8 @@ Die Einstellungen stehen in `config.yaml` unter `control` und haben Standardwert
 | `control.tesla_reserve_commands` | 4 | So viele Befehle je Stunde hält die Regelung für den Tesla frei; ist das Stundenbudget bis auf diese Reserve verbraucht, ändert sie seinen Strom nur noch, wenn der Phasenwächter es verlangt (Abschnitt „Laderegelung“, „Tesla“). Ganze Zahl, kleiner als `commands.per_hour` jedes Fahrzeugs mit Tessie. |
 | `control.tesla_against_s` | 120 | So lange in s lädt ein Fahrzeug mit Tessie ohne Unterbrechung gegen seinen Modus, bevor die Regelung „Laden aus“ erneut sendet (Selbststart). |
 | `control.tesla_against_retry_s` | 600 | Frühestens so viele s später folgt je Fahrzeug der nächste Versuch, solange es gegen den Modus lädt. |
+| `control.evcs_against_s` | 60 | So lange in s zeigt das Rücklesen der EVCS ohne Unterbrechung Laden an, obwohl der Modus des Fahrzeugs nicht laden will, bevor die Regelung „Laden aus“ erneut sendet (Selbststart an der EVCS). |
+| `control.evcs_against_retry_s` | 300 | Frühestens so viele s später folgt je Fahrzeug der nächste Versuch, solange die EVCS gegen den Modus lädt. |
 
 Negative, unendliche und ungültige Werte lehnt der core beim Start ab; `support_soc_pct` liegt
 zwischen 0 und 100, `setpoint_deadband_w` und `peak_target_kw` über 0 (ohne Totband entstünde auch
@@ -4214,11 +4339,16 @@ hoch und hält ein Ziel, wenn eins eingestellt ist (Spec 7.4). Er verhindert kei
 Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beides nicht hält, meldet er.
 
 - **Ziel einstellen und abschalten:** Das Ziel ist `control.peak_target_kw`, solange der gültige Slot
-  des Plans kein Budget nennt (unten). Ohne beides (Standard ohne Leistungspreis) ruht der Wächter
-  ganz (Health `peak.state` `off`). Zum Einschalten trägst du das Ziel in `config.yaml` ein und
-  startest den core neu; nimmst du die Zeile wieder heraus und startest neu, ruht er nur, solange
-  kein Plan ein Budget bringt. Gilt im Monat ein Leistungspreis mit Satz, bringt jeder Plan eines,
-  und der Wächter hält es, solange ein Plan gilt.
+  des Plans kein Budget nennt (unten). Ohne beides ruht der Wächter ganz (Health `peak.state`
+  `off`). Zum Einschalten trägst du das Ziel in `config.yaml` ein und startest den core neu; nimmst
+  du die Zeile wieder heraus und startest neu, ruht er nur, solange kein Plan ein Budget bringt. Gilt
+  im Monat ein Leistungspreis mit Satz, bringt jeder Plan eines, und der Wächter hält es, solange ein
+  Plan gilt. **Ohne Leistungspreis** bringt der Plan seit dem Plan „Netzgrenze je Phase“ ebenfalls
+  ein Budget, aus dem gedachten Satz `planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und
+  Monat; Abschnitt „Planung“, „Einstellungen „Planung““); der Wächter hält es genauso, am core
+  ändert sich dafür nichts. Ausschalten: den Satz in den Einstellungen der Planung auf 0 setzen,
+  dann bringt ein Plan ohne Leistungspreis kein Budget, und der Wächter ruht wieder, wenn auch
+  `control.peak_target_kw` fehlt.
 
   ```yaml
   control:
@@ -5650,8 +5780,10 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
   „Grund: …“), „gültig bis HH:MM Uhr“ oder „Plan abgelaufen“, „Anlass“ (der Auslöser, unten), die
   „Erwarteten Kosten“ des Plans und, daneben, was „Victron allein“ im selben Zeitraum kostet. Mit
-  einem Leistungspreis kommt das „Budget“ dazu (unten). Unter „Auffälligkeiten“ stehen die Befunde
-  der Prüfung eines unplausiblen Plans. Ohne Plan steht „Noch kein Plan.“ und der Status.
+  einem Leistungspreis kommt das „Budget“ dazu (unten). Kennt der Plan Unwetterwarnungen, steht je
+  Warnung eine Zeile „Unwetterwarnung: Gewitter (orange) 14:00–16:00“ darunter (unten,
+  „Unwetter-Reserve“). Unter „Auffälligkeiten“ stehen die Befunde der Prüfung eines unplausiblen
+  Plans. Ohne Plan steht „Noch kein Plan.“ und der Status.
 - **Bedienung:** Ab „Bedienen“ gibt es den Schalter „Netzladen erlaubt“ und die Taste „Neu planen“;
   „Lesen“ sieht den Stand des Schalters als „ja“ oder „nein“. Während eines Laufs steht „Plant …“.
   Nach dem Schalten wartet die Seite auf den Plan, den die geänderte Einstellung auslöst (alle 2 s
@@ -5659,8 +5791,9 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
 - **Gültigkeit:** Ob ein Plan noch gilt, sagt allein die app (`valid` in der Antwort). Die Uhr des
   Browsers zählt nicht: Eine falsche Uhr am Handy zeigt so nie dauerhaft „Plan abgelaufen“.
 - **Diagramme:** „Preise und Prognosen“ mit den Reihen „Bezugspreis“, „Bezugspreis geschätzt“,
-  „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ und den Fenstern
-  „Netzladen“ und „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
+  „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ (im Fenster einer
+  Unwetterwarnung auf der Untergrenze der Unwetter-Reserve) und den Fenstern „Netzladen“ und
+  „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
   auf dem Handy): Die Legende nennt „Netzladen“ und „Halten“, aber nur, was der Plan hat, und der
   Tooltip eines Punktes nennt die Absicht des Slots, dessen Ergebnis der Punkt ist („Akku
   14:15–14:30: Netzladen 6,7 kW“; der SOC gilt am Ende des Slots). Alle Diagramme haben die Legende
@@ -5669,7 +5802,9 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   Rand eines schmalen Handys.
 - **Ablauf:** Aufeinanderfolgende Slots mit gleicher Absicht, gleicher Netzladeleistung und gleichem
   Hauptcode bilden einen Block: „HH:MM–HH:MM“, die Absicht („Eigenverbrauch“, „Halten“,
-  „Netzladen {kW} kW“), „SOC a → b %“ und der Satz der Erklärung (unten). Der erste Block beginnt
+  „Netzladen {kW} kW“, beim Nachladen auf die Reserve „Nachladen {kW} kW“), „SOC a → b %“ und der
+  Satz der Erklärung (unten). Der Tooltip im Diagramm „Akku“ nennt das Nachladen ebenso; seine
+  Fläche und sein Chip gehören zu „Netzladen“. Der erste Block beginnt
   mit dem gemessenen SOC zu Beginn des Plans (`soc_start_pct`; bei einem alten Plan ohne das Feld mit
   dem Ende des ersten Slots). Ändert sich der SOC im Block um mindestens 0,05 und weniger als einen
   Prozentpunkt, steht eine Nachkommastelle („19,2 → 19,9 %“), sonst ganze Zahlen.
@@ -5706,24 +5841,27 @@ Jeder Lauf friert zuerst die Eingangsdaten ein, löst dann das Modell und prüft
    100 W entladen würde und das Modell weniger als die Hälfte davon entlädt. Sonst bleibt es
    `Eigenverbrauch`. Ein `Netzladen`, das sich an der Nachrechnung nicht rechnet (Spread-Regel
    unten), streicht die app wieder; der Slot wird dann `Halten` oder `Eigenverbrauch` nach derselben
-   Regel. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
+   Regel. Das Nachladen auf die Reserve (unten) zählt zum Netzladen des Slots; lädt das Modell
+   daneben weniger als 100 W aus dem Netz, ist der Slot ein Nachladen (höchstens 3 kW), das sich
+   nicht rechnen muss. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
 4. **Prüfung:** Ein unplausibler Plan wird verworfen, und es gilt der Ersatzplan.
 
 **Regel R** („nicht einspeisen und danach billig kaufen“) ist im Optimierer eine harte Bedingung
 (seit Plan 3d nur, bis der Akku wieder leer ist): Lädt er in einem Slot aus dem Netz, speist die PV
 laut Prognose nicht ein, bevor der Akku wieder leer ist (SOC am Slotende höchstens Reserve plus
-0,05 kWh), denn sonst füllte die PV den Akku ohnehin. Ist der Akku vor der nächsten Einspeisung
-verbraucht, darf er laden: Ist es heute trüb und morgen sonnig, lädt er heute, was bis morgen
-verbraucht ist, aber nicht mehr. Die Prüfung rechnet Regel R an der Nachrechnung nach, vom
-`Netzladen`-Slot bis zum Ende des ersten Slots mit SOC höchstens Reserve plus 0,1 kWh; die 0,1 kWh
-Einspeisung, die sie in diesem Fenster zulässt, sind nur ihre Toleranz. Weil die Absichten gerundet
-sind, kann die Nachrechnung mehr im Akku haben als das Modell; würde sie deshalb nach einem
-`Netzladen`-Slot einspeisen, bevor der Akku leer ist, kürzt die app das Netzladen des letzten
-betroffenen Slots um diese Energie, höchstens aber um die Ladung, die vor der ersten Einspeisung
-noch über Reserve plus 0,1 kWh liegt (auf 100 W aufgerundet, unter 100 W wird daraus `Halten`).
-Auch ein Netzladen vor dem Horizont zählt (seit der Fix-Welle von Akku ins Auto): Hat ein früherer
-Plan aus dem Netz geladen und war der SOC bei keinem Planungslauf seither höchstens Reserve plus
-0,1 kWh, rechnet der neue Plan mit Netzenergie im Akku, bis er leer ist. Verbieten kann er die
+0,05 kWh, auch wenn der SOC beim Start darunter lag: Energie unter der Reserve verlässt den Akku
+nie, kann also nicht eingespeist werden), denn sonst füllte die PV den Akku ohnehin. Ist der Akku
+vor der nächsten Einspeisung verbraucht, darf er laden: Ist es heute trüb und morgen sonnig, lädt er
+heute, was bis morgen verbraucht ist, aber nicht mehr. Die Prüfung rechnet Regel R an der
+Nachrechnung nach, vom `Netzladen`-Slot bis zum Ende des ersten Slots mit SOC höchstens Reserve plus
+0,1 kWh; die 0,1 kWh Einspeisung, die sie in diesem Fenster zulässt, sind nur ihre Toleranz. Weil
+die Absichten gerundet sind, kann die Nachrechnung mehr im Akku haben als das Modell; würde sie
+deshalb nach einem `Netzladen`-Slot einspeisen, bevor der Akku leer ist, kürzt die app das Netzladen
+des letzten betroffenen Slots um diese Energie, höchstens aber um die Ladung, die vor der ersten
+Einspeisung noch über Reserve plus 0,1 kWh liegt (auf 100 W aufgerundet, unter 100 W wird daraus
+`Halten`). Auch ein Netzladen vor dem Horizont zählt (seit der Fix-Welle von Akku ins Auto): Hat ein
+früherer Plan aus dem Netz geladen und war der SOC bei keinem Planungslauf seither höchstens Reserve
+plus 0,1 kWh, rechnet der neue Plan mit Netzenergie im Akku, bis er leer ist. Verbieten kann er die
 Einspeisung dann nicht mehr, denn das Laden ist geschehen; füllt die PV den Akku vorher, speist er
 so wenig wie möglich ein (im Modell 200 ct je kWh Strafe). Die Regel wirkt erst, wenn Victron live
 ist und „Netzladen erlaubt“ an ist.
@@ -5752,6 +5890,35 @@ gilt der Ersatzplan.
 Die Regel ist nicht mengenbezogen: Schon eine lohnende spätere Entladung über 1 W rechtfertigt jede
 Ladeleistung. Ein `Netzladen`, das fast ganz sofort verbraucht wird und nur einen kleinen Rest für
 später lässt, bleibt deshalb bestehen; wirtschaftlich ist das etwa ±0.
+
+**Nachladen auf die Reserve** (seit dem Plan „Netzgrenze je Phase“, Entscheidung des Betreibers vom
+3.11.2026: „Ja, immer“): Ohne PV sinkt der SOC am Min-SOC um etwa 1 % in 9 h. Fällt er 5 % unter den
+Min-SOC (die USV-Reserve), lädt Victron ESS selbst mit voller Leistung nach (am 3.11.2026
+22:35–23:05 mit 9 kW bei 11,5 kW Netzbezug), eine neue Spitze. Darum plant die app das selbst und
+sanft, **auch bei ausgeschaltetem „Netzladen erlaubt“**:
+
+- **Wann:** nur, wenn der SOC zu Beginn des Plans unter der Reserve liegt. Am Horizontende soll der
+  Akku wieder an der Reserve stehen; was fehlt, kostet im Modell 2000 ct je kWh (wie die Fehlmenge
+  eines Autos).
+- **Wie viel:** je Slot höchstens 3 kW, höchstens die Ladeleistung und höchstens der höchste
+  Netzladesetpoint minus Hauslast; über den Horizont höchstens die Lücke bis zur Reserve. Es zählt
+  wie Netzladen zum Netzbezug, zur Monatsspitze und zur Grenze je Phase und kostet den Bezugspreis,
+  ohne Marge. Lädt die PV den Akku im Horizont bis zur Reserve, kommt nichts aus dem Netz (PV kostet
+  nichts); sonst nimmt der Plan die billigsten Slots. Nachgeladenes trägt keinen Restwert: Ein
+  billiger Slot unter dem Restwert ist kein Grund, über die Lücke hinaus oder statt der PV zu laden.
+- **Was nachgeladen ist, bleibt im Akku:** Der Plan entlädt es nicht wieder (danach `Halten`), sonst
+  wäre es Netzladen am Schalter vorbei. Die Spread-Regel gilt nicht (kein Befund „rechnet sich
+  nicht“), und Regel R sieht den Akku an der Reserve als leer: Nach dem Nachladen darf die PV
+  einspeisen.
+- **Absicht und Anzeige:** `Netzladen` mit dem Kennzeichen „Nachladen“ (`reserve_recharge`), im
+  „Ablauf“ „Nachladen 3 kW“, Satz „Nachladen auf die Reserve, bevor der Victron selbst mit voller
+  Leistung nachlädt.“ Lädt ein Slot mit eingeschaltetem Schalter daneben mindestens 100 W für
+  später, ist er ein gewöhnliches `Netzladen`; rechnet sich dieser Teil nicht, bleibt das Nachladen
+  allein.
+- **core:** Er nimmt ein Nachladen mit höchstens 3000 W auch bei ausgeschaltetem Schalter an; mehr
+  oder ohne Kennzeichen lehnt er den Plan ab („Plan: Netzladen, obwohl ausgeschaltet.“). Beim
+  Ausschalten des Schalters bleibt ein Nachladen im Plan, der an den core geht.
+- **Ersatzplan:** lädt in den billigsten Slots der ersten 24 h nach (unten, „Ersatzplan“).
 
 ### Autos im Plan
 
@@ -5825,10 +5992,26 @@ nennt.
 - **Prüfung:** Die Bilanz zählt die Autos mit; je Auto ist die Leistung 0 oder zwischen kleinster und
   voller Leistung (1 W Toleranz), und nach der Abfahrt lädt kein Auto (Befunde unten, „Ersatzplan“).
 
+**Grenze je Phase:** Seit dem Plan „Netzgrenze je Phase“ (3.11.2026) plant die app auch eine
+Grenze für den Netzbezug je Phase, nicht nur die Summe. Sie heißt an der Anlage
+(`grid.import_limit_a` − `control.import_margin_a`) · `grid.voltage_nominal_v`, also
+(20 A − 1 A) · 230 V = **4370 W** je Phase (nicht die Sicherung). Haus und Netzladen des Akkus
+verteilt der Plan gleich auf L1, L2 und L3; jedes Auto belastet die Phasen seiner Wallbox
+(`phase_map`, so viele, wie das Auto lädt) mit seinem Netzanteil. PV und Akku ins Auto zählen nicht.
+Tesla (dreiphasig) und e-Golf (zweiphasig) laden darum nur zusammen, wenn es reicht; sonst lädt der
+Plan sie nacheinander, ein Auto auf einer anderen Phase (etwa ein einphasiger Gast) bremst das
+andere nicht. Liegt das Haus allein schon über der Grenze, bleibt für Autos und Netzladen nichts, der
+Plan bleibt aber lösbar. Findet die Prüfung trotzdem einen Bezug über der Grenze, meldet sie „Netzbezug
+über dem Importlimit auf L1 um HH:MM“, und es gilt der Ersatzplan, der die Grenze ebenfalls hält.
+Ausrollen: zusammen mit `ems-core` im nächsten Sammel-Pull, ohne Migration.
+
 ### Netzladen erlaubt
 
 Der Schalter **Netzladen erlaubt** ist standardmäßig aus. Aus heißt: Kein Plan enthält `Netzladen`;
-wo es sich gelohnt hätte, sagt der Satz „Netzladen würde sich lohnen … ist aber ausgeschaltet.“
+wo es sich gelohnt hätte, sagt der Satz „Netzladen würde sich lohnen … ist aber ausgeschaltet.“ Die
+Ausnahme ist das Nachladen auf die Reserve mit höchstens 3 kW, wenn der SOC unter der Reserve liegt
+(oben, „Wie ein Plan entsteht“, „Nachladen auf die Reserve“): Es gilt immer, damit Victron nicht
+selbst mit voller Leistung nachlädt.
 Umschalten kannst du an drei Stellen, mit denselben Folgen:
 
 - im UI auf der Seite **Zeitplan** (ab „Bedienen“),
@@ -5839,10 +6022,11 @@ Jedes Umschalten ist eine neue Version der Einstellungen mit dem Kommentar „Ne
 „Netzladen aus“ im Änderungsprotokoll und löst eine Neuplanung aus. Hat der Schalter schon den Wert,
 entsteht keine neue Version. Der Plan geht danach neu an den core; bis er dort ist, steht der Stand
 „Der Plan ist noch nicht beim core.“ (unten, „Stand der Ausführung“). Beim Ausschalten geht sofort
-derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch`; der neue Plan
-folgt (unten, „Übergabe an den core“). Regelt der core in dem Moment nicht (Regelbetrieb aus,
-Neustart), wartet die Übergabe, bis er wieder regelt; ein gespeicherter `Netzladen`-Slot kann dann
-noch etwa 11 s laufen (eine Abfrage der Health und ein Regelzyklus).
+derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch` (ein Nachladen auf
+die Reserve bleibt); der neue Plan folgt (unten, „Übergabe an den core“). Regelt der core in dem
+Moment nicht (Regelbetrieb aus, Neustart), wartet die Übergabe, bis er wieder regelt; ein
+gespeicherter `Netzladen`-Slot kann dann noch etwa 11 s laufen (eine Abfrage der Health und ein
+Regelzyklus).
 
 ### Akku ins Auto, wenn übrig
 
@@ -5902,6 +6086,118 @@ bleiben, wie sie sind.
     Haus, Akku-Unterstützung und Boost frei bleibt (`battery.max_discharge_w`), zuerst Geplant,
     dann Sofort. Den Rest holt der Override aus dem Netz, und der 15-min-Wächter kann ihn drosseln.
 
+### Unwetter-Reserve
+
+Seit dem Plan „Unwetter-Reserve“ (4.11.2026, `docs/superpowers/plans/2026-11-04-unwetter-reserve.md`)
+hält der Planer den Akku während einer amtlichen Unwetterwarnung von **GeoSphere Austria** über einer
+höheren Untergrenze, damit die USV bei einem Stromausfall länger trägt, und lädt vorher dafür auf. Der
+Schalter ist **ab Werk aus**; Binda schaltet ihn vor der Gewittersaison ein (bis April).
+
+- **Quelle:** `GET https://warnungen.zamg.at/wsapp/api/getWarningsForCoords` mit `site.location` aus
+  `config.yaml` und `lang=de`, ohne Schlüssel, **alle 15 min und nur mit eingeschaltetem Schalter**
+  (beim Einschalten sofort). Beginn und Ende kommen aus den Unix-Sekunden in `rawinfo`; eine Warnung
+  ohne gültige Zeit oder mit Ende vor dem Beginn überspringt die app (im Log
+  `code=storm_warning_skipped`), die übrigen gelten. Bekannte Warnungen gelten bis zu ihrem Ende
+  weiter, auch wenn Abrufe scheitern (eine höhere Reserve ist die sichere Richtung); nur eine
+  erfolgreiche Antwort ersetzt die Liste, eine fehlende Warnung ist dann zurückgenommen. Ein- und
+  Ausschalten verwirft den alten Stand. Die Kurzfrist-Gewitterwarnung `getGewitterAuto` nutzt die app
+  nicht (ohne Beginn und Ende, zu kurz zum Laden).
+- **Welche Warnungen:** die eingestellten Warnarten ab der eingestellten Stufe (Standard Sturm und
+  Gewitter ab Orange, unten).
+- **Wann und wie hoch:** Die Untergrenze gilt am Ende jedes Slots, der die Zeit von **einer Stunde vor
+  Beginn bis zum Ende** einer passenden Warnung berührt (Warnungen beginnen unscharf); mehrere
+  Warnungen vereinigen sich, alle haben dasselbe Ziel. Wirksam ist das Ziel, höchstens `soc_max_pct`;
+  liegt es nicht über der USV-Reserve (`battery.reserve_soc_pct`), tut die Funktion nichts. Was hinter
+  dem Horizont (36 h) liegt, plant die app erst, wenn es hereinrückt.
+- **Weich, die Reserve bleibt hart:** Liegt der Akku im Fenster unter dem Ziel, kostet das im Modell
+  200 ct je kWh und Slot (1 kWh über 10 Slots so viel wie 1 kWh Fehlmenge eines Autos). So entsteht
+  auch dann ein Plan, wenn das Ziel nicht mehr zu erreichen ist (Warnung schon im Gange, Akku leer);
+  der Akku entlädt im Fenster dann nicht weiter (`Halten`). Die USV-Reserve aus `config.yaml` bleibt
+  die harte Untergrenze, und an Victron geht kein neuer Wert.
+- **Aufladen:** Liegt der SOC zu Beginn unter der höchsten Untergrenze im Horizont, darf der Plan bis
+  zum Ende des letzten Fensters aus dem Netz in den Akku laden, **auch bei ausgeschaltetem
+  „Netzladen erlaubt“**: zusammen mit dem Nachladen auf die Reserve höchstens 3 kW je Slot (oben,
+  „Wie ein Plan entsteht“), zum Bezugspreis ohne Marge, über den Horizont höchstens bis zur höchsten
+  Untergrenze. Die PV hat Vorrang, weil sie nichts kostet; sonst nimmt der Plan die billigsten Slots.
+  Von 20 auf 40 % sind das bei 96 kWh 19,2 kWh, mit 3 kW rund 7 h; was bis zum Beginn fehlt, fehlt.
+  Das Aufgeladene **bleibt bis zum Ende des letzten Fensters im Akku** (sonst wäre es Netzladen am
+  Schalter vorbei, etwa billig laden und vor der Warnung teuer entladen); danach darf das Haus es
+  verbrauchen. **Die Grenze:** Netzenergie kommt höchstens bis zur Untergrenze in den Akku und mit
+  höchstens 3 kW, auch wenn der Akku vorher eigene Energie abgegeben hat: Liegt der SOC zu Beginn
+  zwischen Reserve und Untergrenze, darf er vor dem Fenster Energie über der Reserve ans Haus
+  geben, nur das Aufgeladene bleibt. Die PV oder das Netz füllen ihn bis zum Fenster wieder auf,
+  und was bis zum Beginn fehlt, fehlt (weich, 200 ct je kWh und Slot). Das Aufgeladene trägt keinen
+  Restwert und ist im Ablauf ein „Nachladen 3 kW“ mit dem Satz von `NACHLADEN_RESERVE`; der core
+  nimmt es wie jedes Nachladen bis 3000 W auch ohne Schalter an. **Regel R:** Wie nach einem
+  Netzladen kann danach Netzenergie im Akku sein; solange sie nicht verbraucht ist (Akku an der
+  Reserve), kostet die Einspeisung in Folgeläufen 200 ct je kWh, und der Akku gibt keinem Auto
+  etwas (unten, „Autos“).
+- **Autos:** Die Plan-Schwelle der Akku-Unterstützung rechnet mit der Untergrenze je Slot statt mit
+  der Reserve, „Sofort aus dem Akku“ ist in Slots mit Untergrenze aus, und solange der Plan für die
+  Warnung aufladen darf, gibt der Akku keinem Auto in „Geplant“ etwas (kein Akku ins Auto im ganzen
+  Horizont; sonst flösse Netzstrom aus dem Aufladen über den Akku ins Auto, an Regel R2 vorbei).
+  Auch in den Folgeläufen bleibt die Sperre, bis die Netzenergie verbraucht ist: Der Plan nimmt sie
+  wie nach einem Netzladen an (`grid_in_battery_at_start`, Akku ins Auto gesperrt, Einspeisung kostet
+  200 ct je kWh), genau wie beim Nachladen auf die Reserve.
+- **Prüfung und Ersatzplan:** Entlädt die Nachrechnung in einem Slot mit Untergrenze (mindestens
+  100 W) und liegt am Slotende mehr als 0,5 Prozentpunkte darunter, meldet die Prüfung „Akku entlädt
+  um HH:MM unter die Unwetter-Reserve“, und es gilt der Ersatzplan; ein Ziel, das ohne Entladen nicht
+  erreicht wird, ist kein Befund. Der Ersatzplan lädt vor jedem Fenster auf und hält den Akku (unten,
+  „Ersatzplan“).
+- **Neu planen:** Ändern sich die passenden Warnungen (neu, neue Version, andere Zeit, zurückgenommen)
+  oder endet eine, plant die app mit dem Anlass „Unwetterwarnung“ (`storm`) neu; eine Änderung der
+  Einstellung löst „Einstellungen geändert“ aus.
+
+**Einstellungen** (Admins, **Einstellungen** → „Bearbeiten“ → „Planung“ → „Unwetter-Reserve“, gespeichert
+als `planning.storm`). Der Editor erklärt: „Während einer Unwetterwarnung von GeoSphere Austria hält
+der Planer den Akku mindestens auf dem Ziel und lädt ihn vorher dafür auf, zuerst mit PV, sonst mit
+höchstens 3 kW aus dem Netz, auch bei ausgeschaltetem „Netzladen erlaubt“; die USV-Reserve aus
+config.yaml bleibt die harte Untergrenze.“
+
+| Feld | Einstellung | Standard | Werte |
+|---|---|---|---|
+| Unwetter-Reserve | `enabled` | aus | aus: kein Abruf, keine Untergrenze, Status „aus“ |
+| Ziel-SOC (%) | `target_soc_pct` | 40 | ganze Zahl von 10 bis 100 („Ganze Zahl von 10 bis 100“) |
+| Warnstufe | `min_level` | ab orange (2) | „ab gelb“ (1), „ab orange“ (2), „nur rot“ (3) |
+| Warnarten | `kinds` | Sturm, Gewitter | Sturm, Regen, Schnee, Glatteis, Gewitter, Hitze, Kälte; mindestens eine („Mindestens eine Warnart wählen“) |
+
+Die Leseansicht zeigt unter „Planung“ die Zeilen „Eingeschaltet“, „Ziel-SOC“, „Warnstufe“ und
+„Warnarten“.
+
+**Im Zeitplan:** Hat der Plan Warnungen, nennt der Kopf jede in einer Zeile, „Unwetterwarnung: Gewitter
+(orange) 14:00–16:00“, auch eine, die erst hinter dem Horizont beginnt; liegt Beginn oder Ende nicht
+heute, mit „morgen“ oder Wochentag und Datum („Unwetterwarnung: Sturm (rot) morgen 06:00–10:30“). Die
+Slots im Fenster tragen den Satz von `UNWETTER_RESERVE` (unten, „Erklärungen“), und im Diagramm „Akku“
+steigt die Linie „Reserve“ im Fenster auf die Untergrenze.
+
+**Status** der Komponente „Unwetterwarnungen“ (`storm`) auf der Seite **System**:
+
+| Status | Bedeutung |
+|---|---|
+| „aus“ | der Schalter ist aus (in Ordnung) |
+| „keine Warnung“ | der letzte Abruf fand keine passende Warnung (in Ordnung) |
+| „Gewitter (orange) bis 18:00“ | passende Warnungen mit Art, Stufe und Ende, mehrere durch „; “ getrennt; endet eine nicht heute, steht das Datum dabei („bis 10.10. 06:00“) (in Ordnung) |
+| „Warnungen seit HH:MM nicht abrufbar“ | die Abrufe scheitern, und der letzte Erfolg (sonst der erste Versuch) liegt mehr als 1 h zurück (gestört); bekannte Warnungen gelten weiter |
+
+**Home Assistant:** Der Sensor „Unwetter-Reserve“ (`sensor.bindaems_unwetter_reserve`, unten, „Home
+Assistant“) zeigt die Untergrenze des laufenden Slots in %, ohne Warnung `0`, mit den Attributen `bis`
+(Ende der Warnung) und `warnung` (ihr Text). Er rechnet aus den Warnungen und den
+Einstellungen, nicht aus dem Plan, und zeigt die Untergrenze darum auch, wenn gerade kein Plan gilt.
+
+**Was die Unwetter-Reserve nicht tut:**
+
+- **Kein Victron-Min-SOC:** Der Min-SOC bleibt auf der USV-Reserve, der Selbsttest `min_soc` bleibt
+  gleich. Die Untergrenze hält allein der Plan (`Halten` und Netzladen über den core). Wirken kann sie
+  also nur, wenn Victron live ist und der Regelbetrieb an ist; im Dry-Run rechnet der core sie nur mit.
+- **Kein Schutz, wenn die app steht:** Ohne app gibt es keinen neuen Plan; der core führt den letzten
+  höchstens bis zu seinem Ende aus (`valid_until`, höchstens 45 min), danach wirkt kein Plan, und
+  Victron entlädt wieder bis zum Min-SOC. Den Min-SOC während einer
+  Warnung anzuheben, ist bewusst nicht Teil des Plans (Selbsttest, Nachladen von Victron unter
+  Min-SOC − 5 % mit voller Leistung, Watchdog); erst prüfen, wenn sich die Funktion im Sommer bewährt
+  hat.
+- **Nicht schneller als 3 kW:** Was bis zum Beginn der Warnung nicht geladen ist, fehlt.
+- **Kein Akku ins Auto**, solange der Plan für die Warnung aufladen darf (oben, „Autos“).
+
 ### Übergabe an den core
 
 Die app schickt den Plan als Teil der Absicht (Abschnitt 13, „Absicht und Regelbetrieb“), mit einer
@@ -5913,7 +6209,8 @@ Absicht, und ein neuer Plan wird wie eine Bedienung aus der gültigen Absicht ab
 - **Was hinausgeht:** nur der bindende Teil des neuesten gültigen Plans, die Slots vor seinem
   `valid_until` (höchstens 8), je Slot Absicht, Budget, Bezugspreis und Plan-Schwelle, dazu `id`,
   `created_at`, `valid_until` und der Stand von „Netzladen erlaubt“. Ist der Schalter aus, werden
-  `Netzladen`-Slots zu `Eigenverbrauch`. Seit Akku ins Auto trägt jeder Slot den Akkuanteil je
+  `Netzladen`-Slots zu `Eigenverbrauch`, außer einem Nachladen auf die Reserve mit höchstens 3000 W
+  (oben, „Nachladen auf die Reserve“). Seit Akku ins Auto trägt jeder Slot den Akkuanteil je
   angestecktem Auto in „Geplant“ (`ev_battery_w`, ganze W) und `now_battery`, beides nur in
   `Eigenverbrauch`-Slots.
 - **Wann:** beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder Abfrage
@@ -5977,12 +6274,32 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 | `planning.wear_ct` | Verschleiß (ct/kWh) | 2,0 | Kosten je entladener kWh |
 | `planning.end_value_factor` | Vorsichtsfaktor Restwert | 0,9 | bewertet die Energie im Akku am Horizontende (oben) |
 | `planning.inertia_ct` | Planträgheit (ct/kWh) | 0,5 | Kosten je kWh Abweichung der Akkuleistung vom vorigen Plan, in den ersten vier Slots |
+| `planning.peak_soft_ct_per_kw` | Spitze vermeiden ohne Leistungspreis (ct je kW und Monat) | 100 | gedachter Satz für Monate ohne Leistungspreis mit Satz (unten); 0 = aus. Die Ansicht zeigt „100 ct je kW und Monat“, bei 0 „aus“ |
+| `planning.storm` | Unwetter-Reserve | aus | Gruppe mit `enabled` (aus), `target_soc_pct` (40), `min_level` (2 = orange) und `kinds` (`sturm`, `gewitter`): Bei amtlichen Warnungen hebt die Planung die Untergrenze des Akkus von einer Stunde vor Beginn bis zum Ende der Warnung auf das Ziel. Editor und Ansicht: Abschnitt „Unwetter-Reserve“ (oben, „Unwetter-Reserve“) |
 
-Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl von 50 bis 100“
-(Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“ (Vorsichtsfaktor). Gespeicherte Einstellungen ohne
-Gruppe „Planung“ (aus der Zeit vor Plan 3b) laden mit den Standardwerten. Eine Änderung von
-Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen löst eine Neuplanung aus, eine andere
-Einstellung nicht.
+Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl ab 0, z. B. 100“
+(Spitze vermeiden), „Zahl von 50 bis 100“ (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“
+(Vorsichtsfaktor). Gespeicherte Einstellungen ohne Gruppe „Planung“ (aus der Zeit vor Plan 3b) laden
+mit den Standardwerten, ebenso solche ohne ein einzelnes Feld (etwa ohne `peak_soft_ct_per_kw`, vor
+dem Plan „Netzgrenze je Phase“: dann gilt 100). Eine Änderung von Planung, Tarif, Einspeisung oder
+Vorheizen und Vorkühlen löst eine Neuplanung aus, eine andere Einstellung nicht.
+
+**Spitze vermeiden ohne Leistungspreis** (seit dem Plan „Netzgrenze je Phase“, Entscheidung 8 des
+Betreibers vom 3.11.2026: „Gedachter Satz, auch Wächter“): Gilt in einem Monat kein Leistungspreis
+mit Satz (vor 2027 oder ohne eingetragenen Wert), rechnet der Optimierer für ihn mit einem
+**gedachten** Satz: Netzbezug bis zur schon erreichten Monatsspitze kostet nichts, jedes kW darüber
+`planning.peak_soft_ct_per_kw` (Standard 100 ct je kW und Monat; für einen späteren Monat im
+Horizont gilt als bisherige Spitze 0). So verteilt er etwa zwei Autos in einer Nacht mit gleichen
+Preisen über die Slots, statt beide zugleich mit voller Leistung laden zu lassen. Ein gedachter
+Monat bringt sein **Budget** wie ein echter an den core (unten, „Budget“), und der 15-min-Wächter
+hält es (Abschnitt „Akku und Spitzen“, „15-min-Wächter“). **Der gedachte Satz ist kein Geld**, nur
+ein Steuersignal: Er zählt in keiner Kostenanzeige, in keiner Statistik und nicht in den Mehrkosten
+eines Boosts, der Plan meldet `power_price` nicht (die Seite „Zeitplan“ zeigt das Budget deshalb
+nicht, der Sensor „Budget“ in Home Assistant schon), und Netzladen des Akkus, das sich nicht
+rechnet, bleibt nicht stehen, nur um einer gedachten Spitze auszuweichen (der Befund „Netzladen um
+HH:MM rechnet sich nicht“ gilt wie ohne Leistungspreis; nur ein echter Leistungspreis erlaubt das).
+Gilt ein echter Leistungspreis mit Satz, gilt nur dieser. Mit 0 ist alles wie vorher: kein gedachter
+Monat, kein Budget ohne Leistungspreis.
 
 ### Auslöser
 
@@ -6000,6 +6317,7 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `settings` | Einstellungen geändert | Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
 | `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus (ändern sich nur das Ladelimit oder die Quelle des Ladestands, plant die app höchstens alle 5 min neu; Ziel, Abfahrt und die Menge der geplanten Autos lösen sofort aus); außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
+| `storm` | Unwetterwarnung | die passenden Unwetterwarnungen ändern sich (neue, geänderte, zurückgenommene) oder eine endet (seit Plan Unwetter-Reserve) |
 | `thermal` | Klimaanlage geändert | die Betriebsart der Klimaanlage aus Health wechselt zwischen Heizen, Kühlen und dem Rest (Lüften, aus, unbekannt), oder ein neues Wärmemodell liegt vor (seit Plan 5c); je Wechsel einmal, höchstens alle 5 min, auch wenn der Lauf keinen Plan ergibt |
 
 Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core ab seinem nächsten
@@ -6038,11 +6356,16 @@ Die Seite und die Komponente nennen den Grund:
 Die Prüfung findet diese Befunde, jeweils mit der Uhrzeit des Slots (je Art der erste, in der
 Reihenfolge der Slots; der früheste ist der „erste Befund“): „Bilanz verletzt um HH:MM“,
 „SOC außerhalb der Grenzen um HH:MM“, „Leistung über der Grenze um HH:MM“, „Netzladen um HH:MM,
-obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
-bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, mit Autos (seit Plan 4b)
+obwohl ausgeschaltet“ (nicht für ein Nachladen auf die Reserve mit höchstens 3 kW), „Regel R
+verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung, bevor der Akku leer ist“ und
+„Netzladen um HH:MM rechnet sich nicht“ (nicht für ein Nachladen), bei gesetzter Grenze je
+Phase (seit dem Plan „Netzgrenze je Phase“) „Netzbezug über dem Importlimit auf L1 um HH:MM“
+(oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b)
 dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
 Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
-(die Uhrzeit ist die erwartete Ankunft). Gibt der Akku einem Auto mehr als 1 W (Akku ins Auto), kommen
+(die Uhrzeit ist die erwartete Ankunft), mit Unwetter-Reserve (seit dem Plan „Unwetter-Reserve“)
+„Akku entlädt um HH:MM unter die Unwetter-Reserve“ (oben, „Unwetter-Reserve“). Gibt der Akku einem
+Auto mehr als 1 W (Akku ins Auto), kommen
 „Akku ins Auto um HH:MM, obwohl ausgeschaltet“, „Akku ins Auto um HH:MM bei Halten oder
 Netzladen“, „Akku ins Auto um HH:MM, solange Netzstrom im Akku ist“ und „Akku ins Auto um HH:MM,
 während eingespeist wird“ dazu; die Leistung je Auto und die Entladegrenze zählen den Akkuanteil mit.
@@ -6065,6 +6388,21 @@ Der Ersatzplan plant zuerst die Autos im Modus „Geplant“, in der Reihenfolge
 Den Akku rechnet der Ersatzplan mit diesen Autos so:
 
 - **Grundlage:** `Eigenverbrauch` in allen Slots, nachgerechnet.
+- **Nachladen auf die Reserve** (seit dem Plan „Netzgrenze je Phase“, oben, „Wie ein Plan
+  entsteht“): Liegt der SOC zu Beginn unter der Reserve und erreicht die Nachrechnung sie in den
+  ersten 24 h nicht von selbst (etwa durch PV), lädt der Plan zuerst, auch ohne Schalter und ohne
+  teure Slots, in den billigsten Slots dieser 24 h (bei gleichem Preis der frühere) `Netzladen` als
+  Nachladen: je Slot höchstens 3 kW, die Grenze des Slots und den Platz unter dem Netzbezug und der
+  Grenze je Phase (auf volle 100 W abgerundet), der letzte nur den Rest, bis die Nachrechnung die
+  Reserve erreicht. Danach hält er den Akku (`Halten`), wo `Eigenverbrauch` ihn unter die Reserve
+  entlüde.
+- **Unwetter-Reserve** (seit dem Plan „Unwetter-Reserve“, oben, „Unwetter-Reserve“): Bis zum letzten
+  Slot mit Untergrenze entlädt der Akku nie unter die Untergrenze des Fensters, in dem oder vor dem
+  der Slot liegt, schon ab dem ersten Slot des Plans (`Halten`, wo `Eigenverbrauch` darunter führte;
+  sonst deckte das Aufladen auch den Hausverbrauch davor). Liegt die Nachrechnung zu Beginn eines
+  Fensters trotzdem unter der Untergrenze, lädt der Plan nach dem Nachladen auf die Reserve, auch ohne
+  Schalter, in den billigsten Slots vor dem Beginn (bei gleichem Preis der frühere) `Netzladen` als
+  Nachladen mit höchstens 3 kW, bis die Nachrechnung die Untergrenze erreicht oder die Slots aus sind.
 - **Teuer** sind die Slots des heutigen Tages ab dem aktuellen Slot, deren Bezugspreis das 80. Perzentil
   dieser Slots erreicht. Bei einem einheitlichen Preis gibt es keinen. Der SOC **reicht nur knapp**,
   wenn die Nachrechnung in einem teuren Slot mehr als 100 W aus dem Netz bezieht, weil der Akku leer
@@ -6077,6 +6415,10 @@ Den Akku rechnet der Ersatzplan mit diesen Autos so:
   des teuren Slots und Regel R (Einspeisung nur, bis der Akku leer ist) gelten; Regel R hält dabei
   auch jedes schon geplante Netzladen. Die Leistung ist die höchste volle 100 W unter der Grenze
   des Slots; neben Haus und Autos bleibt dabei die Grenze des Netzbezugs frei.
+- **Grenze je Phase** (seit dem Plan „Netzgrenze je Phase“, „Autos im Plan“, „Grenze je Phase“): Jede
+  Phase hat im Netzschritt den Platz „Grenze je Phase minus Netzanteil des Hauses“, abzüglich der Autos
+  davor; ein Auto bekommt höchstens so viel, wie die engste seiner Phasen hergibt, sonst weicht es in den
+  nächsten Slot aus. Auch das Netzladen des Akkus bleibt unter der Grenze je Phase.
 - **Budget:** wie beim Optimierer (unten, „Budget“), ohne die Spitze des Optimierers.
 
 ### Erklärungen
@@ -6091,6 +6433,8 @@ Zahlen:
 
 | Code | Beispiel | Wann |
 |---|---|---|
+| `NACHLADEN_RESERVE` | Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt. | Absicht `Netzladen` als Nachladen auf die Reserve (seit dem Plan „Netzgrenze je Phase“, oben, „Wie ein Plan entsteht“) |
+| `UNWETTER_RESERVE` | Unwetter-Reserve: Gewitter (orange) bis 18:00 Uhr, der Akku hält mindestens 40 %. | der Slot liegt im Fenster einer Unwetterwarnung (seit dem Plan „Unwetter-Reserve“): eine Stunde vor ihrem Beginn bis zu ihrem Ende; „bis“ ist das Ende der Warnung, die Zahl die Untergrenze. Das Aufladen dafür heißt `NACHLADEN_RESERVE` |
 | `NETZLADEN_GUENSTIG` | Akku lädt 4,0 kW aus dem Netz: jetzt 12,3 ct, um 18:00 Uhr 31,5 ct. | Absicht `Netzladen`; „um“ ist der erste spätere Slot mit Entladung ab 100 W, für den sich das Laden auszahlt (gibt es keinen, der teuerste spätere Slot) |
 | `HALTEN_FUER_SPITZE` | Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden. | Absicht `Halten`; später folgt ein Block teurerer Slots mit Entladung |
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |
@@ -6139,9 +6483,12 @@ Ist das 0 kW (am Monatsanfang mit `minimum_kw` 0 und ohne Bezug im Plan), gilt d
 Ladestrom des größten Autos: das Größte aus `min_a · phases · grid.voltage_nominal_v` über die
 Fahrzeuge in `config.yaml` (im Beispiel 3,5 kW für den Tesla). Darunter könnte der Wächter ein
 ladendes Auto nur bis zu seinem Mindeststrom drosseln und alarmieren. Willst du eine andere
-Untergrenze, setze `control.peak_target_kw` oder `minimum_kw` im Tarif. Ohne Leistungspreis ist das
-Budget leer. Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel,
-solange der Slot gilt (Abschnitt „15-min-Wächter“).
+Untergrenze, setze `control.peak_target_kw` oder `minimum_kw` im Tarif. Ohne Leistungspreis mit Satz
+hat ein Monat mit dem gedachten Satz (oben, „Einstellungen „Planung““, Spitze vermeiden ohne
+Leistungspreis) ein Budget nach derselben Regel; die bisherige Monatsspitze zählt dann ohne
+Mindestverrechnung. Mit `planning.peak_soft_ct_per_kw` 0 ist das Budget ohne Leistungspreis leer.
+Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel, solange der
+Slot gilt (Abschnitt „15-min-Wächter“).
 
 ### Plan gegen Ist
 
@@ -6180,6 +6527,7 @@ steht `execution` auf `null`.
 | `battery_plan_next` | Akku-Plan nächster Slot | sensor | wie oben für den Slot danach; am Ende des Plans „unbekannt“ |
 | `planned_soc` | Geplanter SOC | sensor | SOC am Ende des laufenden Slots in %; Attribut `hourly` mit `[{start, soc_pct}]` je volle Stunde des Plans |
 | `budget` | Budget | sensor | das Budget des laufenden Slots in kW mit einer Nachkommastelle; ohne Leistungspreis „unbekannt“ |
+| `storm_reserve` | Unwetter-Reserve | sensor | die Untergrenze des Akkus im laufenden Slot in % (Unwetterwarnung), sonst `0`; Attribute `bis` (Ende der Warnung) und `warnung` (ihr Text) |
 | `grid_charge` | Netzladen erlaubt | switch | die Einstellung (nicht die des Plans); schreibend |
 | `replan` | Neu planen | button | löst eine Neuplanung aus (Anlass „Neu planen“) |
 
@@ -6883,7 +7231,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der siebenundvierzig Szenarien bei jedem Push
+In der CI läuft jedes der achtundvierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -6911,7 +7259,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der siebenundvierzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der achtundvierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -6927,7 +7275,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  siebenundvierzig zusammen rund 5 min.
+  achtundvierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -7016,6 +7364,8 @@ Szenarien für „Geplant“ kommen Ziel und Abfahrt zu Beginn als Version 2 der
 für die Klimaanlage, ab `klima-pv-kuehlen`, entscheidet Victron im Dry-Run mit; dort steckt zu
 Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Auto, ab
 `akku-uebrig-sofort`, ist er wieder live, und nur ein Auto steckt an.
+Im Szenario für den Selbststart der EVCS, `egolf-autostart`, entscheidet er im Dry-Run mit; nur der
+e-Golf steckt an.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -7066,6 +7416,7 @@ Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Aut
 | `egolf-voll-bleibt-an` | e-Golf geladen, die EVCS bleibt an, 30 min | 21.6.2026 ab 09:00, sonniger Morgen, Akku 60 %, e-Golf an der EVCS mit 98 % SOC, in PV-Überschuss; Tesla abgesteckt | Der e-Golf wird „geladen“ (Status 3); ab da bekommt die EVCS kein „Laden aus“ (Regel „Geladen, bleibt an“), und ihr letzter Strombefehl fordert 6 A (`min_a` des e-Golf). |
 | `akku-uebrig-sofort` | Sofort am Abend mit übrigem Akku, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 72 %, nur der Tesla, in Sofort mit höchstens 10 A (`now_max_a`); zu Beginn ein Plan mit `EIGENVERBRAUCH` über 2 Slots, übrigem Akku für Sofort (`now_battery`) und der Plan-Schwelle 70 % (`support_soc_pct`), gültig 30 min | Solange der SOC über 70 % liegt, ab 2 min kein Override: Netzbezug höchstens Haus und Autos über der Entladegrenze des Modells (12000 W) plus 300 W; ab 2 min, nachdem der SOC 70 % erreicht hat, Netzbezug mindestens die Leistung der Autos minus 300 W (der Akku gibt dem Auto nichts mehr); vor der ersten Entscheidung mit „battery_comp“ zeigt die Gesundheit `battery.spare` „on“ mit einem Anteil über 0 W. |
 | `akku-uebrig-geplant` | Geplant in der Nacht aus dem Akku, 45 min | 13.10.2026 ab 02:00, keine PV, Akku 60 %, nur der e-Golf, in Geplant, Ziel 80 %, Abfahrt 07:00; zu Beginn ein Plan mit `EIGENVERBRAUCH` über 3 Slots, der den e-Golf mit 2800 W nennt, alle aus dem Akku (`ev_battery_w`), geplanter SOC am Ende 55, 52 und 51 %, gültig 45 min | Ab 2 min, bis der SOC das geplante Ende seines Slots erreicht (im dritten Slot), höchstens 300 W Netzbezug; ab 2 min danach Netzbezug mindestens die Leistung der Autos minus 300 W; der SOC fällt nie unter 50 % (kleinstes SOC am Ende minus 1 Punkt). |
+| `egolf-autostart` | e-Golf neu angesteckt, EVCS startet selbst, 30 min | 12.10.2026 ab 18:00, Akku 30 %, e-Golf an der EVCS mit 50 % SOC, in PV-Überschuss; Tesla abgesteckt; bei 5 min wird der e-Golf abgesteckt, nach 10 s wieder angesteckt, und 3 s später schaltet die EVCS „Laden an“ selbst (Autostart; der core sendet nichts dazu) | Die EVCS bekommt binnen 90 s (60 s plus Lesetakt und Verzug) nach dem Selbststart „Laden aus“ (Grund `self_start`); ab 2 min danach lädt der e-Golf nicht mehr. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

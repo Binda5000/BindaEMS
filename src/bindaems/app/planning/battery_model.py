@@ -197,6 +197,15 @@ def params_of(inputs: PlanInputs) -> BatteryParams:
     )
 
 
+def reserve_kwh(inputs: PlanInputs) -> float:
+    """Die Reserve des Laufs in kWh, auch wenn der SOC zu Beginn darunter liegt (dann ist
+    ``lo_kwh`` der SOC). Sie ist die Leer-Grenze von Regel R1 (Plan Netzgrenze je Phase,
+    Entscheidung 9): Energie unter der Reserve verlässt den Akku nie, kann also nicht eingespeist
+    werden."""
+    battery = inputs.battery
+    return battery.reserve_pct / 100 * battery.usable_kwh
+
+
 def sim_slots(
     inputs: PlanInputs,
     ev_w: Sequence[Mapping[str, float]] = (),

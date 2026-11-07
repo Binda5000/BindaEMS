@@ -22,6 +22,7 @@ from tests.helpers import stop
 from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
+from bindaems.app.control.boost_cost import boost_cost
 from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
 from bindaems.app.db.schema import charging_session, planned_charge
@@ -31,8 +32,8 @@ from bindaems.app.runtime import AppRuntime, StatsInputs
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent, SupportIntent
 from bindaems.shared.decisions import decision_to_json
-from bindaems.shared.settings import PlanningSettings
-from bindaems.shared.timeutil import ManualClock
+from bindaems.shared.settings import PlanningSettings, PowerComponent
+from bindaems.shared.timeutil import LOCAL_TZ, ManualClock
 
 TOKEN = "x" * 32
 
@@ -104,6 +105,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "core",
         "prices",
         "forecast",
+        "storm",
         "load-forecast",
         "load-model",
         "driving",
@@ -1249,6 +1251,46 @@ async def test_ha_inputs_carry_the_plan_and_the_grid_charge_switch(runtime, monk
     assert inputs.grid_charge_allowed is True
     set_planning(runtime.settings, PlanningSettings(grid_charge_allowed=False))
     assert runtime._build_ha_inputs(Intent(version=1)).grid_charge_allowed is False
+
+
+async def test_ha_inputs_boost_cost_only_with_power_rate(runtime) -> None:
+    # ohne gültigen Leistungspreis bleibt es leer, mit Satz kommt der Wert aus ``boost_cost``
+    now = runtime._clock.now()
+    day = now.astimezone(LOCAL_TZ).date()
+    current = runtime.settings.current()
+    without = [
+        c.model_copy(update={"valid_from": date(2099, 1, 1)})
+        if isinstance(c, PowerComponent)
+        else c
+        for c in current.settings.tariff.components
+    ]
+    tariff = current.settings.tariff.model_copy(update={"components": without})
+    runtime.settings.update(
+        current.settings.model_copy(update={"tariff": tariff}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+    assert runtime._build_ha_inputs(Intent(version=1)).boost_cost_eur == {}
+    current = runtime.settings.current()
+    rated = [
+        c.model_copy(update={"value_eur": 60.0, "valid_from": None})
+        if isinstance(c, PowerComponent)
+        else c
+        for c in current.settings.tariff.components
+    ]
+    tariff = current.settings.tariff.model_copy(update={"components": rated})
+    runtime.settings.update(
+        current.settings.model_copy(update={"tariff": tariff}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+    expected = boost_cost(runtime._cfg, tariff, None, day)
+    assert expected["applies"] is True
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.boost_cost_eur == {v["id"]: v["cost_eur"] for v in expected["vehicles"]}
+    assert set(inputs.boost_cost_eur) == set(runtime._cfg.vehicles)
 
 
 async def test_ha_intent_falls_back_when_the_core_has_none_or_is_down(runtime, monkeypatch) -> None:

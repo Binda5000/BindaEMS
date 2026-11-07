@@ -3,7 +3,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import { DASH, expectedLabel, formatEur, formatNumber, formatTime, NBSP } from '$lib/format';
 	import { plannedLine } from '$lib/charging/view';
-	import { SOURCE_LABELS, TRIGGER_LABELS } from './model';
+	import { SOURCE_LABELS, TRIGGER_LABELS, stormWarningLines } from './model';
 
 	interface Props {
 		data: PlanResponse;
@@ -55,6 +55,9 @@
 		}))
 	);
 
+	// je Unwetterwarnung des Plans eine Zeile, auch für eine hinter dem Horizont (Ruling R12)
+	const storms = $derived(stormWarningLines(plan?.storm ?? null));
+
 	async function toggle(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		await onGridCharge?.(input.checked);
@@ -82,6 +85,13 @@
 			<p class="muted">Grund: {plan.fallback_reason}</p>
 		{/if}
 		<p class="muted">Anlass: {TRIGGER_LABELS[plan.trigger]}</p>
+		{#if storms.length > 0}
+			<ul class="storms" aria-label="Unwetterwarnungen">
+				{#each storms as line, index (index)}
+					<li>{line}</li>
+				{/each}
+			</ul>
+		{/if}
 		<dl class="facts costs">
 			<dt>Erwartete Kosten</dt>
 			<dd>{formatEur(plan.expected_cost_eur)}</dd>
@@ -211,6 +221,16 @@
 		padding: 0.125rem 0.5rem;
 		border: 1px dashed var(--muted);
 		border-radius: 6px;
+	}
+
+	/* amtliche Warnung: der Akku hält dann mehr als die Reserve */
+	.storms {
+		margin: 0 0 0.75rem;
+		padding: 0.25rem 0.5rem;
+		border-left: 3px solid var(--warn);
+		list-style: none;
+		font-weight: 600;
+		overflow-wrap: anywhere;
 	}
 
 	.status {

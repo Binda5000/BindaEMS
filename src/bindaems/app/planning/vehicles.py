@@ -31,7 +31,8 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from bindaems.app.control.intent import health_vehicles, trusted
 from bindaems.app.learning.driving_profile import VehicleProfile, presence_at, weekday_of
-from bindaems.shared.config import Config, EvcsConfig, TwcConfig, VehicleConfig, _Model
+from bindaems.app.planning.grid_phases import car_grid_phases
+from bindaems.shared.config import Config, EvcsConfig, Phase, TwcConfig, VehicleConfig, _Model
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
@@ -79,6 +80,8 @@ class PlanVehicleInput(_Model):
       Eingangsdaten ohne beide Felder laden so (Plan 5b). Beide kommen nur zusammen vor (Ruling
       T10): So meinen ``charge_window``, Regel R2 und die Plausibilität, die an ``arrival_at``
       hängen, dasselbe wie ``expected``.
+    - ``grid_phases``: die 1 bis 3 Netzphasen, auf denen das Auto lädt (je Phase ``Leistung /
+      Anzahl``); ``None`` (alte Eingangsdaten) gilt als 3-phasig symmetrisch
 
     Die drei Energien stehen auf der Wallbox-Seite (Ruling R10).
     """
@@ -101,6 +104,14 @@ class PlanVehicleInput(_Model):
     reached: bool = False
     expected: bool = False
     arrival_at: AwareDatetime | None = None
+    grid_phases: list[Phase] | None = None
+
+    @model_validator(mode="after")
+    def _phases_distinct(self) -> Self:
+        phases = self.grid_phases
+        if phases is not None and not (1 <= len(phases) <= 3 and len(set(phases)) == len(phases)):
+            raise ValueError("grid_phases braucht 1 bis 3 verschiedene Phasen.")
+        return self
 
     @model_validator(mode="after")
     def _arrival_only_when_expected(self) -> Self:
@@ -288,6 +299,7 @@ def _car_input(
         reached=reached,
         expected=arrival_at is not None,
         arrival_at=arrival_at,
+        grid_phases=car_grid_phases(cfg, key, wallbox_key),
     )
 
 

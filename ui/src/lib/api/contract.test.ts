@@ -578,6 +578,30 @@ describe('Akku ins Auto im Plan', () => {
 	});
 });
 
+describe('Nachladen auf die Reserve im Plan', () => {
+	const demo = files['./contract/plan.json'] as { plan: { slots: Record<string, unknown>[] } };
+
+	it('liest das Flag und den Grund, die Demo nennt das Flag', () => {
+		const slot = demo.plan.slots[0]!;
+		expect(Object.keys(slot)).toContain('reserve_recharge');
+		const parsed = v.parse(s.PlanSlotSchema, {
+			...slot,
+			intent: 'NETZLADEN',
+			grid_charge_w: 3000,
+			reserve_recharge: true,
+			codes: ['NACHLADEN_RESERVE']
+		});
+		expect(parsed.reserve_recharge).toBe(true);
+		expect(parsed.codes).toEqual(['NACHLADEN_RESERVE']);
+	});
+
+	it('liest ältere Pläne ohne das Feld mit false', () => {
+		const slot: Record<string, unknown> = { ...demo.plan.slots[0] };
+		delete slot.reserve_recharge;
+		expect(v.parse(s.PlanSlotSchema, slot).reserve_recharge).toBe(false);
+	});
+});
+
 describe('Planung in den Einstellungen', () => {
 	it('liest ältere Einstellungen ohne Akku ins Auto mit false', () => {
 		const demo = files['./contract/settings.json'] as {
@@ -593,6 +617,75 @@ describe('Planung in den Einstellungen', () => {
 		expect(issues(s.PlanningSettingsSchema, { ...older, car_battery_allowed: 'ja' })).not.toEqual(
 			[]
 		);
+	});
+});
+
+describe('Unwetter-Reserve in den Einstellungen', () => {
+	const demo = files['./contract/settings.json'] as {
+		settings: { planning: Record<string, unknown> };
+	};
+
+	it('liest planning.storm, ältere Einstellungen ohne mit den Standardwerten', () => {
+		const standard = {
+			enabled: false,
+			target_soc_pct: 40,
+			min_level: 2,
+			kinds: ['sturm', 'gewitter']
+		};
+		expect(demo.settings.planning.storm).toEqual(standard);
+		expect(v.parse(s.PlanningSettingsSchema, demo.settings.planning).storm).toEqual(standard);
+		const older = { ...demo.settings.planning };
+		delete older.storm;
+		expect(v.parse(s.PlanningSettingsSchema, older).storm).toEqual(standard);
+	});
+
+	it('lehnt eine unbekannte Warnart und eine Stufe außerhalb 1 bis 3 ab', () => {
+		const storm = demo.settings.planning.storm as Record<string, unknown>;
+		const planning = (changes: Record<string, unknown>) => ({
+			...demo.settings.planning,
+			storm: { ...storm, ...changes }
+		});
+		expect(issues(s.PlanningSettingsSchema, planning({ kinds: ['hagel'] }))).not.toEqual([]);
+		expect(issues(s.PlanningSettingsSchema, planning({ min_level: 4 }))).not.toEqual([]);
+		expect(issues(s.PlanningSettingsSchema, planning({ kinds: ['kaelte'] }))).toEqual([]);
+	});
+});
+
+describe('Unwetter-Reserve im Plan', () => {
+	const demo = files['./contract/plan.json'] as {
+		plan: { slots: Record<string, unknown>[] } & Record<string, unknown>;
+	};
+
+	it('liest Warnung, Untergrenze und den Grundcode', () => {
+		const warning = {
+			warn_id: 7,
+			version: 1,
+			kind: 'gewitter',
+			level: 2,
+			begin: '2026-10-16T12:00:00+00:00',
+			end: '2026-10-16T14:00:00+00:00',
+			text: 'Gewitter'
+		};
+		const [first, ...rest] = demo.plan.slots;
+		const slots = [{ ...first, storm_reserve_pct: 40, codes: ['UNWETTER_RESERVE'] }, ...rest];
+		const stormy = { ...demo.plan, storm: { target_pct: 40, warnings: [warning] }, slots };
+		const plan = v.parse(s.PlanSchema, stormy);
+		expect(plan.storm?.warnings[0].kind).toBe('gewitter');
+		expect(plan.slots[0].storm_reserve_pct).toBe(40);
+		expect(plan.slots[0].codes).toEqual(['UNWETTER_RESERVE']);
+	});
+
+	it('liest ältere Pläne ohne Unwetter-Reserve', () => {
+		const slots = demo.plan.slots.map((slot) => {
+			const older = { ...slot };
+			delete older.storm_reserve_pct;
+			return older;
+		});
+		const older = { ...demo.plan, slots } as Record<string, unknown>;
+		delete older.storm;
+		const plan = v.parse(s.PlanSchema, older);
+		expect(plan.storm).toBeNull();
+		expect(plan.slots[0].storm_reserve_pct).toBeNull();
 	});
 });
 

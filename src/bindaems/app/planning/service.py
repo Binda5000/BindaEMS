@@ -41,6 +41,7 @@ from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.battery_model import params_of, sim_slots, simulate
 from bindaems.app.planning.builder import build_plan
 from bindaems.app.planning.fallback import fallback_intents, fallback_vehicles, per_slot
+from bindaems.app.planning.grid_phases import grid_import_limits_w
 from bindaems.app.planning.inputs import (
     PRICE_WINDOW,
     BatteryState,
@@ -86,7 +87,7 @@ from bindaems.app.settings.service import (
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import ChargeMode, Intent
-from bindaems.shared.plan import Plan, PlanTrigger
+from bindaems.shared.plan import Plan, PlanTrigger, StormWarning
 from bindaems.shared.settings import RuntimeSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, slot_start
 
@@ -208,6 +209,7 @@ class PlanningService:
         intent: Callable[[], Intent | None] | None = None,
         driving_profiles: Callable[[], Mapping[str, VehicleProfile]] | None = None,
         thermal_model: ThermalModels | None = None,
+        storm: Callable[[], list[StormWarning]] | None = None,
     ) -> None:
         self._cfg = cfg
         self._settings = settings
@@ -226,6 +228,8 @@ class PlanningService:
         self._intent = intent or (lambda: None)
         # Profile des Fahrverhaltens (Plan 5b) für die erwarteten Autos; ohne Quelle gibt es keine
         self._driving_profiles = driving_profiles
+        # bekannte Unwetterwarnungen (Plan Unwetter-Reserve); ohne Quelle gibt es keine
+        self._storm = storm or (lambda: [])
         self._lock = asyncio.Lock()  # ein Lauf nach dem anderen
         self._running = False
         self._unavailable: str | None = None
@@ -439,6 +443,11 @@ class PlanningService:
             load_issued=load.issued_at if load is not None else None,
             vehicles=vehicles,
             support_pct=self._support_pct(),
+            # nach (Beginn, Nummer): die Reihenfolge der Quelle löst keinen Neuplan aus
+            storm=tuple(
+                (w.warn_id, w.version, w.begin, w.end)
+                for w in sorted(self._storm(), key=lambda w: (w.begin, w.warn_id))
+            ),
         )
         triggers = changed(old, new)
         for trigger in triggers:
@@ -586,10 +595,7 @@ class PlanningService:
 
         battery = self._cfg.battery
         grid = self._cfg.grid
-        if grid.max_import_kw is not None:
-            grid_max_import_w = grid.max_import_kw * 1000
-        else:
-            grid_max_import_w = (grid.fuse_a - grid.fuse_margin_a) * grid.voltage_nominal_v * 3
+        grid_max_import_w, grid_phase_import_w = grid_import_limits_w(grid, self._cfg.control)
         return BatteryState(
             soc_pct=soc_pct,
             usable_kwh=battery.usable_kwh,
@@ -601,6 +607,7 @@ class PlanningService:
             limit_now_discharge_w=bms_w("battery.dcl_a"),
             max_grid_charge_setpoint_w=self._cfg.victron.max_grid_charge_setpoint_w,
             grid_max_import_w=grid_max_import_w,
+            grid_phase_import_w=grid_phase_import_w,
         )
 
     def _read(self, now: datetime) -> tuple[list[PriceInput], float | None]:
@@ -637,7 +644,8 @@ class PlanningService:
 
         Die geplanten Autos kommen aus dem Health des core und der Absicht (``planned_vehicles``),
         danach die erwarteten aus der Anwesenheitsprognose (``expected_vehicles``, nur mit
-        ``driving_profiles``), die PV-Prognose P25 für Regel R2 aus der PV-Prognose. Hat Health
+        ``driving_profiles``), die PV-Prognose P25 für Regel R2 aus der PV-Prognose, die
+        Unwetterwarnungen aus ``storm`` (Plan Unwetter-Reserve). Hat Health
         die Absicht noch nicht bestätigt und steht darin ein Auto in „Geplant“, plant der Lauf
         ohne die Autos; der Dienst merkt sich das und plant neu, sobald Health sie bestätigt
         (``_watch``, Ruling R23).
@@ -673,6 +681,7 @@ class PlanningService:
             car_floor_kw=car_floor_kw(self._cfg),
             pv_p25_w=pv.p25_w if pv is not None else None,
             vehicles=lambda slots: self._vehicles(health, intent, now, slots),
+            storm_warnings=self._storm(),
         )
         carried = await asyncio.to_thread(self._carried, previous)
         at_start = grid_in_battery_at_start(inputs, previous, carried=carried)

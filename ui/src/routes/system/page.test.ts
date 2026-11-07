@@ -117,9 +117,9 @@ it('verweist ganz oben mit dem Ergebnis des Betriebschecks auf die Seite Betrieb
 it('zählt die Komponenten in der Kopfzeile und stellt die gestörte nach vorn', async () => {
 	showSystem(system());
 	const components = card('Komponenten');
-	expect(await within(components).findByText('10 von 11 in Ordnung')).toBeInTheDocument();
+	expect(await within(components).findByText('11 von 12 in Ordnung')).toBeInTheDocument();
 	const rows = within(components).getAllByRole('listitem');
-	expect(rows).toHaveLength(11);
+	expect(rows).toHaveLength(12);
 	expect(within(rows[0]!).getByText('Home Assistant')).toBeInTheDocument();
 	expect(within(rows[0]!).getByRole('img', { name: 'gestört' })).toBeInTheDocument();
 	expect(rows[1]).toHaveTextContent(/^\s*core\s*verbunden\s*$/);

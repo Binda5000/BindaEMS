@@ -35,6 +35,7 @@ from bindaems.shared.plan import (
     PLAN_VALID,
     BatteryIntentKind,
     IntentPlan,
+    recharge_without_switch,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start
 
@@ -373,9 +374,9 @@ class IntentStore:
 
 def _plan_problems(plan: IntentPlan, known_vehicles: Collection[str]) -> list[str]:
     """Die Funde zum Plan (Präzisierung 4), in dieser Reihenfolge: Raster und Lücken, Anzahl,
-    Gültigkeit, Netzladen trotz Schalter aus, unbekannte Fahrzeuge (sortiert), negative
-    Ladeleistung (sortiert), SOC am Slotende außerhalb von 0 bis 100 %; je Fahrzeug ein Fund,
-    egal in wie vielen Slots.
+    Gültigkeit, Netzladen trotz Schalter aus (außer Nachladen auf die Reserve bis 3000 W),
+    unbekannte Fahrzeuge (sortiert), negative Ladeleistung (sortiert), SOC am Slotende außerhalb
+    von 0 bis 100 %; je Fahrzeug ein Fund, egal in wie vielen Slots.
 
     Die Gültigkeit wird nur geprüft, wenn die Slots ein lückenloses Raster bilden; sonst sagt
     ``slots[-1]`` nichts über das Ende des Plans.
@@ -395,8 +396,11 @@ def _plan_problems(plan: IntentPlan, known_vehicles: Collection[str]) -> list[st
     ):
         details.append("Plan: Gültigkeit passt nicht zu den Slots.")
     if not plan.grid_charge_allowed and any(
-        slot.intent.kind is BatteryIntentKind.NETZLADEN for slot in slots
+        slot.intent.kind is BatteryIntentKind.NETZLADEN and not recharge_without_switch(slot.intent)
+        for slot in slots
     ):
+        # Nachladen auf die Reserve (``reserve_recharge``, höchstens ``RESERVE_RECHARGE_MAX_W``)
+        # gilt auch ohne Schalter (Plan Netzgrenze je Phase, Entscheidung 9)
         details.append("Plan: Netzladen, obwohl ausgeschaltet.")
     named = {key for slot in slots for key in slot.vehicles}
     details += [

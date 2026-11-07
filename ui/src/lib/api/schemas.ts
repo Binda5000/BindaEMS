@@ -583,6 +583,32 @@ export const PriceSettingsSchema = v.looseObject({
 });
 export type PriceSettings = v.InferOutput<typeof PriceSettingsSchema>;
 
+/** Arten der amtlichen Warnungen von GeoSphere Austria (Plan Unwetter-Reserve) */
+export const StormKindSchema = v.picklist([
+	'sturm',
+	'regen',
+	'schnee',
+	'glatteis',
+	'gewitter',
+	'hitze',
+	'kaelte'
+]);
+export type StormKind = v.InferOutput<typeof StormKindSchema>;
+/** Warnstufe: 1 gelb, 2 orange, 3 rot */
+export const StormLevelSchema = v.picklist([1, 2, 3]);
+export type StormLevel = v.InferOutput<typeof StormLevelSchema>;
+
+export const StormSettingsSchema = v.looseObject({
+	enabled: v.boolean(),
+	/** Untergrenze des Akkus während einer Warnung in %, ganze Zahl 10 bis 100 */
+	target_soc_pct: v.number(),
+	/** ab dieser Stufe zählt eine Warnung */
+	min_level: StormLevelSchema,
+	/** Warnarten, die zählen (mindestens eine) */
+	kinds: v.array(StormKindSchema)
+});
+export type StormSettings = v.InferOutput<typeof StormSettingsSchema>;
+
 export const PlanningSettingsSchema = v.looseObject({
 	grid_charge_allowed: v.boolean(),
 	/** Akku ins Auto, wenn übrig; ältere Einstellungen kennen den Schalter nicht */
@@ -591,7 +617,17 @@ export const PlanningSettingsSchema = v.looseObject({
 	roundtrip_pct: v.number(),
 	wear_ct: v.number(),
 	end_value_factor: v.number(),
-	inertia_ct: v.number()
+	inertia_ct: v.number(),
+	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat, 0 = aus);
+	 * ältere Einstellungen kennen ihn nicht */
+	peak_soft_ct_per_kw: v.optional(v.number(), 100),
+	/** Unwetter-Reserve; ältere Einstellungen kennen sie nicht */
+	storm: v.optional(StormSettingsSchema, () => ({
+		enabled: false,
+		target_soc_pct: 40,
+		min_level: 2 as const,
+		kinds: ['sturm' as const, 'gewitter' as const]
+	}))
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 
@@ -1435,6 +1471,8 @@ export const BatteryIntentKindSchema = v.picklist(['EIGENVERBRAUCH', 'HALTEN', '
 export type BatteryIntentKind = v.InferOutput<typeof BatteryIntentKindSchema>;
 
 export const PlanReasonCodeSchema = v.picklist([
+	'NACHLADEN_RESERVE',
+	'UNWETTER_RESERVE',
 	'NETZLADEN_GUENSTIG',
 	'HALTEN_FUER_SPITZE',
 	'BUDGET_SPITZE',
@@ -1470,7 +1508,8 @@ export const PlanTriggerSchema = v.picklist([
 	'settings',
 	'manual',
 	'vehicles',
-	'thermal'
+	'thermal',
+	'storm'
 ]);
 export type PlanTrigger = v.InferOutput<typeof PlanTriggerSchema>;
 
@@ -1479,6 +1518,8 @@ export const PlanSlotSchema = v.object({
 	start: Iso,
 	intent: BatteryIntentKindSchema,
 	grid_charge_w: v.number(),
+	/** Netzladen nur auf die Reserve, auch ohne „Netzladen erlaubt“; ältere Pläne haben es nicht */
+	reserve_recharge: v.optional(v.boolean(), false),
 	soc_pct: v.number(),
 	pv_w: v.number(),
 	load_w: v.number(),
@@ -1510,7 +1551,10 @@ export const PlanSlotSchema = v.object({
 	 */
 	thermal_w: v.optional(v.number(), 0),
 	thermal_steps: v.optional(NullableNumber, null),
-	thermal_grid_w: v.optional(v.number(), 0)
+	thermal_grid_w: v.optional(v.number(), 0),
+	/** Untergrenze der Unwetter-Reserve am Slotende in %; `null` außerhalb eines Fensters, ältere
+	 * Pläne haben das Feld nicht */
+	storm_reserve_pct: v.optional(NullableNumber, null)
 });
 export type PlanSlot = v.InferOutput<typeof PlanSlotSchema>;
 
@@ -1537,6 +1581,25 @@ export const PlanThermalSchema = v.object({
 	reason: v.picklist(['ok', 'off', 'no_model', 'mode', 'not_worth', 'solver'])
 });
 export type PlanThermal = v.InferOutput<typeof PlanThermalSchema>;
+
+/** Eine amtliche Unwetterwarnung im Plan; `begin` und `end` sind der Geltungszeitraum */
+export const PlanStormWarningSchema = v.object({
+	warn_id: v.number(),
+	version: v.number(),
+	kind: StormKindSchema,
+	level: StormLevelSchema,
+	begin: Iso,
+	end: Iso,
+	text: v.string()
+});
+export type PlanStormWarning = v.InferOutput<typeof PlanStormWarningSchema>;
+
+/** Unwetter-Reserve im Plan: Untergrenze in % und die passenden Warnungen */
+export const PlanStormSchema = v.object({
+	target_pct: v.number(),
+	warnings: v.array(PlanStormWarningSchema)
+});
+export type PlanStorm = v.InferOutput<typeof PlanStormSchema>;
 
 /** Zusammenfassung des Plans für ein geplantes Auto (Plan 4b) */
 export const PlanVehicleSchema = v.object({
@@ -1593,6 +1656,8 @@ export const PlanSchema = v.object({
 	vehicles: v.array(PlanVehicleSchema),
 	/** `null` ohne Klimaanlage; ältere Pläne haben das Feld nicht */
 	thermal: v.optional(v.nullable(PlanThermalSchema), null),
+	/** `null` ohne Unwetterwarnung im Horizont; ältere Pläne haben das Feld nicht */
+	storm: v.optional(v.nullable(PlanStormSchema), null),
 	slots: v.array(PlanSlotSchema)
 });
 export type Plan = v.InferOutput<typeof PlanSchema>;

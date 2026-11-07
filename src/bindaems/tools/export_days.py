@@ -50,6 +50,7 @@ from bindaems.app.forecast.archive import (
     actual_from_ledger,
 )
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.planning.grid_phases import grid_import_limits_w
 from bindaems.app.prices.service import PriceService, PriceView
 from bindaems.app.prices.store import PriceStore
 from bindaems.app.settings.service import CurrentSettings, StoredSettings
@@ -179,15 +180,12 @@ def _month_peak_kw(ledger: LedgerService, first_day: date) -> float | None:
 
 
 def _battery(cfg: Config, start_soc_pct: float) -> ScenarioBattery:
-    grid = cfg.grid
-    if grid.max_import_kw is not None:
-        grid_max_import_w = grid.max_import_kw * 1000
-    else:
-        grid_max_import_w = (grid.fuse_a - grid.fuse_margin_a) * grid.voltage_nominal_v * 3
+    grid_max_import_w, grid_phase_import_w = grid_import_limits_w(cfg.grid, cfg.control)
     return ScenarioBattery(
         **cfg.battery.model_dump(),
         max_grid_charge_setpoint_w=cfg.victron.max_grid_charge_setpoint_w,
         grid_max_import_w=grid_max_import_w,
+        grid_phase_import_w=grid_phase_import_w,
         start_soc_pct=start_soc_pct,
     )
 

@@ -23,6 +23,7 @@ from pydantic import (
 
 from bindaems.shared.config import _Model
 from bindaems.shared.control import ChargeMode
+from bindaems.shared.plan import StormKind, StormLevel
 
 Ct = Annotated[float, Field(allow_inf_nan=False)]
 NonNegative = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -226,8 +227,25 @@ class PvModelSettings(_Model):
     noct_c: Annotated[float, Field(ge=20, le=80)] = 45.0
 
 
+def _default_storm_kinds() -> list[StormKind]:
+    return ["sturm", "gewitter"]
+
+
+class StormSettings(_Model):
+    """Unwetter-Reserve: Bei amtlichen Warnungen hebt die Planung die Untergrenze des Akkus auf
+    ``target_soc_pct`` (Plan Unwetter-Reserve, Entscheidungen 2 bis 4)."""
+
+    enabled: bool = False
+    target_soc_pct: Annotated[int, Field(ge=10, le=100)] = 40
+    min_level: StormLevel = 2  # 1 gelb, 2 orange, 3 rot
+    kinds: Annotated[list[StormKind], Field(min_length=1)] = Field(
+        default_factory=_default_storm_kinds
+    )
+
+
 class PlanningSettings(_Model):
-    """Planung des Akkus (Plan 3b): Netzladen, Marge, Wirkungsgrad, Verschleiß, Restwert."""
+    """Planung des Akkus (Plan 3b): Netzladen, Marge, Wirkungsgrad, Verschleiß, Restwert,
+    Trägheit, Akku ins Auto und der gedachte Satz für die Monatsspitze ohne Leistungspreis."""
 
     grid_charge_allowed: bool = False
     margin_ct: NonNegative = 2.0  # Mindestgewinn je kWh, damit sich Netzladen lohnt
@@ -236,6 +254,11 @@ class PlanningSettings(_Model):
     end_value_factor: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.9
     inertia_ct: NonNegative = 0.5  # Planträgheit je kWh Abweichung vom vorigen Plan
     car_battery_allowed: bool = False  # Akku ins Auto, wenn übrig (Plan Akku ins Auto)
+    # Gedachter Satz in ct je kW und Monat für Monate ohne Leistungspreis mit Satz: Der Planer
+    # meidet neue Monatsspitzen auch dann, der Wächter hält sein Budget; 0 = aus (Plan Netzgrenze
+    # je Phase, Entscheidung 8)
+    peak_soft_ct_per_kw: NonNegative = 100.0
+    storm: StormSettings = Field(default_factory=StormSettings)
 
 
 HaEntityId = Annotated[str, Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")]

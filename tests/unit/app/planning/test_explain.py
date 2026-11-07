@@ -8,12 +8,14 @@ from typing import Any, get_args
 
 from tests.plan_helpers import (
     SCENARIO_START,
+    STORM_WINDOW,
     at,
     month,
     planned_car,
     resimulate,
     scenario,
     small_battery,
+    storm_scenario,
 )
 
 from bindaems.app.planning.builder import build_plan
@@ -41,6 +43,8 @@ def charge(watts: float) -> BatteryIntent:
 
 
 SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
+    "NACHLADEN_RESERVE": {"kw": 3.0},
+    "UNWETTER_RESERVE": {"art": "Gewitter", "stufe": "orange", "bis": "16:00", "soc": 40.0},
     "NETZLADEN_GUENSTIG": {"kw": 2.3, "ct": 10.0, "um": "18:00", "ct_spaeter": 40.0},
     "HALTEN_FUER_SPITZE": {"soc": 64.4, "von": "18:00", "bis": "20:00", "ct": 38.0},
     "BUDGET_SPITZE": {"soc": 55.0, "kw": 4.3},
@@ -107,6 +111,12 @@ def test_sentences() -> None:
 
 def test_all_sentences_match_the_texts_exactly() -> None:
     expected = {
+        "NACHLADEN_RESERVE": (
+            "Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt."
+        ),
+        "UNWETTER_RESERVE": (
+            "Unwetter-Reserve: Gewitter (orange) bis 16:00 Uhr, der Akku hält mindestens 40 %."
+        ),
         "NETZLADEN_GUENSTIG": "Akku lädt 2,3 kW aus dem Netz: jetzt 10,0 ct, um 18:00 Uhr 40,0 ct.",
         "HALTEN_FUER_SPITZE": "Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden.",
         "BUDGET_SPITZE": "Akku hält 55 %, damit die Monatsspitze unter 4,3 kW bleibt.",
@@ -211,6 +221,20 @@ def test_grid_charge_names_the_later_slot_that_pays_off() -> None:
     (first, *_), *_ = reasons_for(inputs, intents, steps, [None] * 8, fallback=False)
     assert first.code == "NETZLADEN_GUENSTIG"
     assert first.params == {"kw": 2.3, "ct": 10.0, "um": "03:00", "ct_spaeter": 40.0}
+
+
+def test_reserve_recharge_has_its_own_reason() -> None:
+    # Entscheidung 9: ein Nachladen auf die Reserve heißt nicht „lädt aus dem Netz: jetzt …“
+    inputs = scenario(
+        prices=[10.0, 30.0], pv=[0.0] * 2, load=[600.0] * 2, soc_pct=16.0, battery=small_battery()
+    )
+    recharge = BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000.0, reserve_recharge=True
+    )
+    assert codes(inputs, [recharge, HOLD], fallback=True)[0] == ["ERSATZPLAN", "NACHLADEN_RESERVE"]
+    steps = resimulate(inputs, [recharge, HOLD])
+    (first, *_), _ = reasons_for(inputs, [recharge, HOLD], steps, [None] * 2, fallback=False)
+    assert first == Reason(code="NACHLADEN_RESERVE", params={"kw": 3.0})
 
 
 def test_grid_charge_without_payoff_names_the_most_expensive_later_slot() -> None:
@@ -746,3 +770,45 @@ def test_build_plan_passes_the_battery_share_on_to_the_reasons() -> None:
         ev_battery_w=[{"tesla": 3000.0}, {}],
     )
     assert [r.code for r in plan.slots[0].reasons][:2] == ["EIGENVERBRAUCH", "AUTO_AUS_AKKU"]
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 12)
+
+
+def test_storm_reason_text() -> None:
+    reason = Reason(
+        code="UNWETTER_RESERVE",
+        params={"art": "Gewitter", "stufe": "orange", "bis": "16:00", "soc": 40.0},
+    )
+    assert sentence(reason) == (
+        "Unwetter-Reserve: Gewitter (orange) bis 16:00 Uhr, der Akku hält mindestens 40 %."
+    )
+    # im Plan: das Aufladen davor bleibt „Nachladen“, im Fenster steht die Warnung
+    inputs = storm_scenario(soc_pct=25.0)
+    recharge = BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000.0, reserve_recharge=True
+    )
+    intents = [recharge] * 8 + [HOLD] * 88
+    steps = resimulate(inputs, intents)
+    result = reasons_for(inputs, intents, steps, [None] * 96, fallback=False)
+    assert [r.code for r in result[0]] == ["NACHLADEN_RESERVE"]
+    assert [r.code for r in result[20]] == ["HALTEN_RESTWERT"]
+    for index in STORM_WINDOW:
+        assert result[index] == [
+            Reason(
+                code="UNWETTER_RESERVE",
+                params={"art": "Gewitter", "stufe": "orange", "bis": "16:00", "soc": 40.0},
+            )
+        ]
+    assert [r.code for r in result[STORM_WINDOW.stop]] == ["HALTEN_RESTWERT"]
+    # ein Nachladen im Fenster bleibt „Nachladen“
+    intents[STORM_WINDOW.start] = recharge
+    steps = resimulate(inputs, intents)
+    result = reasons_for(inputs, intents, steps, [None] * 96, fallback=False)
+    assert [r.code for r in result[STORM_WINDOW.start]] == ["NACHLADEN_RESERVE"]
+
+
+def test_storm_reason_needs_the_warning() -> None:
+    # Untergrenze ohne passende Warnung (nur in Tests denkbar): die üblichen Regeln
+    inputs = storm_scenario(soc_pct=60.0).model_copy(update={"storm_warnings": []})
+    assert codes(inputs, [EV] * 96)[STORM_WINDOW.start] == ["EIGENVERBRAUCH"]

@@ -21,6 +21,9 @@ from bindaems.shared.timeutil import SLOT, ensure_utc, slot_start
 
 PLAN_VALID: Final = timedelta(minutes=45)
 MAX_INTENT_PLAN_SLOTS: Final = 8
+# Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9): höchstens so viel W, auch
+# bei ausgeschaltetem „Netzladen erlaubt“
+RESERVE_RECHARGE_MAX_W: Final = 3000.0
 # Hinweis für die Klimaanlage (Plan 6a, Entscheidung 7): Schwellen und Perzentil der teuren Slots
 THERMAL_MORE_EXPORT_W: Final = 500.0  # ab dieser geplanten Einspeisung „mehr“
 THERMAL_LESS_EXPORT_W: Final = 100.0  # „weniger“ nur unter dieser geplanten Einspeisung
@@ -38,10 +41,17 @@ class BatteryIntentKind(StrEnum):
 
 
 class BatteryIntent(_Model):
-    """Absicht für den Akku in einem Slot; ``grid_charge_w`` gilt nur bei ``NETZLADEN``."""
+    """Absicht für den Akku in einem Slot; ``grid_charge_w`` gilt nur bei ``NETZLADEN``.
+
+    ``reserve_recharge`` (nur mit ``NETZLADEN``, Plan Netzgrenze je Phase, Entscheidung 9): Das
+    Netzladen lädt den Akku nur auf die Reserve nach; bis ``RESERVE_RECHARGE_MAX_W`` gilt es auch
+    bei ausgeschaltetem „Netzladen erlaubt“ (``recharge_without_switch``). Alte Absichten und Pläne
+    laden mit ``False``.
+    """
 
     kind: BatteryIntentKind = BatteryIntentKind.EIGENVERBRAUCH
     grid_charge_w: NonNegativeW = 0.0
+    reserve_recharge: bool = False
 
     @model_validator(mode="after")
     def _grid_charge_matches_kind(self) -> Self:
@@ -50,10 +60,25 @@ class BatteryIntent(_Model):
             raise ValueError("NETZLADEN braucht eine Leistung über 0 W")
         if not charging and self.grid_charge_w != 0:
             raise ValueError("Nur NETZLADEN hat eine Netzladeleistung")
+        if not charging and self.reserve_recharge:
+            raise ValueError("Nur NETZLADEN lädt auf die Reserve nach")
         return self
 
 
+def recharge_without_switch(intent: BatteryIntent) -> bool:
+    """Gilt ``intent`` auch bei ausgeschaltetem „Netzladen erlaubt“? Nur ein Nachladen auf die
+    Reserve (``reserve_recharge``) mit höchstens ``RESERVE_RECHARGE_MAX_W`` (Entscheidung 9); die
+    app (``intent_plan``, Plausibilität) und der core (Planprüfung) rechnen beide hiermit."""
+    return (
+        intent.kind is BatteryIntentKind.NETZLADEN
+        and intent.reserve_recharge
+        and intent.grid_charge_w <= RESERVE_RECHARGE_MAX_W
+    )
+
+
 ReasonCode = Literal[
+    "NACHLADEN_RESERVE",
+    "UNWETTER_RESERVE",
     "NETZLADEN_GUENSTIG",
     "HALTEN_FUER_SPITZE",
     "BUDGET_SPITZE",
@@ -89,6 +114,7 @@ PlanTrigger = Literal[
     "manual",
     "vehicles",
     "thermal",
+    "storm",
 ]
 SolverStatus = Literal["optimal", "time_limit", "infeasible", "timeout", "error"]
 
@@ -136,6 +162,9 @@ class PlanSlot(_Model):
     thermal_w: Finite = 0.0
     thermal_grid_w: NonNegativeW = 0.0
     thermal_steps: int | None = None
+    # Untergrenze der Unwetter-Reserve am Slotende in % (Plan Unwetter-Reserve, Entscheidung 4);
+    # ``None`` außerhalb eines Fensters. Alte Pläne laden mit ``None``.
+    storm_reserve_pct: Finite | None = None
     reasons: list[Reason]
 
 
@@ -208,6 +237,51 @@ class PlanThermal(_Model):
     reason: ThermalReason
 
 
+# Unwetterwarnung (Plan Unwetter-Reserve): Art in der Reihenfolge der ``warntypid`` 1–7 von
+# GeoSphere Austria, Stufe 1 gelb, 2 orange, 3 rot.
+StormKind = Literal["sturm", "regen", "schnee", "glatteis", "gewitter", "hitze", "kaelte"]
+StormLevel = Literal[1, 2, 3]
+STORM_KIND_LABELS: Final[dict[StormKind, str]] = {
+    "sturm": "Sturm",
+    "regen": "Regen",
+    "schnee": "Schnee",
+    "glatteis": "Glatteis",
+    "gewitter": "Gewitter",
+    "hitze": "Hitze",
+    "kaelte": "Kälte",
+}
+STORM_LEVEL_LABELS: Final[dict[StormLevel, str]] = {1: "gelb", 2: "orange", 3: "rot"}
+
+
+class StormWarning(_Model):
+    """Eine amtliche Wetterwarnung für den Standort; ``warn_id`` und ``version`` kommen von der
+    Quelle, ``begin`` und ``end`` sind der Geltungszeitraum."""
+
+    warn_id: int
+    version: int
+    kind: StormKind
+    level: StormLevel
+    begin: AwareDatetime
+    end: AwareDatetime
+    text: str
+
+    @model_validator(mode="after")
+    def _end_after_begin(self) -> Self:
+        if self.end <= self.begin:
+            raise ValueError("end muss nach begin liegen")
+        return self
+
+
+class PlanStorm(_Model):
+    """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): ``target_pct`` ist das
+    Ziel der Untergrenze in % (``min(Ziel, soc_max_pct)``), ``warnings`` sind die bekannten
+    passenden Warnungen (Art und Stufe nach den Einstellungen, Ende in der Zukunft), auch wenn
+    ihr Fenster nicht im Horizont liegt; die Fenster je Slot stehen in ``storm_reserve_pct``."""
+
+    target_pct: Finite
+    warnings: list[StormWarning]
+
+
 class Plan(_Model):
     id: int | None = None
     created_at: AwareDatetime
@@ -232,6 +306,9 @@ class Plan(_Model):
     vehicles: list[PlanVehicle] = Field(default_factory=list)
     # ``None`` ohne Klimaanlage der Art ``coe_offset``; alte Pläne laden mit ``None`` (Plan 5c)
     thermal: PlanThermal | None = None
+    # gesetzt, sobald passende Unwetterwarnungen bekannt sind (Schalter an), auch ohne Fenster im
+    # Horizont; alte Pläne laden mit ``None`` (Plan Unwetter-Reserve)
+    storm: PlanStorm | None = None
     slots: Annotated[list[PlanSlot], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -373,8 +450,9 @@ def intent_plan(
 ) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
-    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Ebenso der Akku-
-    Anteil daran (``ev_battery_w``, ohne erwartete Autos und ohne Anteile unter 1 W) und
+    ``EIGENVERBRAUCH``, außer einem Nachladen auf die Reserve (``recharge_without_switch``). Die
+    Ladeleistung je Auto geht auf ganze W gerundet mit. Ebenso der Akku-Anteil daran
+    (``ev_battery_w``, ohne erwartete Autos und ohne Anteile unter 1 W) und
     ``now_battery`` (Akku ins Auto): beides nur, wenn die Absicht des Slots nach dieser Umwandlung
     ``EIGENVERBRAUCH`` ist, sonst ``{}`` und ``False``. Jedes Auto aus
     ``plan.vehicles`` steht in jedem Slot vor seiner Abfahrt, auch mit 0 W (Ruling R22): Ein Auto,
@@ -400,7 +478,11 @@ def intent_plan(
 
     def binding(slot: PlanSlot) -> IntentPlanSlot:
         intent = slot.intent
-        if not grid_charge_allowed and intent.kind is BatteryIntentKind.NETZLADEN:
+        if (
+            not grid_charge_allowed
+            and intent.kind is BatteryIntentKind.NETZLADEN
+            and not recharge_without_switch(intent)
+        ):
             intent = BatteryIntent()
         planned = {car.key: 0 for car in cars if slot.start < car.departure_at}
         powers = {key: round(w) for key, w in slot.ev_w.items() if key not in expected}

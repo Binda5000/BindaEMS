@@ -1,7 +1,13 @@
 import type { LineSeriesOption } from 'echarts/charts';
 import { expect, it, vi } from 'vitest';
 import type { Palette } from '$lib/charts/palette';
-import { intentEndingAt, planPriceOption, planSocOption, planVehiclesOption } from './chart';
+import {
+	chargeLegendName,
+	intentEndingAt,
+	planPriceOption,
+	planSocOption,
+	planVehiclesOption
+} from './chart';
 import { slotEndSocPoints } from '$lib/charts/options';
 import { formatTime } from '$lib/format';
 import { NOW, PLAN, planWithWindows } from '$lib/testing/plan';
@@ -70,6 +76,26 @@ it('plots the planned SOC at the end of each slot with the reserve line', () => 
 	expect(soc[0]).toEqual([Date.parse(PLAN.slots[0].start) + 900_000, PLAN.slots[0].soc_pct]);
 	const reserve = series[1].data as Data;
 	expect(reserve.every(([, value]) => value === PLAN.reserve_pct)).toBe(true);
+});
+
+it('hebt die Reserve-Linie im Fenster der Unwetter-Reserve auf die Untergrenze', () => {
+	// Slots 4 bis 7 liegen im Fenster: Untergrenze 40 %, sonst die Reserve des Plans
+	const slots = PLAN.slots.map((s, index) =>
+		index >= 4 && index < 8 ? { ...s, storm_reserve_pct: 40 } : s
+	);
+	const plan = { ...PLAN, slots };
+	const series = (planSocOption(plan, NOW, palette) as { series: LineSeriesOption[] }).series;
+	expect(series[1].name).toBe('Reserve');
+	expect(series[1].step).toBe('end');
+	const reserve = series[1].data as Data;
+	// ein Punkt je Slot und einer am Ende des letzten
+	expect(reserve).toHaveLength(slots.length + 1);
+	expect(reserve.map(([, value]) => value)).toEqual([
+		...slots.map((_, index) => (index >= 4 && index < 8 ? 40 : PLAN.reserve_pct)),
+		PLAN.reserve_pct
+	]);
+	expect(reserve[4]![0]).toBe(Date.parse(slots[4]!.start));
+	expect(reserve.at(-1)![0]).toBe(Date.parse(slots.at(-1)!.start) + 900_000);
 });
 
 it('shows no windows when the plan only covers own consumption', () => {
@@ -265,6 +291,27 @@ it('nennt in der Legende nur Absichten, die der Plan hat', () => {
 	expect(none.legend.data).toEqual(['Geplanter SOC', 'Reserve']);
 });
 
+it('nennt die Netzladen-Fläche „Nachladen“, wenn der Plan nur auf die Reserve nachlädt', () => {
+	const charging = planWithWindows().slots.filter((s) => s.intent === 'NETZLADEN');
+	expect(charging.length).toBeGreaterThan(1);
+	const only = planWithWindows().slots.map((s) =>
+		s.intent === 'NETZLADEN' ? { ...s, reserve_recharge: true } : s
+	);
+	const option = planSocOption({ ...PLAN, slots: only }, NOW, palette) as SocOption;
+	expect(option.legend.data).toContainEqual({ name: 'Nachladen', icon: 'rect' });
+	expect(option.series.map((s) => s.name)).not.toContain('Netzladen');
+	const nachladen = option.series.find((s) => s.name === 'Nachladen');
+	expect(nachladen?.markArea?.data).toHaveLength(1);
+	// gemischt: beide Namen an einem Chip
+	const first = charging[0]!.start;
+	const mixed = planWithWindows().slots.map((s) =>
+		s.intent === 'NETZLADEN' && s.start === first ? { ...s, reserve_recharge: true } : s
+	);
+	const both = planSocOption({ ...PLAN, slots: mixed }, NOW, palette) as SocOption;
+	expect(both.legend.data).toContainEqual({ name: 'Netzladen und Nachladen', icon: 'rect' });
+	expect(chargeLegendName(planWithWindows().slots)).toBe('Netzladen');
+});
+
 it('intentEndingAt nennt die Absicht des Slots, der an der Zeit endet, mit seiner Zeitspanne', () => {
 	const base = PLAN.slots[0]!;
 	const start = Date.parse(base.start);
@@ -281,6 +328,11 @@ it('intentEndingAt nennt die Absicht des Slots, der an der Zeit endet, mit seine
 	expect(intentEndingAt(slots, start)).toBeNull();
 	expect(intentEndingAt(slots, start + 300_000)).toBeNull();
 	expect(intentEndingAt(slots, start + 2_700_000)).toBeNull();
+	// ein Nachladen auf die Reserve heißt „Nachladen“
+	const recharge = [
+		{ ...base, intent: 'NETZLADEN' as const, grid_charge_w: 3000, reserve_recharge: true }
+	];
+	expect(intentEndingAt(recharge, start + 900_000)?.label).toBe('Nachladen 3 kW');
 });
 
 it('zeigt im Tooltip die Absicht des Slots, dessen Ergebnis der SOC-Punkt ist, mit Zeitspanne', () => {

@@ -17,7 +17,7 @@ import {
 import type { Palette } from '$lib/charts/palette';
 import { NBSP, expectedLabel, formatCt, formatNumber, formatTime } from '$lib/format';
 import { parseIso } from '$lib/time';
-import { INTENT_LABELS, intentLabel } from './model';
+import { INTENT_LABELS, RESERVE_RECHARGE_LABEL, intentLabel } from './model';
 
 type Point = [number, number | null];
 
@@ -164,9 +164,40 @@ export function intentEndingAt(
 		? {
 				from: new Date(epoch(slot.start)).toISOString(),
 				to: new Date(time).toISOString(),
-				label: intentLabel(slot.intent, slot.grid_charge_w)
+				label: intentLabel(slot.intent, slot.grid_charge_w, slot.reserve_recharge)
 			}
 		: null;
+}
+
+/**
+ * Name des Chips der Netzladen-Fläche: „Nachladen“, wenn der Plan nur auf die Reserve nachlädt
+ * (`reserve_recharge`), „Netzladen und Nachladen“, wenn er beides hat, sonst „Netzladen“.
+ */
+export function chargeLegendName(slots: PlanSlot[]): string {
+	const charging = slots.filter((slot) => slot.intent === 'NETZLADEN');
+	const recharging = charging.filter((slot) => slot.reserve_recharge).length;
+	if (recharging === 0) return INTENT_LABELS.NETZLADEN;
+	if (recharging === charging.length) return RESERVE_RECHARGE_LABEL;
+	return `${INTENT_LABELS.NETZLADEN} und ${RESERVE_RECHARGE_LABEL}`;
+}
+
+/**
+ * Die Reserve-Linie: ohne Unwetter-Reserve eine Gerade auf `reserve_pct`; mit ihr Stufen, die im
+ * Fenster einer Warnung auf die Untergrenze des Slots steigen (`storm_reserve_pct`).
+ */
+function reserveLine(plan: Plan, from: number, to: number): Partial<LineSeriesOption> {
+	if (!plan.slots.some((slot) => slot.storm_reserve_pct !== null)) {
+		return {
+			data: [
+				[from, plan.reserve_pct],
+				[to, plan.reserve_pct]
+			] as Point[]
+		};
+	}
+	return {
+		step: 'end',
+		data: steps(plan.slots, (slot) => slot.storm_reserve_pct ?? plan.reserve_pct)
+	};
 }
 
 export function planSocOption(plan: Plan, nowIso: string, palette: Palette): EChartsCoreOption {
@@ -208,10 +239,7 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 			yAxisIndex: 0,
 			showSymbol: false,
 			silent: true,
-			data: [
-				[from, plan.reserve_pct],
-				[to, plan.reserve_pct]
-			] as Point[],
+			...reserveLine(plan, from, to),
 			lineStyle: { color: palette.muted, type: 'dashed' },
 			itemStyle: { color: palette.muted }
 		}
@@ -220,9 +248,9 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 	// hängen an der Reihe ihres Chips, ein Tipp blendet sie also mit aus
 	for (const intent of ['NETZLADEN', 'HALTEN'] as const) {
 		if (!plan.slots.some((slot) => slot.intent === intent)) continue;
-		const name = INTENT_LABELS[intent];
+		const name = intent === 'NETZLADEN' ? chargeLegendName(plan.slots) : INTENT_LABELS[intent];
 		series.push({
-			id: `legend_${name.toLowerCase()}`,
+			id: `legend_${intent.toLowerCase()}`,
 			name,
 			type: 'line',
 			data: [],
@@ -236,7 +264,7 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 	const format = axisTooltip({
 		'Geplanter SOC': socFormat,
 		Reserve: socFormat,
-		Netzladen: null,
+		[chargeLegendName(plan.slots)]: null,
 		Halten: null
 	});
 	return {

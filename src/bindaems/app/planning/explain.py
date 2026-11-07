@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from bindaems.app.planning.battery_model import SimStep, params_of
+from bindaems.app.planning.battery_model import SimStep, params_of, reserve_kwh
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
@@ -28,7 +28,16 @@ from bindaems.app.planning.plausibility import (
 )
 from bindaems.app.planning.thermal_shift import STEP_K
 from bindaems.app.planning.vehicles import EV_ON_W, KWH_EPS, charge_window
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, PlanVehicle, Reason
+from bindaems.app.storm.windows import warning_at
+from bindaems.shared.plan import (
+    STORM_KIND_LABELS,
+    STORM_LEVEL_LABELS,
+    BatteryIntent,
+    BatteryIntentKind,
+    PlanSlot,
+    PlanVehicle,
+    Reason,
+)
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
 Params = Mapping[str, float | str]
@@ -78,6 +87,13 @@ def _klima_weniger(params: Params) -> str:
 
 
 _SENTENCES: dict[str, Callable[[Params], str]] = {
+    "NACHLADEN_RESERVE": lambda _: (
+        "Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt."
+    ),
+    "UNWETTER_RESERVE": lambda p: (
+        f"Unwetter-Reserve: {_txt(p, 'art')} ({_txt(p, 'stufe')}) bis {_txt(p, 'bis')} Uhr, "
+        f"der Akku hält mindestens {_de(_num(p, 'soc'), 0)} %."
+    ),
     "NETZLADEN_GUENSTIG": lambda p: (
         f"Akku lädt {_de(_num(p, 'kw'), 1)} kW aus dem Netz: jetzt {_de(_num(p, 'ct'), 1)} ct, "
         f"um {_txt(p, 'um')} Uhr {_de(_num(p, 'ct_spaeter'), 1)} ct."
@@ -248,15 +264,22 @@ def _main_reason(
     """Hauptcode des Slots ``index``; die erste passende Regel gilt, in dieser Reihenfolge
     (wie die Tabelle in docs/betrieb.md, „Planung“):
 
-    1. ``NETZLADEN_GUENSTIG`` bei Absicht ``NETZLADEN``; „um“ ist die erste spätere Entladung, für
+    1. ``NACHLADEN_RESERVE`` bei ``NETZLADEN`` mit ``reserve_recharge`` (Plan Netzgrenze je Phase,
+       Entscheidung 9); ``kw`` ist die Leistung, der Satz nennt sie nicht. Das gilt auch für das
+       Aufladen für die Unwetter-Reserve.
+    2. ``UNWETTER_RESERVE`` in einem Slot mit Untergrenze (``storm_floor_pct``, Plan
+       Unwetter-Reserve, Entscheidung 12): ``art`` und ``stufe`` der Warnung (``warning_at``),
+       ``bis`` ihr Ende (lokal), ``soc`` die Untergrenze in %. Ohne passende Warnung gelten die
+       übrigen Regeln.
+    3. ``NETZLADEN_GUENSTIG`` bei Absicht ``NETZLADEN``; „um“ ist die erste spätere Entladung, für
        die sich das Laden auszahlt (``_first_paying_discharge``), sonst der teuerste spätere Slot.
-    2. ``HALTEN_FUER_SPITZE``, ``BUDGET_SPITZE`` oder ``HALTEN_RESTWERT`` bei Absicht ``HALTEN``.
-    3. ``PV_LADEN``, wenn der Akku mindestens ``MENTION_W`` aus PV lädt.
-    4. ``REGEL_R_BLOCKIERT_NETZLADEN`` bzw. ``NETZLADEN_AUS``, wenn sich Netzladen lohnen würde.
-    5. ``PV_UEBERSCHUSS_ERWARTET``, wenn der Akku entlädt und später die PV ihn lädt.
-    6. ``AKKU_AN_UNTERGRENZE``, wenn der Akku an der Untergrenze steht und das Haus aus dem Netz
+    4. ``HALTEN_FUER_SPITZE``, ``BUDGET_SPITZE`` oder ``HALTEN_RESTWERT`` bei Absicht ``HALTEN``.
+    5. ``PV_LADEN``, wenn der Akku mindestens ``MENTION_W`` aus PV lädt.
+    6. ``REGEL_R_BLOCKIERT_NETZLADEN`` bzw. ``NETZLADEN_AUS``, wenn sich Netzladen lohnen würde.
+    7. ``PV_UEBERSCHUSS_ERWARTET``, wenn der Akku entlädt und später die PV ihn lädt.
+    8. ``AKKU_AN_UNTERGRENZE``, wenn der Akku an der Untergrenze steht und das Haus aus dem Netz
        bezieht (``_at_floor``); ``soc`` ist ``lo_kwh`` in % der Kapazität.
-    7. ``EIGENVERBRAUCH`` sonst.
+    9. ``EIGENVERBRAUCH`` sonst.
     """
     slots = inputs.slots
     count = len(slots)
@@ -264,6 +287,24 @@ def _main_reason(
     now_ct = slots[index].import_ct
     intent = intents[index]
     item = steps[index]
+
+    if intent.reserve_recharge:
+        return Reason(code="NACHLADEN_RESERVE", params={"kw": intent.grid_charge_w / 1000})
+
+    floor_pct = slots[index].storm_floor_pct
+    warning = (
+        warning_at(slots[index].start, inputs.storm_warnings) if floor_pct is not None else None
+    )
+    if floor_pct is not None and warning is not None:
+        return Reason(
+            code="UNWETTER_RESERVE",
+            params={
+                "art": STORM_KIND_LABELS[warning.kind],
+                "stufe": STORM_LEVEL_LABELS[warning.level],
+                "bis": _hhmm(warning.end),
+                "soc": floor_pct,
+            },
+        )
 
     if intent.kind is BatteryIntentKind.NETZLADEN:
         hit = _first_paying_discharge(inputs, steps, index)
@@ -310,13 +351,13 @@ def _main_reason(
     hit = pays_off(inputs, steps, index, by="import")
     switch = inputs.planning.grid_charge_allowed
     if switch and hit is not None:
-        lo_kwh = params_of(inputs).lo_kwh
-        exported = export_while_charged_kwh(steps, index, lo_kwh)
+        empty_kwh = reserve_kwh(inputs)  # Leer-Grenze von Regel R1 (Entscheidung 9)
+        exported = export_while_charged_kwh(steps, index, empty_kwh)
         if exported > R1_TOL_KWH:
             # Beginn des ersten Slots mit Einspeisung, solange der Akku noch geladen ist
             first = next(
                 later
-                for later in range(index, charged_window_end(steps, index, lo_kwh))
+                for later in range(index, charged_window_end(steps, index, empty_kwh))
                 if steps[later].export_w > 0
             )
             return Reason(

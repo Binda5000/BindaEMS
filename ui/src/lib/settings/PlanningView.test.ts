@@ -29,3 +29,36 @@ it('zeigt Akku ins Auto, wenn übrig, als ja oder nein', () => {
 	render(PlanningView, { planning: { ...planning, car_battery_allowed: true } });
 	expect(screen.getByText('Akku ins Auto, wenn übrig').nextElementSibling).toHaveTextContent('ja');
 });
+
+it('zeigt den gedachten Satz für die Monatsspitze, bei 0 „aus“', () => {
+	const planning = settingsCurrent().settings.planning;
+	const label = 'Spitze vermeiden ohne Leistungspreis';
+	const { unmount } = render(PlanningView, { planning });
+	expect(screen.getByText(label).nextElementSibling).toHaveTextContent('100 ct je kW und Monat');
+	unmount();
+	render(PlanningView, { planning: { ...planning, peak_soft_ct_per_kw: 0 } });
+	expect(screen.getByText(label).nextElementSibling).toHaveTextContent('aus');
+});
+
+it('zeigt die Unwetter-Reserve: aus, Ziel, Stufe und Warnarten', () => {
+	const planning = settingsCurrent().settings.planning;
+	const { unmount } = render(PlanningView, { planning });
+	expect(screen.getByRole('heading', { name: 'Unwetter-Reserve' })).toBeInTheDocument();
+	const value = (label: string) => screen.getByText(label).nextElementSibling;
+	expect(value('Eingeschaltet')).toHaveTextContent('nein');
+	expect(value('Ziel-SOC')).toHaveTextContent('40 %');
+	expect(value('Warnstufe')).toHaveTextContent('ab orange');
+	expect(value('Warnarten')).toHaveTextContent('Sturm, Gewitter');
+	unmount();
+	const storm = {
+		enabled: true,
+		target_soc_pct: 55,
+		min_level: 3 as const,
+		kinds: ['kaelte' as const]
+	};
+	render(PlanningView, { planning: { ...planning, storm } });
+	expect(value('Eingeschaltet')).toHaveTextContent('ja');
+	expect(value('Ziel-SOC')).toHaveTextContent('55 %');
+	expect(value('Warnstufe')).toHaveTextContent('nur rot');
+	expect(value('Warnarten')).toHaveTextContent('Kälte');
+});

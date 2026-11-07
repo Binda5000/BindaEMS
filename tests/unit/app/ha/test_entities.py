@@ -13,9 +13,11 @@ from tests.plan_helpers import (
     at,
     planned_car,
     sample_plan,
+    sample_slot,
     scenario,
 )
 
+from bindaems.app.charging.estimate import ESTIMATED_MODES, estimate_charge
 from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.ha.entities import (
     UNKNOWN,
@@ -30,6 +32,7 @@ from bindaems.app.ha.entities import (
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.builder import build_plan
+from bindaems.app.planning.vehicles import full_power_w
 from bindaems.app.prices.service import PriceService
 from bindaems.app.stats.service import TodayStats
 from bindaems.shared.config import Config, ha_object_id
@@ -65,6 +68,7 @@ def test_entities_from_config(cfg) -> None:
         "battery_plan_next",
         "planned_soc",
         "budget",
+        "storm_reserve",
         "grid_power",
         "pv_power",
         "battery_power",
@@ -92,6 +96,7 @@ def test_entities_from_config(cfg) -> None:
         "tesla_boost_stop",
         "tesla_wallbox",
         "tesla_charge_energy",
+        "tesla_charge_estimate",
         "tesla_target_soc",
         "tesla_now_max_a",
         "tesla_departure",
@@ -107,6 +112,7 @@ def test_entities_from_config(cfg) -> None:
         "egolf_boost_stop",
         "egolf_wallbox",
         "egolf_charge_energy",
+        "egolf_charge_estimate",
         "egolf_target_soc",
         "egolf_now_max_a",
         "egolf_departure",
@@ -1682,3 +1688,204 @@ def test_build_inputs_takes_the_thermal_plan_setting(
         live, price_service, store, forecast_service, T_APP, thermal_plan_enabled=True
     )
     assert inputs.thermal_plan_enabled is True
+
+
+def test_storm_sensor(cfg) -> None:
+    until = datetime(2026, 7, 1, 14, 0, tzinfo=UTC)
+    inputs = sample_inputs(storm_floor_pct=40.0, storm_until=until, storm_text="Gewitter")
+    spec = entity(cfg, "storm_reserve")
+    assert spec.value(inputs) == "40"
+    assert spec.attributes(inputs) == {"bis": "2026-07-01T16:00:00+02:00", "warnung": "Gewitter"}
+    assert config_of(cfg, "storm_reserve")["name"] == "Unwetter-Reserve"
+    assert config_of(cfg, "storm_reserve")["unit_of_measurement"] == "%"
+    quiet = sample_inputs()
+    assert spec.value(quiet) == "0"
+    assert spec.attributes(quiet) == {"bis": None, "warnung": None}
+
+
+# --- Ladeschätzung je Fahrzeug -----------------------------------------------------------------
+
+ESTIMATE_MODES = ("planned", "now", "pv", "min_pv")
+
+
+def _estimate_plan() -> Any:
+    prices = (30.0, 10.0, 20.0, 40.0)
+    slots = [
+        sample_slot(f"08:{minute:02d}", price_ct=ct, day="2026-10-09")
+        for minute, ct in zip((0, 15, 30, 45), prices, strict=True)
+    ]
+    return sample_plan(T_APP.isoformat(), ["08:00"]).model_copy(update={"slots": slots})
+
+
+def _estimate_inputs(**changes: Any) -> HaInputs:
+    # 10:00 Ortszeit, Abfahrt 11:00; Tesla steckt an der EVCS, Ladestand 40 % gemessen
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(departure="11:00")})
+    health = _health_car() | {"soc_source": "measured"}
+    values: dict[str, Any] = {
+        "intent": intent,
+        "intent_version": 3,
+        "now": T_APP,
+        "plan": _estimate_plan(),
+        "vehicles": [health],
+    }
+    return sample_inputs(**(values | changes))
+
+
+def _expected(cfg: Config, **changes: Any) -> Any:
+    vehicle, wallbox = cfg.vehicles["tesla"], cfg.wallboxes["evcs"]
+    volt = cfg.grid.voltage_nominal_v
+    max_w = full_power_w(vehicle, wallbox, volt)
+    args: dict[str, Any] = {
+        "key": "tesla",
+        "now": T_APP,
+        "soc_pct": 40.0,
+        "target_soc_pct": 80.0,
+        "limit_soc_pct": None,
+        "departure_at": T_APP + timedelta(hours=1),
+        "usable_kwh": vehicle.usable_kwh,
+        "efficiency": vehicle.charge_efficiency_pct / 100,
+        "min_w": vehicle.min_a * volt * vehicle.phases,
+        "max_w": max_w,
+        "now_w": max_w,
+        "power_cost_eur": None,
+    }
+    return estimate_charge(_estimate_plan().slots, **(args | changes))
+
+
+def test_charge_estimate_entity_discovery(cfg) -> None:
+    config = config_of(cfg, "tesla_charge_estimate")
+    assert config["name"] == "Ladeschätzung"
+    assert (config["unit_of_measurement"], config["device_class"]) == ("EUR", "monetary")
+    assert config["json_attributes_topic"] == "bindaems/state/tesla_charge_estimate/attributes"
+    assert config["device"]["name"] == "BindaEMS Tesla Model 3"
+
+
+def test_charge_estimate_state_is_planned_cost(cfg) -> None:
+    inputs = _estimate_inputs()
+    expected = _expected(cfg)
+    cost = expected.modes[ChargeMode.PLANNED].cost_eur
+    assert cost > 0
+    assert state(cfg, "tesla_charge_estimate", inputs) == f"{cost:.2f}"
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(inputs)
+    assert attrs["soc_pct"] == 40.0 and attrs["target_soc_pct"] == 80.0
+    assert attrs["departure_at"] == local(T_APP + timedelta(hours=1))
+    assert attrs["until"] == local(expected.until)
+    assert attrs["need_kwh"] == round(expected.need_kwh, 1)
+    assert attrs["price_estimated"] is False
+    for name, mode in zip(ESTIMATE_MODES, ESTIMATED_MODES, strict=True):
+        got = attrs[name]
+        want = expected.modes[mode]
+        assert got["energy_kwh"] == want.energy_kwh and got["cost_eur"] == want.cost_eur
+        assert got["soc_pct"] == want.soc_pct and got["reachable"] is want.reachable
+        assert got["target_soc_pct"] == want.target_soc_pct
+        finish = None if want.finish_at is None else local(want.finish_at)
+        assert got["finish_at"] == finish
+    assert "power_cost_eur" in attrs["now"] and "power_cost_eur" not in attrs["planned"]
+
+
+def test_estimate_unknown_without_measured_soc(cfg) -> None:
+    health = _health_car() | {"soc_source": "assumed"}
+    inputs = _estimate_inputs(vehicles=[health])
+    assert state(cfg, "tesla_charge_estimate", inputs) == "None"
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(inputs)
+    assert attrs["planned"] is None and attrs["soc_pct"] is None and attrs["until"] is None
+    estimated = _estimate_inputs(vehicles=[_health_car() | {"soc_source": "estimated"}])
+    assert state(cfg, "tesla_charge_estimate", estimated) != "None"
+
+
+def test_estimate_unknown_when_unplugged_or_no_plan(cfg) -> None:
+    unplugged = _estimate_inputs(vehicles=[_health_car() | {"plugged": False}])
+    assert state(cfg, "tesla_charge_estimate", unplugged) == "None"
+    assert state(cfg, "tesla_charge_estimate", _estimate_inputs(plan=None)) == "None"
+    assert state(cfg, "tesla_charge_estimate", _estimate_inputs(now=None)) == "None"
+    assert state(cfg, "tesla_charge_estimate", _estimate_inputs(vehicles=[])) == "None"
+    no_wallbox = _estimate_inputs(vehicles=[_health_car() | {"wallbox": None}])
+    assert state(cfg, "tesla_charge_estimate", no_wallbox) == "None"
+
+
+def test_estimate_uses_charge_limit(cfg) -> None:
+    intent = Intent(
+        version=3, vehicles={"tesla": VehicleIntent(target_soc_pct=90, departure="11:00")}
+    )
+    health = _health_car() | {"charge_limit_pct": 80}
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(
+        _estimate_inputs(intent=intent, vehicles=[health])
+    )
+    assert attrs["target_soc_pct"] == 80
+    assert attrs["planned"]["target_soc_pct"] == 80 and attrs["now"]["target_soc_pct"] == 80
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(_estimate_inputs(intent=intent))
+    assert attrs["target_soc_pct"] == 90
+    # ohne bekanntes Ladelimit laden die Modi außer „Geplant“ bis voll
+    assert attrs["planned"]["target_soc_pct"] == 90
+    for name in ("now", "pv", "min_pv"):
+        assert attrs[name]["target_soc_pct"] == 100
+
+
+def test_estimate_other_modes_stop_at_car_limit(cfg) -> None:
+    # Ladelimit 90, Ziel 80: „Sofort“ lädt bis 90, „Geplant“ bis 80
+    health = _health_car() | {"soc_pct": 75.0, "charge_limit_pct": 90}
+    inputs = _estimate_inputs(vehicles=[health])
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(inputs)
+    expected = _expected(cfg, soc_pct=75.0, limit_soc_pct=90.0)
+    assert attrs["target_soc_pct"] == 80
+    assert attrs["planned"]["target_soc_pct"] == 80 and attrs["now"]["target_soc_pct"] == 90
+    assert attrs["now"]["energy_kwh"] == expected.modes[ChargeMode.NOW].energy_kwh
+    assert attrs["now"]["energy_kwh"] > attrs["planned"]["energy_kwh"] > 0
+
+
+def test_estimate_synced_limit_keeps_target(cfg) -> None:
+    # Mit Abgleich des Ladelimits stellt BindaEMS das Limit selbst: „Geplant“ nimmt das Ziel der
+    # Absicht wie der core (effective_target), auch über einem Limit von 70
+    vehicle = cfg.vehicles["tesla"].model_copy(update={"charge_limit_sync": True})
+    synced = cfg.model_copy(update={"vehicles": {**cfg.vehicles, "tesla": vehicle}})
+    health = _health_car() | {"charge_limit_pct": 70}
+    attrs = entity(synced, "tesla_charge_estimate").attributes(_estimate_inputs(vehicles=[health]))
+    assert attrs["target_soc_pct"] == 80 and attrs["planned"]["target_soc_pct"] == 80
+    assert attrs["now"]["target_soc_pct"] == 70
+
+
+def test_estimate_attributes_stable_while_idle(cfg) -> None:
+    # Zwei Läufe 5 s auseinander, am Laden ändert sich nichts: dieselben Attribute, sonst
+    # schriebe jeder Publish (alle 5 s) eine neue Zeile in den Recorder
+    health = _health_car() | {"soc_pct": 78.04}
+    spec = entity(cfg, "tesla_charge_estimate")
+    first = spec.attributes(_estimate_inputs(vehicles=[health], now=T_APP + timedelta(seconds=20)))
+    second = spec.attributes(_estimate_inputs(vehicles=[health], now=T_APP + timedelta(seconds=25)))
+    assert first["now"]["finish_at"] is not None
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert first["soc_pct"] == 78.0
+    finish = datetime.fromisoformat(first["now"]["finish_at"])
+    assert (finish.second, finish.microsecond) == (0, 0)
+
+
+def test_estimate_departure_is_next(cfg) -> None:
+    # 10:00 Ortszeit, Abfahrt 07:00: die von morgen
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(departure="07:00")})
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(_estimate_inputs(intent=intent))
+    tomorrow = datetime(2026, 10, 10, 7, 0, tzinfo=LOCAL_TZ)
+    assert attrs["departure_at"] == tomorrow.isoformat()
+    # ohne Absicht für das Auto gilt der Standard 07:00
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(
+        _estimate_inputs(intent=Intent(version=3))
+    )
+    assert attrs["departure_at"] == tomorrow.isoformat()
+
+
+def test_estimate_now_respects_now_limit(cfg) -> None:
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(departure="11:00", now_max_a=10)})
+    attrs = entity(cfg, "tesla_charge_estimate").attributes(_estimate_inputs(intent=intent))
+    per_slot = 10 * 230 * 3 * 0.25 / 1000
+    assert attrs["now"]["energy_kwh"] == pytest.approx(round(4 * per_slot, 1))
+    # ein Limit über der vollen Leistung begrenzt nicht
+    high = Intent(version=3, vehicles={"tesla": VehicleIntent(departure="11:00", now_max_a=32)})
+    got = entity(cfg, "tesla_charge_estimate").attributes(_estimate_inputs(intent=high))
+    assert got["now"]["energy_kwh"] == _expected(cfg).modes[ChargeMode.NOW].energy_kwh
+
+
+def test_estimate_now_power_cost(cfg) -> None:
+    spec = entity(cfg, "tesla_charge_estimate")
+    assert (
+        spec.attributes(_estimate_inputs(boost_cost_eur={"tesla": 1.5}))["now"]["power_cost_eur"]
+        == 1.5
+    )
+    assert spec.attributes(_estimate_inputs())["now"]["power_cost_eur"] is None

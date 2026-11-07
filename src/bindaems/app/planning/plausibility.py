@@ -15,6 +15,25 @@ Entladegrenze zählen den Akkuanteil ``bt_ev`` mit. Gibt der Akku einem Auto meh
 Akku sein können (Entscheidung 2, ``grid_in_battery``, auch aus einem Netzladen vor dem Horizont)
 und nichts eingespeist werden.
 
+Netzbezug je Phase (Plan Netzgrenze je Phase, Entscheidung 7): Ist ``grid_phase_import_w`` gesetzt,
+darf der Netzbezug auf keiner Phase ``R_t + BALANCE_TOL_W`` übersteigen. Gezählt wird nur der
+Netzanteil: Haus und Netzladen je ein Drittel, jedes Auto mit seinem Netzanteil ``gr_ev`` zu den
+Anteilen seiner Phasen (``phase_shares``); PV und Akku ins Auto zählen nicht.
+
+Nachladen auf die Reserve (Plan Netzgrenze je Phase, Entscheidung 9): ``gr_r`` zählt in Ladung und
+Phasengrenze wie ``gr_b``. Ein ``NETZLADEN`` mit ``reserve_recharge`` bis ``RESERVE_RECHARGE_MAX_W``
+gilt auch bei ausgeschaltetem Schalter und muss sich nicht rechnen. Regel R1 und
+``grid_in_battery`` zählen den Akku als leer, sobald er höchstens an der Reserve steht
+(``reserve_kwh``), auch wenn der SOC zu Beginn darunter liegt.
+
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 6): ``gr_s`` zählt in Ladung und
+Phasengrenze wie ``gr_r``. Ein ``NETZLADEN`` mit ``reserve_recharge`` (Nachladen und Aufladen für
+die Unwetter-Reserve) setzt im Optimierer kein ``z_t``; Regel R1 prüft es deshalb nicht
+(``r1_applies``), sonst wäre jede Einspeisung nach dem Aufladen über die Reserve ein Befund.
+Entlädt die Nachrechnung in einem Slot mit Untergrenze (``SlotInput.storm_floor_pct``) mit
+mindestens ``HOLD_MIN_W`` und endet mehr als ``STORM_TOL_PCT`` Prozentpunkte darunter, ist das ein
+Befund (Entscheidung 10); ein Ziel, das der Akku nicht erreicht, ohne zu entladen, ist keiner.
+
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
@@ -26,7 +45,14 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final, Literal
 
-from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
+from bindaems.app.planning.battery_model import (
+    SLOT_H,
+    SimStep,
+    params_of,
+    reserve_kwh,
+    sim_slots,
+)
+from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, ev_battery_power_w
 from bindaems.app.planning.thermal_shift import STEP_K
@@ -37,6 +63,7 @@ from bindaems.shared.plan import (
     BatteryIntentKind,
     Plan,
     PlanSlot,
+    recharge_without_switch,
 )
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
@@ -49,8 +76,17 @@ EMPTY_TOL_KWH: Final = R1_TOL_KWH  # so nah an der Reserve gilt der Akku der Nac
 # jede Entladung über der Toleranz der Bilanz; der Optimierer kennt keine Mindestentladung).
 USED_ABOVE_W: Final = BALANCE_TOL_W
 MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss oder Netzbezug
+HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
+STORM_TOL_PCT: Final = 0.5  # so weit darf die Nachrechnung unter der Unwetter-Reserve enden
 
 PaysOffBy = Literal["discharge", "import"]
+
+
+def r1_applies(intent: BatteryIntent) -> bool:
+    """Regel R1 gilt für ``intent``: ``NETZLADEN`` ohne ``reserve_recharge``. Nachladen auf die
+    Reserve und Aufladen für die Unwetter-Reserve setzen im Optimierer kein ``z_t``; für sie
+    gilt sie nicht, Absichten und Plausibilität rechnen hiermit wie der Optimierer."""
+    return intent.kind is BatteryIntentKind.NETZLADEN and not intent.reserve_recharge
 
 
 def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> int:
@@ -100,7 +136,7 @@ def grid_in_battery_at_start(inputs: PlanInputs, previous: Plan | None, *, carri
     Abgeleitet aus dem vorigen Plan ``previous`` (dem zuletzt gespeicherten, an den der core sich
     gehalten hat) und dem SOC jetzt, weiter wie ``grid_in_battery``, „bis der Akku wieder leer ist“:
 
-    - Ist der Akku jetzt leer (SOC höchstens ``lo_kwh + EMPTY_TOL_KWH``, wie die Nachrechnung), ist
+    - Ist der Akku jetzt leer (SOC höchstens Reserve + ``EMPTY_TOL_KWH``, wie die Nachrechnung), ist
       keine Netzenergie darin.
     - Sonst ist sie darin, wenn der vorige Plan sie schon zu Beginn annahm (``carried``, sein
       ``grid_in_battery_at_start``) oder einer seiner ``NETZLADEN``-Slots begonnen hat, solange der
@@ -113,7 +149,7 @@ def grid_in_battery_at_start(inputs: PlanInputs, previous: Plan | None, *, carri
     """
     params = params_of(inputs)
     soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
-    if soc_kwh <= params.lo_kwh + EMPTY_TOL_KWH or previous is None:
+    if soc_kwh <= reserve_kwh(inputs) + EMPTY_TOL_KWH or previous is None:
         return False
     if carried:
         return True
@@ -201,10 +237,13 @@ def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -
 
     Das gilt mit einer späteren Entladung (``pays_off``) oder mit dem Restwert am Horizontende
     (``pays_off_at_end``); mit Leistungspreis immer, weil Netzladen dann auch einer Spitze
-    ausweichen darf. Plausibilität und Absichten rechnen beide hiermit.
+    ausweichen darf. Ein gedachter Monat ohne Leistungspreis (``PeakMonth.virtual``, Plan
+    Netzgrenze je Phase, Entscheidung 8) zählt hier nicht: Sein Satz steuert, ist aber kein Geld,
+    und Netzladen, das sich nicht rechnet, soll nicht bleiben, nur um ihm auszuweichen (Ruling zu
+    Task 5). Plausibilität und Absichten rechnen beide hiermit.
     """
     return (
-        bool(inputs.peak_months)
+        any(not entry.virtual for entry in inputs.peak_months)
         or pays_off(inputs, steps, index) is not None
         or pays_off_at_end(inputs, steps, index)
     )
@@ -240,10 +279,13 @@ def check_plan(
     sonst ``ValueError``.
     """
     params = params_of(inputs)
+    empty_kwh = reserve_kwh(inputs)  # Leer-Grenze von Regel R1 (Entscheidung 9)
     slots = sim_slots(inputs)
     from_battery = ev_battery_power_w(result) if ev_battery_w is None else list(ev_battery_w)
     if len(from_battery) != len(intents):
         raise ValueError("Akkuanteil der Autos muss zu den Absichten passen")
+    phase_limit_w = inputs.battery.grid_phase_import_w
+    car_shares = [(car, phase_shares(car.grid_phases)) for car in inputs.vehicles]
     found: dict[str, tuple[int, str]] = {}
 
     def report(kind: str, index: int, text: str) -> None:
@@ -259,7 +301,7 @@ def check_plan(
         load_w = flows.pv_h + flows.gr_h + flows.bt_h
         if abs(pv_w - inp.pv_w) > BALANCE_TOL_W or abs(load_w - inp.load_w) > BALANCE_TOL_W:
             report("balance", index, f"Bilanz verletzt um {at}")
-        charge_w = flows.pv_b + flows.gr_b
+        charge_w = flows.pv_b + flows.gr_b + flows.gr_r + flows.gr_s
         discharge_w = flows.bt_h + sum(flows.ev_battery.values())
         if (
             charge_w > slot.max_charge_w + BALANCE_TOL_W
@@ -269,6 +311,17 @@ def check_plan(
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(flows.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
+        if phase_limit_w is not None:
+            room_w = phase_room_w(phase_limit_w, inp.load_w, inp.pv_w) + BALANCE_TOL_W
+            for phase in PHASES:
+                phase_w = (flows.gr_h + flows.gr_b + flows.gr_r + flows.gr_s) / 3 + sum(
+                    shares[phase] * flows.ev[car.key][1]
+                    for car, shares in car_shares
+                    if car.key in flows.ev and phase in shares
+                )
+                if phase_w > room_w:
+                    report("phase", index, f"Netzbezug über dem Importlimit auf {phase} um {at}")
+                    break
 
     for car in inputs.vehicles:
         window = charge_window(car, inputs.slots)
@@ -294,22 +347,29 @@ def check_plan(
                     f"Auto {car.name} lädt außerhalb seiner Grenzen um {at}",
                 )
 
-    for index, (item, slot) in enumerate(zip(steps, slots, strict=True)):
+    for index, (item, slot, inp) in enumerate(zip(steps, slots, inputs.slots, strict=True)):
         at = _local_time(inputs, index)
         if item.charge_pv_w + item.charge_grid_w > slot.max_charge_w + BALANCE_TOL_W:
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(item.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
+        floor_pct = inp.storm_floor_pct
+        if (
+            floor_pct is not None
+            and item.discharge_w >= HOLD_MIN_W
+            and item.soc_end_kwh < (floor_pct - STORM_TOL_PCT) / 100 * params.capacity_kwh
+        ):
+            report("storm", index, f"Akku entlädt um {at} unter die Unwetter-Reserve")
 
     switch = inputs.planning.grid_charge_allowed
     for index, intent in enumerate(intents):
         if intent.kind is not BatteryIntentKind.NETZLADEN:
             continue
         at = _local_time(inputs, index)
-        if not switch:
+        if not switch and not recharge_without_switch(intent):
             report("switch", index, f"Netzladen um {at}, obwohl ausgeschaltet")
-        while_charged_kwh = export_while_charged_kwh(steps, index, params.lo_kwh)
-        if while_charged_kwh > R1_TOL_KWH:
+        while_charged_kwh = export_while_charged_kwh(steps, index, empty_kwh)
+        if r1_applies(intent) and while_charged_kwh > R1_TOL_KWH:
             exported = _kwh_text(while_charged_kwh)
             report(
                 "r1",
@@ -317,12 +377,12 @@ def check_plan(
                 f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung, "
                 "bevor der Akku leer ist",
             )
-        if not grid_charge_pays(inputs, steps, index):
+        if not intent.reserve_recharge and not grid_charge_pays(inputs, steps, index):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
 
     car_switch = inputs.planning.car_battery_allowed
     grid_inside = grid_in_battery(
-        intents, steps, params.lo_kwh, at_start=inputs.grid_in_battery_at_start
+        intents, steps, empty_kwh, at_start=inputs.grid_in_battery_at_start
     )
     for index, (flows, item, intent) in enumerate(zip(result.flows, steps, intents, strict=True)):
         if sum(from_battery[index].values()) <= BALANCE_TOL_W:

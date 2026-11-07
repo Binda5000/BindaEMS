@@ -28,6 +28,7 @@ from bindaems.app.planning.battery_model import params_of, sim_slots
 from bindaems.app.planning.inputs import (
     END_WINDOW,
     MAX_SLOTS,
+    PeakMonth,
     PlanInputs,
     PlanningUnavailable,
     end_value_ct,
@@ -35,7 +36,8 @@ from bindaems.app.planning.inputs import (
     peak_months,
 )
 from bindaems.app.planning.store import PlanStore
-from bindaems.shared.settings import PlanningSettings, TariffSettings
+from bindaems.shared.plan import StormWarning
+from bindaems.shared.settings import PlanningSettings, StormSettings, TariffSettings
 from bindaems.shared.timeutil import SLOT
 
 
@@ -196,6 +198,52 @@ def test_peak_months_skip_months_without_power_price():
 
 def test_missing_power_rate_has_no_peak_months():
     assert peak_months([at("2027-03-01T10:00:00+00:00")], TariffSettings(), 5.0) == []
+
+
+def test_soft_rate_gives_a_virtual_month_without_power_price():
+    # Plan Netzgrenze je Phase, Entscheidung 8: ohne Leistungspreis mit Satz ein gedachter Monat
+    starts = [at("2026-11-10T10:00:00+00:00"), at("2026-11-10T10:15:00+00:00")]
+    assert peak_months(starts, TariffSettings(), 9.2, soft_ct_per_kw=100.0) == [
+        PeakMonth(
+            month="2026-11",
+            virtual=True,
+            peak0_kw=9.2,
+            tier_kw=0,
+            below_ct_per_kw=0,
+            above_ct_per_kw=100,
+        )
+    ]
+    assert peak_months(starts, TariffSettings(), 9.2, soft_ct_per_kw=0.0) == []
+    assert peak_months(starts, TariffSettings(), 9.2) == []
+
+
+def test_soft_rate_starts_later_virtual_months_at_zero():
+    starts = [at("2026-11-30T22:45:00+00:00"), at("2026-11-30T23:00:00+00:00")]
+    months = peak_months(starts, TariffSettings(), 9.2, soft_ct_per_kw=100.0)
+    assert [(m.month, m.peak0_kw, m.virtual) for m in months] == [
+        ("2026-11", 9.2, True),
+        ("2026-12", 0.0, True),
+    ]
+
+
+def test_real_power_price_wins_over_the_soft_rate():
+    tariff = with_power_price(value_eur=30.0, above_eur=60.0, valid_from="2027-01-01")
+    starts = [at("2027-01-10T10:00:00+00:00")]
+    [real] = peak_months(starts, tariff, 3.4, soft_ct_per_kw=100.0)
+    assert (real.month, real.virtual, real.peak0_kw, real.tier_kw) == ("2027-01", False, 3.4, 10.0)
+    assert real.above_ct_per_kw == pytest.approx(600.0)
+    # Jahreswechsel: Dezember gedacht, Januar echt
+    starts = [at("2026-12-31T22:45:00+00:00"), at("2026-12-31T23:00:00+00:00")]
+    months = peak_months(starts, tariff, 3.4, soft_ct_per_kw=100.0)
+    assert [(m.month, m.virtual) for m in months] == [("2026-12", True), ("2027-01", False)]
+
+
+def test_inputs_carry_the_virtual_month_of_the_soft_rate():
+    inputs = assemble(month_peak_kw=4.0)
+    assert [(m.month, m.peak0_kw, m.virtual, m.above_ct_per_kw) for m in inputs.peak_months] == [
+        ("2026-10", 4.0, True, 100.0)
+    ]
+    assert assemble(planning=PlanningSettings(peak_soft_ct_per_kw=0.0)).peak_months == []
 
 
 def test_inputs_carry_peak_months():
@@ -392,3 +440,89 @@ def test_old_inputs_load_without_grid_energy_at_start(store: PlanStore, engine: 
     assert inputs == sample_inputs()
     carried = sample_inputs().model_copy(update={"grid_in_battery_at_start": True})
     assert PlanInputs.model_validate_json(carried.model_dump_json()) == carried
+
+
+def test_old_inputs_load_without_virtual_months(store: PlanStore, engine: Engine) -> None:
+    # Entscheidung 8: Eingangsdaten vor dem gedachten Satz laden mit echten Monaten und Satz 100
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    assert data["peak_months"] and all(m.pop("virtual") is False for m in data["peak_months"])
+    assert data["planning"].pop("peak_soft_ct_per_kw") == 100.0
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs is not None and not any(m.virtual for m in inputs.peak_months)
+    assert inputs == sample_inputs()
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Task 4)
+
+_THUNDER = StormWarning(
+    warn_id=7,
+    version=1,
+    kind="gewitter",
+    level=2,
+    begin=at("2026-10-16T12:00:00+00:00"),  # 14:00 Ortszeit
+    end=at("2026-10-16T14:00:00+00:00"),
+    text="Gewitter",
+)
+_YELLOW = _THUNDER.model_copy(update={"warn_id": 8, "level": 1})
+
+
+def _storm_planning(*, enabled: bool) -> PlanningSettings:
+    return PlanningSettings(storm=StormSettings(enabled=enabled))
+
+
+def test_assemble_sets_floors() -> None:
+    inputs = assemble(planning=_storm_planning(enabled=True), storm_warnings=[_YELLOW, _THUNDER])
+    floors = [s.storm_floor_pct for s in inputs.slots]
+    # Slots ab 10:00 UTC: 11:00 (eine Stunde Vorlauf) bis 14:00 UTC sind Slot 4 bis 15
+    assert [i for i, f in enumerate(floors) if f is not None] == list(range(4, 16))
+    assert {f for f in floors if f is not None} == {40.0}
+    assert inputs.storm_warnings == [_THUNDER]  # Gelb liegt unter der Warnstufe
+
+
+def test_assemble_without_switch_has_no_floors() -> None:
+    inputs = assemble(planning=_storm_planning(enabled=False), storm_warnings=[_THUNDER])
+    assert all(s.storm_floor_pct is None for s in inputs.slots)
+    assert inputs.storm_warnings == []
+    plain = assemble()
+    assert plain.storm_warnings == [] and all(s.storm_floor_pct is None for s in plain.slots)
+
+
+def test_assemble_floor_is_capped_at_the_highest_soc() -> None:
+    inputs = assemble(
+        planning=_storm_planning(enabled=True),
+        battery=state(soc_max_pct=35.0),
+        storm_warnings=[_THUNDER],
+    )
+    assert {s.storm_floor_pct for s in inputs.slots[4:16]} == {35.0}
+
+
+def test_old_inputs_load_without_storm(store: PlanStore, engine: Engine) -> None:
+    # Eingangsdaten vor der Unwetter-Reserve laden ohne Warnungen und ohne Untergrenzen
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    assert data.pop("storm_warnings") == []
+    for slot in data["slots"]:
+        assert slot.pop("storm_floor_pct") is None
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs == sample_inputs()
+    stormy = assemble(planning=_storm_planning(enabled=True), storm_warnings=[_THUNDER])
+    assert PlanInputs.model_validate_json(stormy.model_dump_json()) == stormy

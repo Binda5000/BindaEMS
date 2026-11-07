@@ -13,29 +13,40 @@ from typing import Final
 
 import structlog
 
-from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
+from bindaems.app.planning.battery_model import (
+    SLOT_H,
+    params_of,
+    reserve_kwh,
+    sim_slots,
+    simulate,
+    step,
+)
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import (
     OptimizerResult,
     ev_battery_power_w,
     ev_power_w,
     grid_charge_cap_w,
+    recharge_caps_w,
+    storm_charge_caps_w,
 )
 from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
+    HOLD_MIN_W,
     R1_TOL_KWH,
+    SOC_TOL_KWH,
     charged_window_end,
     export_while_charged_kwh,
     grid_charge_pays,
+    r1_applies,
 )
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, BatteryIntent, BatteryIntentKind
 
 log = structlog.get_logger(__name__)
 
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
 ROUND_W: Final = 100.0  # Schritt der Netzladeleistung
 HOLD_SHARE: Final = 0.5  # Halten, wenn weniger als dieser Anteil des Eigenverbrauchs entlädt
-HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
 
 
 def drop_held_battery(
@@ -66,16 +77,25 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     """Absicht je Slot; ohne Flüsse (keine Lösung) eine leere Liste.
 
     ``NETZLADEN(P)`` bei Netzladen ab ``GRID_CHARGE_MIN_W`` mit ``P`` auf ``ROUND_W`` gerundet
-    und durch ``GC_t`` begrenzt. Sonst ``HALTEN``, wenn der Optimierer weniger als
-    ``HOLD_SHARE`` dessen entlädt, was der Eigenverbrauch lieferte (mindestens ``HOLD_MIN_W``);
-    die Hälfte ist die Rundung auf die nächste ausführbare Absicht. Sonst ``EIGENVERBRAUCH``.
+    und durch ``GC_t`` begrenzt. Das Nachladen auf die Reserve (``gr_r``, Entscheidung 9) und das
+    Aufladen für die Unwetter-Reserve (``gr_s``, Plan Unwetter-Reserve, Entscheidung 6) zählen
+    dazu: ``P = gr_b + gr_r + gr_s``, begrenzt durch ``max(GC_t, R_t)`` mit der Grenze ``R_t``,
+    die beide sich teilen (``recharge_caps_w``, ``storm_charge_caps_w``); bleibt ``gr_b`` unter
+    ``GRID_CHARGE_MIN_W``, ist der Slot ein Nachladen (``reserve_recharge``, höchstens
+    ``RESERVE_RECHARGE_MAX_W``, auch bei ausgeschaltetem Schalter). Sonst ``HALTEN``, wenn der
+    Optimierer weniger als ``HOLD_SHARE`` dessen entlädt, was der Eigenverbrauch lieferte
+    (mindestens ``HOLD_MIN_W``); die Hälfte ist die Rundung auf die nächste ausführbare Absicht.
+    Sonst ``EIGENVERBRAUCH``.
 
     Zuletzt hält ``_keep_rule_r1`` Regel R1 an der Nachrechnung ein, und
-    ``_drop_unprofitable`` streicht Netzladen, das sich dort nicht rechnet. Die Nachrechnung
-    kennt die Ladeleistung der Autos und ihren Akkuanteil aus den Flüssen (``ev_power_w``,
-    ``ev_battery_power_w``); der Eigenverbrauch, mit dem ``HALTEN`` vergleicht, ist der des Hauses
-    ohne Autos. Gibt der Akku den Autos im Slot mindestens ``HOLD_MIN_W`` (Akku ins Auto), ist der
-    Slot ``EIGENVERBRAUCH``, nie ``HALTEN``: Nur dann gibt die Nachrechnung den Autos etwas.
+    ``_drop_unprofitable`` streicht Netzladen, das sich dort nicht rechnet; ein Nachladen bleibt
+    stehen, und aus einem gestrichenen Slot mit Nachladen oder Aufladen ab ``GRID_CHARGE_MIN_W``
+    wird dieses allein. Danach hält ``_keep_storm`` die Unwetter-Reserve an der Nachrechnung.
+    Die Nachrechnung kennt die Ladeleistung der Autos und ihren Akkuanteil aus den Flüssen
+    (``ev_power_w``, ``ev_battery_power_w``); der Eigenverbrauch, mit dem ``HALTEN`` vergleicht,
+    ist der des Hauses ohne Autos. Gibt der Akku den Autos im Slot
+    mindestens ``HOLD_MIN_W`` (Akku ins Auto), ist der Slot ``EIGENVERBRAUCH``, nie ``HALTEN``:
+    Nur dann gibt die Nachrechnung den Autos etwas.
     """
     if not result.flows:
         return []
@@ -84,8 +104,17 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     params = params_of(inputs)
     slots = sim_slots(inputs, ev_w, ev_battery_w)
     soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    # gemeinsame Grenze von Nachladen und Aufladen für die Unwetter-Reserve je Slot
+    recharge_caps = [
+        max(reserve_w, storm_w)
+        for reserve_w, storm_w in zip(
+            recharge_caps_w(inputs), storm_charge_caps_w(inputs), strict=True
+        )
+    ]
     intents: list[BatteryIntent] = []
-    plain: list[BatteryIntent] = []  # Absicht je Slot nach der Regel ohne Netzladen
+    # Absicht je Slot, wenn das Netzladen sich nicht rechnet: nach der Regel ohne Netzladen, mit
+    # dem Nachladen auf die Reserve allein, wenn es eines gibt
+    plain: list[BatteryIntent] = []
     for index, flows in enumerate(result.flows):
         slot = slots[index]
         deliverable_w = max(0.0, soc_kwh - params.lo_kwh) * params.eta_dis / SLOT_H * 1000
@@ -96,21 +125,38 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
             plain.append(BatteryIntent(kind=BatteryIntentKind.HALTEN))
         else:
             plain.append(BatteryIntent())
-        intents.append(plain[-1])
         soc_kwh = flows.soc_end_kwh
-        if flows.gr_b >= GRID_CHARGE_MIN_W:
-            cap_w = grid_charge_cap_w(inputs, index)
-            power_w = min(
-                ROUND_W * floor(flows.gr_b / ROUND_W + 0.5), ROUND_W * floor(cap_w / ROUND_W)
-            )
-            if power_w > 0:
-                intents[-1] = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
-    return _drop_unprofitable(
+        recharge = flows.gr_b < GRID_CHARGE_MIN_W
+        recharge_w = recharge_caps[index]
+        reserve_w = flows.gr_r + flows.gr_s  # Nachladen und Aufladen für die Unwetter-Reserve
+        if reserve_w >= GRID_CHARGE_MIN_W and not recharge:
+            alone = _grid_charge(reserve_w, recharge_w, reserve_recharge=True)
+            plain[-1] = alone or plain[-1]
+        intents.append(plain[-1])
+        if flows.gr_b + reserve_w >= GRID_CHARGE_MIN_W:
+            cap_w = max(grid_charge_cap_w(inputs, index), recharge_w)
+            if recharge:
+                cap_w = min(cap_w, RESERVE_RECHARGE_MAX_W)
+            charging = _grid_charge(flows.gr_b + reserve_w, cap_w, reserve_recharge=recharge)
+            intents[-1] = charging or intents[-1]
+    kept = _drop_unprofitable(
         inputs,
         _keep_rule_r1(inputs, intents, ev_w, ev_battery_w),
         plain,
         ev_w,
         ev_battery_w,
+    )
+    return _keep_storm(inputs, kept, ev_w, ev_battery_w)
+
+
+def _grid_charge(watts: float, cap_w: float, *, reserve_recharge: bool) -> BatteryIntent | None:
+    """``NETZLADEN`` mit ``watts`` auf ``ROUND_W`` gerundet, höchstens ``cap_w`` (auf ``ROUND_W``
+    abgerundet); ``None``, wenn davon nichts bleibt."""
+    power_w = min(ROUND_W * floor(watts / ROUND_W + 0.5), ROUND_W * floor(cap_w / ROUND_W))
+    if power_w <= 0:
+        return None
+    return BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w, reserve_recharge=reserve_recharge
     )
 
 
@@ -121,7 +167,10 @@ def _keep_rule_r1(
     ev_battery_w: Sequence[Mapping[str, float]] = (),
 ) -> list[BatteryIntent]:
     """Kürzt Netzladen, bis die Nachrechnung nach keinem ``NETZLADEN``-Slot mehr als
-    ``R1_TOL_KWH`` einspeist, solange der Akku noch geladen ist (``export_while_charged_kwh``).
+    ``R1_TOL_KWH`` einspeist, solange der Akku noch geladen ist (``export_while_charged_kwh``, mit
+    der Reserve als Leer-Grenze, auch unter ihr beim Start). Ein ``NETZLADEN`` mit
+    ``reserve_recharge`` (Nachladen auf die Reserve, Aufladen für die Unwetter-Reserve) bleibt, wie
+    es ist: Es setzt im Optimierer kein ``z_t``, Regel R1 gilt dafür nicht (``r1_applies``).
 
     Wenn Regel R1 bindet, füllt der Optimierer den Akku bis zur Einspeisung genau; schon die
     Rundung einer Teilentladung zu ``HALTEN`` lässt die Nachrechnung dann überlaufen und
@@ -137,6 +186,7 @@ def _keep_rule_r1(
     (``sim_slots``).
     """
     params = params_of(inputs)
+    empty_kwh = reserve_kwh(inputs)  # Leer-Grenze von Regel R1 (Entscheidung 9)
     slots = sim_slots(inputs, ev_w, ev_battery_w)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     result = list(intents)
@@ -146,25 +196,24 @@ def _keep_rule_r1(
         late = [
             index
             for index, intent in enumerate(result)
-            if intent.kind is BatteryIntentKind.NETZLADEN
-            and export_while_charged_kwh(steps, index, params.lo_kwh) > R1_TOL_KWH
+            if r1_applies(intent) and export_while_charged_kwh(steps, index, empty_kwh) > R1_TOL_KWH
         ]
         if not late:
             break
         index = late[-1]
-        cut_kwh = export_kwh = export_while_charged_kwh(steps, index, params.lo_kwh)
-        end = charged_window_end(steps, index, params.lo_kwh)
+        cut_kwh = export_kwh = export_while_charged_kwh(steps, index, empty_kwh)
+        end = charged_window_end(steps, index, empty_kwh)
         first = next(j for j in range(index, end) if steps[j].export_w > 0)
         if first > index:
             # Es reicht, den Akku bis zur ersten Einspeisung auf die Reserve zu bringen.
-            above_kwh = steps[first].soc_start_kwh - (params.lo_kwh + EMPTY_TOL_KWH)
+            above_kwh = steps[first].soc_start_kwh - (empty_kwh + EMPTY_TOL_KWH)
             cut_kwh = min(cut_kwh, above_kwh / params.eta_ch)
         cut_w = ROUND_W * max(1, ceil(cut_kwh / SLOT_H * 1000 / ROUND_W))
         power_w = min(result[index].grid_charge_w, steps[index].charge_grid_w)
         power_w = ROUND_W * floor((power_w - cut_w) / ROUND_W)
         first_cut.setdefault(index, (result[index].grid_charge_w, export_kwh))
         result[index] = (
-            BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
+            result[index].model_copy(update={"grid_charge_w": power_w})
             if power_w >= GRID_CHARGE_MIN_W
             else BatteryIntent(kind=BatteryIntentKind.HALTEN)
         )
@@ -181,6 +230,40 @@ def _keep_rule_r1(
     return result
 
 
+def _keep_storm(
+    inputs: PlanInputs,
+    intents: list[BatteryIntent],
+    ev_w: Sequence[Mapping[str, float]] = (),
+    ev_battery_w: Sequence[Mapping[str, float]] = (),
+) -> list[BatteryIntent]:
+    """``HALTEN`` statt ``EIGENVERBRAUCH`` in jedem Slot mit Untergrenze der Unwetter-Reserve
+    (``storm_floor_pct``, Plan Unwetter-Reserve, Entscheidung 10), in dem die Nachrechnung mit
+    mindestens ``HOLD_MIN_W`` entlädt und unter der Untergrenze endet (``SOC_TOL_KWH``): Hält der
+    Optimierer den Akku dort an der Untergrenze und entlädt nur einen Teil, ist der Slot sonst
+    Eigenverbrauch und entlädt ganz. Ein Slot, in dem der Akku den Autos mindestens ``HOLD_MIN_W``
+    gibt, bleibt ``EIGENVERBRAUCH``. Ohne Untergrenze unverändert."""
+    if all(slot.storm_floor_pct is None for slot in inputs.slots):
+        return intents
+    params = params_of(inputs)
+    slots = sim_slots(inputs, ev_w, ev_battery_w)
+    result = list(intents)
+    soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    for index, (slot, inp) in enumerate(zip(slots, inputs.slots, strict=True)):
+        item = step(soc_kwh, slot, result[index], params)
+        floor_pct = inp.storm_floor_pct
+        if (
+            floor_pct is not None
+            and result[index].kind is BatteryIntentKind.EIGENVERBRAUCH
+            and slot.ev_battery_w < HOLD_MIN_W
+            and item.discharge_w >= HOLD_MIN_W
+            and item.soc_end_kwh < floor_pct / 100 * params.capacity_kwh - SOC_TOL_KWH
+        ):
+            result[index] = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+            item = step(soc_kwh, slot, result[index], params)
+        soc_kwh = item.soc_end_kwh
+    return result
+
+
 def _drop_unprofitable(
     inputs: PlanInputs,
     intents: list[BatteryIntent],
@@ -189,7 +272,8 @@ def _drop_unprofitable(
     ev_battery_w: Sequence[Mapping[str, float]] = (),
 ) -> list[BatteryIntent]:
     """Streicht ``NETZLADEN``, das sich an der Nachrechnung nicht rechnet (``grid_charge_pays``,
-    dieselbe Rechnung wie die Plausibilität); der Slot bekommt seine Absicht aus ``plain``.
+    dieselbe Rechnung wie die Plausibilität); der Slot bekommt seine Absicht aus ``plain``. Ein
+    Nachladen auf die Reserve (``reserve_recharge``) muss sich nicht rechnen und bleibt.
 
     Die Rundung kann die Nutzung verschieben: Fehlen in einem billigen Slot nach dem Netzladen
     weniger als ``HOLD_MIN_W``, wird er ``EIGENVERBRAUCH`` und verbraucht die geladene Energie
@@ -210,6 +294,7 @@ def _drop_unprofitable(
             index
             for index, intent in enumerate(result)
             if intent.kind is BatteryIntentKind.NETZLADEN
+            and not intent.reserve_recharge
             and not grid_charge_pays(inputs, steps, index)
         ]
         if not idle:

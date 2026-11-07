@@ -3,17 +3,29 @@ import type {
 	BatteryIntentKind,
 	PlanReasonCode,
 	PlanSlot,
+	PlanStorm,
 	PlanTrigger,
-	PlanVehicle
+	PlanVehicle,
+	StormKind,
+	StormLevel
 } from '$lib/api/schemas';
-import { expectedLabel, formatNumber, formatNumberMax } from '$lib/format';
-import { parseIso } from '$lib/time';
+import {
+	expectedLabel,
+	formatDayTime,
+	formatNumber,
+	formatNumberMax,
+	formatTime
+} from '$lib/format';
+import { parseIso, todayVienna } from '$lib/time';
 
 export const INTENT_LABELS: Record<BatteryIntentKind, string> = {
 	EIGENVERBRAUCH: 'Eigenverbrauch',
 	HALTEN: 'Halten',
 	NETZLADEN: 'Netzladen'
 };
+
+/** `NETZLADEN` nur auf die Reserve (`reserve_recharge`), auch ohne „Netzladen erlaubt“ */
+export const RESERVE_RECHARGE_LABEL = 'Nachladen';
 
 export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	start: 'Start',
@@ -26,10 +38,47 @@ export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	settings: 'Einstellungen geändert',
 	manual: 'Neu planen',
 	vehicles: 'Fahrzeug geändert',
-	thermal: 'Klimaanlage geändert'
+	thermal: 'Klimaanlage geändert',
+	storm: 'Unwetterwarnung'
 };
 
 export const SOURCE_LABELS = { optimizer: 'Optimierer', fallback: 'Ersatzplan' } as const;
+
+/**
+ * Warnarten von GeoSphere Austria, wie `STORM_KIND_LABELS` in `shared/plan.py` (ein Test in
+ * `tests/unit/test_docs.py` hält beide gleich)
+ */
+export const STORM_KIND_LABELS: Record<StormKind, string> = {
+	sturm: 'Sturm',
+	regen: 'Regen',
+	schnee: 'Schnee',
+	glatteis: 'Glatteis',
+	gewitter: 'Gewitter',
+	hitze: 'Hitze',
+	kaelte: 'Kälte'
+};
+
+export const STORM_LEVEL_LABELS: Record<StormLevel, string> = { 1: 'gelb', 2: 'orange', 3: 'rot' };
+
+/**
+ * Kopf des Zeitplans: „Unwetterwarnung: Gewitter (orange) 14:00–16:00“ je Warnung des Plans, auch
+ * für eine, die erst hinter dem Horizont beginnt (Ruling R12). Ein Zeitpunkt an einem anderen Tag
+ * als heute trägt den Tag („morgen 06:00“, „Mo 12.10. 08:00“); das Ende am Tag des Beginns nur die
+ * Uhrzeit.
+ */
+export function stormWarningLines(storm: PlanStorm | null, now: Date = new Date()): string[] {
+	return (storm?.warnings ?? []).map((warning) => {
+		const begin = parseIso(warning.begin);
+		const end = parseIso(warning.end);
+		const from = begin === null ? formatTime(warning.begin) : formatDayTime(new Date(begin), now);
+		const sameDay =
+			begin !== null && end !== null && todayVienna(new Date(begin)) === todayVienna(new Date(end));
+		const to =
+			end === null || sameDay ? formatTime(warning.end) : formatDayTime(new Date(end), now);
+		const kind = STORM_KIND_LABELS[warning.kind];
+		return `Unwetterwarnung: ${kind} (${STORM_LEVEL_LABELS[warning.level]}) ${from}\u2013${to}`;
+	});
+}
 
 const SLOT_MS = 900_000;
 /** Zusätze zum Hauptcode eines Slots */
@@ -40,6 +89,8 @@ export interface PlanBlock {
 	end: string;
 	intent: PlanSlot['intent'];
 	gridChargeW: number;
+	/** Nachladen auf die Reserve (`reserve_recharge` der Slots) */
+	reserveRecharge: boolean;
 	/** SOC am Ende des Slots vor dem Block, beim ersten Block der Start-SOC des Plans (sonst das Ende des ersten Slots) */
 	socFrom: number;
 	socTo: number;
@@ -63,7 +114,8 @@ function endOf(slot: PlanSlot): string {
 }
 
 /**
- * Aufeinanderfolgende Slots mit gleicher Absicht, gleichem Netzladen und gleichem Hauptcode. Ein
+ * Aufeinanderfolgende Slots mit gleicher Absicht, gleichem Netzladen (auch ob es ein Nachladen ist)
+ * und gleichem Hauptcode. Ein
  * erwartetes Auto (Plan 5b) hängt am Block seiner Ankunft, eine Ankunft vor dem Plan am ersten Block;
  * liegt die Ankunft hinter dem Plan, bleibt es weg.
  */
@@ -75,7 +127,7 @@ export function planBlocks(
 	const blocks: PlanBlock[] = [];
 	let key = '';
 	slots.forEach((slot, index) => {
-		const slotKey = `${slot.intent}|${slot.grid_charge_w}|${mainCode(slot)}`;
+		const slotKey = `${slot.intent}|${slot.grid_charge_w}|${slot.reserve_recharge}|${mainCode(slot)}`;
 		const last = blocks.at(-1);
 		if (last && slotKey === key) {
 			last.end = endOf(slot);
@@ -88,6 +140,7 @@ export function planBlocks(
 			end: endOf(slot),
 			intent: slot.intent,
 			gridChargeW: slot.grid_charge_w,
+			reserveRecharge: slot.reserve_recharge,
 			socFrom: index > 0 ? slots[index - 1]!.soc_pct : (socStartPct ?? slot.soc_pct),
 			socTo: slot.soc_pct,
 			text: slot.text,
@@ -120,15 +173,23 @@ export function socRange(from: number, to: number): string {
 	return `${formatNumber(from, digits)} → ${formatNumber(to, digits)}`;
 }
 
-/** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ (die kW nur beim Netzladen mit Leistung) */
-export function intentLabel(intent: BatteryIntentKind, gridChargeW: number): string {
-	const label = INTENT_LABELS[intent];
-	return intent === 'NETZLADEN' && gridChargeW > 0
+/**
+ * „Netzladen 2,3 kW“, „Nachladen 3 kW“ (Netzladen nur auf die Reserve), „Halten“,
+ * „Eigenverbrauch“ (die kW nur beim Netzladen mit Leistung)
+ */
+export function intentLabel(
+	intent: BatteryIntentKind,
+	gridChargeW: number,
+	reserveRecharge = false
+): string {
+	const charging = intent === 'NETZLADEN';
+	const label = charging && reserveRecharge ? RESERVE_RECHARGE_LABEL : INTENT_LABELS[intent];
+	return charging && gridChargeW > 0
 		? `${label} ${formatNumberMax(gridChargeW / 1000, 1)} kW`
 		: label;
 }
 
-/** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ */
+/** „Netzladen 2,3 kW“, „Nachladen 3 kW“, „Halten“, „Eigenverbrauch“ */
 export function blockLabel(block: PlanBlock): string {
-	return intentLabel(block.intent, block.gridChargeW);
+	return intentLabel(block.intent, block.gridChargeW, block.reserveRecharge);
 }

@@ -15,6 +15,10 @@ Akku ins Auto (Plan Akku ins Auto): Haus und Autos zusammen entladen nie über d
 nie zugleich mit Laden, nichts bei ausgeschaltetem Schalter, nichts, solange nach Netzladen
 Netzenergie im Akku sein kann (Regel R1 bis zum Leerstand), und nichts, solange PV in Akku oder Netz
 geht.
+
+Netzgrenze je Phase (Plan Netzgrenze je Phase, Entscheidung 4): Mit einer Grenze bezieht keine
+Phase in keinem Slot mehr als ``R_t`` (``phase_room_w``) aus dem Netz; Haus und Netzladen zählen je
+ein Drittel, jedes Auto sein Netz ins Auto geteilt durch die Anzahl seiner Phasen.
 """
 
 from __future__ import annotations
@@ -23,11 +27,12 @@ from typing import Any
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from tests.plan_helpers import planned_car, scenario
+from tests.plan_helpers import planned_car, scenario, state
 
-from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots
+from bindaems.app.planning.battery_model import SLOT_H, params_of, reserve_kwh, sim_slots
+from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, solve
+from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, recharge_caps_w, solve
 from bindaems.app.planning.vehicles import (
     PlanVehicleInput,
     grid_allowed,
@@ -58,6 +63,9 @@ def horizons(draw: st.DrawFn) -> dict[str, object]:
             "soc_pct": draw(st.floats(0.0, 100.0)),
             "target_soc_pct": draw(st.floats(20.0, 100.0)),
             "efficiency": draw(st.floats(0.5, 1.0)),
+            "grid_phases": draw(
+                st.lists(st.sampled_from(PHASES), min_size=1, max_size=3, unique=True)
+            ),
         }
         for _ in range(draw(st.integers(min_value=0, max_value=2)))
     ]
@@ -70,6 +78,7 @@ def horizons(draw: st.DrawFn) -> dict[str, object]:
         "grid_charge": draw(st.booleans()),
         "car_battery": draw(st.booleans()),
         "cars": cars,
+        "battery": state(grid_phase_import_w=draw(st.none() | st.floats(3000.0, 8000.0))),
     }
 
 
@@ -96,6 +105,7 @@ def _with_cars(inputs: PlanInputs, specs: list[dict[str, Any]]) -> PlanInputs:
                 max_w=max_w,
                 need_kwh=need,
                 horizon_need_kwh=horizon_need(need, max_w, departure_at, horizon_end),
+                grid_phases=spec["grid_phases"],
             )
         )
     allowed = grid_allowed(cars, inputs.slots, [car.key for car in cars])
@@ -111,14 +121,26 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
     result = solve(inputs)
     assert result.status in ("optimal", "time_limit") and result.flows
     params = params_of(inputs)
+    empty_kwh = reserve_kwh(inputs)  # Leer-Grenze von R1 ist die Reserve (Entscheidung 9)
     sims = sim_slots(inputs)
+    # Nachladen auf die Reserve (Entscheidung 9): nur unter der Reserve, je Slot höchstens
+    # ``recharge_cap_w``, und was nachgeladen ist, bleibt im Akku
+    recharge_caps = recharge_caps_w(inputs)
+    below_reserve = inputs.battery.soc_pct < inputs.battery.reserve_pct
+    recharged_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     for index, (slot, flow) in enumerate(zip(inputs.slots, result.flows, strict=True)):
         bt_ev = sum(flow.ev_battery.values())
         assert params.lo_kwh - 0.01 <= flow.soc_end_kwh <= params.hi_kwh + 0.01
+        assert flow.gr_r <= recharge_caps[index] + 1
+        if below_reserve:
+            recharged_kwh += params.eta_ch * flow.gr_r * _KWH
+            assert flow.soc_end_kwh >= recharged_kwh - 1e-3
+        else:
+            assert flow.gr_r == 0
         assert flow.pv_x <= slot.pv_w + 1
         assert flow.gr_h + flow.bt_h <= max(0.0, slot.load_w - slot.pv_w) + 1
         assert flow.bt_h + bt_ev <= sims[index].max_discharge_w + 1
-        assert min(flow.pv_b + flow.gr_b, flow.bt_h + bt_ev) <= 1
+        assert min(flow.pv_b + flow.gr_b + flow.gr_r, flow.bt_h + bt_ev) <= 1
         if not inputs.planning.grid_charge_allowed:
             assert flow.gr_b == 0
         if not inputs.planning.car_battery_allowed:
@@ -128,8 +150,7 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
                 (
                     j
                     for j in range(index, len(result.flows))
-                    if result.flows[j].soc_end_kwh
-                    <= params.lo_kwh + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+                    if result.flows[j].soc_end_kwh <= empty_kwh + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
                 ),
                 len(result.flows) - 1,
             )
@@ -139,9 +160,19 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
         pv_ev = sum(pv for pv, _ in flow.ev.values())
         gr_ev = sum(grid for _, grid in flow.ev.values())
         assert flow.pv_h + pv_ev + flow.pv_b + flow.pv_x <= slot.pv_w + 1
-        assert flow.gr_h + flow.gr_b + gr_ev <= inputs.battery.grid_max_import_w + 1
+        assert flow.gr_h + flow.gr_b + flow.gr_r + gr_ev <= inputs.battery.grid_max_import_w + 1
         if gr_ev > 1 or bt_ev > 1:
             assert flow.pv_b + flow.pv_x <= 1
+        limit_w = inputs.battery.grid_phase_import_w
+        if limit_w is not None:
+            room_w = phase_room_w(limit_w, slot.load_w, slot.pv_w)
+            for phase in PHASES:
+                cars_w = sum(
+                    flow.ev.get(car.key, (0.0, 0.0))[1]
+                    * phase_shares(car.grid_phases).get(phase, 0.0)
+                    for car in inputs.vehicles
+                )
+                assert (flow.gr_h + flow.gr_b + flow.gr_r) / 3 + cars_w <= room_w + 1
     for car in inputs.vehicles:
         charged = [
             sum(flow.ev.get(car.key, (0.0, 0.0))) + flow.ev_battery.get(car.key, 0.0)

@@ -13,6 +13,9 @@ import type {
 	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
+	StormKind,
+	StormLevel,
+	StormSettings,
 	ThermalPlanSettings,
 	TimeWindow
 } from '$lib/api/schemas';
@@ -68,7 +71,38 @@ export interface PlanningDraft {
 	wearCt: string;
 	endValueFactor: string;
 	inertiaCt: string;
+	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat) */
+	peakSoftCt: string;
+	storm: StormDraft;
 }
+
+/** Unwetter-Reserve: Schalter, Ziel-SOC als Text, Warnstufe und Warnarten */
+export interface StormDraft {
+	enabled: boolean;
+	targetSocPct: string;
+	minLevel: StormLevel;
+	kinds: StormKind[];
+}
+
+/** Die Warnarten in der Reihenfolge von GeoSphere Austria (`warntypid` 1 bis 7) */
+export const STORM_KINDS: readonly StormKind[] = [
+	'sturm',
+	'regen',
+	'schnee',
+	'glatteis',
+	'gewitter',
+	'hitze',
+	'kaelte'
+];
+
+/** Auswahl der Warnstufe im Editor und in der Leseansicht */
+export const STORM_MIN_LEVEL_LABELS: Record<StormLevel, string> = {
+	1: 'ab gelb',
+	2: 'ab orange',
+	3: 'nur rot'
+};
+
+export const STORM_KINDS_ERROR = 'Mindestens eine Warnart wählen';
 
 /** Fahrverhalten: Puffer und Grenzen als Text, die Anwesenheits-Entität je Fahrzeug (leer = keine) */
 export interface DrivingDraft {
@@ -186,6 +220,7 @@ const NUMBER_ERROR = 'Zahl, z. B. 8,11';
 const NON_NEGATIVE_ERROR = 'Zahl ab 0, z. B. 2,0';
 const PERCENT_ERROR = 'Zahl von 50 bis 100';
 const FACTOR_ERROR = 'Zahl von 0 bis 1, z. B. 0,9';
+const SOFT_PEAK_ERROR = 'Zahl ab 0, z. B. 100';
 const DEFAULT_TIER_KW = '10';
 const DEFAULT_MINIMUM_KW = '2';
 export const MONTHS = [
@@ -351,7 +386,14 @@ function planningDraft(planning: PlanningSettings): PlanningDraft {
 		roundtripPct: decimalText(planning.roundtrip_pct),
 		wearCt: decimalText(planning.wear_ct),
 		endValueFactor: decimalText(planning.end_value_factor),
-		inertiaCt: decimalText(planning.inertia_ct)
+		inertiaCt: decimalText(planning.inertia_ct),
+		peakSoftCt: decimalText(planning.peak_soft_ct_per_kw),
+		storm: {
+			enabled: planning.storm.enabled,
+			targetSocPct: String(planning.storm.target_soc_pct),
+			minLevel: planning.storm.min_level,
+			kinds: [...planning.storm.kinds]
+		}
 	};
 }
 
@@ -652,8 +694,27 @@ function planningNumber(
 	return value;
 }
 
+/** Ganze Prozent 10 bis 100 und mindestens eine Warnart; die Warnarten in fester Reihenfolge */
+function applyStorm(
+	draft: StormDraft,
+	current: StormSettings,
+	errors: Record<string, string>
+): StormSettings {
+	const target = wholeNumber(draft.targetSocPct, 'planning.storm.target_soc_pct', errors, 10, 100);
+	const kinds = STORM_KINDS.filter((kind) => draft.kinds.includes(kind));
+	if (kinds.length === 0) errors['planning.storm.kinds'] = STORM_KINDS_ERROR;
+	return {
+		...current,
+		enabled: draft.enabled,
+		target_soc_pct: target ?? current.target_soc_pct,
+		min_level: draft.minLevel,
+		kinds
+	};
+}
+
 function applyPlanning(
 	draft: PlanningDraft,
+	current: PlanningSettings,
 	errors: Record<string, string>
 ): PlanningSettings | null {
 	const before = Object.keys(errors).length;
@@ -692,7 +753,16 @@ function applyPlanning(
 			0,
 			null,
 			NON_NEGATIVE_ERROR
-		)
+		),
+		peak_soft_ct_per_kw: planningNumber(
+			draft.peakSoftCt,
+			'planning.peak_soft_ct_per_kw',
+			errors,
+			0,
+			null,
+			SOFT_PEAK_ERROR
+		),
+		storm: applyStorm(draft.storm, current.storm, errors)
 	};
 	if (Object.keys(errors).length > before) return null;
 	return planning as PlanningSettings;
@@ -858,7 +928,7 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		if (valid && typeof ct === 'number') monthly[month] = ct;
 	});
 
-	const planning = applyPlanning(draft.planning, errors);
+	const planning = applyPlanning(draft.planning, settings.planning, errors);
 
 	const learning = applyLearning(draft.learning, settings.learning, errors);
 

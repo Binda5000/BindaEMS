@@ -32,6 +32,7 @@ export function slot(
 		start: iso(local),
 		intent,
 		grid_charge_w: gridChargeW,
+		reserve_recharge: false,
 		soc_pct: 50,
 		pv_w: 0,
 		load_w: 1000,
@@ -51,6 +52,7 @@ export function slot(
 		thermal_w: 0,
 		thermal_steps: null,
 		thermal_grid_w: 0,
+		storm_reserve_pct: null,
 		...changes
 	};
 }

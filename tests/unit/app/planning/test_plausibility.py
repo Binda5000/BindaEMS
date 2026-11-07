@@ -20,14 +20,17 @@ from tests.plan_helpers import (
     sample_plan,
     scenario,
     small_battery,
+    state,
+    virtual,
 )
 
-from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots, simulate
+from bindaems.app.planning.battery_model import SLOT_H, SimStep, eta, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
+    STORM_TOL_PCT,
     charged_window_end,
     check_plan,
     export_while_charged_kwh,
@@ -70,6 +73,33 @@ def test_grid_charge_when_switched_off_is_reported() -> None:
     assert "Netzladen um 02:00, obwohl ausgeschaltet" in issues
 
 
+def _recharge(watts: float, *, flag: bool = True) -> list[BatteryIntent]:
+    return [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=watts, reserve_recharge=flag)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("watts", "flag", "reported"),
+    [(2500.0, True, False), (3000.0, True, False), (3500.0, True, True), (2500.0, False, True)],
+)
+def test_reserve_recharge_with_switch_off(watts: float, flag: bool, reported: bool) -> None:
+    # Entscheidung 9: Nachladen auf die Reserve bis 3000 W ist auch ohne Schalter erlaubt, und
+    # es muss sich nicht rechnen
+    inputs = scenario(
+        prices=[10.0], pv=[0.0], load=[1000.0], soc_pct=16.0, battery=state(usable_kwh=96.0)
+    )
+    intents = _recharge(watts, flag=flag)
+    issues = check_plan(
+        inputs,
+        flows_result([flow(gr_h=1000, gr_r=watts, soc_end_kwh=15.36 + watts * SLOT_H / 1000)]),
+        intents,
+        resimulate(inputs, intents),
+    )
+    assert ("Netzladen um 02:00, obwohl ausgeschaltet" in issues) is reported
+    assert ("Netzladen um 02:00 rechnet sich nicht" in issues) is not flag
+
+
 def test_r1_on_resimulation_is_reported() -> None:
     inputs = scenario(
         prices=[5.0, 8.0],
@@ -87,6 +117,95 @@ def test_r1_on_resimulation_is_reported() -> None:
         and i.endswith(" kWh Einspeisung, bevor der Akku leer ist")
         for i in issues
     )
+
+
+def test_storm_charge_then_export_is_no_r1_finding() -> None:
+    # Ruling R6: Aufladen für die Unwetter-Reserve (``NETZLADEN`` mit ``reserve_recharge``) setzt
+    # im Optimierer kein ``z_t``. Speist die PV danach ein, solange der Akku über der Reserve
+    # steht, ist das kein Befund nach Regel R1; dasselbe Netzladen ohne Flag ist einer.
+    inputs = scenario(
+        prices=[5.0, 8.0],
+        pv=[0.0, 9000.0],
+        load=[500.0, 500.0],
+        battery=small_battery(),
+        soc_pct=85.0,
+        storm_floors=[95.0, 95.0],
+    )
+    flagged = [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000, reserve_recharge=True),
+        BatteryIntent(),
+    ]
+    result = flows_result(
+        [
+            flow(gr_h=500, gr_s=3000, soc_end_kwh=9.2),
+            flow(pv_h=500, pv_b=3000, pv_x=5500, soc_end_kwh=9.9),
+        ]
+    )
+    steps = resimulate(inputs, flagged)
+    assert steps[1].export_w > 0 and steps[0].soc_end_kwh > params_of(inputs).lo_kwh + 0.5
+    issues = check_plan(inputs, result, flagged, steps)
+    assert not any(i.startswith("Regel R verletzt") for i in issues)
+    assert issues == []
+    switched = inputs.model_copy(
+        update={
+            "planning": inputs.planning.model_copy(update={"grid_charge_allowed": True}),
+            "end_value_ct": 30.0,
+        }
+    )
+    plain = [flagged[0].model_copy(update={"reserve_recharge": False}), BatteryIntent()]
+    assert any(
+        i.startswith("Regel R verletzt: Netzladen um 02:00")
+        for i in check_plan(switched, result, plain, resimulate(switched, plain))
+    )
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 10)
+
+
+def _storm_slot(soc_pct: float, *, drop_pct: float, floor_pct: float | None = 40.0) -> PlanInputs:
+    """Ein Slot um 14:15 Ortszeit mit Untergrenze ``floor_pct``, Akku 10 kWh ab ``soc_pct``; das
+    Haus braucht so viel, dass der Akku bei Eigenverbrauch ``drop_pct`` Prozentpunkte entlädt."""
+    load_w = drop_pct / 100 * 10.0 / SLOT_H * 1000 * eta(88.0)
+    return scenario(
+        prices=[20.0],
+        pv=[0.0],
+        load=[load_w],
+        soc_pct=soc_pct,
+        battery=small_battery(),
+        start="2026-10-16T12:15:00+00:00",
+        storm_floors=[floor_pct],
+    )
+
+
+def test_discharge_below_floor_is_finding() -> None:
+    inputs = _storm_slot(40.2, drop_pct=1.2)
+    assert inputs.planning.roundtrip_pct == 88.0
+    intents = [BatteryIntent()]
+    steps = resimulate(inputs, intents)
+    assert steps[0].soc_end_kwh == pytest.approx(3.9)
+    issues = check_plan(inputs, flows_of(steps, inputs), intents, steps)
+    assert issues == ["Akku entlädt um 14:15 unter die Unwetter-Reserve"]
+
+
+def test_discharge_within_the_tolerance_is_no_finding() -> None:
+    assert STORM_TOL_PCT == 0.5
+    inputs = _storm_slot(40.2, drop_pct=0.6)  # endet bei 39,6 %
+    intents = [BatteryIntent()]
+    steps = resimulate(inputs, intents)
+    assert check_plan(inputs, flows_of(steps, inputs), intents, steps) == []
+
+
+def test_unreachable_floor_is_no_finding() -> None:
+    # 30 % im Fenster: das Ziel ist nicht zu erreichen; wer hält, entlädt nicht darunter
+    inputs = _storm_slot(30.0, drop_pct=1.2)
+    held = [BatteryIntent(kind=BatteryIntentKind.HALTEN)]
+    steps = resimulate(inputs, held)
+    assert check_plan(inputs, flows_of(steps, inputs), held, steps) == []
+    # ohne Untergrenze ist dasselbe Entladen kein Befund
+    plain = _storm_slot(40.2, drop_pct=1.2, floor_pct=None)
+    intents = [BatteryIntent()]
+    steps = resimulate(plain, intents)
+    assert check_plan(plain, flows_of(steps, plain), intents, steps) == []
 
 
 def test_r1_allows_grid_charge_used_up_before_pv() -> None:
@@ -123,6 +242,11 @@ def test_unprofitable_grid_charge_is_reported_without_power_price() -> None:
     with_peak = inputs.model_copy(update={"peak_months": [month("2026-10", 2.0)]})
     assert "Netzladen um 02:00 rechnet sich nicht" not in check_plan(
         with_peak, flows_of(steps, with_peak), intents, steps
+    )
+    # Ein gedachter Monat ist kein Geld (Ruling zu Task 5): der Befund bleibt
+    with_virtual = inputs.model_copy(update={"peak_months": [virtual("2026-10", 2.0)]})
+    assert "Netzladen um 02:00 rechnet sich nicht" in check_plan(
+        with_virtual, flows_of(steps, with_virtual), intents, steps
     )
 
 
@@ -799,3 +923,58 @@ def test_grid_in_battery_at_start_is_carried_until_the_battery_is_empty() -> Non
     assert grid_in_battery_at_start(_now_inputs(empty_pct + 0.1), previous, carried=True)
     grid_charged = _previous("2026-10-16T01:46:00+00:00", ["01:45", "02:00"], "01:45")
     assert not grid_in_battery_at_start(_now_inputs(15.0), grid_charged, carried=True)
+
+
+# Netzbezug je Phase (Plan Netzgrenze je Phase, Entscheidung 7)
+PHASE_LIMIT_W = (20 - 1) * 230.0
+
+
+def _phase_check(
+    *, limit_w: float | None, pv_w: float, load_w: float, ev: dict[str, Any]
+) -> list[str]:
+    # Ein Slot um 04:00 Ortszeit mit Tesla und e-Golf, beide 3-phasig (``grid_phases`` ohne Angabe)
+    inputs = scenario(
+        prices=[20.0],
+        pv=[pv_w],
+        load=[load_w],
+        battery=small_battery(grid_phase_import_w=limit_w),
+        start="2026-10-16T02:00:00+00:00",
+        vehicles=[planned_car(), planned_car(key="egolf", name="e-Golf")],
+    )
+    pv_ev = sum(pv for pv, _ in ev.values())
+    result = flows_result(
+        [flow(pv_h=min(load_w, pv_w - pv_ev), gr_h=max(0.0, load_w - pv_w + pv_ev), ev=ev)]
+    )
+    intents = [BatteryIntent()]
+    return check_plan(inputs, result, intents, resimulate(inputs, intents))
+
+
+def test_phase_over_import_limit_is_a_finding() -> None:
+    issues = _phase_check(
+        limit_w=PHASE_LIMIT_W,
+        pv_w=0.0,
+        load_w=600.0,
+        ev={"tesla": (0.0, 11040.0), "egolf": (0.0, 7360.0)},
+    )
+    assert "Netzbezug über dem Importlimit auf L1 um 04:00" in issues
+
+
+def test_phase_check_without_limit_finds_nothing() -> None:
+    issues = _phase_check(
+        limit_w=None,
+        pv_w=0.0,
+        load_w=600.0,
+        ev={"tesla": (0.0, 11040.0), "egolf": (0.0, 7360.0)},
+    )
+    assert not any("Importlimit" in text for text in issues)
+
+
+def test_phase_check_counts_only_grid_share() -> None:
+    # Dieselben Autos komplett aus PV: der Netzanteil bleibt weit unter der Grenze
+    issues = _phase_check(
+        limit_w=PHASE_LIMIT_W,
+        pv_w=19000.0,
+        load_w=600.0,
+        ev={"tesla": (11040.0, 0.0), "egolf": (7360.0, 0.0)},
+    )
+    assert not any("Importlimit" in text for text in issues)

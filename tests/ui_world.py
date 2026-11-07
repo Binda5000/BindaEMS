@@ -92,7 +92,7 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind, SlotFlows
 from bindaems.shared.influx.lineprotocol import epoch_ms
-from bindaems.shared.plan import Plan
+from bindaems.shared.plan import Plan, StormWarning
 from bindaems.shared.settings import (
     DrivingSettings,
     MonthlyFeeComponent,
@@ -1124,6 +1124,43 @@ def demo_thermal_stage() -> Iterator[None]:
     Plan der Demo-Welt sofort durch einen ohne Vorschau (Betriebsart „unbekannt“, Grund „aus“)."""
     with patch("bindaems.app.planning.service.apply_thermal", _demo_apply_thermal):
         yield
+
+
+# Unwetter-Reserve im Demo-Backend (Plan Unwetter-Reserve, Task 6): eine Gewitterwarnung (orange)
+# am Abend des 09.10., 18:00 bis 21:00 Ortszeit. Nur ``tests.e2e.ui_server`` schaltet sie ein; die
+# Vertragsdateien bleiben ohne Warnung.
+DEMO_STORM = StormWarning(
+    warn_id=4711,
+    version=1,
+    kind="gewitter",
+    level=2,
+    begin=datetime(2026, 10, 9, 18, 0, tzinfo=LOCAL_TZ),
+    end=datetime(2026, 10, 9, 21, 0, tzinfo=LOCAL_TZ),
+    text="Gewitter mit Starkregen und Sturmböen",
+)
+
+
+async def demo_storm(app: AppRuntime) -> None:
+    """Für das Demo-Backend: Unwetter-Reserve an und die Warnung ``DEMO_STORM`` bekannt, ohne
+    Abruf bei GeoSphere Austria (der Dienst ``storm.run`` läuft in der Demo nicht). Die Pläne des
+    Planungsdienstes danach halten den Akku im Fenster auf 40 %."""
+    current = app.settings.current()
+    planning = current.settings.planning
+    storm = planning.storm.model_copy(update={"enabled": True})
+    app.settings.update(
+        current.settings.model_copy(
+            update={"planning": planning.model_copy(update={"storm": storm})}
+        ),
+        base_version=current.version,
+        actor="admin",
+        source="ui",
+    )
+
+    async def fetch(*_: Any) -> list[StormWarning]:
+        return [DEMO_STORM]
+
+    app.storm._fetch = fetch
+    await app.storm.refresh()
 
 
 async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:

@@ -9,6 +9,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import update
@@ -43,8 +44,15 @@ from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
 from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanTrigger, intent_plan
-from bindaems.shared.settings import PlanningSettings, ThermalPlanSettings
+from bindaems.shared.plan import (
+    BatteryIntent,
+    BatteryIntentKind,
+    Plan,
+    PlanTrigger,
+    StormWarning,
+    intent_plan,
+)
+from bindaems.shared.settings import PlanningSettings, StormSettings, ThermalPlanSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
 Solver = Callable[[PlanInputs], Awaitable[OptimizerResult]]
@@ -250,6 +258,7 @@ async def test_collect_battery_from_config(service, cfg):
     )
     assert battery.max_grid_charge_setpoint_w == cfg.victron.max_grid_charge_setpoint_w
     assert battery.grid_max_import_w == (35 - 2) * 230.0 * 3
+    assert battery.grid_phase_import_w == (20 - 1) * 230.0
     assert battery.limit_now_charge_w is None and battery.limit_now_discharge_w is None
     assert inputs.month_peak_kw is None and inputs.trigger == "start"
 
@@ -272,6 +281,29 @@ async def test_collect_budget_floors_from_the_config(service_with, cfg):
     control = cfg.control.model_copy(update={"peak_target_kw": 8.0})
     inputs = await service_with(cfg=cfg.model_copy(update={"control": control})).collect("start")
     assert inputs.peak_target_kw == 8.0
+
+
+async def test_collect_passes_the_storm_warnings(service_with, settings_service, clock):
+    # Ruling R1: ``collect`` gibt die bekannten Warnungen an ``assemble_inputs``; mit Schalter
+    # haben die Slots der Warnung (eine Stunde Vorlauf) die Untergrenze
+    begin = slot_start(clock.now()) + 8 * SLOT
+    warning = StormWarning(
+        warn_id=1,
+        version=1,
+        kind="sturm",
+        level=3,
+        begin=begin,
+        end=begin + 4 * SLOT,
+        text="Sturm",
+    )
+    service = service_with(storm=lambda: [warning])
+    inputs = await service.collect("storm")
+    assert inputs.storm_warnings == [] and all(s.storm_floor_pct is None for s in inputs.slots)
+    set_planning(settings_service, PlanningSettings(storm=StormSettings(enabled=True)))
+    inputs = await service.collect("storm")
+    assert inputs.storm_warnings == [warning]
+    floors = [i for i, s in enumerate(inputs.slots) if s.storm_floor_pct is not None]
+    assert floors == list(range(4, 12))
 
 
 async def test_collect_takes_p25_and_the_planned_cars(service_with, live, forecast):
@@ -703,6 +735,58 @@ async def test_new_pv_forecast_requests_replan(service_with, forecast):
         forecast.forecast = replace(forecast.forecast, issued_at=newer)
         await until(lambda: len(calls) == 2)
     assert triggers(calls) == ["start", "pv_forecast"]
+
+
+async def test_storm_warning_change_requests_replan_once(service_with):
+    warnings: list[StormWarning] = []
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), storm=lambda: list(warnings)
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        warnings.append(
+            StormWarning(
+                warn_id=1,
+                version=1,
+                kind="gewitter",
+                level=2,
+                begin=at("2026-10-16T12:00:00+00:00"),
+                end=at("2026-10-16T14:00:00+00:00"),
+                text="t",
+            )
+        )
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)  # unveränderte Warnung plant nicht noch einmal
+        warnings.clear()  # zurückgenommen
+        await until(lambda: len(calls) == 3)
+    assert triggers(calls) == ["start", "storm", "storm"]
+
+
+async def test_storm_warning_order_does_not_request_replan(service_with):
+    def warning(warn_id: int) -> StormWarning:
+        return StormWarning(
+            warn_id=warn_id,
+            version=1,
+            kind="gewitter",
+            level=2,
+            begin=at("2026-10-16T12:00:00+00:00"),
+            end=at("2026-10-16T14:00:00+00:00"),
+            text="t",
+        )
+
+    warnings = [warning(1), warning(2)]
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), storm=lambda: list(warnings)
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        warnings.reverse()  # gleicher Beginn, andere Reihenfolge der Quelle
+        await asyncio.sleep(0.2)
+    assert triggers(calls) == ["start"]
 
 
 async def test_new_prices_request_replan(service_with, price_store, clock):
@@ -1231,10 +1315,19 @@ async def test_shadow_shift_is_not_sent(service_with, live, cold, small_house):
 
 
 async def test_active_shift_goes_into_intent(
-    service_with, live, cold, settings_service, small_house
+    service_with, live, cold, settings_service, small_house, monkeypatch
 ):
     set_thermal(settings_service, enabled=True)
     live.health = thermal_health()
+    # der Plan des ersten Schritts, wie ihn der zweite bekommt
+    stage_one: list[Plan] = []
+    apply = thermal_stage.apply_thermal
+
+    def recording(plan: Plan, **kwargs: Any) -> Plan:
+        stage_one.append(plan)
+        return apply(plan, **kwargs)
+
+    monkeypatch.setattr("bindaems.app.planning.service.apply_thermal", recording)
     service = service_with(cfg=small_house, thermal_model=heating_models())
     plan = await service.replan("manual")
     assert plan.thermal is not None
@@ -1244,8 +1337,10 @@ async def test_active_shift_goes_into_intent(
     cheap_before = [s for s in plan.slots if s.start < expensive[0].start]
     assert max(s.thermal_steps or 0 for s in cheap_before) > 0
     assert min(s.thermal_w for s in expensive) < 0
-    # Plan des ersten Schritts bleibt: Bezug, Einspeisung und Kosten unverändert
-    first = await service_with(cfg=small_house).replan("manual")
+    # Plan des ersten Schritts bleibt: Bezug, Einspeisung und Kosten unverändert. Verglichen wird
+    # mit dem ersten Schritt desselben Laufs: Ein zweiter Lauf hat einen vorigen Plan und darf bei
+    # gleichen Kosten andere Slots wählen (gleiche Abendpreise, Monatsspitze ohne Leistungspreis).
+    [first] = stage_one
     assert [(s.import_w, s.export_w, s.cost_ct) for s in plan.slots] == [
         (s.import_w, s.export_w, s.cost_ct) for s in first.slots
     ]

@@ -140,6 +140,7 @@ def test_battery_comes_from_config(app_db: AppDb, cfg: Config) -> None:
     assert battery.usable_kwh == cfg.battery.usable_kwh
     assert battery.max_grid_charge_setpoint_w == cfg.victron.max_grid_charge_setpoint_w
     assert battery.grid_max_import_w > 0 and battery.start_soc_pct == 35.0
+    assert battery.grid_phase_import_w == 4370.0
 
 
 def test_day_with_too_many_gaps_is_skipped(app_db: AppDb, cfg: Config) -> None:

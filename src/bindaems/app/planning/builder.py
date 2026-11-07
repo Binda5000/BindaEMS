@@ -10,6 +10,10 @@ Akku ins Auto (Plan Akku ins Auto, wenn er übrig ist): Der Akkuanteil je Auto
 (``PlanSlot.ev_battery_w``) geht in die Nachrechnung und damit in Kosten, Budget und Plan-Schwelle,
 nicht in die Vergleichskosten (Entscheidung 10). Ein Plan des Optimierers sagt je Slot, ob Autos in
 Sofort übrigen Akku bekommen (``PlanSlot.now_battery``, ``now_battery_flags``); der Ersatzplan nie.
+
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidungen 7 und 12): Jeder Slot trägt seine
+Untergrenze (``PlanSlot.storm_reserve_pct``), die Plan-Schwelle rechnet mit ihr
+(``support_thresholds``), und der Plan nennt Ziel und Warnungen (``Plan.storm``, ``plan_storm``).
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from bindaems.shared.plan import (
     Plan,
     PlanSlot,
     PlanSource,
+    PlanStorm,
     PlanVehicle,
     SolverStatus,
 )
@@ -156,7 +161,8 @@ def _budgets(
     source: PlanSource,
     optimizer_peaks_kw: Mapping[str, float] | None,
 ) -> list[float | None]:
-    """Budget je Slot (akzeptierte Monatsspitze in kW) für Monate mit Leistungspreis.
+    """Budget je Slot (akzeptierte Monatsspitze in kW) für Monate mit Leistungspreis und für
+    gedachte Monate ohne (``PeakMonth.virtual``, Plan Netzgrenze je Phase, Entscheidung 8).
 
     Eine Formel für Ersatzplan und Optimierer (Präzisierungen 10 und 11, Gesamtreview I2): auf
     0,1 kW aufgerundet das Größte aus ``peak0_kw`` (bisherige Monatsspitze, mindestens
@@ -208,30 +214,49 @@ def _guard_steps(
 
 
 def support_thresholds(
-    slots: Sequence[PlanSlot], reserve_pct: float
+    slots: Sequence[PlanSlot], reserve_pct: float, floors: Sequence[float | None] = ()
 ) -> list[tuple[float, datetime]]:
     """Plan-Schwelle der Akku-Unterstützung je Slot und der Zeitpunkt, bis zu dem der Plan den Akku
-    braucht (Präzisierung 6).
+    braucht (Präzisierung 6; Plan Unwetter-Reserve, Entscheidung 7).
 
-    Mit der Entladung ``d_t`` eines Slots in Prozentpunkten (``soc_start_pct - soc_end_pct``) gilt
-    rückwärts ``R_N = 0`` und ``R_t = max(0, d_t + R_{t+1})``; die Schwelle ist
-    ``min(100, ceil(reserve_pct + R_t))``. „Bis“ ist der Beginn des ersten späteren Slots mit
-    ``R = 0``, sonst das Horizontende.
+    ``floors`` ist die Untergrenze der Unwetter-Reserve je Slot in % (``None``: die Reserve; ohne
+    Angabe überall die Reserve). Mit der Entladung ``d_t`` eines Slots in Prozentpunkten
+    (``soc_start_pct - soc_end_pct``) und ``g_t = f_t − reserve_pct`` (``f_t`` die Untergrenze des
+    Slots, sonst die Reserve) gilt rückwärts ``R_N = 0`` und ``R_t = max(g_t, d_t + R_{t+1})``; die
+    Schwelle ist ``min(100, ceil(reserve_pct + R_t))``. Ohne Untergrenze ist ``g_t = 0``. „Bis“ ist
+    der Beginn des ersten späteren Slots mit ``R = 0``, sonst das Horizontende; im Fenster also
+    mindestens sein Ende.
     """
     count = len(slots)
+    if floors and len(floors) != count:
+        raise ValueError("Untergrenzen müssen zu den Slots passen")
     if count == 0:
         return []
+    above = [0.0] * count  # g_t
+    for index, floor_pct in enumerate(floors):
+        if floor_pct is not None:
+            above[index] = max(0.0, floor_pct - reserve_pct)
     starts = [slot.start for slot in slots] + [slots[-1].start + SLOT]
     need = [0.0] * (count + 1)
     until = [starts[count]] * (count + 1)
     for index in range(count - 1, -1, -1):
         drop = slots[index].soc_start_pct - slots[index].soc_end_pct
-        need[index] = max(0.0, drop + need[index + 1])
+        need[index] = max(above[index], drop + need[index + 1])
         until[index] = starts[index + 1] if need[index + 1] <= _SOC_EPS else until[index + 1]
     return [
         (min(100.0, float(ceil(reserve_pct + need[index] - _SOC_EPS))), until[index])
         for index in range(count)
     ]
+
+
+def plan_storm(inputs: PlanInputs) -> PlanStorm | None:
+    """Unwetter-Reserve des Plans (Entscheidung 12, Ruling R12): das Ziel ``min(Ziel,
+    soc_max_pct)`` und die passenden Warnungen, sobald welche bekannt sind, auch wenn kein Slot
+    des Horizonts eine Untergrenze hat; ``None`` ohne Warnung (Schalter aus eingeschlossen)."""
+    if not inputs.storm_warnings:
+        return None
+    target = float(min(inputs.planning.storm.target_soc_pct, inputs.battery.soc_max_pct))
+    return PlanStorm(target_pct=target, warnings=list(inputs.storm_warnings))
 
 
 def build_plan(
@@ -300,10 +325,12 @@ def build_plan(
                 ev_w=cars,
                 ev_battery_w=from_battery,
                 now_battery=now,
+                storm_reserve_pct=slot.storm_floor_pct,
                 reasons=[],
             )
         )
-    thresholds = support_thresholds(drafts, inputs.battery.reserve_pct)
+    floors = [slot.storm_floor_pct for slot in inputs.slots]
+    thresholds = support_thresholds(drafts, inputs.battery.reserve_pct, floors)
     reasons = reasons_for(
         inputs,
         intents,
@@ -333,10 +360,12 @@ def build_plan(
         soc_max_pct=inputs.battery.soc_max_pct,
         soc_start_pct=inputs.battery.soc_pct,
         month_peak_kw=inputs.month_peak_kw,
-        power_price=bool(inputs.peak_months),
+        # nur ein echter Leistungspreis; ein gedachter Monat gibt nur sein Budget (Entscheidung 8)
+        power_price=any(not entry.virtual for entry in inputs.peak_months),
         expected_cost_ct=sum(item.cost_ct for item in steps),
         baseline_cost_ct=baseline_cost_ct(inputs, powers),
         issues=list(issues),
         vehicles=vehicles,
+        storm=plan_storm(inputs),
         slots=slots,
     )
