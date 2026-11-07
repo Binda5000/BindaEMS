@@ -1005,3 +1005,39 @@ def test_suffix_collision_is_detected(tmp_path, key, entity) -> None:
 
     with pytest.raises(ConfigError, match=rf"vehicles\.{key}: .*{entity}.*vehicles\.tesla"):
         load_config(write_cfg(tmp_path, mutate))
+
+
+def test_outage_floor_defaults_to_5() -> None:
+    assert load_config(EXAMPLE).battery.outage_floor_soc_pct == 5.0
+
+
+def test_outage_floor_above_reserve_rejected(tmp_path: Path) -> None:
+    p = write_cfg(
+        tmp_path,
+        lambda d: d["battery"].update(reserve_soc_pct=20, outage_floor_soc_pct=25),
+    )
+    with pytest.raises(ConfigError, match="outage_floor_soc_pct darf nicht über reserve_soc_pct"):
+        load_config(p)
+
+
+@pytest.mark.parametrize(("value", "ok"), [(59, False), (3601, False), (60, True), (3600, True)])
+def test_ping_interval_bounds(tmp_path: Path, value: float, ok: bool) -> None:
+    p = write_cfg(tmp_path, lambda d: d.setdefault("app", {}).update(ping_interval_s=value))
+    if ok:
+        assert load_config(p).app.ping_interval_s == value
+    else:
+        with pytest.raises(ConfigError):
+            load_config(p)
+    assert load_config(EXAMPLE).app.ping_interval_s == 300.0
+
+
+def test_ping_url_must_be_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
+    monkeypatch.setenv("BINDAEMS_PING_URL", "http://x")
+    with pytest.raises(ValidationError, match=r"ping_url muss mit https:// beginnen"):
+        load_secrets()
+    monkeypatch.setenv("BINDAEMS_PING_URL", "https://hc-ping.com/abc")
+    url = load_secrets().ping_url
+    assert url is not None and url.get_secret_value() == "https://hc-ping.com/abc"
+    monkeypatch.setenv("BINDAEMS_PING_URL", "")
+    assert load_secrets().ping_url is None

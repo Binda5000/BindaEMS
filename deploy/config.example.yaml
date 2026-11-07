@@ -16,6 +16,7 @@ grid:
 battery:
   usable_kwh: 30
   reserve_soc_pct: 20   # USV-Reserve: harte Untergrenze für den Akku-SOC
+  # outage_floor_soc_pct: 5   # SOC, bei dem das BMS im Inselbetrieb abschaltet (höchstens reserve_soc_pct); Untergrenze der USV-Reichweite
   max_charge_w: 10000
   max_discharge_w: 12000
 
@@ -152,6 +153,7 @@ app:
   core_url: http://ems-core:8081
   trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
   cookie_secure: true
+  # ping_interval_s: 300   # Takt des Lebenszeichens in s (60 bis 3600); es wird nur gesendet, wenn BINDAEMS_PING_URL gesetzt ist
 
 # Wärme und Kälte (Phase 6a): die Klimaanlage an der UVR610. Der core liest vom C.M.I. per CoE V2 (UDP)
 # Ist, Soll, Betriebsart, Rückmeldung, Leistung und das Echo des Versatzes und sendet der UVR einen

@@ -159,11 +159,15 @@ class BatteryConfig(_Model):
     max_charge_w: Annotated[float, Field(gt=0)]
     max_discharge_w: Annotated[float, Field(gt=0)]
     soc_max_pct: Annotated[float, Field(gt=0, le=100)] = 100.0
+    # SOC, bei dem das BMS im Inselbetrieb abschaltet (Untergrenze der USV-Reichweite)
+    outage_floor_soc_pct: Annotated[float, Field(ge=0, le=100)] = 5.0
 
     @model_validator(mode="after")
     def _reserve_below_max(self) -> Self:
         if self.reserve_soc_pct >= self.soc_max_pct:
             raise ValueError("reserve_soc_pct muss kleiner als soc_max_pct sein")
+        if self.outage_floor_soc_pct > self.reserve_soc_pct:
+            raise ValueError("outage_floor_soc_pct darf nicht über reserve_soc_pct liegen")
         return self
 
 
@@ -569,6 +573,7 @@ class AppConfig(_Model):
     cookie_secure: bool = True
     ui_dir: Path | None = Path("/app/ui")
     decisions_keep_days: Annotated[int, Field(ge=1, le=3650)] = 180  # Entscheidungslog in SQLite
+    ping_interval_s: Annotated[float, Field(ge=60, le=3600)] = 300.0  # Takt des Lebenszeichens
 
     @field_validator("trusted_proxies")
     @classmethod
@@ -912,6 +917,7 @@ class Secrets(BaseSettings):
     ha_token: SecretStr | None = None
     influx_password: SecretStr | None = None
     ha_mqtt_password: SecretStr | None = None
+    ping_url: SecretStr | None = None
     internal_token: SecretStr
 
     @field_validator("internal_token")
@@ -919,6 +925,13 @@ class Secrets(BaseSettings):
     def _token_length(cls, value: SecretStr) -> SecretStr:
         if len(value.get_secret_value()) < 32:
             raise ValueError("internal_token muss mindestens 32 Zeichen lang sein")
+        return value
+
+    @field_validator("ping_url")
+    @classmethod
+    def _ping_url_https(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not value.get_secret_value().startswith("https://"):
+            raise ValueError("ping_url muss mit https:// beginnen")
         return value
 
 
