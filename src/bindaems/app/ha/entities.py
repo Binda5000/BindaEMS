@@ -28,6 +28,7 @@ from bindaems.app.learning.driving_profile import (
     weekday_of,
 )
 from bindaems.app.ledger.service import MonthPeak
+from bindaems.app.monitoring.backup_range import BackupRange
 from bindaems.app.planning.execution import ExecutionState, execution_state
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.thermal_shift import STEP_K
@@ -174,6 +175,9 @@ class HaInputs:
     # je Fahrzeug die Mehrkosten des Leistungspreises bei voller Leistung (``boost_cost``); leer,
     # wenn kein Leistungspreis gilt
     boost_cost_eur: Mapping[str, float] = field(default_factory=dict)
+    # USV-Reichweite des Akkus bei Netzausfall; None = unbekannt
+    backup: BackupRange | None = None
+    outage_since: datetime | None = None  # Beginn des laufenden Netzausfalls; None = keiner
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -1029,6 +1033,36 @@ def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     }
 
 
+def _backup_hours(reserve: bool) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        if inputs.backup is None:
+            return UNKNOWN
+        return fmt(inputs.backup.reserve_h if reserve else inputs.backup.now_h, 1)
+
+    return value
+
+
+def _backup_attributes(cfg: Config) -> Callable[[HaInputs], Mapping[str, Any]]:
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        backup = inputs.backup
+        return {
+            "reserve_h": None if backup is None else backup.reserve_h,
+            "night_h": None if backup is None else backup.night_h,
+            "load_w": None if backup is None else backup.load_w,
+            "load_source": None if backup is None else backup.load_source,
+            "floor_soc_pct": cfg.battery.outage_floor_soc_pct,
+            "ohne_pv": True,
+        }
+
+    return attributes
+
+
+def _outage_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    """Beginn des laufenden Ausfalls lokal (wie bei ``prices``); ohne Ausfall ``None``."""
+    since = inputs.outage_since
+    return {"seit": None if since is None else since.astimezone(LOCAL_TZ).isoformat()}
+
+
 def _storm_floor(inputs: HaInputs) -> str:
     return fmt(0.0 if inputs.storm_floor_pct is None else inputs.storm_floor_pct, 0)
 
@@ -1223,6 +1257,36 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             unit="%",
             device_class="battery",
             state_class="measurement",
+        ),
+        EntitySpec(
+            "usv_reichweite",
+            "sensor",
+            "USV-Reichweite",
+            main,
+            _backup_hours(reserve=False),
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+            attributes=_backup_attributes(cfg),
+        ),
+        EntitySpec(
+            "usv_reichweite_reserve",
+            "sensor",
+            "USV-Reichweite ab Reserve",
+            main,
+            _backup_hours(reserve=True),
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+        ),
+        EntitySpec(
+            "netzausfall",
+            "binary_sensor",
+            "Netzausfall",
+            main,
+            lambda i: on_off(i.outage_since is not None),
+            device_class="problem",
+            attributes=_outage_attributes,
         ),
         EntitySpec(
             "ems_mode",
@@ -1633,6 +1697,8 @@ def build_inputs(
     storm_until: datetime | None = None,
     storm_text: str | None = None,
     boost_cost_eur: Mapping[str, float] | None = None,
+    backup: BackupRange | None = None,
+    outage_since: datetime | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -1728,6 +1794,8 @@ def build_inputs(
         storm_until=storm_until,
         storm_text=storm_text,
         boost_cost_eur=dict(boost_cost_eur or {}),
+        backup=backup,
+        outage_since=outage_since,
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

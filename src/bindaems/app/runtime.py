@@ -721,6 +721,8 @@ class AppRuntime:
             auto_target=self._auto_targets(),
             thermal_plan_enabled=settings.learning.thermal.enabled,
             **self._storm_ha(now),
+            backup=self.backup_range(),
+            outage_since=outage.start if (outage := self.outages.open_now()) else None,
             # die Mehrkosten des Leistungspreises nur, wenn im Monat einer gilt
             boost_cost_eur=(
                 {item["id"]: item["cost_eur"] for item in costs["vehicles"]}

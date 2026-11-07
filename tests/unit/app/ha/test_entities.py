@@ -31,6 +31,7 @@ from bindaems.app.ha.entities import (
 )
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.ledger.service import MonthPeak
+from bindaems.app.monitoring.backup_range import BackupRange
 from bindaems.app.planning.builder import build_plan
 from bindaems.app.planning.vehicles import full_power_w
 from bindaems.app.prices.service import PriceService
@@ -74,6 +75,9 @@ def test_entities_from_config(cfg) -> None:
         "battery_power",
         "house_power",
         "battery_soc",
+        "usv_reichweite",
+        "usv_reichweite_reserve",
+        "netzausfall",
         "ems_mode",
         "core_online",
         "problem_competitor",
@@ -1889,3 +1893,58 @@ def test_estimate_now_power_cost(cfg) -> None:
         == 1.5
     )
     assert spec.attributes(_estimate_inputs())["now"]["power_cost_eur"] is None
+
+
+def test_backup_range_discovery(cfg) -> None:
+    for oid, name in (
+        ("usv_reichweite", "USV-Reichweite"),
+        ("usv_reichweite_reserve", "USV-Reichweite ab Reserve"),
+    ):
+        topic, payload = discovery(entity(cfg, oid), cfg.homeassistant.mqtt)
+        data = json.loads(payload)
+        assert topic == f"homeassistant/sensor/bindaems/{oid}/config"
+        assert data["name"] == name
+        assert (data["unit_of_measurement"], data["device_class"], data["state_class"]) == (
+            "h",
+            "duration",
+            "measurement",
+        )
+    outage = json.loads(discovery(entity(cfg, "netzausfall"), cfg.homeassistant.mqtt)[1])
+    assert (outage["name"], outage["device_class"]) == ("Netzausfall", "problem")
+
+
+def test_backup_range_states_and_attributes(cfg) -> None:
+    backup = BackupRange(now_h=6.34, reserve_h=3.0, load_w=420.0, load_source="tag", night_h=9.2)
+    inputs = sample_inputs(backup=backup)
+    assert state(cfg, "usv_reichweite", inputs) == "6.3"
+    assert state(cfg, "usv_reichweite_reserve", inputs) == "3.0"
+    assert entity(cfg, "usv_reichweite_reserve").attributes is None
+    assert entity(cfg, "usv_reichweite").attributes(inputs) == {
+        "reserve_h": 3.0,
+        "night_h": 9.2,
+        "load_w": 420.0,
+        "load_source": "tag",
+        "floor_soc_pct": cfg.battery.outage_floor_soc_pct,
+        "ohne_pv": True,
+    }
+
+
+def test_backup_range_unknown(cfg) -> None:
+    for inputs in (
+        sample_inputs(backup=None),
+        sample_inputs(backup=BackupRange(None, None, None, None, None)),
+    ):
+        assert state(cfg, "usv_reichweite", inputs) == UNKNOWN
+        assert state(cfg, "usv_reichweite_reserve", inputs) == UNKNOWN
+
+
+def test_outage_binary_sensor(cfg) -> None:
+    since = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
+    on = sample_inputs(outage_since=since)
+    assert state(cfg, "netzausfall", on) == "ON"
+    assert entity(cfg, "netzausfall").attributes(on) == {
+        "seit": since.astimezone(LOCAL_TZ).isoformat()
+    }
+    off = sample_inputs()
+    assert state(cfg, "netzausfall", off) == "OFF"
+    assert entity(cfg, "netzausfall").attributes(off) == {"seit": None}
