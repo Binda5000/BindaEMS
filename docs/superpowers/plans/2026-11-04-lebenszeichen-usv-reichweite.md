@@ -19,20 +19,20 @@
 - Reichweite immer **ohne PV** gerechnet und so beschriftet; nie negativ, nie NaN, nie unendlich; ohne Grundlage keine Zahl, sondern „zu wenig Daten“.
 - Texte deutsch, Zahlen mit Komma, `NBSP` vor Einheiten (wie `energyText`).
 - Neue Felder in `config.yaml` haben Standardwerte; sie dürfen erst in die `config.yaml` der Anlage, wenn core und app aus diesem Stand laufen (der core liest dieselbe Datei).
-- Migration: die nächste freie Nummer bei Beginn der Umsetzung (heute `0016`; laufen parallel andere Pläne mit Migration, gilt die Reihenfolge auf `main`).
+- Migration: die nächste freie Nummer auf `main` bei Beginn von Task 3; „Betrieb im Blick“ bringt `0016` (`v0016_ops.py`), dieser Plan dann `0017` mit `down_revision = "0016"`.
 - Ausrollen: nur mit einem Sammel-Pull (core + app gemeinsam, nie `ems-app` allein), frühestens mit Stufe 2 ab 23.11.2026; bis 22.11. laufen Abnahmen.
 - Prüfkette vor jedem Commit wie in den Projektregeln (ruff, mypy strict, lint-imports, pytest mit Abdeckung ≥ 75 % gesamt, UI check/lint/test).
 
 ## Entscheidungen
 
-Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit der Empfehlung geschrieben.
+Freigegeben vom Betreiber am 7.11.2026 („Bitte starten“). Die Karten: 5 hat er am 4.11. gewählt, 6 gilt mit der Freigabe in der empfohlenen Form; 7 bleibt bei 5 %, bis er seinen Wert nennt.
 
 1. **Wer pingt: die app** (nicht der core, nicht der Cerbo). Die app läuft in der VM im Cluster: Fehlt ihr Ping, ist die VM, der Cluster oder das Internet weg. Der core bleibt frei von Internet-Abhängigkeiten, der Cerbo-Watchdog unverändert. Ein Cron am Cerbo würde einen VM-Ausfall nicht sehen.
 2. **Dienst: healthchecks.io-Protokoll** (gratis bis 20 Checks; auch selbst gehostet möglich). Erfolg = `POST <url>`, Störung = `POST <url>/fail`, je mit einer Textzeile als Body (healthchecks zeigt sie im Verlauf und in vielen Benachrichtigungen). Einrichtung beim Dienst: Periode 5 min, Karenz 10 min, Benachrichtigung z. B. über Telegram, ntfy oder Pushover. Das ist dein Schritt an der Anlage (Task 8 schreibt die Anleitung).
 3. **Takt 5 min** (`app.ping_interval_s`, Standard 300, 60–3600), erster Ping 30 s nach dem Start der app.
 4. **Wann „Störung“ (`/fail`):** core seit mindestens 120 s nicht erreichbar; Netzausfall (Inselbetrieb); core im Zustand SAFE (veraltete Cerbo-Daten u. a.). OBSERVE und DEGRADED gelten als in Ordnung (OBSERVE ist normal bei Regelbetrieb aus); der Text nennt die Betriebsart. Mehr prüft der Betriebscheck (Idee 1.1), nicht dieses Lebenszeichen.
-5. **(Karte) Netzausfall meldet das Lebenszeichen als Störung**, mit SOC und Reichweite im Text („Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18 h ohne PV“); kehrt das Netz zurück, kommt mit dem nächsten Ping „wieder in Ordnung“. Ist der Router nicht an der USV, bleibt der Ping ganz aus, und der Dienst meldet das nach der Karenz ebenfalls.
-6. **(Karte) Lastannahme der Reichweite: mittlere Last an AC-Out der letzten 7 vollen Tage** (24 h). Quelle: InfluxDB, Retention `long`, Messung `power` mit `source='load'`, `id='consumption_output'`, Phasen L1–L3, je Viertelstunde gemittelt und über die Phasen summiert (eine Viertelstunde zählt nur mit allen drei Phasen). Die Nacht-Grundlast an AC-Out (00:00–05:00 der letzten 7 Nächte) rechnet die app trotzdem und zeigt sie als zweite Zahl („nachts bis ≈ 40 h“) in API, HA-Attributen und der Karte auf der Seite System. Begründung: Was an AC-Out hängt, läuft bei einem Ausfall tagsüber wie sonst weiter; nur mit der Nachtlast wäre die Zahl zu optimistisch.
+5. **(entschieden 4.11.) Netzausfall meldet das Lebenszeichen als Störung**, mit SOC und Reichweite im Text („Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18 h ohne PV“); kehrt das Netz zurück, kommt mit dem nächsten Ping „wieder in Ordnung“. Ist der Router nicht an der USV, bleibt der Ping ganz aus, und der Dienst meldet das nach der Karenz ebenfalls.
+6. **(mit der Freigabe 7.11.) Lastannahme der Reichweite: mittlere Last an AC-Out der letzten 7 vollen Tage** (24 h). Quelle: InfluxDB, Retention `long`, Messung `power` mit `source='load'`, `id='consumption_output'`, Phasen L1–L3, je Viertelstunde gemittelt und über die Phasen summiert (eine Viertelstunde zählt nur mit allen drei Phasen). Die Nacht-Grundlast an AC-Out (00:00–05:00 der letzten 7 Nächte) rechnet die app trotzdem und zeigt sie als zweite Zahl („nachts bis ≈ 40 h“) in API, HA-Attributen und der Karte auf der Seite System. Begründung: Was an AC-Out hängt, läuft bei einem Ausfall tagsüber wie sonst weiter; nur mit der Nachtlast wäre die Zahl zu optimistisch.
 7. **Untergrenze im Inselbetrieb:** neues Feld `battery.outage_floor_soc_pct` (Standard 5 %, Bereich 0 bis `reserve_soc_pct`). Victron ESS entlädt bei Netzausfall unter den Min-SOC, bis das BMS abschaltet; diese Schwelle trägst du für deinen Akku ein (Frage in der Freigabe).
 8. **Formel:** `η = √(planning.roundtrip_pct / 100)` (Entladeseite, Standard 88 % → 0,938). `kWh(soc) = max(0, soc − Untergrenze) / 100 × usable_kwh × η`. Reichweite `h = kWh × 1000 / Last_W`. Zwei Zahlen: **jetzt** (aktueller SOC) und **ab Reserve** (`reserve_soc_pct`, also was die Reserve allein trägt). Last unter 50 W gilt als unplausibel → keine Zahl.
 9. **Während eines Netzausfalls** rechnet die Reichweite mit der mittleren Last an AC-Out (Summe `consumption_output.l1..l3.power_w` aus dem Live-Stand) seit Beginn des Ausfalls, sobald 15 min erfasst sind; vorher mit der Lastannahme.
@@ -45,7 +45,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 1. **Internet weg, VM läuft:** jeder Ping scheitert (Timeout, DNS, Proxy). Erwartet: kein Absturz, kein Neustart anderer Jobs, eine Logzeile je Wechsel (nicht je Versuch), Komponente „Lebenszeichen nicht gesendet seit 14:05“, nächster Versuch im Takt. Test in Task 4.
 2. **Neustart der app während eines Netzausfalls** und Neustart nach dem Ende: keine zweite offene Zeile, kein Ausfall ohne Ende. Test in Task 3.
 3. **SOC ungültig oder veraltet, core getrennt:** keine Reichweite (`None`), kein „0 h“; das Lebenszeichen meldet erst nach 120 s „core nicht erreichbar“. Tests in Task 2 und Task 4.
-4. **InfluxDB nicht erreichbar, neue Anlage oder Lücken bei `consumption_output`:** weniger als 192 vollständige Viertelstunden (2 Tage, alle drei Phasen) → keine Lastannahme, Text „zu wenig Daten“, keine Division durch null. Test in Task 2.
+4. **InfluxDB nicht erreichbar, neue Anlage oder Lücken bei `consumption_output`:** weniger als 192 vollständige Viertelstunden (2 Tage, alle drei Phasen) → keine Lastannahme, Text „zu wenig Daten“, keine Division durch null; scheitert nur die Abfrage, gilt die letzte gültige Lastannahme bis 48 h weiter. Test in Task 2.
 5. **Secret-Leck:** die URL (mit UUID) erscheint weder im Log noch in `/api/backup`, `/api/system` oder HA, auch nicht in einer Fehlermeldung von httpx. Test in Task 4.
 
 ---
@@ -86,7 +86,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
   - `def slot_loads(series: Sequence[Series]) -> dict[datetime, float]` — je Viertelstunde die Summe der drei Phasen; Viertelstunden ohne alle drei Phasen fallen weg
   - `def load_basis(loads: Mapping[datetime, float], today: date) -> LoadBasis` — Tage `today−7 … today−1` (lokal), Tag = alle Viertelstunden, Nacht = mit lokalem Beginn 00:00–04:45; `day_w` nur ab `MIN_DAY_SLOTS = 192`, `night_w` ab `MIN_NIGHT_SLOTS = 40`, sonst `None`.
   - `@dataclass(frozen=True) class BackupRange: now_h: float | None; reserve_h: float | None; load_w: float | None; load_source: Literal["tag", "ausfall"] | None; night_h: float | None`
-  - `def backup_range(*, soc_pct: float | None, reserve_pct: float, floor_pct: float, usable_kwh: float, roundtrip_pct: float, basis: LoadBasis, outage_load_w: float | None) -> BackupRange`
+  - `def backup_range(*, soc_pct: float | None, reserve_pct: float, floor_pct: float, usable_kwh: float, roundtrip_pct: float, basis: LoadBasis | None, outage_load_w: float | None) -> BackupRange` (`basis=None` und kein `outage_load_w` → alle Stunden `None`)
   - `def hours_text(hours: float | None) -> str` — „≈ 7,5 h“, „≈ 31 h“, `None` → „zu wenig Daten“
   - `class BackupRangeService(influx: InfluxReader, clock)` mit `async refresh() -> None` (Abfrage über 7 Tage, dann `load_basis`; bei `InfluxQueryError` bleibt die letzte Grundlage bis 48 h), `basis() -> LoadBasis | None`, `async run() -> None` (beim Start und täglich 00:20 lokal, über `next_local` aus `bindaems.app.schedule`).
 
@@ -114,7 +114,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
 ### Task 3: Netzausfälle erkennen und speichern
 
 **Files:**
-- Create: `src/bindaems/app/db/migrations/versions/v0016_grid_outage.py`
+- Create: `src/bindaems/app/db/migrations/versions/v0017_grid_outage.py`
 - Modify: `src/bindaems/app/db/schema.py` (Tabelle `grid_outage`)
 - Create: `src/bindaems/app/monitoring/outages.py`
 - Test: `tests/unit/app/monitoring/test_outages.py`, `tests/unit/app/test_db.py` (Migration auf/ab)
@@ -135,7 +135,7 @@ Mit (Karte) markiert: als Entscheidungskarte an Binda gestellt; der Plan ist mit
   - `test_restart_during_outage_continues` → offene Zeile in der DB, neuer Tracker, Quelle 240 → dieselbe `id`, keine zweite Zeile.
   - `test_restart_after_return_closes_estimated` → offene Zeile, neuer Tracker, Quelle 1 → `end` = erste Beobachtung, `end_estimated is True`.
   - `test_recent_newest_first` → 25 Ausfälle → `recent()` liefert 20, neuester zuerst.
-  - In `test_db.py`: `test_migration_0016_creates_grid_outage` (auf und ab, Tabelle danach da bzw. weg); `test_migrations_match_schema` bleibt grün.
+  - In `test_db.py`: `test_migration_0017_creates_grid_outage` (auf und ab, Tabelle danach da bzw. weg); `test_migrations_match_schema` bleibt grün.
 - [ ] **Step 2:** Tests → FAIL.
 - [ ] **Step 3:** Umsetzen. Speichern: Beginn und Ende sofort, laufende Werte höchstens alle 60 s (`load_wh`, `covered_s`, `soc_min`). DB-Zugriffe über `asyncio.to_thread` wie in den anderen Diensten.
 - [ ] **Step 4:** Tests grün, Migration in `tests/unit/app/test_db.py` grün.
