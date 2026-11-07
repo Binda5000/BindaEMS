@@ -1118,7 +1118,8 @@ im Takt weiter; im Log steht eine Zeile je Wechsel, nicht je Versuch.
   (`Ac/ConsumptionOnOutput`), gerechnet immer **ohne PV**. Lastannahme ist das Mittel der letzten 7 vollen
   Tage aus InfluxDB (Retention `long`); die Nacht von 00:00 bis 05:00 steht als zweite Zahl daneben.
   Dazu braucht es mindestens 192 vollständige Viertelstunden (2 Tage, alle drei Phasen), sonst steht
-  „zu wenig Daten“.
+  „zu wenig Daten“. Während eines offenen Netzausfalls rechnet die Reichweite mit der mittleren Last
+  an AC-Out seit Beginn des Ausfalls (nach 15 Minuten) statt mit dem 7-Tage-Mittel.
 - **Vor dem Ausrollen** auf der Seite **System** in der Signaltabelle nachsehen, dass
   `consumption_output.l1..l3.power_w` Werte haben; sonst bleibt die Reichweite „zu wenig Daten“.
 - **Untergrenze:** `battery.outage_floor_soc_pct` (ab Werk 5 %, höchstens `reserve_soc_pct`) ist der SOC,
