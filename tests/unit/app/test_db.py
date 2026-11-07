@@ -18,6 +18,7 @@ from bindaems.app.db.schema import (
     driving_automation,
     driving_profile,
     forecast_record,
+    grid_outage,
     ledger_check,
     ledger_cost,
     metadata,
@@ -29,7 +30,7 @@ from bindaems.app.db.schema import (
     thermal_model,
 )
 
-HEAD = "0016"  # neueste Migration
+HEAD = "0017"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -799,3 +800,35 @@ def test_migration_0016_up_and_down(engine: Engine) -> None:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0015"
     migrate(engine)
     assert {"ops_finding", "ops_day"} <= set(inspect(engine).get_table_names())
+
+
+def test_migration_0017_creates_grid_outage(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "grid_outage") == {
+        "id": False,
+        "start": False,
+        "end": True,
+        "end_estimated": False,
+        "soc_start": True,
+        "soc_end": True,
+        "soc_min": True,
+        "load_wh": False,
+        "covered_s": False,
+    }
+    assert inspector.get_pk_constraint("grid_outage")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("grid_outage")] == [
+        ("ix_grid_outage_start", ["start"])
+    ]
+    t = datetime(2026, 11, 4, 2, 5, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(grid_outage).values(start=t, end_estimated=False, load_wh=0.0, covered_s=0.0)
+        )
+        stored = conn.execute(select(grid_outage)).mappings().one()
+    assert (stored["start"], stored["end"]) == (t, None)
+    _downgrade(engine, "0016")
+    assert "grid_outage" not in inspect(engine).get_table_names()
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0016"
+    migrate(engine)
+    assert "grid_outage" in inspect(engine).get_table_names()

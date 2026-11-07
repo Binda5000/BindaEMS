@@ -429,3 +429,20 @@ ops_day = Table(
     Column("computed_at", UtcDateTime(), nullable=False),
     Column("report_sent_at", UtcDateTime(), nullable=True),
 )
+
+# Netzausfälle (Victron im Inselbetrieb): Energie nur an AC-Out, ``covered_s`` zählt die Zeit,
+# in der alle drei Phasen einen Wert hatten
+grid_outage = Table(
+    "grid_outage",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("start", UtcDateTime(), nullable=False),
+    Column("end", UtcDateTime(), nullable=True),
+    Column("end_estimated", Boolean, nullable=False),
+    Column("soc_start", Float, nullable=True),
+    Column("soc_end", Float, nullable=True),
+    Column("soc_min", Float, nullable=True),
+    Column("load_wh", Float, nullable=False),
+    Column("covered_s", Float, nullable=False),
+    Index("ix_grid_outage_start", "start"),
+)
