@@ -1,5 +1,33 @@
 # Übergabe an die nächste Session
 
+**Stand an der Anlage (7.11.2026, geht allen älteren Angaben unten vor):** Ausgerollt ist `sha-146d7cc`
+(Stufe 1 des Sammel-Pulls am 3.11.2026, fest als `BINDAEMS_VERSION` in der `.env`), davor das
+gemeinsame Fenster vom 26.10.2026 (`d1875af`). Damit laufen 3c, 3d, 4a, 4b, 4c, 5a, 5b, 6a,
+„Kleinigkeiten“, smartENERGY-Fix, Übersicht B, Abfahrt als Uhrzeit, Sofort-Limit, Open-Meteo- und
+„Warum?“-Fix. Wallbox und Tesla sind seit 17.10.2026 live (evcc aus), **Victron seit 3.11.2026, 19:45**
+(DESS aus seit 19.10.2026, „Netzladen erlaubt“ an), die Klimaanlage im Dry-Run, „Lastmodell verwenden“
+aus. Teil 2 ist vollständig (EVCS „Verbindung unterbrochen“ am 27.10.2026, Victron 17.2-4 am
+3.11.2026). Offen an der Anlage, in dieser Reihenfolge:
+
+1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
+   nachts wie geplant).
+2. Klimaanlage live schalten (die 7 Tage Dry-Run seit 26.10.2026 sind um).
+3. Geplantes Laden einmal ausprobieren und die zwei offenen Teile der Abnahme Phase 4.
+4. Den OeMAG-Wert für Oktober im Tarif eintragen.
+5. **17.11.2026:** `export_days` und `scenario_days` über 18.10. bis 16.11.2026 (Abnahme Phase 3) und
+   die Abnahme der Statistik (4a).
+6. **Ab 23.11.2026:** die Abnahmen 5a und 5b auswerten (28 Tage ab 26.10.2026), dann Stufe 2 des
+   Sammel-Pulls (5c, Standard-Lademodus, Vorklimatisieren, Akku ins Auto, Punkte 18, 19 und 20). Vorher
+   in Influx prüfen, dass `wallbox.evcs.start_stop` am 05.11. um ~16:19 auf 1 sprang (Punkt 20). Nie nur
+   `ems-app` ziehen; core und app immer gemeinsam mit fester Version.
+7. Wann es passt: die Reste der Abnahme Phase 1 (1 bis 3 und 4.1), die manuellen Punkte von Teil 1
+   (17.1-3, 17.1-12) und die Log-Zeile der Probe vom 11.10.2026.
+
+Die Schritte im Einzelnen führt der Betreiber in seiner Anlagenliste
+`/mnt/project-files/anlage/befehle-nach-3c.md` und in `/mnt/project-files/anlage/sammel-pull.md`
+(außerhalb des Repos). Wo die Punkte unter „Offen an der Anlage“ unten älter sind, steht am Anfang
+des Punktes, was erledigt ist.
+
 Stand: 21.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
 („mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
@@ -1133,45 +1161,22 @@ der Anlage“). Betrieb: `docs/betrieb.md`, „Laderegelung“, „Tesla“, „
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
-- **Offen:**
-  - an der Anlage: die Welle „Aufgeschobene Kleinigkeiten“ gemeinsam mit 3d, 4b, 5a, 5b und 6a ausrollen (core und app
-    zusammen, nach dem 16.11.2026, keine Migration); an der Anlage zu bestätigen: `mode=ro` für `export_days` auf der
-    WAL-Datenbank im Compose-Volume, die Probe mit `docker stop` (Exitcode 143)
-  - an der Anlage: Plan 3d (Regel R1 bis der Akku leer ist) ausrollen, Zeitpunkt entscheidet der
-    Betreiber (Entscheidung 6); Vorschlag: mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“)
-  - an der Anlage: Plan 5b (core und app gemeinsam, Regelbetrieb aus) mit 3d, 4b, 5a und 6a ausrollen
-    (Punkt 11 unter „Offen an der Anlage“); danach die Abnahme 5b (28 Tage,
-    `docs/verification/abnahme-phase-5b.md`)
-  - an der Anlage: Plan „Akku ins Auto, wenn er übrig ist“ (core und app gemeinsam, keine Migration) nach Gesamtreview,
-    Fix-Welle und Integration ausrollen; den Schalter erst einschalten, wenn Victron live ist (Punkt 17 unter „Offen an der
-    Anlage“)
-  - an der Anlage: Plan 5c (core und app gemeinsam, Regelbetrieb aus) frühestens nach den Abnahmen 5a und
-    5b am 22.11.2026 ausrollen (Punkt 14 unter „Offen an der Anlage“); danach die Abnahme 5c Teil A (14 Tage
-    Vorschau) und Teil B (14 Tage live, `docs/verification/abnahme-phase-5c.md`)
-  - im Code, Plan 5c: Die Betriebsbits der Klimaanlage (`running`, `heating`, `cooling`, `venting`) stehen nur
-    bei Änderung in InfluxDB, `raw` hält 90 Tage; ändert sich ein Bit über 90 Tage nicht (ohne Neustart des
-    core), fehlt sein Wert vor dem Fenster, die Viertelstunden bekommen keine Betriebsart, und das Modell meldet
-    `few_days` (sicher, Betriebshandbuch „Vorheizen und Vorkühlen (Phase 5c)“). Vor der Kühlsaison 2027
-    beheben (Seed aus dem frühesten Punkt im Fenster oder periodisches Neuschreiben der Zustände).
-  - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
-    der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
-  - an der Anlage: Plan 6a mit 4b im gemeinsamen Fenster nach dem 25.10.2026 ausrollen (Punkt 8 unter „Offen an der
-    Anlage“), vorher Routing und Firewall für UDP 5442; danach die Abnahme 6a (7 Tage Dry-Run, dann live)
-  - an der Anlage: Plan 4b ausrollen, im gemeinsamen Fenster nach dem 25.10.2026 und als Schritt des Betreibers
-    (Punkt 7 unter „Offen an der Anlage“); danach die Abnahme der Phase 4 (30 Tage Statistik, „Ziel-SOC“
-    ≥ 95 %, „HA in beide Richtungen“)
-  - an der Anlage: Plan 4a ausrollen (nur `ems-app`, Punkt 6 unter „Offen an der Anlage“) und die 30 Tage
-    der Abnahme beginnen
-  - an der Anlage: Images von 2d, 3a, 3b und 3c ausrollen (Punkte „Zu 3a gehört“, „Zu 3b gehört“ und
-    „Zu 3c gehört“ unter „Offen an der Anlage“), die 30 echten Tage durch die Werkzeuge rechnen (Punkt
-    5 dort), Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3 (die Erkennung läuft im
-    Dry-Run mit, Health zeigt, wer wo steht), der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron
-    17.2-4), 2 Wochen Dry-Run der Planausführung mit DESS aus, dann Victron live (Punkt 4 dort)
-  - vor der Live-Schaltung von EVCS und Tesla: die Liste „Vor der Live-Schaltung“ (siehe
-    „Offen an der Anlage“)
-  - die Abnahme der Phase 1 an der Anlage
-  - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
-    die Log-Zeile der Probe
+- **Offen (Stand 7.11.2026):** an der Anlage die Liste im Kopf dieser Datei („Stand an der
+  Anlage“). Ausgerollt sind 3c, 3d, 4a, 4b, 4c, 5a, 5b, 6a, „Kleinigkeiten“, Übersicht B, Abfahrt als
+  Uhrzeit und Sofort-Limit; Victron ist seit 3.11.2026 live. Noch nicht ausgerollt (Stufe 2 ab
+  23.11.2026): 5c, Standard-Lademodus, Vorklimatisieren, „Akku ins Auto, wenn er übrig ist“ (Schalter
+  erst jetzt, mit Victron live, sinnvoll), Punkt 18, Ladeauswahl beim Anstecken (19) und
+  Selbststart an der EVCS (20). Abnahmen: Phase 3 und Statistik am 17.11.2026,
+  5a und 5b ab 23.11.2026, 6a mit dem Live-Schalten der Klimaanlage, danach 5c Teil A und Teil B
+  (`docs/verification/abnahme-phase-5a.md`, `…-5b.md`, `…-5c.md`). Aus der Welle „Kleinigkeiten“ an der
+  Anlage noch zu bestätigen: `mode=ro` für `export_days` auf der WAL-Datenbank im Compose-Volume und die
+  Probe mit `docker stop` (Exitcode 143).
+  Im Code, Plan 5c: Die Betriebsbits der Klimaanlage (`running`, `heating`, `cooling`, `venting`)
+  stehen nur bei Änderung in InfluxDB, `raw` hält 90 Tage; ändert sich ein Bit über 90 Tage nicht (ohne
+  Neustart des core), fehlt sein Wert vor dem Fenster, die Viertelstunden bekommen keine Betriebsart,
+  und das Modell meldet `few_days` (sicher, Betriebshandbuch „Vorheizen und Vorkühlen (Phase 5c)“). Vor
+  der Kühlsaison 2027 beheben (Seed aus dem frühesten Punkt im Fenster oder periodisches Neuschreiben
+  der Zustände).
 
 ## Arbeitsweise mit dem Betreiber
 
@@ -1580,6 +1585,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 
 ## Stand der Installation beim Betreiber
 
+- **Stand 7.11.2026:** Images `sha-146d7cc` (Stufe 1 des Sammel-Pulls, 3.11.2026), davor `d1875af`
+  (gemeinsames Fenster 26.10.2026). Victron ist seit 3.11.2026, 19:45 live, DESS seit 19.10.2026 aus.
+  Teil 2 ist vollständig. Der Rest dieses Abschnitts beschreibt den Stand vom 21.10.2026.
 - Docker auf einer VM im LAN des Betreibers, Images vom Stand nach Plan 4a (`fb23bd0`, laut Betreiber
   ausgerollt am 18.10.2026; davor 2c-1 bis 3b am 17.10.2026 mit `6a6904a` und der Stand nach 2b vom
   12.10.2026). Plan 4b ist nicht ausgerollt (erst im gemeinsamen Fenster nach dem 25.10.2026); bis dahin kein
@@ -1591,8 +1599,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   Wiederanstecken des e-Golf gut drei Stunden Netzladen ausgelöst (Stand EVCS-Selbststart oben, Punkt 20 unter „Offen an der Anlage“).
 - Wallbox (`wallbox.evcs`) und Tesla laut Betreiber seit dem 17.10.2026 **live**, evcc abgeschaltet;
   der Dry-Run neben evcc ist dabei übersprungen worden. Die Zuordnung der Autos hat der Betreiber am
-  19.10.2026 in mehreren Konstellationen im Live-Betrieb geprüft, ohne Befund. Offen ist Teil 2
-  „Verbindung unterbrochen“ für die Wallbox. Victron im Dry-Run (DESS an).
+  19.10.2026 in mehreren Konstellationen im Live-Betrieb geprüft, ohne Befund. Teil 2
+  „Verbindung unterbrochen“ für die Wallbox ist am 27.10.2026 bestanden. Victron ist seit 3.11.2026
+  live (vorher Dry-Run, DESS aus seit 19.10.2026).
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -1602,15 +1611,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   - Watchdog-Probe (Teil 2, Punkt 17.2-5) am 11.10.2026 bestanden, am 12.10.2026 mit 1.1.0
     erneut bestanden.
   - Teil 2 EVCS am 12.10.2026 bestanden: Schreibweg über den GX-Dienst `evcharger` bestätigt,
-    fremde Änderung erkannt, Watchdog setzt den sicheren Strom. Offen ist „Verbindung
-    unterbrochen“.
+    fremde Änderung erkannt, Watchdog setzt den sicheren Strom. „Verbindung
+    unterbrochen“ am 27.10.2026 bestanden (zweiter Lauf, 17.2-5 mit 1.1.0 erneut bestanden).
   - Teil 2 Victron am 12.10.2026 mit vorübergehend abgeschaltetem DESS: Override setzen und mit
     `null` aufheben bestätigt, Ruhezustand `null`, Entladesperre und Netzladen wirken. Neu: Der
     Override verschwindet nach 5 min ohne Auffrischen. Am Abend in einem zweiten Lauf 17.2-8
     „Importlimit“ bestanden: Mit einer Last, die eine Phase über 20 A gebracht hätte, blieb L3 bei
     höchstens 19,4 A, der Akku lieferte dabei 3072 W. Ein Vorlauf mit dem Multi auf „Nur Laden“
     (charger only) ergab 33,3 A auf L3 ohne Beitrag des Akkus: In diesem Modus wirkt das
-    Importlimit nicht. Offen ist 17.2-4.
+    Importlimit nicht. 17.2-4 am 3.11.2026 bestanden.
   - Teil 2 Tesla am 12.10.2026 bestanden (drei Läufe und Schlaf-Test): Das Auto folgt
     Strombefehlen über Tessie, „Laden aus und an“ wirkt, ein schlafendes Auto wird nicht geweckt
     (10 min Schlaf-Test). Ein erster Befehl auf 5 A wirkt über Tessie nicht, obwohl Tessie ihn
@@ -1620,7 +1629,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
     Hause.“ im ersten Lauf kam von einer falschen `site.location`, die der Betreiber korrigiert
     hat.
 - **Befunde:**
-  - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird. Für den
+  - Dynamic ESS ist seit dem 19.10.2026 aus (vorher: Es bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird). Für den
     Dry-Run des Victron-Teils schaltet er es in einem Fenster ab, das er bestimmt (Design 2c-2, 11.1).
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter ihrer
     LAN-Adresse. BindaEMS bekam unter derselben Adresse zuerst nur Nullen. Ursache war die
@@ -1644,7 +1653,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (nach Plan 4a):**
   1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4).
-     **Erledigt:** 2c-1 bis 3b am 17.10.2026 (`6a6904a`), 3c und 4a am 18.10.2026 (`fb23bd0`). Weil
+     **Erledigt:** 2c-1 bis 3b am 17.10.2026 (`6a6904a`), 3c und 4a am 18.10.2026 (`fb23bd0`), das
+     gemeinsame Fenster am 26.10.2026 (`d1875af`) und Stufe 1 des Sammel-Pulls am 3.11.2026
+     (`sha-146d7cc`). Seitdem core und app immer gemeinsam mit fester `BINDAEMS_VERSION`, nie nur
+     `ems-app`. Weil
      Wallbox und Tesla live sind, vor jedem Update des core den Regelbetrieb aus und danach wieder an.
      **Zu 2d gehört:**
      - Die Migration der app (`0007`, Tabelle `decision`) läuft beim Start der app von selbst. Die
@@ -1764,7 +1776,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
        „Gast, angenommen“ an der EVCS, ist der Tracker zu spät) und ob ein Tesla an der EVCS, ein
        e-Golf am Wall Connector und ein Gast erkannt werden (rechne mit einigen Minuten: 60 s
        Kandidatur, und Tessie meldet ein neu angestecktes Auto bis zu 10 min verspätet).
-  3. EVCS-Teil-2 „Verbindung unterbrochen“ und Victron 17.2-4 nachholen (17.2-4 ist Voraussetzung der
+  3. **Erledigt:** EVCS am 27.10.2026, Victron 17.2-4 am 3.11.2026, 18:11. Ursprünglich: EVCS-Teil-2 „Verbindung unterbrochen“ und Victron 17.2-4 nachholen (17.2-4 ist Voraussetzung der
      Live-Schaltung von Victron, Punkt 4):
      - EVCS: den Schritt „Verbindung unterbrochen“ (Punkt `evcs` erneut, die Rückfrage mit `j`
        beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
@@ -1777,7 +1789,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
        damit den Akku (17.2-4 schreibt nur den Override), während evcc die EVCS regelt; den Tesla
        berührt keiner der Schritte. Notiere die Zeit, damit du die Entscheidungen dieser Zeit beim
        Vergleich mit evcc ausnimmst.
-  4. **Victron in den Dry-Run und live, mit 2 Wochen Dry-Run der Planausführung** (Design 2c-2, 11.1;
+  4. **Erledigt:** DESS aus seit 19.10.2026, Victron live seit 3.11.2026, 19:45. Offen: die ersten Tage beobachten. Ursprünglich: **Victron in den Dry-Run und live, mit 2 Wochen Dry-Run der Planausführung** (Design 2c-2, 11.1;
      Plan 3c, Entscheidung 14; Betriebshandbuch, „Akku und Spitzen“, „Victron in den Dry-Run und
      live“), in dieser Reihenfolge (nach dem Ausrollen, Punkt 1, bei dem der core neu startet):
      1. **DESS aus für den Dry-Run,** für die ganzen 2 Wochen: Solange DESS an ist, ist Victron
@@ -1828,7 +1840,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         dem Dialog „Live schalten“ oder per Absicht (`"actuators": {"victron": "live"}`). Ab dann
         stellt der Plan den Akku („Der core führt den Plan aus.“). DESS bleibt danach aus; schaltet
         man es wieder ein, sperrt sich Victron, und der Override verfällt nach 300 s.
-  5. **Den Plan beobachten und die 30 echten Tage prüfen** (nach dem Ausrollen, Punkt 1, parallel zum
+  5. **Offen:** am 17.11.2026 über 18.10. bis 16.11.2026; vorher den OeMAG-Wert für Oktober eintragen. **Den Plan beobachten und die 30 echten Tage prüfen** (nach dem Ausrollen, Punkt 1, parallel zum
      Dry-Run der Planausführung, Punkt 4; Betriebshandbuch, „Planung“, „An der Anlage prüfen“ und
      „Szenarien“). Solange Victron im Dry-Run ist, stellt der Plan nichts am Akku; die Schritte sind
      lesend:
@@ -1869,7 +1881,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         - Der Test `test_app_runtime::test_runtime_starts_and_stops_cleanly` ist in der Entwicklung
           einmal gescheitert (`last_attempt` war `None`), einzeln und in allen späteren Läufen
           grün. Scheitert er in der CI, ist das ein bekannter Wackler und kein neuer Fehler.
-  6. **Statistik (Plan 4a) ausrollen und die Abnahme beginnen** (ausgerollt laut Betreiber am
+  6. **Ausgerollt; offen:** die Abnahme am 17.11.2026. **Statistik (Plan 4a) ausrollen und die Abnahme beginnen** (ausgerollt laut Betreiber am
      18.10.2026, Abnahme 18.10. bis 16.11.2026; Betriebshandbuch, Abschnitt 8,
      „Statistik ausrollen (Plan 4a)“). Plan 4a braucht nur `ems-app`: Der core bleibt, der Regelbetrieb
      bleibt an, und die Aktoren behalten ihre Betriebsart. Er hängt nicht an den Punkten 1 bis 5 und kann
@@ -1912,7 +1924,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         die Wallbox-Zähler als `energy` ankommen, zeigt die erste Nacht. Die Belegung der Wallboxen
         kommt aus Health (`wallboxes[].occupant`, 10-s-Takt): Ohne Regelbetrieb steht dort niemand,
         und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
-  7. **Geplantes Laden (Plan 4b) ausrollen**, **im gemeinsamen Fenster nach dem 25.10.2026** (Entscheidung vom 22.10.2026); das ist ein
+  7. **Ausgerollt am 26.10.2026; offen:** Geplantes Laden ausprobieren und die zwei offenen Teile der Abnahme Phase 4. Ursprünglich: **Geplantes Laden (Plan 4b) ausrollen**, **im gemeinsamen Fenster nach dem 25.10.2026** (Entscheidung vom 22.10.2026); das ist ein
      Schritt des Betreibers (Entscheidung 17 des Plans), und nichts geht dabei von selbst live. Die
      Images enthalten 4b seit dem 19.10.2026 (`latest`). Die Schritte stehen
      im Betriebshandbuch, „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“:
@@ -1937,7 +1949,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      7. **Rückweg:** Ein core vor 4b liest die gespeicherte Absicht nicht, sobald sie Ziel, Abfahrt
         oder Autos im Plan trägt, und startet ohne Absicht mit dem Alarm `intent.file`
         (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 4b“).
-  8. **Klimaanlage (Plan 6a) ausrollen**, mit 4b im gemeinsamen Fenster nach dem 25.10.2026;
+  8. **Ausgerollt am 26.10.2026, Teil 2 `thermal` bestanden; offen:** live schalten, Abnahme 6a. Ursprünglich: **Klimaanlage (Plan 6a) ausrollen**, mit 4b im gemeinsamen Fenster nach dem 25.10.2026;
      das ist ein Schritt des Betreibers, und nichts geht dabei von selbst live. Die Schritte stehen im
      Betriebshandbuch, „Klimaanlage (Phase 6a)“, und in `docs/verification/abnahme-phase-6a.md`:
      1. **Netz:** Routing und Firewall für UDP 5442 zwischen 192.168.81.0/24 (C.M.I.) und
@@ -1952,7 +1964,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      4. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
      5. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
         und die Abnahme 6a.
-  9. **Regel R1 bis der Akku leer ist (Plan 3d) ausrollen**; wann, entscheidet der Betreiber am Ende
+  9. **Ausgerollt am 26.10.2026.** Ursprünglich: **Regel R1 bis der Akku leer ist (Plan 3d) ausrollen**; wann, entscheidet der Betreiber am Ende
      (Entscheidung 6 des Plans). Vorschlag: im selben Zug wie 4b und 6a (Punkte 7 und 8), also nach der
      Abnahme der Phase 3. Nur die app ändert sich (`docker compose pull && docker compose up -d`; der
      core, `shared` und das UI sind unverändert, es gibt keine Migration). Das Image `latest` enthält
@@ -1961,7 +1973,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      beim Beobachten des Plans (Punkt 5) auf den Satz „Kein Netzladen: Ab … Uhr speist die PV … ein,
      bevor der Akku leer ist (Regel R)“ und darauf achten, dass der Akku vor der Einspeisung wirklich
      auf der Reserve ist.
-  10. **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
+  10. **Ausgerollt am 26.10.2026, Schalter aus; offen:** die Abnahme 5a ab 23.11.2026. Ursprünglich: **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
       im gemeinsamen Fenster nach dem 25.10.2026; bis dahin kein `docker compose pull`. Das ist ein Schritt des
       Betreibers. 5a schaltet nichts an der Anlage, es ändert nur die Eingabe des Planers. Das Modell
       gilt, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil, und das kann
@@ -1994,7 +2006,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          verwenden“ aus (reiner Schattenbetrieb, das Modell rechnet weiter mit) und später an
          derselben Stelle wieder ein; die app bewertet dann sofort neu. Die Dauer eines Trainings an
          der Anlage ist nicht gemessen (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
-  11. **Fahrverhalten (Plan 5b) ausrollen**, gemeinsam mit 3d, 4b, 5a und 6a und damit nach der Abnahme der
+  11. **Ausgerollt am 26.10.2026; offen:** die Abnahme 5b ab 23.11.2026. Ursprünglich: **Fahrverhalten (Plan 5b) ausrollen**, gemeinsam mit 3d, 4b, 5a und 6a und damit nach der Abnahme der
       Phase 3; bis dahin kein `docker compose pull`, und erst nach dem Gesamtreview und der Zustimmung des
       Betreibers zur Integration auf `main`. Das ist ein Schritt des Betreibers. Anders als 5a ändert 5b den
       core (`departure_on`), core und app rollen darum gemeinsam aus, **mit ausgeschaltetem Regelbetrieb**.
@@ -2019,14 +2031,14 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       7. **Abnahme 5b:** 28 Tage ab dem Ausrollen (Checkliste oben): Vorschläge mit Konfidenz,
          Trefferquoten je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch
          die Automatik, ein erwartetes Auto im Zeitplan, beim Anstecken ersetzt (einmal beobachtet).
-  12. **Übersicht neu (Plan Übersicht B) ausrollen:** nur `ems-app` (das UI liegt im Image der app), **keine Migration, keine
+  12. **Ausgerollt mit Stufe 1 am 3.11.2026.** Der Vorschlag „nur `ems-app`“ unten gilt nicht mehr: core und app immer gemeinsam. Ursprünglich: **Übersicht neu (Plan Übersicht B) ausrollen:** nur `ems-app` (das UI liegt im Image der app), **keine Migration, keine
       Änderung an core, `config.yaml` oder Home Assistant**. Seit 27.10.2026 auf `main` (`8ae335e`); wann ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem nächsten Pull von `ems-app`
       (`cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`; der Regelbetrieb
       braucht dafür nicht aus). Danach auf der Übersicht ansehen: die Hinweis-Leiste (ohne Hinweise unsichtbar), den Akku
       mit „≈ x von 96 kWh“ und der Zeile „Plan: …“ (nur mit gültigem Plan), die Tageswerte in PV, Haus und Netz und das
       Diagramm mit Akku-SOC und Akku-Plan; am Handy (360 bis 390 px) ohne waagrechtes Scrollen und mit einem Blick auf
       „Warum?“ (siehe die aufgeschobenen Kleinigkeiten am Ende der Datei).
-  13. **Sofort-Limit (Plan Sofort-Limit) ausrollen:** core **und** app gemeinsam (ein alter core lehnt das neue Feld `now_max_a`
+  13. **Ausgerollt mit Stufe 1 am 3.11.2026.** Ursprünglich: **Sofort-Limit (Plan Sofort-Limit) ausrollen:** core **und** app gemeinsam (ein alter core lehnt das neue Feld `now_max_a`
       der Absicht ab), **keine Migration, keine ACL-Zeile** (die Zahlen sind die Plattform `number`). Noch nicht auf `main`;
       wann integriert und ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem nächsten gemeinsamen Pull
       (`cd /opt/bindaems && docker compose pull && docker compose up -d`). Danach auf „Laden“ ein Auto auf „Sofort“ stellen, bei
@@ -2036,7 +2048,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       **Seit 28.10.2026 enthält `main` (und damit `latest`) auch Plan 5c:** Ein Pull von `latest` bringt dann auch 5c mit
       der Migration `0015`; vorher die Datenbank sichern wie in Punkt 14, Schritt 2. Wer das Sofort-Limit vor dem 22.11.2026
       ohne 5c will, setzt `BINDAEMS_VERSION=sha-146d7cc` (der Stand von `main` davor).
-  14. **Vorheizen und Vorkühlen (Plan 5c) ausrollen**, frühestens nach den Abnahmen 5a und 5b am
+  14. **Offen, mit Stufe 2 ab 23.11.2026.** **Vorheizen und Vorkühlen (Plan 5c) ausrollen**, frühestens nach den Abnahmen 5a und 5b am
       22.11.2026 und nicht während des Wechsels von Victron auf live; wann, entscheidet der Betreiber (Plan
       5c, Entscheidung 15), (seit 28.10.2026 auf `main`).
       Anders als ein Pull nur von `ems-app` ändert 5c den core (der Planwert in der Absicht), core und app
@@ -2055,7 +2067,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          (14 Heiztage, Daten seit dem 26.10.2026).
       6. **Abnahme Teil B:** nach Teil A, nach der Abnahme 6a (Aktor live) und nur auf Entscheidung des
          Betreibers: Schalter an, 14 Tage live.
-  15. **Standard-Lademodus (Plan Standard-Lademodus) ausrollen und die Standards wählen:** nur `ems-app` (kein core, **keine Migration,
+  15. **Offen, mit Stufe 2 ab 23.11.2026.** Anders als unten steht, nie nur `ems-app` ziehen: core und app gemeinsam mit fester Version. **Standard-Lademodus (Plan Standard-Lademodus) ausrollen und die Standards wählen:** nur `ems-app` (kein core, **keine Migration,
       keine ACL-Zeile, kein Element in Home Assistant**), jederzeit; noch nicht auf `main`, wann integriert und ausgerollt wird,
       entscheidet der Betreiber. Vorschlag: mit dem nächsten Pull von `ems-app`
       (`cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps ems-app`; der Regelbetrieb braucht dafür nicht aus).
@@ -2065,7 +2077,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Danach prüfen: Auto an einem Ladepunkt mit einem Standard abstecken, im Änderungsprotokoll steht ein Eintrag mit dem Urheber
       „Standard-Lademodus“ und der Quelle `system`, und auf „Laden“ steht der neue Modus. Der Rückweg steht in `docs/betrieb.md`,
       Abschnitt 4, „Rollback auf einen Stand vor dem Standard-Lademodus“.
-  16. **Vorklimatisieren über die Wallbox (Plan Vorklimatisieren) ausrollen:** core **und** app gemeinsam, mit dem nächsten
+  16. **Offen, mit Stufe 2 ab 23.11.2026.** **Vorklimatisieren über die Wallbox (Plan Vorklimatisieren) ausrollen:** core **und** app gemeinsam, mit dem nächsten
       gemeinsamen Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`); der core sendet neue Grund-Codes, die app
       kennt ihren Text (ein alter UI-Stand zeigt nur den Code). **Keine Migration, keine Änderung der Absicht, keine ACL-Zeile, kein
       Schritt an `config.yaml`** (der Schalter `climate_via_wallbox` ist ab Werk an). Seit dem 28.10.2026 auf `main`; wann
@@ -2080,7 +2092,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       ansehen und den Befund weitergeben, bevor der Schalter geändert wird. Der Rückweg steht in `docs/betrieb.md`, Abschnitt 4
       („Rollback auf einen Stand vor dem Vorklimatisieren über die Wallbox“): `climate_via_wallbox` aus `config.yaml` entfernen,
       falls eingetragen, dann den core zurückrollen.
-  17. **Akku ins Auto, wenn übrig (Plan „Akku ins Auto, wenn er übrig ist“) ausrollen:** core **und** app gemeinsam (jeder
+  17. **Offen, mit Stufe 2 ab 23.11.2026.** **Akku ins Auto, wenn übrig (Plan „Akku ins Auto, wenn er übrig ist“) ausrollen:** core **und** app gemeinsam (jeder
       Plan-Slot der Absicht hat die neuen Felder `ev_battery_w` und `now_battery`, ein alter core lehnt sie ab,
       `extra="forbid"`), **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**. Seit dem 28.10.2026 auf `main`;
       wann ausgerollt wird, entscheidet der Betreiber. Vorschlag: mit dem
@@ -2102,7 +2114,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Einstellungen vor dem Rollback als YAML exportieren, `planning.car_battery_allowed` löschen und danach importieren
       (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Akku ins Auto“; zusammen mit dem Rollback vor dem
       Standard-Lademodus beide Schlüssel löschen).
-  18. **Diagramme und Plantexte, Verständlichkeit und Design sowie Akku-kWh über Reserve ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
+  18. **Offen, mit Stufe 2 ab 23.11.2026.** **Diagramme und Plantexte, Verständlichkeit und Design sowie Akku-kWh über Reserve ausrollen:** nur `ems-app` (kein core, **keine Migration, keine ACL-Zeile,
       keine Änderung an `config.yaml`**), mit dem nächsten Sammel-Pull (`cd /opt/bindaems && docker compose pull && docker compose up -d`),
       **nie allein** (`ems-app` wird nicht einzeln gezogen); wann, entscheidet der Betreiber. Alle drei kommen mit demselben Pull. Danach am Handy ansehen: **Übersicht** und **Zeitplan** (Legende als antippbare Chips unter dem Diagramm, „jetzt“ an
       der Linie, im Akku-Diagramm die Zeile „Akku HH:MM–HH:MM: …“ im Tooltip, „Netzladen“ und „Halten“ lassen sich ausblenden); Pläne von vor dem
@@ -2204,7 +2216,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 
 ## Nächste Schritte im Projekt
 
-1. **Abnahme der Phase 1** nach `docs/verification/abnahme-phase-1.md`:
+1. **Abnahme der Phase 1** nach `docs/verification/abnahme-phase-1.md` (Stand 7.11.2026: offen sind 1
+   bis 3 und das Häkchen bei 4.1, Protokoll `docs/verification/2026-10-19-abnahme-phase-1.md`):
    - 7 Tage lückenlose Aufzeichnung (Tagesbilanz „96 von 96 · 100 %“)
    - Tagesbilanz innerhalb ±2 % von VRM
    - Preise und Prognose sichtbar
