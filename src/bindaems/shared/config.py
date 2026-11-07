@@ -930,13 +930,6 @@ class Secrets(BaseSettings):
             raise ValueError("internal_token muss mindestens 32 Zeichen lang sein")
         return value
 
-    @field_validator("ping_url")
-    @classmethod
-    def _ping_url_https(cls, value: SecretStr | None) -> SecretStr | None:
-        if value is not None and not value.get_secret_value().startswith("https://"):
-            raise ValueError("ping_url muss mit https:// beginnen")
-        return value
-
 
 def load_secrets() -> Secrets:
     """Liest die Secrets aus der Umgebung."""

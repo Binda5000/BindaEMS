@@ -1105,6 +1105,8 @@ meldet das nach der Karenz ebenfalls.
    `docker compose stop ems-app`: Nach höchstens 15 Minuten (Periode plus Karenz) kommt die Meldung aufs
    Handy. Danach `docker compose start ems-app`.
 
+Beginnt die URL nicht mit `https://`, sendet die app nichts und meldet beim Baustein „Ping-URL ungültig (nur https)“; core und app starten trotzdem.
+
 Scheitert ein Ping (Internet weg), meldet die app „nicht gesendet seit …“ beim Baustein und versucht es
 im Takt weiter; im Log steht eine Zeile je Wechsel, nicht je Versuch.
 

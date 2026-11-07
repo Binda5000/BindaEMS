@@ -29,6 +29,7 @@ FIRST_PING_S = 30.0
 REQUEST_TIMEOUT_S = 10.0
 NAME = "Lebenszeichen"
 SEP = " · "
+INVALID_URL_TEXT = "Ping-URL ungültig (nur https)"
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,10 @@ class Heartbeat:
         inputs: Callable[[], Reading],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        self._url = None if url is None else url.get_secret_value().rstrip("/")
+        raw = None if url is None else url.get_secret_value().rstrip("/")
+        # Eine unbrauchbare URL stoppt den Start nicht (core liest dieselben Secrets): kein Senden
+        self._invalid = raw is not None and not raw.startswith("https://")
+        self._url = None if self._invalid else raw
         self._http = http
         self._clock = clock
         self._interval_s = interval_s
@@ -125,6 +129,10 @@ class Heartbeat:
         self._last_text: str | None = None
 
     async def run(self) -> None:
+        if self._invalid:
+            log.error("Lebenszeichen aus: Ping-URL ungültig, nur https ist erlaubt")
+            await asyncio.Event().wait()
+            return
         if self._url is None:
             log.info("Lebenszeichen aus: keine Ping-URL gesetzt")
             await asyncio.Event().wait()  # schläft dauerhaft, kein Neustart-Kreislauf
@@ -181,6 +189,8 @@ class Heartbeat:
         return True
 
     def ping_info(self) -> PingInfo:
+        if self._invalid:
+            return PingInfo(configured=True, ok=False, last_sent=None, text=INVALID_URL_TEXT)
         return PingInfo(
             configured=self._url is not None,
             ok=self._failed_since is None,
@@ -189,6 +199,8 @@ class Heartbeat:
         )
 
     def component_status(self) -> ComponentStatus:
+        if self._invalid:
+            return ComponentStatus(NAME, False, INVALID_URL_TEXT)
         if self._url is None:
             return ComponentStatus(NAME, True, "aus (keine Ping-URL)")
         if self._failed_since is not None:

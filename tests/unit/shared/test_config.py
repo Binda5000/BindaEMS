@@ -1031,11 +1031,13 @@ def test_ping_interval_bounds(tmp_path: Path, value: float, ok: bool) -> None:
     assert load_config(EXAMPLE).app.ping_interval_s == 300.0
 
 
-def test_ping_url_must_be_https(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ping_url_is_not_validated_so_core_and_app_still_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
     monkeypatch.setenv("BINDAEMS_PING_URL", "http://x")
-    with pytest.raises(ValidationError, match=r"ping_url muss mit https:// beginnen"):
-        load_secrets()
+    url = load_secrets().ping_url
+    assert url is not None and url.get_secret_value() == "http://x"
     monkeypatch.setenv("BINDAEMS_PING_URL", "https://hc-ping.com/abc")
     url = load_secrets().ping_url
     assert url is not None and url.get_secret_value() == "https://hc-ping.com/abc"

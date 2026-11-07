@@ -251,6 +251,26 @@ async def test_inputs_failure_sends_fail_and_logs_once_per_state_change() -> Non
     assert str(seen[2].url) == "https://hc-ping.com/abc"
 
 
+async def test_invalid_url_never_sends_and_reports_without_echo() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("darf nichts senden")
+
+    hb, http, _ = _hb(httpx.MockTransport(handler), url="http://hc.example/geheim")
+    assert await hb.send_once() is False
+    status = hb.component_status()
+    assert status.ok is False
+    assert status.message == "Ping-URL ungültig (nur https)"
+    info = hb.ping_info()
+    assert (info.configured, info.ok, info.last_sent) == (True, False, None)
+    assert info.text == "Ping-URL ungültig (nur https)"
+    assert "geheim" not in repr((status, info))
+    task = asyncio.ensure_future(hb.run())
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    task.cancel()
+    await http.aclose()
+
+
 async def test_without_url_is_off() -> None:
     sleeps: list[float] = []
 
