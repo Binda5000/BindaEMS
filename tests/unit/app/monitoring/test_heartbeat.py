@@ -10,7 +10,7 @@ import pytest
 import structlog
 from pydantic import SecretStr
 
-from bindaems.app.monitoring.heartbeat import Heartbeat, Reading, Verdict, verdict
+from bindaems.app.monitoring.heartbeat import Heartbeat, PingInfo, Reading, Verdict, verdict
 from bindaems.app.monitoring.outages import Outage
 from bindaems.shared.timeutil import ManualClock
 
@@ -250,3 +250,22 @@ async def test_run_first_ping_after_30s_then_interval() -> None:
     assert sleeps == [30, 300, 300]
     assert len(sent) == 2
     await http.aclose()
+
+
+def test_ping_info() -> None:
+    clock = ManualClock(NOW)
+    reading = Reading(True, "CONTROL", [], None, 55.0, None)
+    off = Heartbeat(None, httpx.AsyncClient(), clock, interval_s=300, inputs=lambda: reading)
+    assert off.ping_info() == PingInfo(False, True, None, None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    beat = Heartbeat(
+        SecretStr("https://hc.example/abc"), http, clock, interval_s=300, inputs=lambda: reading
+    )
+    assert beat.ping_info() == PingInfo(True, True, None, None)
+    assert asyncio.run(beat.send_once()) is True
+    info = beat.ping_info()
+    assert info.ok and info.last_sent == NOW and info.text == "in Ordnung · CONTROL · SOC 55 %"

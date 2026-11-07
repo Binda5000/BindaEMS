@@ -111,6 +111,10 @@ class OutageTracker:
         elif island:
             self._begin(now, soc)
 
+    def open_now(self) -> Outage | None:
+        """Der laufende Ausfall nur aus dem Speicher (ohne Datenbank, für die Ereignisschleife)."""
+        return self._open
+
     def current(self) -> Outage | None:
         if self._open is not None:
             return self._open

@@ -49,6 +49,16 @@ class Reading:
     range_now: float | None
 
 
+@dataclass(frozen=True)
+class PingInfo:
+    """Zustand des Lebenszeichens für die API; nie die URL."""
+
+    configured: bool
+    ok: bool
+    last_sent: datetime | None
+    text: str | None
+
+
 def _hhmm(moment: datetime) -> str:
     return moment.astimezone(LOCAL_TZ).strftime("%H:%M")
 
@@ -166,6 +176,14 @@ class Heartbeat:
         self._last_ok = now
         self._last_text = current.text
         return True
+
+    def ping_info(self) -> PingInfo:
+        return PingInfo(
+            configured=self._url is not None,
+            ok=self._failed_since is None,
+            last_sent=self._last_ok,
+            text=self._last_text,
+        )
 
     def component_status(self) -> ComponentStatus:
         if self._url is None:

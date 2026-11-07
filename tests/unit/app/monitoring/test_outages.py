@@ -186,3 +186,16 @@ def test_mean_w() -> None:
     )
     assert Outage(**base, load_wh=100.0, covered_s=3600.0).mean_w == pytest.approx(100)  # type: ignore[arg-type]
     assert Outage(**base, load_wh=10.0, covered_s=899.0).mean_w is None  # type: ignore[arg-type]
+
+
+def test_open_now_reads_memory_only(engine: Engine, clock: ManualClock) -> None:
+    live = FakeLive()
+    tracker = _tracker(engine, live, clock)
+    assert tracker.open_now() is None
+    live.set(ISLAND_SOURCE, 62)
+    tracker.poll()
+    opened = tracker.open_now()
+    assert opened is not None and opened.soc_start == 62
+    live.set(1, 60)
+    tracker.poll()
+    assert tracker.open_now() is None

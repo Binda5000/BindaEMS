@@ -113,6 +113,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "planning",
         "ledger",
         "influx",
+        "Lebenszeichen",
         "ha",
         "ha-notify",
     ]
@@ -133,6 +134,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "/api/ledger/days?from=2026-10-09&to=2026-10-09",
         "/api/limits",
         "/api/state",
+        "/api/backup",
     ):
         assert client.get(path).status_code == 200, path
 
@@ -1772,5 +1774,16 @@ async def test_runtime_starts_weather_backfill_as_one_shot_job(runtime, respx_mo
     await until(lambda: any(job.get_name() == "weather-backfill" for job in runtime._tasks))
     job = next(job for job in runtime._tasks if job.get_name() == "weather-backfill")
     await asyncio.wait_for(asyncio.shield(job), timeout=2)  # endet von selbst, ohne Neustart
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_runtime_supervises_monitoring_jobs(runtime, respx_mock) -> None:
+    respx_mock.route().respond(503)  # kein echter Netzverkehr
+    task = asyncio.create_task(runtime.run())
+    await until(
+        lambda: {"backup-range", "outages", "heartbeat"} <= {j.get_name() for j in runtime._tasks}
+    )
+    assert runtime.backup_range().now_h is None  # ohne SOC und Lastgrundlage
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)

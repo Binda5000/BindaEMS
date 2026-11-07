@@ -86,6 +86,10 @@ from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.estimate import GapEstimator
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.monitoring.backup_range import BackupRange, BackupRangeService, backup_range
+from bindaems.app.monitoring.heartbeat import Heartbeat, Reading
+from bindaems.app.monitoring.outages import OutageTracker
+from bindaems.app.monitoring.routes import backup_router
 from bindaems.app.ops.routes import current_check, ops_router
 from bindaems.app.ops.service import (
     FindingsService,
@@ -225,6 +229,16 @@ class AppRuntime:
         self.influx_writer = InfluxWriter(cfg.influxdb, secrets.influx_password, self._http, spool)
         self._sink = LoopSink(self.influx_writer)
         self.reader = InfluxReader(cfg.influxdb, secrets.influx_password, self._http)
+
+        self.backup_range_service = BackupRangeService(self.reader, self._clock)
+        self.outages = OutageTracker(self.engine, self.live, self._clock)
+        self.heartbeat = Heartbeat(
+            secrets.ping_url,
+            self._http,
+            self._clock,
+            interval_s=cfg.app.ping_interval_s,
+            inputs=self._heartbeat_reading,
+        )
 
         self.price_store = PriceStore(self.engine, self._clock)
         self.prices = PriceService(self.price_store, self.settings)
@@ -485,6 +499,7 @@ class AppRuntime:
             self.planning.component_status,
             self.ledger.component_status,
             self._influx_status,
+            self.heartbeat.component_status,
         ]
         if self.ha_publisher is not None:
             sources.append(self.ha_publisher.component_status)
@@ -538,6 +553,15 @@ class AppRuntime:
                 prices_router(self.prices, self.pipeline, self._clock, guard),
                 forecast_router(
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
+                ),
+                backup_router(
+                    range_now=self.backup_range,
+                    basis=self.backup_range_service.basis,
+                    outages=self.outages,
+                    heartbeat=self.heartbeat,
+                    floor_pct=cfg.battery.outage_floor_soc_pct,
+                    clock=self._clock,
+                    guard=guard,
                 ),
                 learning_router(
                     self.load_model,
@@ -595,6 +619,33 @@ class AppRuntime:
 
     def _warnings(self) -> list[str]:
         return self.settings.warnings() + self.auth.warnings()
+
+    def backup_range(self) -> BackupRange:
+        """USV-Reichweite: eine Stelle für API, HA und Lebenszeichen (ohne Datenbank)."""
+        soc = self.live.value("battery.soc_pct")
+        outage = self.outages.open_now()
+        battery = self._cfg.battery
+        return backup_range(
+            soc_pct=float(soc) if isinstance(soc, int | float) else None,
+            reserve_pct=battery.reserve_soc_pct,
+            floor_pct=battery.outage_floor_soc_pct,
+            usable_kwh=battery.usable_kwh,
+            roundtrip_pct=self.settings.current().settings.planning.roundtrip_pct,
+            basis=self.backup_range_service.basis(),
+            outage_load_w=outage.mean_w if outage is not None else None,
+        )
+
+    def _heartbeat_reading(self) -> Reading:
+        health = self.live.health or {}
+        soc = self.live.value("battery.soc_pct")
+        return Reading(
+            connected=self.live.connected,
+            mode=health.get("mode"),
+            reasons=health.get("mode_reasons", []),
+            outage=self.outages.open_now(),
+            soc_pct=float(soc) if isinstance(soc, int | float) else None,
+            range_now=self.backup_range().now_h,
+        )
 
     def _influx_status(self) -> ComponentStatus:
         stats = self.influx_writer.stats()
@@ -754,6 +805,9 @@ class AppRuntime:
             ("ops-nightly", self._ops_nightly_loop),
             ("ops-report", self._ops_report_loop),
             ("consumer-energy", self._energy_loop),
+            ("backup-range", self.backup_range_service.run),
+            ("outages", self.outages.run),
+            ("heartbeat", self.heartbeat.run),
         ]
         if self.thermal_model is not None:
             jobs.append(("thermal-model", self.thermal_model.run))
