@@ -11,8 +11,8 @@ aus. Teil 2 ist vollständig (EVCS „Verbindung unterbrochen“ am 27.10.2026, 
 **Plan Lebenszeichen und USV-Reichweite** (`docs/superpowers/plans/2026-11-04-lebenszeichen-usv-reichweite.md`) ist umgesetzt und seit
 8.11.2026 auf `main`, **nicht ausgerollt** (Punkt 24 unter „Offen an der Anlage“). Nur app, UI und HA; der core
 bleibt unverändert.
-**Plan PV je Anlage und String** (`docs/superpowers/plans/2026-11-08-pv-je-anlage-und-string.md`) ist umgesetzt: auf dem Branch
-`claude/project-thread-i85go5`, **nicht auf `main`, nicht ausgerollt** (Punkt 25 unter „Offen an der Anlage“). Nur app und UI, Migration `0018`;
+**Plan PV je Anlage und String** (`docs/superpowers/plans/2026-11-08-pv-je-anlage-und-string.md`) ist umgesetzt und seit
+8.11.2026 auf `main`, **nicht ausgerollt** (Punkt 25 unter „Offen an der Anlage“). Nur app und UI, Migration `0018`;
 der core bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
