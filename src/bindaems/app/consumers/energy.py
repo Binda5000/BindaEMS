@@ -136,13 +136,54 @@ def _points(
     return points
 
 
+def time_window(start_ms: int, end_ms: int) -> str:
+    """``WHERE``-Bedingung für ``[start_ms, end_ms)``."""
+    return f"time >= {start_ms}ms AND time < {end_ms}ms"
+
+
+async def core_power_points(
+    reader: InfluxReader,
+    retention: str,
+    tags: Sequence[tuple[str, str]],
+    time_condition: str,
+    step_s: int,
+) -> dict[tuple[str, str], list[Point]]:
+    """Mittel von ``p_w`` je ``step_s`` für core-Reihen ``(source, id)`` (Messung ``power``,
+    ``phase=total``) aus ``retention``; Schritte ohne Wert fehlen."""
+    condition = " OR ".join(
+        f'("source"={quote_str(source)} AND "id"={quote_str(id_)})'
+        for source, id_ in dict.fromkeys(tags)
+    )
+    # Bezeichner und Werte sind maskiert
+    query = (
+        f'SELECT mean("p_w") AS "w" FROM {quote_ident(retention)}."power" '  # noqa: S608
+        f"WHERE \"phase\"='total' AND ({condition}) AND {time_condition} "
+        f'GROUP BY time({step_s}s),"source","id" fill(none)'
+    )
+    found: dict[tuple[str, str], list[Point]] = {}
+    for item in await reader.query(query):
+        source, id_ = item.tags.get("source"), item.tags.get("id")
+        if source is not None and id_ is not None:
+            found.setdefault((source, id_), []).extend(_points(item, 1.0))
+    return found
+
+
+def ha_mean_query(measurements: str, condition: str, time_condition: str, step_s: int) -> str:
+    """Mittel von ``value`` je ``step_s`` für die Entitäten aus ``ha_selection``."""
+    return (
+        f'SELECT mean("value") AS "w" FROM {measurements} '  # noqa: S608
+        f"WHERE {time_condition} AND ({condition}) "
+        f'GROUP BY time({step_s}s),"domain","entity_id" fill(none)'
+    )
+
+
 @dataclass(frozen=True)
 class _Window:
     start_ms: int
     end_ms: int
 
     def condition(self) -> str:
-        return f"time >= {self.start_ms}ms AND time < {self.end_ms}ms"
+        return time_window(self.start_ms, self.end_ms)
 
 
 class EnergyCache:
@@ -253,22 +294,9 @@ class EnergyCache:
     async def _core_points(
         self, tags: Sequence[tuple[str, str]], window: _Window
     ) -> dict[tuple[str, str], list[Point]]:
-        condition = " OR ".join(
-            f'("source"={quote_str(source)} AND "id"={quote_str(id_)})'
-            for source, id_ in dict.fromkeys(tags)
+        return await core_power_points(
+            self._reader, self._retention, tags, window.condition(), BUCKET_S
         )
-        # Bezeichner und Werte sind maskiert
-        query = (
-            f'SELECT mean("p_w") AS "w" FROM {quote_ident(self._retention)}."power" '  # noqa: S608
-            f"WHERE \"phase\"='total' AND ({condition}) AND {window.condition()} "
-            f'GROUP BY time({BUCKET_S}s),"source","id" fill(none)'
-        )
-        found: dict[tuple[str, str], list[Point]] = {}
-        for item in await self._reader.query(query):
-            source, id_ = item.tags.get("source"), item.tags.get("id")
-            if source is not None and id_ is not None:
-                found.setdefault((source, id_), []).extend(_points(item, 1.0))
-        return found
 
     async def _ha_energy(
         self, refs: dict[Key, HaRef], window: _Window
@@ -279,11 +307,7 @@ class EnergyCache:
         measurements, condition = ha_selection(list(refs.values()))
         seed = _Window(window.start_ms - int(HA_SEED.total_seconds() * 1000), window.start_ms)
         # Bezeichner und Werte sind maskiert
-        means = (
-            f'SELECT mean("value") AS "w" FROM {measurements} '  # noqa: S608
-            f"WHERE {window.condition()} AND ({condition}) "
-            f'GROUP BY time({BUCKET_S}s),"domain","entity_id" fill(none)'
-        )
+        means = ha_mean_query(measurements, condition, window.condition(), BUCKET_S)
         before = (
             f'SELECT last("value") AS "w" FROM {measurements} '  # noqa: S608
             f'WHERE {seed.condition()} AND ({condition}) GROUP BY "domain","entity_id"'

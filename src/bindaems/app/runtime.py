@@ -579,6 +579,8 @@ class AppRuntime:
                     cfg,
                     guard,
                     self.pv_energy,
+                    self.pv_days,
+                    self._clock,
                 ),
                 prices_router(self.prices, self.pipeline, self._clock, guard),
                 forecast_router(
