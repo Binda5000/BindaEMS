@@ -1,12 +1,19 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
 from tests.app_helpers import T_APP, influx_q, k
 
-from bindaems.app.consumers.energy import EnergyCache, day_start, ha_points, integrate_wh
+from bindaems.app.consumers.energy import (
+    EnergyCache,
+    core_tags,
+    day_start,
+    ha_points,
+    integrate_wh,
+)
 from bindaems.app.consumers.service import Consumer
 from bindaems.app.consumers.values import HaRef
-from bindaems.app.history.influx import Series
+from bindaems.app.history.influx import RP_LONG, Series
 from bindaems.shared.influx.lineprotocol import epoch_ms
 
 URL = "http://influx.lan:8086/query"
@@ -63,7 +70,8 @@ async def test_core_energy_with_house_in_one_query(respx_mock, reader, clock) ->
     query = influx_q(route.calls.last.request)
     assert query == (
         'SELECT mean("p_w") AS "w" FROM "raw"."power" WHERE "phase"=\'total\' AND '  # noqa: S608
-        "((\"source\"='load' AND \"id\"='v1') OR (\"source\"='derived' AND \"id\"='house_load')) "
+        "((\"source\"='load' AND \"id\"='v1') OR (\"source\"='derived' AND \"id\"='house_load') "
+        "OR (\"source\"='derived' AND \"id\"='pv_total')) "
         f"AND time >= {M0}ms AND time < {epoch_ms(T_APP)}ms "
         'GROUP BY time(60s),"source","id" fill(none)'
     )
@@ -174,7 +182,7 @@ async def test_window_energy_matches_refresh_for_today(respx_mock, reader, clock
         )
     )
     cache = EnergyCache(reader, clock, None)
-    energy, house = await cache.window_energy([og, other], MIDNIGHT, clock.now())
+    energy, house, _pv = await cache.window_energy([og, other], MIDNIGHT, clock.now())
     # keine Zustandsänderung: der Cache ist noch leer
     assert cache.since is None and cache.house_kwh() is None and cache.energy_kwh(og) is None
     await cache.refresh([og, other])
@@ -196,10 +204,60 @@ async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
     await cache.refresh([og])
     before = (cache.since, cache.energy_kwh(og), cache.house_kwh())
     start, end = MIDNIGHT - timedelta(days=1), MIDNIGHT
-    energy, house = await cache.window_energy([og], start, end)
+    energy, house, _pv = await cache.window_energy([og], start, end)
     assert (cache.since, cache.energy_kwh(og), cache.house_kwh()) == before
     # der Punkt liegt bei end (Mock ignoriert das Fenster): er zählt nicht
     assert energy == {1: (0.0, None)}
     assert house is None
     query = influx_q(route.calls.last.request)
     assert f"time >= {epoch_ms(start)}ms AND time < {epoch_ms(end)}ms" in query
+
+
+@dataclass(frozen=True)
+class _Source:
+    id: int
+    source_kind: str
+    power_ref: str
+    power_unit: str | None
+
+
+async def test_window_energy_accepts_any_power_source(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).respond(
+        json=_results(
+            _series("power", {"source": "pv", "id": "huawei"}, [(M0, 600.0), (M0 + MIN, 600.0)])
+        )
+    )
+    cache = EnergyCache(reader, clock, None)
+    source = _Source(7, "core", "pv.huawei.power_w", None)
+    result = await cache.window_energy([source], MIDNIGHT, clock.now())
+    assert result.per_source == {7: (0.02, None)}
+
+
+def test_pv_dc_maps_to_dc_series() -> None:
+    assert core_tags("pv_dc.power_w") == ("pv", "dc")
+    assert core_tags("pv.huawei.power_w") == ("pv", "huawei")
+    assert core_tags("battery.power_w") is None
+
+
+async def test_pv_total_kwh_from_derived(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).respond(
+        json=_results(
+            _series(
+                "power",
+                {"source": "derived", "id": "pv_total"},
+                [(M0 + n * MIN, 1200.0) for n in range(60)],
+            )
+        )
+    )
+    cache = EnergyCache(reader, clock, None)
+    await cache.refresh([])
+    assert cache.pv_total_kwh() == 1.2
+
+
+async def test_retention_long_reads_long(respx_mock, reader, clock) -> None:
+    route = respx_mock.post(URL).respond(json=_results())
+    source = _Source(1, "core", "pv.huawei.power_w", None)
+    await EnergyCache(reader, clock, None, retention=RP_LONG).refresh([source])
+    assert '"long"."power"' in influx_q(route.calls.last.request)
+    await EnergyCache(reader, clock, None).refresh([source])
+    assert '"raw"."power"' in influx_q(route.calls.last.request)

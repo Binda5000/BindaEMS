@@ -55,7 +55,7 @@ def consumers_router(
         if energy is None:
             return (None, None)
         if consumer.source_kind == "ha" and ha is not None and consumer.power_unit is not None:
-            ref = HaRef.from_consumer(consumer)
+            ref = HaRef.from_source(consumer)
             if ha.wrong_unit(ref):  # der Verlauf hätte dieselbe falsche Einheit
                 return (None, ha.note(ref))
         return (energy.energy_kwh(consumer), energy.note(consumer))

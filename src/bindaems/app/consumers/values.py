@@ -17,6 +17,7 @@ from typing import Any, Final, Literal
 import structlog
 
 from bindaems.app.consumers.service import HA_REF_RE, Consumer
+from bindaems.app.consumers.source import PowerSource
 from bindaems.app.core_link import LiveState
 from bindaems.app.history.influx import (
     InfluxQueryError,
@@ -55,11 +56,11 @@ class HaRef:
     unit: HaUnit
 
     @classmethod
-    def from_consumer(cls, c: Consumer) -> HaRef:
+    def from_source(cls, c: PowerSource) -> HaRef:
         domain, _, object_id = c.power_ref.partition(".")
         unit = _UNITS.get(c.power_unit)
         if c.source_kind != "ha" or unit is None or not object_id:
-            raise ValueError(f"Verbraucher {c.id} liest keine HA-Entität")
+            raise ValueError(f"Quelle {c.id} liest keine HA-Entität")
         return cls(domain, object_id, unit)
 
 
@@ -269,7 +270,7 @@ def consumer_power(consumer: Consumer, live: LiveState, ha: HaValueCache | None)
     if ha is None:
         return None
     try:
-        return ha.power_w(HaRef.from_consumer(consumer))
+        return ha.power_w(HaRef.from_source(consumer))
     except ValueError:
         return None
 
@@ -281,7 +282,7 @@ def consumer_note(consumer: Consumer, ha: HaValueCache | None) -> str | None:
     if ha is None:
         return NOT_CONFIGURED
     try:
-        return ha.note(HaRef.from_consumer(consumer))
+        return ha.note(HaRef.from_source(consumer))
     except ValueError:
         return None
 

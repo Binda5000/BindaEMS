@@ -973,7 +973,7 @@ class AppRuntime:
         while True:
             try:
                 consumers = await asyncio.to_thread(self.consumers.list)
-                refs = [HaRef.from_consumer(c) for c in consumers if c.source_kind == "ha"]
+                refs = [HaRef.from_source(c) for c in consumers if c.source_kind == "ha"]
                 await cache.refresh(refs)
             except Exception:
                 log.exception("HA-Werte der Verbraucher nicht lesbar")

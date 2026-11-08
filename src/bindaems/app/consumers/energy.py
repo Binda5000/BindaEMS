@@ -16,11 +16,11 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
-from typing import Final
+from typing import Final, NamedTuple
 
 import structlog
 
-from bindaems.app.consumers.service import Consumer
+from bindaems.app.consumers.source import PowerSource
 from bindaems.app.consumers.values import HaRef, ha_selection, number
 from bindaems.app.history.influx import (
     RP_RAW,
@@ -37,8 +37,11 @@ log = structlog.get_logger(__name__)
 
 BUCKET_S: Final = 60
 HA_SEED: Final = timedelta(days=7)  # so weit zurück wird der Wert vor Mitternacht gesucht
-CORE_POWER_RE = re.compile(r"^(?P<source>load|pv|wallbox)\.(?P<id>[^.]+)\.power_w$")
+CORE_POWER_RE = re.compile(
+    r"^(?:(?P<source>load|pv|wallbox)\.(?P<id>[^.]+)|(?P<dc>pv_dc))\.power_w$"
+)
 HOUSE: Final = ("derived", "house_load")
+PV_TOTAL: Final = ("derived", "pv_total")
 NO_SERIES: Final = "Signal wird nicht aufgezeichnet"
 NO_HISTORY: Final = "kein Verlauf seit Mitternacht"
 UNREADABLE: Final = "Verlauf nicht lesbar"
@@ -46,6 +49,26 @@ _SCALE: dict[str, float] = {"W": 1.0, "kW": 1000.0}
 
 Key = tuple[str, str, str | None]  # Quelle, Signal oder Entität, Einheit
 Point = tuple[int, float]  # Millisekunden, Watt
+
+
+def core_tags(ref: str) -> tuple[str, str] | None:
+    """Tags ``(source, id)`` der Reihe eines core-Leistungssignals; ``None``: nicht aufgezeichnet.
+
+    ``pv_dc.power_w`` (DC-gekoppelte PV) schreibt der core als ``source=pv, id=dc``."""
+    found = CORE_POWER_RE.fullmatch(ref)
+    if found is None:
+        return None
+    if found["dc"] is not None:
+        return ("pv", "dc")
+    return (found["source"], found["id"])
+
+
+class WindowEnergy(NamedTuple):
+    """Ergebnis von ``EnergyCache.window_energy``."""
+
+    per_source: dict[int, tuple[float | None, str | None]]
+    house_kwh: float | None
+    pv_total_kwh: float | None
 
 
 def day_start(now: datetime) -> datetime:
@@ -68,8 +91,8 @@ def integrate_wh(points: Sequence[Point], end_ms: int, hold_ms: int | None) -> f
     return total
 
 
-def _key(consumer: Consumer) -> Key:
-    return (consumer.source_kind, consumer.power_ref, consumer.power_unit)
+def _key(source: PowerSource) -> Key:
+    return (source.source_kind, source.power_ref, source.power_unit)
 
 
 def _points(
@@ -108,15 +131,27 @@ class _Window:
 
 
 class EnergyCache:
-    """Energie je Verbraucher und der Hauslast seit Mitternacht."""
+    """Energie je Quelle, der Hauslast und der PV gesamt seit Mitternacht.
 
-    def __init__(self, reader: InfluxReader, clock: Clock, ha_database: str | None) -> None:
+    ``retention`` ist die Aufbewahrung, aus der die core-Minutenmittel kommen (``raw`` oder
+    ``long``)."""
+
+    def __init__(
+        self,
+        reader: InfluxReader,
+        clock: Clock,
+        ha_database: str | None,
+        *,
+        retention: str = RP_RAW,
+    ) -> None:
         self._reader = reader
+        self._retention = retention
         self._clock = clock
         self._ha_database = ha_database
         # je Verbraucherquelle kWh oder Grund; als Ganzes ersetzt (Endpunkte lesen aus Threads)
         self._energy: dict[Key, tuple[float | None, str | None]] = {}
         self._house: float | None = None
+        self._pv_total: float | None = None
         self._since: datetime | None = None
 
     @property
@@ -124,54 +159,59 @@ class EnergyCache:
         """Beginn des Zeitraums der letzten Berechnung (``None``: noch keine)."""
         return self._since
 
-    def energy_kwh(self, consumer: Consumer) -> float | None:
-        return self._energy.get(_key(consumer), (None, None))[0]
+    def energy_kwh(self, source: PowerSource) -> float | None:
+        return self._energy.get(_key(source), (None, None))[0]
 
-    def note(self, consumer: Consumer) -> str | None:
-        """Warum ``consumer`` keine Energie hat; ``None``, solange nichts berechnet wurde."""
-        return self._energy.get(_key(consumer), (None, None))[1]
+    def note(self, source: PowerSource) -> str | None:
+        """Warum ``source`` keine Energie hat; ``None``, solange nichts berechnet wurde."""
+        return self._energy.get(_key(source), (None, None))[1]
 
     def house_kwh(self) -> float | None:
         return self._house
 
-    async def refresh(self, consumers: Iterable[Consumer]) -> None:
+    def pv_total_kwh(self) -> float | None:
+        return self._pv_total
+
+    async def refresh(self, sources: Iterable[PowerSource]) -> None:
         """Rechnet ``day_start(now) … now`` und ersetzt das Ergebnis als Ganzes."""
-        consumers = list(consumers)
+        sources = list(sources)
         now = self._clock.now()
         since = day_start(now)
-        energy, house = await self.window_energy(consumers, since, now)
-        self._energy = {_key(consumer): energy[consumer.id] for consumer in consumers}
-        self._house, self._since = house, since
+        result = await self.window_energy(sources, since, now)
+        self._energy = {_key(source): result.per_source[source.id] for source in sources}
+        self._house, self._pv_total, self._since = result.house_kwh, result.pv_total_kwh, since
 
     async def window_energy(
-        self, consumers: Iterable[Consumer], start: datetime, end: datetime
-    ) -> tuple[dict[int, tuple[float | None, str | None]], float | None]:
-        """Energie je Verbraucher (Schlüssel: ``Consumer.id``) und der Hauslast in ``[start, end)``.
+        self, sources: Iterable[PowerSource], start: datetime, end: datetime
+    ) -> WindowEnergy:
+        """Energie je Quelle (Schlüssel: ``.id``), der Hauslast und der PV gesamt in
+        ``[start, end)``.
 
-        Je Verbraucher kWh oder der Grund, warum es keine gibt. Der Cache bleibt unberührt; das
+        Je Quelle kWh oder der Grund, warum es keine gibt. Der Cache bleibt unberührt; das
         Ergebnis taugt auch für vergangene Tage (``refresh`` ruft mit ``day_start(now) … now``).
         """
         window = _Window(epoch_ms(start), epoch_ms(end))
         core: dict[Key, tuple[str, str]] = {}
         ha: dict[Key, HaRef] = {}
         by_key: dict[Key, tuple[float | None, str | None]] = {}
-        consumers = list(consumers)
-        for consumer in consumers:
-            key = _key(consumer)
-            if consumer.source_kind == "core":
-                found = CORE_POWER_RE.fullmatch(consumer.power_ref)
-                if found is None:
+        sources = list(sources)
+        for source in sources:
+            key = _key(source)
+            if source.source_kind == "core":
+                tags = core_tags(source.power_ref)
+                if tags is None:
                     by_key[key] = (None, NO_SERIES)
                 else:
-                    core[key] = (found["source"], found["id"])
+                    core[key] = tags
             else:
                 try:
-                    ha[key] = HaRef.from_consumer(consumer)
+                    ha[key] = HaRef.from_source(source)
                 except ValueError:
                     by_key[key] = (None, NO_SERIES)
         house: float | None = None
+        pv_total: float | None = None
         try:
-            series = await self._core_points([*core.values(), HOUSE], window)
+            series = await self._core_points([*core.values(), HOUSE, PV_TOTAL], window)
         except InfluxQueryError as exc:
             log.warning("Energie der Verbraucher nicht lesbar", error=str(exc))
             by_key |= dict.fromkeys(core, (None, UNREADABLE))
@@ -179,9 +219,12 @@ class EnergyCache:
             for key, tags in core.items():
                 by_key[key] = self._kwh(series.get(tags), window, BUCKET_S * 1000)
             house = self._kwh(series.get(HOUSE), window, BUCKET_S * 1000)[0]
+            pv_total = self._kwh(series.get(PV_TOTAL), window, BUCKET_S * 1000)[0]
         if ha:
             by_key |= await self._ha_energy(ha, window)
-        return {consumer.id: by_key[_key(consumer)] for consumer in consumers}, house
+        return WindowEnergy(
+            {source.id: by_key[_key(source)] for source in sources}, house, pv_total
+        )
 
     @staticmethod
     def _kwh(
@@ -200,7 +243,7 @@ class EnergyCache:
         )
         # Bezeichner und Werte sind maskiert
         query = (
-            f'SELECT mean("p_w") AS "w" FROM {quote_ident(RP_RAW)}."power" '  # noqa: S608
+            f'SELECT mean("p_w") AS "w" FROM {quote_ident(self._retention)}."power" '  # noqa: S608
             f"WHERE \"phase\"='total' AND ({condition}) AND {window.condition()} "
             f'GROUP BY time({BUCKET_S}s),"source","id" fill(none)'
         )

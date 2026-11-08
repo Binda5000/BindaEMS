@@ -708,7 +708,7 @@ def _create_consumers(app: AppRuntime) -> list[HaRef]:
             power_unit="W",
         )
     )
-    return [HaRef.from_consumer(c) for c in app.consumers.list() if c.source_kind == "ha"]
+    return [HaRef.from_source(c) for c in app.consumers.list() if c.source_kind == "ha"]
 
 
 def _rate_forecasts(app: AppRuntime) -> None:
