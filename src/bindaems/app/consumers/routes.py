@@ -23,8 +23,8 @@ from bindaems.app.consumers.values import (
     HaValueCache,
     build_tree,
     candidates,
-    consumer_note,
-    consumer_power,
+    source_note,
+    source_power,
 )
 from bindaems.app.core_link import LiveState
 from bindaems.app.db.fields import MAX_ID
@@ -67,9 +67,9 @@ def consumers_router(
         house_w = float(house) if isinstance(house, int | float) else None
         tree = build_tree(
             consumers,
-            lambda c: consumer_power(c, live, ha),
+            lambda c: source_power(c, live, ha),
             house_w,
-            lambda c: consumer_note(c, ha),
+            lambda c: source_note(c, ha),
             consumer_energy,
             energy.house_kwh() if energy is not None else None,
         )

@@ -33,10 +33,11 @@ from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.routes import charging_router
 from bindaems.app.charging.sessions import ChargingSession, SessionService
 from bindaems.app.charging.tracker import ChargingTracker
-from bindaems.app.consumers.days import FILL_DAYS, ConsumerDays
+from bindaems.app.consumers.days import FILL_DAYS, ConsumerDays, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
+from bindaems.app.consumers.source import PowerSource
 from bindaems.app.consumers.values import HaRef, HaValueCache
 from bindaems.app.control.boost_cost import boost_cost
 from bindaems.app.control.decisions import DecisionCollector, DecisionStore
@@ -44,6 +45,7 @@ from bindaems.app.control.intent import CoreDown, IntentService
 from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
+from bindaems.app.db.schema import pv_source_day
 from bindaems.app.forecast.archive import ForecastArchive
 from bindaems.app.forecast.calibration import pv_threshold_w
 from bindaems.app.forecast.load import LoadForecastService
@@ -70,7 +72,7 @@ from bindaems.app.ha.notify import (
     websocket_service_call,
 )
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
-from bindaems.app.history.influx import InfluxQueryError, InfluxReader
+from bindaems.app.history.influx import RP_LONG, InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
 from bindaems.app.learning.driving_auto import DrivingAutomation
@@ -107,6 +109,9 @@ from bindaems.app.prices.scheduler import PriceScheduler
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.sources import ReferenceSource, SmartEnergySource, make_reference
 from bindaems.app.prices.store import PriceStore
+from bindaems.app.pv.periods import pv_fill_days
+from bindaems.app.pv.routes import pv_router
+from bindaems.app.pv.service import PvSourceService
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.routes import settings_router
 from bindaems.app.settings.service import SettingsService
@@ -148,6 +153,7 @@ WEATHER_KEEP = timedelta(days=120)
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
+PV_DAYS_NIGHTLY = 3  # nachts: fehlende PV-Tage der letzten 3
 CONSUMER_DAYS_NIGHTLY = 3  # nachts: fehlende Tage der letzten 3 (gestern, Fehler nachholen)
 LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
 LEDGER_BACKFILL_WAIT_S = (
@@ -219,6 +225,10 @@ class AppRuntime:
         self.settings = SettingsService(self.engine, self._clock, self.audit)
         ha_database = cfg.influxdb.ha_database
         self.consumers = ConsumerService(
+            self.engine, self._clock, self.audit, ha_enabled=ha_database is not None
+        )
+
+        self.pv_sources = PvSourceService(
             self.engine, self._clock, self.audit, ha_enabled=ha_database is not None
         )
 
@@ -424,6 +434,17 @@ class AppRuntime:
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
+        # PV: eigene IDs, daher eigener Cache; core-Minutenmittel aus RP long (unbegrenzt)
+        self.pv_energy = EnergyCache(self.reader, self._clock, ha_database, retention=RP_LONG)
+        self.pv_days = SourceDays(
+            self.engine,
+            self.pv_energy,
+            self.pv_sources.list,
+            pv_source_day,
+            "source_id",
+            self._clock,
+            total_id=0,
+        )
         self.stats = StatsService(
             self.ledger,
             self.charging_sessions,
@@ -549,6 +570,15 @@ class AppRuntime:
                 ),
                 consumers_router(
                     self.consumers, self.live, self.ha_values, self.reader, cfg, guard, self.energy
+                ),
+                pv_router(
+                    self.pv_sources,
+                    self.live,
+                    self.ha_values,
+                    self.reader,
+                    cfg,
+                    guard,
+                    self.pv_energy,
                 ),
                 prices_router(self.prices, self.pipeline, self._clock, guard),
                 forecast_router(
@@ -808,6 +838,7 @@ class AppRuntime:
             ("ops-nightly", self._ops_nightly_loop),
             ("ops-report", self._ops_report_loop),
             ("consumer-energy", self._energy_loop),
+            ("pv-days-fill", self._pv_days_fill),
             ("backup-range", self.backup_range_service.run),
             ("outages", self.outages.run),
             ("heartbeat", self.heartbeat.run),
@@ -973,7 +1004,10 @@ class AppRuntime:
         while True:
             try:
                 consumers = await asyncio.to_thread(self.consumers.list)
-                refs = [HaRef.from_source(c) for c in consumers if c.source_kind == "ha"]
+                pv = await asyncio.to_thread(self.pv_sources.list)
+                # eine Abfrage für beide: der Cache ersetzt seinen Inhalt als Ganzes
+                sources: list[PowerSource] = [*consumers, *pv]
+                refs = [HaRef.from_source(c) for c in sources if c.source_kind == "ha"]
                 await cache.refresh(refs)
             except Exception:
                 log.exception("HA-Werte der Verbraucher nicht lesbar")
@@ -986,6 +1020,10 @@ class AppRuntime:
                 await self.energy.refresh(consumers)
             except Exception:
                 log.exception("Energie der Verbraucher nicht bestimmbar")
+            try:
+                await self.pv_energy.refresh(await asyncio.to_thread(self.pv_sources.list))
+            except Exception:
+                log.exception("Energie der PV nicht bestimmbar")
             await asyncio.sleep(ENERGY_S)
 
     async def _ha_inputs_loop(self) -> None:
@@ -1276,6 +1314,24 @@ class AppRuntime:
                 log.info("Energie der Verbraucher je Tag gespeichert", days=stored)
         except Exception:
             log.exception("Energie der Verbraucher je Tag nicht gespeichert")
+        if not start:  # beim Start füllt ``pv-days-fill`` (mehr Tage, eigene Aufgabe)
+            try:
+                stored = await self.pv_days.fill_missing(today, PV_DAYS_NIGHTLY)
+                if stored:
+                    log.info("Energie der PV je Tag gespeichert", days=stored)
+            except Exception:
+                log.exception("Energie der PV je Tag nicht gespeichert")
+
+    async def _pv_days_fill(self) -> None:
+        """Holt beim Start die fehlenden PV-Tage bis Januar des Vorjahres nach (einmalig, eigene
+        Aufgabe, damit der Start und die Verbraucher nicht warten)."""
+        today = self._clock.now().astimezone(LOCAL_TZ).date()
+        try:
+            stored = await self.pv_days.fill_missing(today, pv_fill_days(today))
+            if stored:
+                log.info("Energie der PV je Tag gespeichert", days=stored)
+        except Exception:
+            log.exception("Energie der PV je Tag nicht gespeichert")
 
     async def _estimate_gaps(self, today: date) -> int:
         """Rechnet die Lücken der letzten 7 Tage bis gestern nach, aber nur in dem Teil, den der
