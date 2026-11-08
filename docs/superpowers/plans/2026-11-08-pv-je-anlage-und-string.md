@@ -201,24 +201,24 @@ Folgen für die Lösung: Anlagen kommen aus dem core (Victron), Strings aus HA. 
 ### Task 6: Seite „PV-Anlagen“
 
 **Files:**
-- Create: `ui/src/routes/pv/+page.svelte`, `ui/src/lib/pv/PvTree.svelte`, `ui/src/lib/pv/PvForm.svelte`, `ui/src/lib/pv/PvDayChart.svelte`, `ui/src/lib/pv/PvPeriodChart.svelte`, `ui/src/lib/pv/tree.ts`
+- Create: `ui/src/routes/pv/+page.svelte`, `ui/src/lib/pv/PvSystemCard.svelte`, `ui/src/lib/pv/PvForm.svelte`, `ui/src/lib/pv/PvDayChart.svelte`, `ui/src/lib/pv/PvPeriodChart.svelte`, `ui/src/lib/pv/tree.ts`
 - Modify: `ui/src/lib/nav.ts` (Eintrag `{ href: '/pv', label: 'PV-Anlagen', icon: 'pv' }` vor „Verbraucher“), `ui/src/lib/api/schemas.ts`, `tests/ui_world.py` (PV-Quellen und Antworten für E2E), `ui/tests/e2e/pages.spec.ts`
 - Test: `*.test.ts` neben den Komponenten, `ui/src/lib/nav.test.ts`, `ui/tests/e2e/pv.spec.ts`
 
 **Interfaces:**
 - Consumes: `GET /api/pv`, `/api/pv/candidates`, `/api/pv/day`, `/api/pv/period`, POST/PATCH/DELETE (Task 3, 4); `periodRange`, `periodTitle`, `shift`, `parsePeriod`, `parseDay` aus `ui/src/lib/stats/period.ts`.
-- Gestaltung: Entwürfe A (Tabelle zuerst), B (Karte je Anlage) und C (Vergleich zuerst) sowie Tag und Formular auf https://claude.ai/artifact/92eEBBsDHVoYCQ4oGqrjkx. Umgesetzt wird die Variante, die der Betreiber wählt; die Bausteine unten gelten für alle drei, nur Anordnung und Gewicht unterscheiden sich (B: eine Karte je Anlage mit Kennzahlen und kWh/kWp-Balken je String statt der Tabelle; C: Vergleich der Strings in kWh/kWp oben, Liste darunter). Monate ohne Daten im Jahr erscheinen grau hinterlegt mit „noch keine Daten (Werte ab …)“.
-- Produces: Seite von oben nach unten (Variante A):
-  1. Kopf: „PV gesamt jetzt“ und „Heute“ (kWh), darunter die Zeitraum-Leiste „Tag | Woche | Monat | Jahr“ mit `‹ {Titel} ›` und „Heute“ (wie Statistik).
-  2. **Tabelle** (Anlage fett, Strings eingerückt mit Farbpunkt): Name, „Jetzt“, Ertrag im Zeitraum (Spaltenkopf „Heute“, „Diese Woche“, „November 2026“ …), „kWh/kWp“; fehlen frühe Tage, klein „ab 18.10.“; unter einer Anlage mit Strings eine graue Zeile „Strings zusammen“; „Nicht zugeordnet“ zuletzt, kursiv. Fehlt ein Wert: „–“ und klein der Grund. Admins: Knopf „Anlage hinzufügen“, je Zeile „Ändern“; im Formular bei einer Anlage „String hinzufügen“.
+- Gestaltung: **Variante B „Karte je Anlage“** (Wahl des Betreibers am 8.11.2026) aus https://claude.ai/artifact/92eEBBsDHVoYCQ4oGqrjkx, Artboards „B · Karte je Anlage“, „Tag“ und „String hinzufügen“. Monate ohne Daten im Jahr erscheinen grau hinterlegt mit „noch keine Daten (Werte ab …)“.
+- Produces: Seite von oben nach unten:
+  1. Zeitraum-Leiste „Tag | Woche | Monat | Jahr“ mit `‹ {Titel} ›` und „Heute“ (wie Statistik), darunter die Zeile „PV gesamt {kWh im Zeitraum} · jetzt {kW}“; ist „Nicht zugeordnet“ bekannt und ≥ 0,1 kWh oder ≥ 50 W, darunter klein „davon nicht zugeordnet {kWh}“.
+  2. **Eine Karte je Anlage** (`PvSystemCard.svelte`, Reihenfolge nach `sort`, dann Name): Kopf mit Name und „{kWp} kWp · {Quelle}“ („Victron-Zähler (AC)“ bzw. „Home Assistant“), Admins mit Stift-Knopf „{Name} ändern“; drei Kennzahlen „{Zeitraum}“ (kWh), „je kWp“ und „Jetzt“ (kW); hat die Anlage Strings, darunter „Strings im Vergleich (kWh je kWp)“ mit einer Zeile je String (Farbpunkt, Name, kWp, kWh/kWp fett und kWh) und einem Balken, dessen Länge kWh/kWp relativ zum besten String der Anlage ist (bester = 100 %); Strings ohne kWp zeigen nur kWh und keinen Balken; darunter klein „Strings zusammen {kWh} (DC, vor dem Wechselrichter)“. Fehlt ein Wert: „–“ und klein der Grund. Fehlen frühe Tage im Zeitraum, klein „ab 18.10.“. Unter den Karten (Admins) „Weitere Anlage hinzufügen“ (gestrichelt; ohne Anlagen „Anlage hinzufügen“ mit einem Satz, was hier erscheint).
   3. **Formular** (Dialog wie `ConsumerForm`): Name, „Gehört zu“ (keine = Anlage, sonst Auswahl der Anlagen), Farbe, Quelle (core-Signal aus Kandidaten oder HA-Entität mit Einheit), kWp (optional, Komma erlaubt), Reihenfolge; Löschen mit Bestätigung.
   4. **Diagramm** zum Zeitraum: Tag → `PvDayChart` (eine Linie je Eintrag in seiner Farbe, Tooltip „{Zeit} · {Name} {W}“); Woche/Monat/Jahr → `PvPeriodChart` (gruppierte Balken je Tag bzw. Monat, Tooltip „{Datum} · {Name} {kWh}“). Umschalter „Anlagen | Strings“ und „kWh | kWh/kWp“ (kWh/kWp nur für Einträge mit kWp; bei „Strings“ Standard kWh/kWp). Legende als Chips (`ChartLegend`).
   Live-Aktualisierung alle 15 s für Kopf, „Jetzt“ und den laufenden Zeitraum (wie „Verbraucher“); vergangene Zeiträume beim Öffnen und Blättern.
 
 - [ ] **Step 1: Failing tests**
   - `nav.test.ts`: „PV-Anlagen“ steht direkt vor „Verbraucher“, für viewer und admin.
-  - `tree.test.ts`: `rows(tree)` liefert Anlage, Strings (eingerückt), „Strings zusammen“, „Nicht zugeordnet“ in dieser Reihenfolge; `formatKwp(2)` → „2,00“.
-  - `PvTree.test.ts`: 0 W zeigt „0 W“, `null` zeigt „–“ und den Grund; viewer sieht keine Knöpfe.
+  - `tree.test.ts`: `cards(tree)` liefert je Anlage ihre Strings in `sort`-Reihenfolge und `barPct` je String; `formatKwp(2)` → „2,00“.
+  - `PvSystemCard.test.ts`: 0 W zeigt „0 W“, `null` zeigt „–“ und den Grund; viewer sieht keinen Stift; Süd 5,68 und West 4,88 kWh/kWp → Balken 100 % und 86 %; String ohne kWp hat keinen Balken; Anlage ohne Strings zeigt keinen Vergleich.
   - `PvForm.test.ts`: „Gehört zu“ bietet nur Anlagen an (keine Strings, nicht sich selbst); kWp „4,1“ → `4.1`; HA ohne Einheit → Fehlermeldung, kein Absenden.
   - `PvPeriodChart.test.ts`: Jahr hat 12 Kategorien „Jan“ … „Dez“; `null` ergibt eine Lücke, keinen 0-Balken; Umschalter kWh/kWp blendet Einträge ohne kWp aus und sagt das in einer Zeile („ohne kWp: …“).
   - `page.test.ts`: `?zeitraum=monat&tag=2026-11-08` lädt `/api/pv/period?period=month&day=2026-11-08`; `‹` springt zum Oktober; Tag zeigt die Kurve, Monat die Balken.
