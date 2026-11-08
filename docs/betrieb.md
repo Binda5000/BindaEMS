@@ -2296,15 +2296,24 @@ in der UI, nicht in `config.yaml`; jede Änderung steht im Änderungsprotokoll.
   Wechselrichters. Unter einer Anlage gibt es darum keine Restzeile.
 - **„Nicht zugeordnet“** steht nur oben und nur, wenn mindestens eine Anlage angelegt ist: PV gesamt
   (die Summe aller PV-Quellen im core) minus die Summe der obersten Anlagen, als Leistung und als Energie.
-  Sie erscheint erst ab 0,1 kWh oder 50 W.
+  In Woche, Monat und Jahr rechnet die app sie je Tag, nur an Tagen, an denen PV gesamt und jede Anlage
+  einen Wert haben, und summiert dann: beginnt eine Anlage mitten im Monat, zählt der Monat erst ab ihrem
+  ersten Tag. Sie erscheint erst ab 0,1 kWh, im laufenden Zeitraum auch ab 50 W jetzt.
 - **Kurve und Tage:** core-Signale liest die app aus der Aufbewahrung `long` (1-min-Mittel, jeder Tag
   abrufbar), HA-Sensoren aus der HA-Datenbank. An der Zeitumstellung hat der Tag 23 oder 25 Stunden.
-  0 W ist ein gültiger Wert (nachts also nicht „–“, kWh je kWp bei 0 kWh ist 0,00). Meldet ein
-  Template-Sensor nachts `unavailable`, zählt das nicht als Wert; die Energie ergibt sich aus den
-  vorhandenen Werten.
+  0 W ist ein gültiger Wert (nachts also nicht „–“, kWh je kWp bei 0 kWh ist 0,00). HA schreibt
+  einen Sensor nur, wenn er sich ändert, und für `unavailable` gar keinen Wert. Für die Energie der PV
+  gilt ein HA-Wert deshalb bis zum nächsten, **höchstens 30 Minuten**; danach zählt nichts (Lücke, der
+  Tag bleibt bekannt). Meldet ein Template-Sensor nachts `unavailable`, zählt der letzte Wert vom
+  Abend also höchstens 30 Minuten, nicht die ganze Nacht. Tagsüber ändern sich die Werte laufend, und
+  ein Sensor, der nachts 0 W schreibt, gibt so oder so 0 kWh. In der Tageskurve fehlen Schritte ohne
+  Wert. Verbraucher halten ihre HA-Werte weiter bis zum nächsten.
 - **Vor den ersten Daten:** Monate vor der Inbetriebnahme oder vor den Template-Sensoren zeigen „–“
   (keine Balken), nicht 0 kWh. Die Summe des Zeitraums zählt nur bekannte Tage und nennt den ersten Tag
-  mit Wert („ab …“).
+  mit Wert („ab …“). Auch ein Tag ohne Wert mitten im Zeitraum fehlt in der Summe, ohne Hinweis. Die
+  Karte „PV je Anlage“ der Statistik rechnet dagegen streng wie die Verbraucher: Fehlt ein Tag des
+  Zeitraums, zeigt sie „–“ mit dem Grund. Für denselben Zeitraum kann die PV-Seite also eine Summe
+  zeigen, wo die Statistik „–“ zeigt.
 
 Fehlt ein Wert, steht der Grund unter dem Namen:
 
@@ -2315,7 +2324,8 @@ Fehlt ein Wert, steht der Grund unter dem Namen:
 | Signal wird nicht aufgezeichnet | Der core schreibt dieses Signal nicht nach InfluxDB (nur `pv.<id>.power_w` und `pv_dc.power_w`), oder die HA-Datenbank ist nicht eingerichtet. |
 | kein Verlauf seit Mitternacht | InfluxDB hat für heute keine Werte dieses Eintrags. |
 | Verlauf nicht lesbar | InfluxDB lehnt die Abfrage ab oder ist nicht erreichbar (Log der app). |
-| Tag nicht gespeichert | Für den Tag liegt keine Zeile in der Datenbank (siehe unten, älter als der Nachholbereich, oder der Eintrag ist neu). |
+| Noch nicht berechnet | Die app hat den Stand von heute seit dem Start noch nicht gerechnet (etwa eine Minute nach dem Start), oder der Eintrag ist eben angelegt. |
+| Tag nicht gespeichert | Für den Tag liegt keine Zeile in der Datenbank (siehe unten, älter als der Nachholbereich, oder der Nachtrag für einen neuen Eintrag läuft noch). |
 
 **Ertrag je Tag gespeichert:** Die app speichert die Energie jedes Eintrags je Tag in `pv_source_day`,
 dazu je Tag „PV gesamt“ unter der reservierten `source_id` 0 (für „Nicht zugeordnet“ in Woche, Monat
@@ -2326,11 +2336,18 @@ reicht der Nachholbereich weit zurück:
   fehlenden Tage bis zum **1. Januar des Vorjahres** nach, höchstens 800 Tage. Ein Tag ohne jeden
   Verlauf bekommt eine Zeile mit Grund und wird nicht erneut gerechnet. Die Aufgabe läuft bei jedem
   Start, rechnet aber nur, was fehlt.
+- **Nach einem neuen Eintrag** rechnet dieselbe Aufgabe noch einmal, ohne Neustart (einige Sekunden
+  nach der letzten Änderung; mehrere Änderungen kurz nacheinander geben einen Lauf). Der neue Eintrag
+  bekommt so seine Tage bis zum 1. Januar des Vorjahres. Das kann einige Minuten dauern; bis dahin
+  stehen ältere Tage als „Tag nicht gespeichert“ da.
+- **Nach einem geänderten Signal** (Art, Signal oder Einheit) verwirft die app die gespeicherten Tage
+  des Eintrags und rechnet sie mit dem neuen Signal neu, wie nach einem neuen Eintrag. So korrigierst
+  du eine falsche HA-Entität oder W statt kW auch rückwirkend. Name, Farbe, kWp und Anlage zu ändern
+  behält die Tage.
 - **Nachts um 02:45 Uhr** holt sie die fehlenden Tage der letzten 3 nach.
-- **Ein Eintrag, den du nach dem Start anlegst,** bekommt deshalb zunächst nur die letzten 3 Tage
-  (in der folgenden Nacht). Ältere Tage stehen als „Tag nicht gespeichert“ leer da, bis die app neu
-  startet: `docker compose restart ems-app` rechnet sie dann nach. Das kann einige Minuten dauern.
-- Ist der Verlauf eines Eintrags gerade nicht lesbar, behält er seine alte Zeile.
+- Ist der Verlauf eines Eintrags gerade nicht lesbar, behält er seine alte Zeile. Einen Tag, der so
+  fehlt, versucht die app erst beim nächsten neuen Eintrag oder geänderten Signal, nachts (die letzten
+  3 Tage) oder beim nächsten Start wieder, nicht in einer Schleife.
 
 **Weiteres System dazunehmen:**
 

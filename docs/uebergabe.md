@@ -2247,8 +2247,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       von selbst; setzt `0017` aus Punkt 24 voraus), keine ACL-Zeile, keine Änderung an `config.yaml`; nichts an der Anlage wird geschaltet. Danach:
       (a) in Home Assistant prüfen, dass die InfluxDB-Integration die Template-Sensoren der Strings schreibt (`include`); (b) in der UI auf der Seite
       „PV-Anlagen“ die Anlage „Huawei“ (core-Signal `pv.huawei.power_w`, 9,8 kWp) anlegen, darunter die Strings „Süd“ (PV1, 4,1 kWp)
-      und „West“ (PV2, 5,7 kWp) als HA-Entitäten (die Template-Sensoren, Namen aus HA); der erste Start rechnet die Tage bis 1.1.2025 im Hintergrund
-      nach (`pv-days-fill`), die Einträge aus (b) haben danach nur die letzten 3 Tage, ältere Tage kommen mit `docker compose restart ems-app`.
+      und „West“ (PV2, 5,7 kWp) als HA-Entitäten (die Template-Sensoren, Namen aus HA); nach jedem neuen Eintrag rechnet die app dessen Tage bis
+      1.1.2025 im Hintergrund nach (`pv-days-fill`, ohne Neustart, einige Minuten), ein geändertes Signal rechnet die Tage des Eintrags neu.
       Prüfen: Summe „Strings zusammen“ liegt etwas über der Anlage (DC gegen AC), „Nicht zugeordnet“ ist klein, ein Monat zeigt vor den
       Template-Sensoren „–“. Rückweg: die Datenbank auf `0017` zurücknehmen. Betrieb: `docs/betrieb.md`, „PV-Anlagen“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
