@@ -10,7 +10,10 @@ aus. Teil 2 ist vollständig (EVCS „Verbindung unterbrochen“ am 27.10.2026, 
 3.11.2026).
 **Plan Lebenszeichen und USV-Reichweite** (`docs/superpowers/plans/2026-11-04-lebenszeichen-usv-reichweite.md`) ist umgesetzt: auf dem Branch
 `claude/project-thread-800wyz`, **nicht auf `main`, nicht ausgerollt** (Punkt 24 unter „Offen an der Anlage“). Nur app, UI und HA; der core
-bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
+bleibt unverändert.
+**Plan PV je Anlage und String** (`docs/superpowers/plans/2026-11-08-pv-je-anlage-und-string.md`) ist umgesetzt: auf dem Branch
+`claude/project-thread-i85go5`, **nicht auf `main`, nicht ausgerollt** (Punkt 25 unter „Offen an der Anlage“). Nur app und UI, Migration `0018`;
+der core bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
    nachts wie geplant).
@@ -2239,6 +2242,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       „USV und Netzausfälle“ und Baustein „Lebenszeichen“; app stoppen, nach höchstens 15 min kommt die Meldung. Das Protokoll der Netzausfälle
       beginnt erst mit dem Ausrollen. Schritte im Einzelnen: `docs/betrieb.md`, Abschnitt 7, „Lebenszeichen einrichten“. Rückweg: die Felder
       aus der `config.yaml` nehmen, die Datenbank auf `0016` zurücknehmen.
+  25. **PV je Anlage und String ausrollen:** nur app und UI, mit Stufe 2 des Sammel-Pulls (ab 23.11.2026), `ems-core` **und** `ems-app` zusammen mit fester
+      Version, **nie `ems-app` allein**; Datenbank vorher sichern. **Migration `0018`** (Tabellen `pv_source` und `pv_source_day`, läuft beim Start der app
+      von selbst; setzt `0017` aus Punkt 24 voraus), keine ACL-Zeile, keine Änderung an `config.yaml`; nichts an der Anlage wird geschaltet. Danach:
+      (a) in Home Assistant prüfen, dass die InfluxDB-Integration die Template-Sensoren der Strings schreibt (`include`); (b) in der UI auf der Seite
+      „PV-Anlagen“ die Anlage „Huawei“ (core-Signal `pv.huawei.power_w`, 9,8 kWp) anlegen, darunter die Strings „Süd“ (PV1, 4,1 kWp)
+      und „West“ (PV2, 5,7 kWp) als HA-Entitäten (die Template-Sensoren, Namen aus HA); der erste Start rechnet die Tage bis 1.1.2025 im Hintergrund
+      nach (`pv-days-fill`), die Einträge aus (b) haben danach nur die letzten 3 Tage, ältere Tage kommen mit `docker compose restart ems-app`.
+      Prüfen: Summe „Strings zusammen“ liegt etwas über der Anlage (DC gegen AC), „Nicht zugeordnet“ ist klein, ein Monat zeigt vor den
+      Template-Sensoren „–“. Rückweg: die Datenbank auf `0017` zurücknehmen. Betrieb: `docs/betrieb.md`, „PV-Anlagen“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

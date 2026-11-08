@@ -1542,8 +1542,8 @@ Die WAL-Dateien müssen weg, sonst spielt SQLite alte Änderungen in die zurück
 Daten seit der Sicherung (z. B. Preise, Abrechnung) holt die app beim Start zum Teil wieder:
 Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB. Die Statistik holt
 die app ebenfalls nach, soweit sie sich rechnen lässt: Einstandspreis, Abgleich (35 Tage) und
-Energie je Verbraucher (31 Tage). Ladesessions und Belegung seit der Sicherung gehen verloren, denn
-sie kommen nur aus dem Betrieb der app. Die Modelle des Lastmodells liegen als Dateien unter
+Energie je Verbraucher (31 Tage) und je PV-Eintrag (seit Januar des Vorjahres, Abschnitt „PV-Anlagen“). Ladesessions und Belegung seit der Sicherung gehen verloren, denn
+sie kommen nur aus dem Betrieb der app. Die PV-Anlagen und Strings (`pv_source`) und ihre Tage (`pv_source_day`) liegen in der Datenbank und sind in der Sicherung enthalten. Die Modelle des Lastmodells liegen als Dateien unter
 `/data/models/load/` und brauchen keine Sicherung, weil die app jede Nacht neu trainiert
 (Abschnitt „Lastmodell (Phase 5a)“).
 
@@ -1848,7 +1848,8 @@ gilt für diesen Browser.
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz, seit Plan 5c mit Klimaanlage die Karte „Vorheizen und Vorkühlen“; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (ein Satz, ob Modell oder Profil näher lag, und der Vergleich nach Vorlauf) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Was das Modell nutzt“ (Abschnitt „Lastmodell (Phase 5a)“), seit Plan 5c mit Klimaanlage die Karte „Wärmemodell“ (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
-| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Erlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
+| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Erlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „PV je Anlage“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
+| PV-Anlagen | Anlagen und ihre Strings mit Leistung jetzt, Ertrag und kWh je kWp je Tag, Woche, Monat und Jahr, Tageskurve, „Nicht zugeordnet“ (unten, „PV-Anlagen“); Admins legen Einträge an, ändern und löschen sie |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten (deutsche Namen, gestörte zuerst, dazu „{x} von {n} in Ordnung“), Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Betrieb | der Betriebscheck („Alles in Ordnung?“), die Auffälligkeiten der letzten Tage mit dem Tagesbericht und alle Schalter mit Stand (unten, „Betrieb: Check, Auffälligkeiten, Schalter“); für alle Rollen sichtbar |
@@ -2266,6 +2267,85 @@ SHOW SERIES ON "homeassistant" WHERE "entity_id" = 'serverschrank_power'
 (`W,…`) oder mit der Entität (`sensor.serverschrank_power,…`); beides liest die app. Beginnt
 sie mit etwas anderem, etwa `state,…` bei `override_measurement`, findet die app den Sensor
 nicht. Dann nimm den Weg über das core-Signal.
+
+### PV-Anlagen
+
+Die Seite „PV-Anlagen“ (in der Navigation direkt vor „Verbraucher“) zeigt die Erzeugung je Anlage und
+je String. Alle sehen sie, nur Admins legen Einträge an, ändern und löschen sie. Die Pflege geschieht
+in der UI, nicht in `config.yaml`; jede Änderung steht im Änderungsprotokoll.
+
+- **Zwei Ebenen:** Eine Anlage (oberste Ebene) kann Strings als Kinder haben; ein String hat keine
+  Kinder. Eine Anlage ohne Strings ist erlaubt, etwa ein Balkonkraftwerk. Eine Anlage mit Strings
+  lässt sich erst löschen, wenn ihre Strings gelöscht sind (409); ein gelöschter Eintrag verliert
+  auch seine gespeicherten Tage.
+- **Quelle der Leistung:** ein core-Signal (`pv.<id>.power_w`, Victron-Zähler am Wechselstrom, oder
+  `pv_dc.power_w`, MPPT am Gleichstrom; die Seite nennt sie „Victron-Zähler (AC)“ und „Victron-MPPT (DC)“) oder ein
+  HA-Leistungssensor in W oder kW („Home Assistant“, Voraussetzungen wie bei „Verbraucher aus Home
+  Assistant“). Ohne `influxdb.ha_database` lehnt die app das Anlegen einer HA-Quelle mit 422 ab; vorhandene
+  HA-Einträge zeigen dann „HA-Datenbank nicht eingerichtet“, core-Einträge laufen normal.
+- **kWp** je Eintrag ist optional (0,1 bis 1000). Mit kWp zeigt die Seite kWh je kWp (zwei
+  Nachkommastellen); das macht Strings verschiedener Größe vergleichbar, ein schwacher String fällt auf.
+- **Zeiträume:** Tag, Woche (Montag bis Sonntag), Monat und Jahr mit Blättern und „Heute“, dieselben
+  Grenzen wie die Statistik (Wiener Zeit); Zeitraum und Tag stehen in der Adresse
+  (`/pv?zeitraum=monat&tag=2026-11-08`). Der Tag zeigt die Leistungskurve in 5-min-Schritten, Woche und
+  Monat Balken je Tag, das Jahr Balken je Monat. Über den Balken wählst du „Anlagen“ oder „Strings“ und
+  „kWh“ oder „kWh/kWp“. Die Tabelle zeigt den Ertrag im gewählten Zeitraum (beim laufenden bis jetzt).
+  Die Statistik hat zusätzlich die Karte „PV je Anlage“.
+- **Strings messen DC, Anlagen AC.** Die Summe der Strings („Strings zusammen“, mit dem Hinweis „DC, vor
+  dem Wechselrichter“) liegt deshalb etwas über der Anlage; die Differenz sind die Verluste des
+  Wechselrichters. Unter einer Anlage gibt es darum keine Restzeile.
+- **„Nicht zugeordnet“** steht nur oben und nur, wenn mindestens eine Anlage angelegt ist: PV gesamt
+  (die Summe aller PV-Quellen im core) minus die Summe der obersten Anlagen, als Leistung und als Energie.
+  Sie erscheint erst ab 0,1 kWh oder 50 W.
+- **Kurve und Tage:** core-Signale liest die app aus der Aufbewahrung `long` (1-min-Mittel, jeder Tag
+  abrufbar), HA-Sensoren aus der HA-Datenbank. An der Zeitumstellung hat der Tag 23 oder 25 Stunden.
+  0 W ist ein gültiger Wert (nachts also nicht „–“, kWh je kWp bei 0 kWh ist 0,00). Meldet ein
+  Template-Sensor nachts `unavailable`, zählt das nicht als Wert; die Energie ergibt sich aus den
+  vorhandenen Werten.
+- **Vor den ersten Daten:** Monate vor der Inbetriebnahme oder vor den Template-Sensoren zeigen „–“
+  (keine Balken), nicht 0 kWh. Die Summe des Zeitraums zählt nur bekannte Tage und nennt den ersten Tag
+  mit Wert („ab …“).
+
+Fehlt ein Wert, steht der Grund unter dem Namen:
+
+| Grund | Bedeutung und Abhilfe |
+|---|---|
+| HA-Datenbank nicht eingerichtet (influxdb.ha_database) | `influxdb.ha_database` fehlt in `config.yaml` (Abschnitt „Verbraucher aus Home Assistant“). Betrifft nur HA-Einträge. |
+| kein Wert in den letzten 24 h | Die HA-Entität hat in den letzten 24 h nichts nach InfluxDB geschrieben, oder HA schreibt sie gar nicht (`include`/`exclude` der InfluxDB-Integration von HA). Bei Template-Sensoren der Strings: prüfen, dass sie in `include` stehen. |
+| Signal wird nicht aufgezeichnet | Der core schreibt dieses Signal nicht nach InfluxDB (nur `pv.<id>.power_w` und `pv_dc.power_w`), oder die HA-Datenbank ist nicht eingerichtet. |
+| kein Verlauf seit Mitternacht | InfluxDB hat für heute keine Werte dieses Eintrags. |
+| Verlauf nicht lesbar | InfluxDB lehnt die Abfrage ab oder ist nicht erreichbar (Log der app). |
+| Tag nicht gespeichert | Für den Tag liegt keine Zeile in der Datenbank (siehe unten, älter als der Nachholbereich, oder der Eintrag ist neu). |
+
+**Ertrag je Tag gespeichert:** Die app speichert die Energie jedes Eintrags je Tag in `pv_source_day`,
+dazu je Tag „PV gesamt“ unter der reservierten `source_id` 0 (für „Nicht zugeordnet“ in Woche, Monat
+und Jahr). Anders als bei den Verbrauchern rechnet sie aus `long` statt aus `raw` (90 Tage), deshalb
+reicht der Nachholbereich weit zurück:
+
+- **Beim Start** (Hintergrundaufgabe `pv-days-fill`, sie hält den Start nicht auf) holt die app alle
+  fehlenden Tage bis zum **1. Januar des Vorjahres** nach, höchstens 800 Tage. Ein Tag ohne jeden
+  Verlauf bekommt eine Zeile mit Grund und wird nicht erneut gerechnet. Die Aufgabe läuft bei jedem
+  Start, rechnet aber nur, was fehlt.
+- **Nachts um 02:45 Uhr** holt sie die fehlenden Tage der letzten 3 nach.
+- **Ein Eintrag, den du nach dem Start anlegst,** bekommt deshalb zunächst nur die letzten 3 Tage
+  (in der folgenden Nacht). Ältere Tage stehen als „Tag nicht gespeichert“ leer da, bis die app neu
+  startet: `docker compose restart ems-app` rechnet sie dann nach. Das kann einige Minuten dauern.
+- Ist der Verlauf eines Eintrags gerade nicht lesbar, behält er seine alte Zeile.
+
+**Weiteres System dazunehmen:**
+
+- *Victron-`pvinverter`* (ein Wechselrichter am Cerbo): Trage seine Instanz in `config.yaml` unter
+  `victron.instances.pv` ein, dann `docker compose restart ems-core ems-app`. Danach legst du in der UI
+  eine Anlage mit dem core-Signal `pv.<id>.power_w` an.
+- *Anderes Gerät* (zum Beispiel Huawei): Lege einen Leistungssensor in Home Assistant an, lass ihn von der
+  InfluxDB-Integration schreiben und lege dann in der UI eine Anlage mit der HA-Entität an. Strings des
+  Huawei nimmst du über die vorhandenen Template-Sensoren (U × I) als HA-Einträge unter der Anlage. Der
+  Verlauf reicht so weit zurück, wie HA diese Sensoren nach InfluxDB schreibt.
+- *DC-gekoppelte PV:* `pv_dc.power_w` ist eine einzige Anlage („MPPT gesamt“); einzelne MPPT folgen in
+  einem eigenen Plan.
+
+Sicherung: Die Tabellen `pv_source` und `pv_source_day` gehören zur Sicherung der app (Abschnitt 9).
+Nichts an der Anlage wird geschaltet.
 
 ### Live-Anzeige
 

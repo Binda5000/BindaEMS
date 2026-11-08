@@ -604,6 +604,12 @@ bindaems/
 - Detailwerte nur über die vorhandenen HA-Entitäten. Eine direkte Modbus-Verbindung gibt es nicht (der SDongle erlaubt meist nur eine).
 - Keine Steuerung.
 
+**Stand Plan PV je Anlage und String** (`docs/superpowers/plans/2026-11-08-pv-je-anlage-und-string.md`; auf dem Branch `claude/project-thread-i85go5`, nicht auf `main`, nicht ausgerollt; Betrieb: `docs/betrieb.md`, „PV-Anlagen“):
+- **Strings des Huawei** kommen weiter nur über HA-Entitäten, und zwar die vorhandenen Template-Sensoren (U × I), die HA nach InfluxDB schreibt (`include` der InfluxDB-Integration). BindaEMS rechnet nicht selbst U × I. Der Verlauf reicht so weit zurück, wie HA diese Sensoren schreibt.
+- **Einträge** pflegen Admins in der UI (Tabellen `pv_source` und `pv_source_day`, Migration `0018`, `app/pv/`): Anlage (oberste Ebene) mit optionalen Strings, Quelle ein core-Signal (`pv.<id>.power_w`, `pv_dc.power_w`) oder ein HA-Leistungssensor, optional kWp. Strings messen DC, Anlagen AC; „Strings zusammen“ liegt deshalb etwas über der Anlage, und „Nicht zugeordnet“ (PV gesamt minus Summe der Anlagen) gibt es nur oben.
+- **Ertrag je Tag** speichert die app in `pv_source_day` (PV gesamt unter `source_id` 0), aus RP `long` statt `raw`; der Start holt die fehlenden Tage bis 1. Januar des Vorjahres nach (höchstens 800), nachts 02:45 Uhr die letzten 3.
+- **Nicht in diesem Plan:** einzelne Victron-MPPT (bis dahin ist `pv_dc.power_w` eine Anlage) und eine Meldung bei String-Ausfall (Idee 11.3, braucht die Prognose je Fläche).
+
 ### 6.10 GeoSphere Warn-API
 
 Seit dem Plan Unwetter-Reserve (4.11.2026, `docs/superpowers/plans/2026-11-04-unwetter-reserve.md`, Entscheidungen 1 und 8; Betrieb: `docs/betrieb.md`, „Planung“, „Unwetter-Reserve“), Adapter `app/storm/geosphere.py`, Dienst `app/storm/service.py`:
@@ -2145,6 +2151,7 @@ pv:
   | Zeitplan | 36 h: Preise, PV- und Lastprognose, geplanter SOC, Ladefenster, Budget, Erklärungen je Slot, Plan vs. Ist |
   | Laden | je Auto: Modus, Ziel-SOC, Abfahrt, Zuordnung (Auto/manuell), Session, Boost mit Mehrkostenanzeige |
   | Statistik | Tag, Woche, Monat, Jahr: Autarkie, Eigenverbrauch, Kosten, Ersparnis (zwei Varianten), Einspeiseerlös, Energie und Kosten je Auto (PV/Akku/Netz), Akku → Auto, je Verbraucher, Monatsspitzen |
+  | PV-Anlagen | Anlagen und Strings aus core-Signalen oder HA-Leistungssensoren anlegen (Stand Plan PV je Anlage und String, 6.9); Leistung jetzt, Ertrag und kWh/kWp je Tag, Woche, Monat, Jahr, Tageskurve, „Nicht zugeordnet“ |
   | Verbraucher | aus HA-Entitäten oder Victron-Zählern anlegen; Name, Gruppe, Elternelement, Farbe |
   | Entscheidungen | filterbares Entscheidungslog |
   | System | Geräte, Datenfrische, Selbstprüfung, mitregelnde Systeme, Watchdog, Prüfprotokoll, Dry-Run- und Live-Schalter |
