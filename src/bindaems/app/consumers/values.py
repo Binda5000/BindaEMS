@@ -16,9 +16,10 @@ from typing import Any, Final, Literal
 
 import structlog
 
-from bindaems.app.consumers.service import HA_REF_RE, Consumer
+from bindaems.app.consumers.service import Consumer
 from bindaems.app.consumers.source import PowerSource
 from bindaems.app.core_link import LiveState
+from bindaems.app.db.fields import HA_REF_RE
 from bindaems.app.history.influx import (
     InfluxQueryError,
     InfluxReader,

@@ -16,8 +16,8 @@ from typing import Any, Final
 
 import structlog
 
-from bindaems.app.consumers.service import HA_REF_RE
 from bindaems.app.consumers.values import NOT_CONFIGURED, ha_ref, number
+from bindaems.app.db.fields import HA_REF_RE
 from bindaems.app.forecast.load import MinuteMeans, ha_query, seed_query, slot_mean
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader, Series
 from bindaems.shared.timeutil import slots_between

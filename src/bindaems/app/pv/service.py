@@ -6,23 +6,17 @@ import builtins
 import re
 import threading
 from dataclasses import asdict, dataclass
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
-from sqlalchemy import Connection, Engine, Row, delete, insert, select, update
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import Connection, Engine, delete, insert, select, update
 
 from bindaems.app.audit import AuditLog, Source
+from bindaems.app.db.fields import HA_REF_RE, DbId, Name, Rows, changes
 from bindaems.app.db.schema import pv_source, pv_source_day
 from bindaems.shared.timeutil import Clock
 
 PV_CORE_REF_RE = re.compile(r"^(pv\.[a-z0-9_]+|pv_dc)\.power_w$")
-HA_REF_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
-MAX_ID = 2**63 - 1  # größte Ganzzahl in SQLite
-
-_Row = Row[*tuple[Any, ...]]
-
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
-DbId = Annotated[int, Field(ge=1, le=MAX_ID)]
 
 
 class PvSourceInput(BaseModel):
@@ -79,7 +73,7 @@ class PvSourceError(Exception):
         self.status = status
 
 
-def _source(row: _Row) -> PvSource:
+def _source(row: Rows) -> PvSource:
     return PvSource(
         id=row.id,
         name=row.name,
@@ -153,13 +147,13 @@ class PvSourceService:
             )
             updated = PvSource(id=source_id, **data.model_dump())
             before, after = asdict(old), asdict(updated)
-            changes = {
-                key: {"old": before[key], "new": value}
-                for key, value in after.items()
-                if before[key] != value
-            }
             self._audit.record(
-                actor, source, "pv_source.update", data.name, {"changes": changes}, conn=conn
+                actor,
+                source,
+                "pv_source.update",
+                data.name,
+                {"changes": changes(before, after)},
+                conn=conn,
             )
         return updated
 
@@ -181,7 +175,7 @@ class PvSourceService:
             raise PvSourceError("HA-Datenbank nicht eingerichtet (influxdb.ha_database)", 422)
 
     @staticmethod
-    def _get(conn: Connection, source_id: int) -> _Row:
+    def _get(conn: Connection, source_id: int) -> Rows:
         row = conn.execute(select(pv_source).where(pv_source.c.id == source_id)).first()
         if row is None:
             raise PvSourceError("PV-Eintrag nicht gefunden", 404)

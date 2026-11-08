@@ -12,7 +12,6 @@ from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import (
-    MAX_ID,
     Consumer,
     ConsumerError,
     ConsumerInput,
@@ -28,6 +27,7 @@ from bindaems.app.consumers.values import (
     consumer_power,
 )
 from bindaems.app.core_link import LiveState
+from bindaems.app.db.fields import MAX_ID
 from bindaems.app.history.influx import InfluxReader
 from bindaems.shared.config import Config
 
