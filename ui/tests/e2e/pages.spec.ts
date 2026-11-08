@@ -6,6 +6,8 @@ const PAGES = [
 	'/verlauf',
 	'/statistik?zeitraum=tag&datum=2026-10-09', // feste Tage: Heute hängt sonst an der echten Uhr
 	'/statistik?zeitraum=monat&datum=2026-10-09', // Monat der Demo-Welt: Diagramm und Karten gefüllt
+	'/pv?zeitraum=tag&tag=2026-10-09', // feste Tage wie bei der Statistik
+	'/pv?zeitraum=jahr&tag=2026-10-09',
 	'/verbraucher',
 	'/laden',
 	'/zeitplan',

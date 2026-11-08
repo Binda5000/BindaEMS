@@ -13,6 +13,14 @@
       "unit": "W"
     },
     {
+      "entity_id": "sensor.pv1_leistung",
+      "unit": "W"
+    },
+    {
+      "entity_id": "sensor.pv2_leistung",
+      "unit": "W"
+    },
+    {
       "entity_id": "sensor.waschmaschine_power",
       "unit": "W"
     }

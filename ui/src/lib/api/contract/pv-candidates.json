@@ -1,0 +1,25 @@
+{
+  "core": [
+    "pv.huawei.power_w",
+    "pv_dc.power_w"
+  ],
+  "ha": [
+    {
+      "entity_id": "sensor.kueche_power",
+      "unit": "W"
+    },
+    {
+      "entity_id": "sensor.pv1_leistung",
+      "unit": "W"
+    },
+    {
+      "entity_id": "sensor.pv2_leistung",
+      "unit": "W"
+    },
+    {
+      "entity_id": "sensor.waschmaschine_power",
+      "unit": "W"
+    }
+  ],
+  "ha_error": null
+}

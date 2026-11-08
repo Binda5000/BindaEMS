@@ -182,7 +182,7 @@ it('rückt um Mitternacht auf den neuen Tag weiter', async () => {
 	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['day', '2026-10-10']);
 });
 
-it('zeigt unter den Kosten Autos, Laden je Auto, Ladesessions, Verbraucher, Monatsspitzen und Abgleich', async () => {
+it('zeigt unter den Kosten Autos, Laden je Auto, Ladesessions, Verbraucher, PV je Anlage, Monatsspitzen und Abgleich', async () => {
 	navigate('?zeitraum=monat&datum=2026-10-09');
 	render(Page);
 	await screen.findByRole('table', { name: 'Ladesessions' });
@@ -196,6 +196,7 @@ it('zeigt unter den Kosten Autos, Laden je Auto, Ladesessions, Verbraucher, Mona
 		'Geplantes Laden',
 		'Ladesessions',
 		'Verbraucher',
+		'PV je Anlage',
 		'Monatsspitzen',
 		'Abgleich mit den Zählern'
 	]);

@@ -15,6 +15,8 @@ import thermal from './contract/learning-thermal.json';
 import qualityDaily from './contract/forecast-quality-daily.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
+import pvDay from './contract/pv-day.json';
+import pvMonth from './contract/pv-period-month.json';
 import opsCheck from './contract/ops-check.json';
 import opsFindings from './contract/ops-findings.json';
 import opsSwitches from './contract/ops-switches.json';
@@ -218,6 +220,33 @@ it('liest die Statistik eines Zeitraums mit GET', async () => {
 	expect(Object.fromEntries(url.searchParams)).toEqual({ period: 'month', date: '2026-10-09' });
 	expect(result.period).toBe('month');
 	expect(result.vehicles.map((vehicle) => vehicle.key)).toContain('tesla');
+});
+
+it('liest den Ertrag der PV im Zeitraum und die Tageskurve mit GET', async () => {
+	reply(pvMonth);
+	const result = await api.pvPeriod('month', '2026-11-08');
+	expect(sent().url).toBe('/api/pv/period?period=month&day=2026-11-08');
+	expect(result.buckets).toHaveLength(31);
+	fetchMock.mockClear();
+	reply(pvDay);
+	await api.pvDay('2026-10-08');
+	expect(sent().url).toBe('/api/pv/day?date=2026-10-08');
+});
+
+it('ändert einen PV-Eintrag mit PATCH und CSRF-Token', async () => {
+	const input = {
+		name: 'Süd',
+		parent_id: 1,
+		color: '#d18f00',
+		source_kind: 'ha' as const,
+		power_ref: 'sensor.pv1_leistung',
+		power_unit: 'W' as const,
+		kwp: 4.1,
+		sort: 0
+	};
+	reply({ id: 2, ...input });
+	await api.updatePv(2, input);
+	expect(sent()).toEqual({ url: '/api/pv/2', method: 'PATCH', body: input, csrf: 'tok-123' });
 });
 
 it('liest die Statistik ohne Datum für heute', async () => {

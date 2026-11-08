@@ -9,6 +9,7 @@ it('zeigt Lesenden und Bedienenden dieselben Seiten', () => {
 		['/prognosen', 'Prognosen'],
 		['/verlauf', 'Verlauf'],
 		['/statistik', 'Statistik'],
+		['/pv', 'PV-Anlagen'],
 		['/verbraucher', 'Verbraucher'],
 		['/system', 'System'],
 		['/betrieb', 'Betrieb'],
@@ -27,6 +28,7 @@ it('zeigt Admins zusätzlich Benutzer und Protokoll', () => {
 		'/prognosen',
 		'/verlauf',
 		'/statistik',
+		'/pv',
 		'/verbraucher',
 		'/system',
 		'/betrieb',
@@ -46,6 +48,7 @@ it('zeigt Laden und Entscheidungen für alle Rollen mit ihren Symbolen', () => {
 		'/prognosen',
 		'/verlauf',
 		'/statistik',
+		'/pv',
 		'/verbraucher',
 		'/system',
 		'/betrieb',
@@ -94,6 +97,19 @@ it('zeigt Betrieb für alle Rollen nach System, mit dem Symbol check', () => {
 			href: '/betrieb',
 			label: 'Betrieb',
 			icon: 'check'
+		});
+	}
+});
+
+it('zeigt PV-Anlagen für alle Rollen direkt vor den Verbrauchern, mit dem Symbol pv', () => {
+	for (const role of ['viewer', 'operator', 'admin'] as const) {
+		const items = navItems(role);
+		const hrefs = items.map((item) => item.href);
+		expect(hrefs.indexOf('/pv')).toBe(hrefs.indexOf('/verbraucher') - 1);
+		expect(items.find((item) => item.href === '/pv')).toEqual({
+			href: '/pv',
+			label: 'PV-Anlagen',
+			icon: 'pv'
 		});
 	}
 });

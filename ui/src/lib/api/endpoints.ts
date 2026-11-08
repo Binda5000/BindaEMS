@@ -125,6 +125,21 @@ export const api = {
 		request('PATCH', `/api/consumers/${id}`, { body: input, schema: s.ConsumerSchema }),
 	deleteConsumer: (id: number): Promise<void> => request('DELETE', `/api/consumers/${id}`),
 
+	pv: (o?: Load): Promise<s.PvResponse> => get('/api/pv', s.PvResponseSchema, o),
+	pvCandidates: (o?: Load): Promise<s.PvCandidates> =>
+		get('/api/pv/candidates', s.PvCandidatesSchema, o),
+	/** Tageskurve je Eintrag am Tag `day` (YYYY-MM-DD) */
+	pvDay: (day: string, o?: Load): Promise<s.PvDay> =>
+		get(withQuery('/api/pv/day', { date: day }), s.PvDaySchema, o),
+	/** Ertrag je Eintrag im Zeitraum, der `day` (YYYY-MM-DD) enthält */
+	pvPeriod: (period: s.StatsPeriod, day: string, o?: Load): Promise<s.PvPeriod> =>
+		get(withQuery('/api/pv/period', { period, day }), s.PvPeriodSchema, o),
+	createPv: (input: s.PvSourceInput): Promise<s.PvSource> =>
+		request('POST', '/api/pv', { body: input, schema: s.PvSourceSchema }),
+	updatePv: (id: number, input: s.PvSourceInput): Promise<s.PvSource> =>
+		request('PATCH', `/api/pv/${id}`, { body: input, schema: s.PvSourceSchema }),
+	deletePv: (id: number): Promise<void> => request('DELETE', `/api/pv/${id}`),
+
 	historyCatalog: (o?: Load): Promise<s.CatalogEntry[]> =>
 		get('/api/history/catalog', v.array(s.CatalogEntrySchema), o),
 	history: (series: string[], range: Range, o?: Load): Promise<s.HistoryResponse> =>

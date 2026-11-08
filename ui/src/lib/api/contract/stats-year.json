@@ -291,7 +291,35 @@
       "note": "Tag nicht gespeichert"
     }
   ],
-  "pv_sources": [],
+  "pv_sources": [
+    {
+      "id": 1,
+      "name": "Huawei",
+      "parent_id": null,
+      "kwp": 9.8,
+      "kwh": null,
+      "kwh_per_kwp": null,
+      "note": "Tag nicht gespeichert"
+    },
+    {
+      "id": 2,
+      "name": "Süd",
+      "parent_id": 1,
+      "kwp": 4.1,
+      "kwh": null,
+      "kwh_per_kwp": null,
+      "note": "Tag nicht gespeichert"
+    },
+    {
+      "id": 3,
+      "name": "West",
+      "parent_id": 1,
+      "kwp": 5.7,
+      "kwh": null,
+      "kwh_per_kwp": null,
+      "note": "Tag nicht gespeichert"
+    }
+  ],
   "month_peaks": [
     {
       "month": "2026-09",

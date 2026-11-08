@@ -22,7 +22,9 @@ from tests.ui_world import (
     DEMO_TOTP_SECRET,
     T_DEMO,
     World,
+    add_pv_sources,
     build_world,
+    refresh_pv,
 )
 
 from bindaems.app.charging.planned import PlannedSummary
@@ -42,6 +44,11 @@ GET_ENDPOINTS = {
     "limits": "/api/limits",
     "consumers": "/api/consumers",
     "consumer-candidates": "/api/consumers/candidates",
+    "pv": "/api/pv",
+    "pv-candidates": "/api/pv/candidates",
+    "pv-day": "/api/pv/day?date=2026-10-08",
+    "pv-period-month": "/api/pv/period?period=month&day=2026-10-09",
+    "pv-period-year": "/api/pv/period?period=year&day=2026-10-09",
     "history-catalog": "/api/history/catalog",
     "history": "/api/history?series=grid,soc.battery&from=2026-10-09T06:00:00Z"
     "&to=2026-10-09T08:00:00Z",
@@ -191,8 +198,16 @@ def matches_contract(name: str, body: object) -> bool:
     return path.is_file() and path.read_text(encoding="utf-8") == text
 
 
+async def contract_world(cfg, data_dir: Path) -> World:
+    """Die Demo-Welt mit PV-Anlage und Strings samt gespeicherten Tagen (für /api/pv)."""
+    world = await build_world(cfg, data_dir)
+    add_pv_sources(world.app)
+    await refresh_pv(world.app)
+    return world
+
+
 async def test_api_responses_match_ui_contract(cfg, tmp_path) -> None:
-    world = await build_world(cfg, tmp_path)
+    world = await contract_world(cfg, tmp_path)
     try:
         actual = await asyncio.to_thread(collect_responses, world)  # GET, WebSocket, POST, 422
         actual.update(await live_messages(world))
@@ -207,7 +222,7 @@ async def test_demo_world_is_deterministic(cfg, tmp_path) -> None:
     # Sonst wechselten die Vertragsdateien bei jedem Lauf
     bodies = []
     for name in ("a", "b"):
-        world = await build_world(cfg, tmp_path / name)
+        world = await contract_world(cfg, tmp_path / name)
         try:
             body = await asyncio.to_thread(collect_responses, world)
             body.update(await live_messages(world))

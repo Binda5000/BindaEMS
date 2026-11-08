@@ -37,6 +37,7 @@ const PAGES: readonly (NavItem & { adminOnly?: boolean })[] = [
 	{ href: '/prognosen', label: 'Prognosen', icon: 'forecast' },
 	{ href: '/verlauf', label: 'Verlauf', icon: 'history' },
 	{ href: '/statistik', label: 'Statistik', icon: 'stats' },
+	{ href: '/pv', label: 'PV-Anlagen', icon: 'pv' },
 	{ href: '/verbraucher', label: 'Verbraucher', icon: 'consumers' },
 	{ href: '/system', label: 'System', icon: 'system' },
 	{ href: '/betrieb', label: 'Betrieb', icon: 'check' },

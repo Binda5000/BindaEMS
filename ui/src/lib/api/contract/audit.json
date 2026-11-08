@@ -1,5 +1,59 @@
 [
   {
+    "id": 14,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "admin",
+    "source": "ui",
+    "action": "pv_source.create",
+    "target": "West",
+    "details": {
+      "name": "West",
+      "parent_id": 1,
+      "color": "#1f6feb",
+      "source_kind": "ha",
+      "power_ref": "sensor.pv2_leistung",
+      "power_unit": "W",
+      "kwp": 5.7,
+      "sort": 1
+    }
+  },
+  {
+    "id": 13,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "admin",
+    "source": "ui",
+    "action": "pv_source.create",
+    "target": "Süd",
+    "details": {
+      "name": "Süd",
+      "parent_id": 1,
+      "color": "#d18f00",
+      "source_kind": "ha",
+      "power_ref": "sensor.pv1_leistung",
+      "power_unit": "W",
+      "kwp": 4.1,
+      "sort": 0
+    }
+  },
+  {
+    "id": 12,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "admin",
+    "source": "ui",
+    "action": "pv_source.create",
+    "target": "Huawei",
+    "details": {
+      "name": "Huawei",
+      "parent_id": null,
+      "color": "#6e7781",
+      "source_kind": "core",
+      "power_ref": "pv.huawei.power_w",
+      "power_unit": null,
+      "kwp": 9.8,
+      "sort": 0
+    }
+  },
+  {
     "id": 11,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",

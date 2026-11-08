@@ -831,6 +831,117 @@ export const CandidatesSchema = v.object({
 });
 export type Candidates = v.InferOutput<typeof CandidatesSchema>;
 
+// --- PV-Anlagen ----------------------------------------------------------------------------
+
+/** Anlage (`parent_id` leer) oder String einer Anlage */
+export const PvSourceSchema = v.object({
+	id: v.number(),
+	name: v.string(),
+	parent_id: v.nullable(v.number()),
+	color: v.string(),
+	source_kind: v.picklist(['core', 'ha']),
+	power_ref: v.string(),
+	power_unit: v.nullable(v.picklist(['W', 'kW'])),
+	kwp: NullableNumber,
+	sort: v.number()
+});
+export type PvSource = v.InferOutput<typeof PvSourceSchema>;
+
+/** Knoten im Baum der PV: Anlagen mit ihren Strings, zuletzt „Nicht zugeordnet“ */
+export interface PvNode {
+	id: number | null;
+	name: string;
+	color: string;
+	kind: 'system' | 'string' | 'unassigned';
+	power_w: number | null;
+	kwh_today: number | null;
+	kwp: number | null;
+	kwh_per_kwp: number | null;
+	/** warum ein Wert fehlt (Leistung, sonst Energie) */
+	note: string | null;
+	children: PvNode[];
+	strings_power_w: number | null;
+	strings_kwh_today: number | null;
+}
+
+export const PvNodeSchema: v.GenericSchema<PvNode> = v.object({
+	id: v.nullable(v.number()),
+	name: v.string(),
+	color: v.string(),
+	kind: v.picklist(['system', 'string', 'unassigned']),
+	power_w: NullableNumber,
+	kwh_today: NullableNumber,
+	kwp: NullableNumber,
+	kwh_per_kwp: NullableNumber,
+	note: v.nullable(v.string()),
+	children: v.array(v.lazy(() => PvNodeSchema)),
+	strings_power_w: NullableNumber,
+	strings_kwh_today: NullableNumber
+});
+
+export const PvResponseSchema = v.object({
+	/** PV gesamt jetzt (alle Quellen des core) */
+	total_w: NullableNumber,
+	/** PV gesamt seit Mitternacht */
+	total_kwh: NullableNumber,
+	/** Anlagen; ist eine angelegt, zuletzt „Nicht zugeordnet“ */
+	tree: v.array(PvNodeSchema),
+	sources: v.array(PvSourceSchema),
+	energy_since: v.nullable(Iso)
+});
+export type PvResponse = v.InferOutput<typeof PvResponseSchema>;
+
+/** Vorschläge: core-Signale als Text (anders als bei den Verbrauchern), HA-Sensoren mit Einheit */
+export const PvCandidatesSchema = v.object({
+	core: v.array(v.string()),
+	ha: v.array(v.object({ entity_id: v.string(), unit: v.picklist(['W', 'kW']) })),
+	ha_error: v.nullable(v.string())
+});
+export type PvCandidates = v.InferOutput<typeof PvCandidatesSchema>;
+
+/** Tageskurve je Eintrag: Punkte `[ms, W]` in 5-Minuten-Schritten, ohne Wert fehlt der Punkt */
+export const PvDaySchema = v.object({
+	date: DateText,
+	series: v.array(
+		v.object({
+			id: v.number(),
+			points: v.array(v.tuple([v.number(), v.number()])),
+			/** warum die Kurve leer ist */
+			note: v.nullable(v.string())
+		})
+	)
+});
+export type PvDay = v.InferOutput<typeof PvDaySchema>;
+
+const PvBucketsKwh = v.array(NullableNumber);
+
+/**
+ * Ertrag im Zeitraum: je Bucket (Tag bzw. Monat im Jahr) und als Summe der bekannten Tage. Ein
+ * Bucket ohne bekannten Tag ist `null` (keine Daten), nicht 0.
+ */
+export const PvPeriodSchema = v.object({
+	period: v.picklist(['day', 'week', 'month', 'year']),
+	first: DateText,
+	last: DateText,
+	buckets: v.array(v.object({ start: DateText, end: DateText })),
+	total: v.object({ kwh: PvBucketsKwh, sum_kwh: NullableNumber }),
+	/** PV gesamt minus Anlagen; `null`, solange keine Anlage angelegt ist */
+	unassigned: v.nullable(v.object({ kwh: PvBucketsKwh, sum_kwh: NullableNumber })),
+	sources: v.array(
+		v.object({
+			id: v.number(),
+			kwh: PvBucketsKwh,
+			sum_kwh: NullableNumber,
+			kwh_per_kwp: NullableNumber,
+			/** erster Tag mit Wert im Zeitraum */
+			first_known: v.nullable(DateText),
+			/** Grund, wenn `sum_kwh` fehlt */
+			note: v.nullable(v.string())
+		})
+	)
+});
+export type PvPeriod = v.InferOutput<typeof PvPeriodSchema>;
+
 // --- Verlauf -----------------------------------------------------------------------------
 
 export const CatalogEntrySchema = v.object({ id: v.string(), label: v.string(), unit: v.string() });
@@ -1524,6 +1635,17 @@ export interface ConsumerInput {
 	power_ref: string;
 	power_unit?: 'W' | 'kW' | null;
 	sort?: number;
+}
+
+export interface PvSourceInput {
+	name: string;
+	parent_id: number | null;
+	color: string;
+	source_kind: 'core' | 'ha';
+	power_ref: string;
+	power_unit: 'W' | 'kW' | null;
+	kwp: number | null;
+	sort: number;
 }
 
 // --- Zeitplan des Akkus (Plan 3b) --------------------------------------------------------
