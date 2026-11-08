@@ -4,7 +4,9 @@
   (``phase=total``) alle 2 bis 10 s, die Hauslast als ``source=derived, id=house_load``. Gelesen
   werden Minutenmittel; jedes gilt für seine Minute, fehlende Minuten zählen nicht (Lücke).
 - **HA-Entitäten** schreibt Home Assistant nur bei Änderung. Ein Wert gilt bis zum nächsten,
-  der letzte vor Mitternacht ab Mitternacht.
+  der letzte vor Mitternacht ab Mitternacht. Mit ``ha_hold`` (PV) gilt ein Wert höchstens so
+  lange nach seiner Zeit, danach ist Lücke: für ``unavailable`` schreibt HA keinen Wert, und ein
+  Wechselrichter, der abends mit ein paar Watt abschaltet, sammelte sonst die Nacht über Energie.
 
 Alle Werte einer Art kommen mit einer Abfrage; ``refresh`` ersetzt das Ergebnis als Ganzes,
 ``window_energy`` rechnet beliebige Zeiträume (auch vergangene Tage) und ändert den Cache nicht.
@@ -92,15 +94,19 @@ def day_start(now: datetime) -> datetime:
     return datetime.combine(local.date(), time(0), LOCAL_TZ).astimezone(UTC)
 
 
-def integrate_wh(points: Sequence[Point], end_ms: int, hold_ms: int | None) -> float:
-    """Energie in Wh: jeder Wert gilt bis zum nächsten, höchstens ``hold_ms`` und bis zum Ende."""
+def integrate_wh(
+    points: Sequence[Point], end_ms: int, hold_ms: int | None, start_ms: int | None = None
+) -> float:
+    """Energie in Wh: jeder Wert gilt bis zum nächsten, höchstens ``hold_ms`` und bis zum Ende;
+    vor ``start_ms`` zählt nichts."""
     total = 0.0
     ordered = sorted(points)
-    for index, (start, watts) in enumerate(ordered):
+    for index, (at, watts) in enumerate(ordered):
         until = ordered[index + 1][0] if index + 1 < len(ordered) else end_ms
         if hold_ms is not None:
-            until = min(until, start + hold_ms)
+            until = min(until, at + hold_ms)
         until = min(until, end_ms)
+        start = at if start_ms is None else max(at, start_ms)
         if until > start:
             total += watts * (until - start) / 3_600_000
     return total
@@ -190,7 +196,7 @@ class EnergyCache:
     """Energie je Quelle, der Hauslast und der PV gesamt seit Mitternacht.
 
     ``retention`` ist die Aufbewahrung, aus der die core-Minutenmittel kommen (``raw`` oder
-    ``long``)."""
+    ``long``). ``ha_hold`` begrenzt, wie lange ein HA-Wert gilt (``None``: bis zum nächsten)."""
 
     def __init__(
         self,
@@ -199,9 +205,11 @@ class EnergyCache:
         ha_database: str | None,
         *,
         retention: str = RP_RAW,
+        ha_hold: timedelta | None = None,
     ) -> None:
         self._reader = reader
         self._retention = retention
+        self._ha_hold_ms = int(ha_hold.total_seconds() * 1000) if ha_hold is not None else None
         self._clock = clock
         self._ha_database = ha_database
         # je Verbraucherquelle kWh oder Grund; als Ganzes ersetzt (Endpunkte lesen aus Threads)
@@ -289,7 +297,8 @@ class EnergyCache:
     ) -> tuple[float | None, str | None]:
         if not points:
             return (None, NO_HISTORY)
-        return (round(integrate_wh(points, window.end_ms, hold_ms) / 1000, 3), None)  # auf Wh
+        kwh = integrate_wh(points, window.end_ms, hold_ms, window.start_ms) / 1000
+        return (round(kwh, 3), None)  # auf Wh
 
     async def _core_points(
         self, tags: Sequence[tuple[str, str]], window: _Window
@@ -321,11 +330,16 @@ class EnergyCache:
         result: dict[Key, tuple[float | None, str | None]] = {}
         for key, ref in refs.items():
             points = ha_points(today, ref)
-            # der letzte Wert vor Mitternacht gilt ab Mitternacht
+            # der letzte Wert vor Mitternacht gilt ab Mitternacht, mit ``ha_hold`` nur bis so
+            # lange nach seiner Zeit (er bleibt ein Wert: 0 kWh, kein unbekannter Tag)
             seeds = sorted(ha_points(earlier, ref))
             if seeds:
-                points.append((window.start_ms, seeds[-1][1]))
-            result[key] = self._kwh(points, window, None)
+                at, watts = seeds[-1]
+                hold = self._ha_hold_ms
+                points.append(
+                    (window.start_ms if hold is None else min(at, window.start_ms), watts)
+                )
+            result[key] = self._kwh(points, window, self._ha_hold_ms)
         return result
 
 

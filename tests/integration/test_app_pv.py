@@ -2,8 +2,10 @@ import asyncio
 import contextlib
 from datetime import date
 
+import httpx
 import pytest
 from structlog.testing import capture_logs
+from tests.app_helpers import influx_q
 from tests.integration.test_app_runtime import PASSWORD, make_runtime
 from tests.plan_helpers import until
 
@@ -113,6 +115,48 @@ async def test_ha_without_database_shows_reason(cfg, tmp_path, respx_mock) -> No
         assert nodes["Huawei"]["kwh_today"] == 0.05
         assert "HA-Datenbank nicht eingerichtet" in nodes["HA"]["note"]
         assert nodes["HA"]["power_w"] is None
+    finally:
+        runtime.engine.dispose()
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_pv_energy_caps_a_held_ha_value_consumers_do_not(cfg, tmp_path, respx_mock) -> None:
+    """Ein Wechselrichter, der abends mit 30 W ``unavailable`` wird, sammelt in der PV keine
+    Energie über die Nacht; ein Verbraucher hält seinen Wert wie bisher."""
+    tags = {"domain": "sensor", "entity_id": "pv1"}
+    midnight = 1791496800000  # 09.10.2026, 00:00 Ortszeit
+
+    def influx(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("db") != "homeassistant" or "mean" not in influx_q(request):
+            return httpx.Response(200, json={"results": [{}]})
+        row = {"name": "W", "tags": tags, "columns": ["time", "w"]}
+        return httpx.Response(
+            200, json={"results": [{"series": [row | {"values": [[midnight, 30.0]]}]}]}
+        )
+
+    respx_mock.post("http://influx.lan:8086/query").mock(side_effect=influx)
+    runtime = make_runtime(cfg, tmp_path)
+    try:
+        runtime.consumers.create(
+            ConsumerInput(
+                name="Server",
+                color="#000000",
+                source_kind="ha",
+                power_ref="sensor.pv1",
+                power_unit="W",
+            ),
+            actor="t",
+            source="ui",
+        )
+        runtime.pv_sources.create(
+            pv_input(source_kind="ha", power_ref="sensor.pv1", power_unit="W"),
+            actor="t",
+            source="ui",
+        )
+        await runtime.energy.refresh(runtime.consumers.list())
+        await runtime.pv_energy.refresh(runtime.pv_sources.list())
+        assert runtime.energy.energy_kwh(runtime.consumers.list()[0]) == 0.3  # 10 h × 30 W
+        assert runtime.pv_energy.energy_kwh(runtime.pv_sources.list()[0]) == 0.015  # 30 min
     finally:
         runtime.engine.dispose()
 

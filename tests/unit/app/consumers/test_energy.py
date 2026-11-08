@@ -131,6 +131,49 @@ async def test_ha_energy_starts_with_the_value_before_midnight(respx_mock, reade
     assert f"time >= {M0 - 7 * 24 * HOUR}ms AND time < {M0}ms" in ha_queries[1]
 
 
+def held_ha(seed_at: int, seed_w: float):
+    """HA schreibt nur bei Änderung und bei „unavailable“ keinen Wert: vor Mitternacht
+    ``seed_w`` (um ``seed_at``), heute 1 kW ab 07:00 und 20 W ab 08:00, danach nichts mehr."""
+    tags = {"domain": "sensor", "entity_id": "pv1"}
+
+    def influx(request: httpx.Request) -> httpx.Response:
+        query = influx_q(request)
+        if query.startswith('SELECT mean("p_w")'):
+            return httpx.Response(200, json=_results())
+        if query.startswith('SELECT last("value")'):
+            return httpx.Response(200, json=_results(_series("W", tags, [(seed_at, seed_w)])))
+        points = [(M0 + 7 * HOUR, 1000.0), (M0 + 8 * HOUR, 20.0)]
+        return httpx.Response(200, json=_results(_series("W", tags, points)))
+
+    return influx
+
+
+async def test_ha_hold_caps_a_held_value(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).mock(side_effect=held_ha(M0 - 15 * MIN, 40.0))
+    pv = _ha("sensor.pv1")
+    cache = EnergyCache(reader, clock, "homeassistant", ha_hold=timedelta(minutes=30))
+    await cache.refresh([pv])
+    # 40 W bis 00:15 (30 min nach 23:45), 1 kW 07:00–07:30, 20 W 08:00–08:30; dazwischen Lücke
+    assert (cache.energy_kwh(pv), cache.note(pv)) == (0.52, None)
+
+
+async def test_ha_hold_old_value_before_midnight_counts_nothing(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).mock(side_effect=held_ha(M0 - 6 * HOUR, 40.0))
+    pv = _ha("sensor.pv1")
+    cache = EnergyCache(reader, clock, "homeassistant", ha_hold=timedelta(minutes=30))
+    await cache.refresh([pv])
+    assert (cache.energy_kwh(pv), cache.note(pv)) == (0.51, None)  # kein unbekannter Tag
+
+
+async def test_consumers_hold_ha_values_without_cap(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).mock(side_effect=held_ha(M0 - 15 * MIN, 40.0))
+    kitchen = _ha("sensor.pv1")
+    cache = EnergyCache(reader, clock, "homeassistant")
+    await cache.refresh([kitchen])
+    # 40 W 00:00–07:00, 1 kW 07:00–08:00, 20 W 08:00–10:00
+    assert cache.energy_kwh(kitchen) == 1.32
+
+
 async def test_ha_energy_without_database(respx_mock, reader, clock) -> None:
     respx_mock.post(URL).respond(json=_results())
     kitchen = _ha("sensor.kueche")

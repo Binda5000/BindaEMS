@@ -155,6 +155,7 @@ LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständig
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
 PV_DAYS_NIGHTLY = 3  # nachts: fehlende PV-Tage der letzten 3
 PV_FILL_DEBOUNCE_S = 5.0  # mehrere Änderungen kurz nacheinander lösen einen Nachtrag aus
+PV_HA_HOLD = timedelta(minutes=30)  # so lange gilt ein HA-Wert der PV höchstens (dann Lücke)
 CONSUMER_DAYS_NIGHTLY = 3  # nachts: fehlende Tage der letzten 3 (gestern, Fehler nachholen)
 LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
 LEDGER_BACKFILL_WAIT_S = (
@@ -443,7 +444,9 @@ class AppRuntime:
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
         # PV: eigene IDs, daher eigener Cache; core-Minutenmittel aus RP long (unbegrenzt)
-        self.pv_energy = EnergyCache(self.reader, self._clock, ha_database, retention=RP_LONG)
+        self.pv_energy = EnergyCache(
+            self.reader, self._clock, ha_database, retention=RP_LONG, ha_hold=PV_HA_HOLD
+        )
         self.pv_days = SourceDays(
             self.engine,
             self.pv_energy,
