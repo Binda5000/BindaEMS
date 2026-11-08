@@ -25,9 +25,15 @@ from bindaems.app.db.fields import MAX_ID
 from bindaems.app.history.influx import InfluxReader
 from bindaems.app.pv.curve import day_curve
 from bindaems.app.pv.periods import SourceEnergy, buckets, period_energy, unassigned
-from bindaems.app.pv.service import PvSource, PvSourceError, PvSourceInput, PvSourceService
+from bindaems.app.pv.service import (
+    PV_CORE_REF_RE,
+    PvSource,
+    PvSourceError,
+    PvSourceInput,
+    PvSourceService,
+)
 from bindaems.app.pv.tree import build_pv_tree
-from bindaems.app.stats.service import Period, period_range
+from bindaems.app.stats.service import NOT_COMPUTED, Period, period_range
 from bindaems.shared.config import Config
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock
 
@@ -118,9 +124,9 @@ def pv_router(
         sources = service.list()
         now_day = today()
         stored = days.daily(first, min(last, now_day - timedelta(days=1))) if days else {}
-        todays: dict[int, float | None] = {
-            s.id: energy.energy_kwh(s) if energy is not None else None for s in sources
-        }
+        # wie ``/api/pv``: ein HA-Sensor mit falscher Einheit hat auch heute keine Energie
+        today_energy = {s.id: source_energy(s, ha, energy) for s in sources}
+        todays: dict[int, float | None] = {sid: kwh for sid, (kwh, _) in today_energy.items()}
         todays[0] = energy.pv_total_kwh() if energy is not None else None
         parts = buckets(period, first, last)
         found = period_energy(stored, todays, parts, now_day)
@@ -129,15 +135,16 @@ def pv_router(
         def note(source: PvSource, found_: SourceEnergy, has_today: bool) -> str | None:
             if found_.sum_kwh is not None:
                 return None
-            live_note = energy.note(source) if energy is not None and has_today else None
-            return live_note or found_.note
+            if energy is not None and has_today:  # vor der ersten Rechnung wie die Statistik
+                return today_energy[source.id][1] or NOT_COMPUTED
+            return found_.note
 
         def per_kwp(sid: int) -> float | None:
             total, size = found[sid].sum_kwh, kwp[sid]
             return round(total / size, 3) if total is not None and size else None
 
         top = [found[s.id] for s in sources if s.parent_id is None]
-        rest, rest_sum = unassigned(found[0], top) if top else ([], None)
+        rest, rest_sum = unassigned(found[0], top, parts) if top else ([], None)
         return {
             "period": period,
             "first": first.isoformat(),
@@ -161,11 +168,7 @@ def pv_router(
     @router.get("/candidates")
     async def list_candidates(session: Admin) -> dict[str, Any]:
         signals = live.state.get("signals") if live.state is not None else None
-        core = {
-            name
-            for name in signals or {}
-            if name.startswith("pv.") and name.endswith(".power_w") and name.count(".") == 2
-        }
+        core = {name for name in signals or {} if PV_CORE_REF_RE.fullmatch(name)}
         core.add(PV_DC_SIGNAL)
         found, error = await ha_candidates(cfg, reader)
         return {"core": sorted(core), "ha": found, "ha_error": error}

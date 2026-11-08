@@ -9,7 +9,7 @@ from __future__ import annotations
 import calendar
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Final
 
@@ -57,6 +57,7 @@ class SourceEnergy:
     sum_kwh: float | None  # über die bekannten Tage
     first_known: date | None
     note: str | None  # warum nichts bekannt ist
+    by_day: dict[date, float] = field(default_factory=dict)  # die bekannten Tage
 
 
 PeriodEnergy = dict[int, SourceEnergy]
@@ -103,21 +104,25 @@ def period_energy(
             _sum(list(known.values())),
             min(known) if known else None,
             None if known else (reason or NO_DAY),
+            known,
         )
     return result
 
 
 def unassigned(
-    total: SourceEnergy, systems: Sequence[SourceEnergy]
+    total: SourceEnergy, systems: Sequence[SourceEnergy], period_buckets: Sequence[PvBucket]
 ) -> tuple[list[float | None], float | None]:
-    """„Nicht zugeordnet“ je Bucket: PV gesamt minus oberste Anlagen (mindestens 0); ``None``,
-    wenn eines davon im Bucket unbekannt ist. Dazu die Summe der bekannten Buckets."""
+    """„Nicht zugeordnet“ je Tag: PV gesamt minus oberste Anlagen (mindestens 0), nur an Tagen,
+    an denen alle bekannt sind; je Bucket summiert (``None``: kein solcher Tag). Beginnt eine
+    Anlage mitten im Monat, zählt der Monat so erst ab ihrem ersten Tag. Dazu die Summe der
+    bekannten Buckets."""
     rest: list[float | None] = []
-    for index, whole in enumerate(total.kwh):
-        parts = [system.kwh[index] for system in systems]
-        if whole is None or any(part is None for part in parts):
-            rest.append(None)
-        else:
-            known = [part for part in parts if part is not None]
-            rest.append(round(max(0.0, whole - math.fsum(known)), 3))
+    for bucket in period_buckets:
+        values: list[float] = []
+        for day in _days(bucket.start, bucket.end):
+            whole = total.by_day.get(day)
+            parts = [system.by_day[day] for system in systems if day in system.by_day]
+            if whole is not None and len(parts) == len(systems):
+                values.append(max(0.0, whole - math.fsum(parts)))
+        rest.append(_sum(values))
     return rest, _sum([value for value in rest if value is not None])

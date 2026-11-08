@@ -137,3 +137,47 @@ def test_day_curve_route(client, auth, service, respx_mock) -> None:
     body = client.get("/api/pv/day?date=2026-10-08").json()
     assert body["date"] == "2026-10-08"
     assert body["series"] == [{"id": 1, "points": [[1000, 5.0]], "note": None}]
+
+
+def test_today_before_the_first_refresh_is_not_computed(period_client, auth, service) -> None:
+    login_as(period_client, auth, "viewer")
+    service.create(PvSourceInput(**BODY), actor="x", source="ui")
+    (row,) = period_client.get("/api/pv/period?period=day").json()["sources"]
+    assert (row["sum_kwh"], row["note"]) == (None, "Noch nicht berechnet")
+
+
+class WrongUnit:
+    """HA-Werte, deren Sensor eine falsche Einheit meldet."""
+
+    def wrong_unit(self, _ref) -> bool:
+        return True
+
+    def note(self, _ref) -> str:
+        return "Einheit kWh statt W"
+
+
+def test_today_skips_ha_sensor_with_wrong_unit(
+    make_client, service, live, reader, cfg, guard, engine, clock, auth
+) -> None:
+    energy = EnergyCache(reader, clock, "homeassistant", retention="long")
+    days = SourceDays(engine, energy, service.list, pv_source_day, "source_id", clock, total_id=0)
+    client = make_client(
+        pv_router(service, live, WrongUnit(), reader, cfg, guard, energy, days, clock)  # type: ignore[arg-type]
+    )
+    login_as(client, auth, "viewer")
+    ha = {**BODY, "source_kind": "ha", "power_ref": "sensor.pv1", "power_unit": "W"}
+    source = service.create(PvSourceInput(**ha), actor="x", source="ui")
+    energy._energy = {("ha", "sensor.pv1", "W"): (1.5, None)}  # Stand des Caches
+    assert energy.energy_kwh(source) == 1.5
+    (row,) = client.get("/api/pv/period?period=day").json()["sources"]
+    assert (row["sum_kwh"], row["note"]) == (None, "Einheit kWh statt W")
+
+
+def test_candidates_only_valid_pv_signals(client, auth, live) -> None:
+    assert live.state is not None
+    live.state["signals"]["pv.Huawei-1.power_w"] = {"v": 1.0, "ts": "…", "q": "ok"}
+    login_as(client, auth, "admin")
+    assert client.get("/api/pv/candidates").json()["core"] == [
+        "pv.huawei.power_w",
+        "pv_dc.power_w",
+    ]

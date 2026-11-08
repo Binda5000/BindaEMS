@@ -1,12 +1,12 @@
 """Energie je Quelle und lokalem Tag (Plan 4a, Entscheidung 8).
 
-Die app speichert die Energie je Leistungsquelle (Verbraucher, PV) in einer Tagestabelle; für die
-Verbraucher ``consumer_day``: nachts die fehlenden Tage der
-letzten 3 (gestern, Fehler nachholen), beim Start die der letzten 31. Es gilt dieselbe Rechnung
-wie für „heute“ (``EnergyCache.window_energy``); der Tag ist
+Die app speichert die Energie je Leistungsquelle in einer Tagestabelle: Verbraucher in
+``consumer_day``, PV in ``pv_source_day``. Nachts füllt sie die fehlenden Tage der letzten 3
+(gestern, Fehler nachholen); wie weit der Start zurückreicht, bestimmt der Aufrufer (Verbraucher
+31 Tage, denn ihre Rohdaten in InfluxDB halten 90 Tage; PV bis Januar des Vorjahres aus RP
+``long``). Es gilt dieselbe Rechnung wie für „heute“ (``EnergyCache.window_energy``); der Tag ist
 ``[lokale Mitternacht, nächste Mitternacht)``, an Tagen der Zeitumstellung also 23 oder 25
-Stunden. Ältere Tage bleiben leer, denn die Rohdaten in InfluxDB halten 90 Tage. Heute und die
-Zukunft werden nie gespeichert.
+Stunden. Heute und die Zukunft werden nie gespeichert.
 """
 
 from __future__ import annotations

@@ -1,4 +1,5 @@
-"""Energie der Verbraucher seit Mitternacht (Wien), integriert aus dem Leistungsverlauf.
+"""Energie je Leistungsquelle (Verbraucher, PV) seit Mitternacht (Wien), integriert aus dem
+Leistungsverlauf.
 
 - **core-Signale** ``load|pv|wallbox.<id>.power_w`` schreibt der core als Messung ``power``
   (``phase=total``) alle 2 bis 10 s, die Hauslast als ``source=derived, id=house_load``. Gelesen
@@ -196,7 +197,8 @@ class EnergyCache:
     """Energie je Quelle, der Hauslast und der PV gesamt seit Mitternacht.
 
     ``retention`` ist die Aufbewahrung, aus der die core-Minutenmittel kommen (``raw`` oder
-    ``long``). ``ha_hold`` begrenzt, wie lange ein HA-Wert gilt (``None``: bis zum nächsten)."""
+    ``long``). ``ha_hold`` begrenzt, wie lange ein HA-Wert gilt (``None``: bis zum nächsten).
+    ``label`` nennt im Log, wessen Energie fehlt (``Verbraucher``, ``PV``)."""
 
     def __init__(
         self,
@@ -206,13 +208,15 @@ class EnergyCache:
         *,
         retention: str = RP_RAW,
         ha_hold: timedelta | None = None,
+        label: str = "Verbraucher",
     ) -> None:
         self._reader = reader
         self._retention = retention
         self._ha_hold_ms = int(ha_hold.total_seconds() * 1000) if ha_hold is not None else None
+        self._label = label
         self._clock = clock
         self._ha_database = ha_database
-        # je Verbraucherquelle kWh oder Grund; als Ganzes ersetzt (Endpunkte lesen aus Threads)
+        # je Quelle kWh oder Grund; als Ganzes ersetzt (Endpunkte lesen aus Threads)
         self._energy: dict[Key, tuple[float | None, str | None]] = {}
         self._house: float | None = None
         self._pv_total: float | None = None
@@ -278,7 +282,7 @@ class EnergyCache:
         try:
             series = await self._core_points([*core.values(), HOUSE, PV_TOTAL], window)
         except InfluxQueryError as exc:
-            log.warning("Energie der Verbraucher nicht lesbar", error=str(exc))
+            log.warning(f"Energie der {self._label} nicht lesbar", error=str(exc))
             by_key |= dict.fromkeys(core, (None, UNREADABLE))
         else:
             for key, tags in core.items():
@@ -325,7 +329,7 @@ class EnergyCache:
             today = await self._reader.query(means, database=database)
             earlier = await self._reader.query(before, database=database)
         except InfluxQueryError as exc:
-            log.warning("Energie der HA-Verbraucher nicht lesbar", error=str(exc))
+            log.warning(f"HA-Energie der {self._label} nicht lesbar", error=str(exc))
             return dict.fromkeys(refs, (None, UNREADABLE))
         result: dict[Key, tuple[float | None, str | None]] = {}
         for key, ref in refs.items():

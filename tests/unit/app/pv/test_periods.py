@@ -62,5 +62,18 @@ def test_unassigned_from_total() -> None:
         1: {date(2026, 11, 2): (27.5, None)},
     }
     result = period_energy(daily, {0: None, 1: None}, week, TODAY)
-    kwh, total = unassigned(result[0], [result[1]])
+    kwh, total = unassigned(result[0], [result[1]], week)
     assert kwh[0] == 2.5 and kwh[1] is None and total == 2.5
+
+
+def test_unassigned_per_day_when_a_system_starts_mid_month() -> None:
+    year = buckets("year", date(2026, 1, 1), date(2026, 12, 31))
+    daily = {
+        0: {date(2026, 10, d): (10.0, None) for d in range(1, 32)},
+        1: {date(2026, 10, d): (8.0, None) for d in range(15, 32)},
+    }
+    result = period_energy(daily, {0: None, 1: None}, year, TODAY)
+    kwh, total = unassigned(result[0], [result[1]], year)
+    # nur die 17 Tage, an denen beide bekannt sind (nicht 310 − 136 kWh)
+    assert kwh[9] == 34.0 and kwh[8] is None and kwh[10] is None
+    assert total == 34.0

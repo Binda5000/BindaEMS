@@ -132,7 +132,7 @@ class HaValueCache:
             series = await self._reader.query(query, database=self._database)
         except InfluxQueryError as exc:
             self._readings = dict.fromkeys(refs, (None, UNREADABLE))
-            log.warning("HA-Werte der Verbraucher nicht lesbar", error=str(exc))
+            log.warning("HA-Werte der Verbraucher und PV nicht lesbar", error=str(exc))
             return
         found = _readings(series)
         result: dict[HaRef, tuple[float | None, str | None]] = {}

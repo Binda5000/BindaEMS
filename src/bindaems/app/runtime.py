@@ -445,7 +445,12 @@ class AppRuntime:
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
         # PV: eigene IDs, daher eigener Cache; core-Minutenmittel aus RP long (unbegrenzt)
         self.pv_energy = EnergyCache(
-            self.reader, self._clock, ha_database, retention=RP_LONG, ha_hold=PV_HA_HOLD
+            self.reader,
+            self._clock,
+            ha_database,
+            retention=RP_LONG,
+            ha_hold=PV_HA_HOLD,
+            label="PV",
         )
         self.pv_days = SourceDays(
             self.engine,
@@ -1026,7 +1031,7 @@ class AppRuntime:
                 refs = [HaRef.from_source(c) for c in sources if c.source_kind == "ha"]
                 await cache.refresh(refs)
             except Exception:
-                log.exception("HA-Werte der Verbraucher nicht lesbar")
+                log.exception("HA-Werte der Verbraucher und PV nicht lesbar")
             await asyncio.sleep(HA_VALUES_S)
 
     async def _energy_loop(self) -> None:

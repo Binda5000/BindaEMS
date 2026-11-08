@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from structlog.testing import capture_logs
 from tests.app_helpers import T_APP, influx_q, k
 
 from bindaems.app.consumers.energy import (
@@ -304,3 +305,15 @@ async def test_retention_long_reads_long(respx_mock, reader, clock) -> None:
     assert '"long"."power"' in influx_q(route.calls.last.request)
     await EnergyCache(reader, clock, None).refresh([source])
     assert '"raw"."power"' in influx_q(route.calls.last.request)
+
+
+async def test_log_names_the_owner_of_the_cache(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).respond(500, text="kaputt")
+    pv = _ha("sensor.pv1")
+    core, _ = k(1, 0.0)
+    cache = EnergyCache(reader, clock, "homeassistant", label="PV")
+    with capture_logs() as logs:
+        await cache.refresh([pv, core])
+    events = [e["event"] for e in logs]
+    assert "Energie der PV nicht lesbar" in events
+    assert "HA-Energie der PV nicht lesbar" in events
