@@ -19,7 +19,7 @@ from typing import Final
 
 from sqlalchemy import Engine, Table, delete, insert, select
 
-from bindaems.app.consumers.energy import NO_HISTORY, UNREADABLE, EnergyCache
+from bindaems.app.consumers.energy import UNREADABLE, EnergyCache
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.source import PowerSource
 from bindaems.app.db.schema import consumer_day
@@ -74,8 +74,7 @@ class SourceDays:
         result = await self._cache.window_energy(sources, start, end)
         energy = dict(result.per_source)
         if self._total_id is not None:
-            total = result.pv_total_kwh
-            energy[self._total_id] = (total, None if total is not None else NO_HISTORY)
+            energy[self._total_id] = (result.pv_total_kwh, result.pv_total_note)
         return await asyncio.to_thread(self._write, day, energy)
 
     def _write(self, day: date, energy: dict[int, tuple[float | None, str | None]]) -> int:

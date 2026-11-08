@@ -275,3 +275,27 @@ async def test_source_days_total_id_stores_pv_total(engine, reader, clock, respx
     with engine.connect() as conn:
         rows = [(r.day, r.src_id, r.kwh, r.note) for r in conn.execute(select(table))]
     assert rows == [("2026-10-08", 0, 1.2, None)]
+
+
+async def test_source_days_total_keeps_old_row_when_unreadable(
+    engine, reader, clock, respx_mock
+) -> None:
+    table = Table(
+        "test_source_day3",
+        MetaData(),
+        Column("day", String(10), primary_key=True),
+        Column("src_id", Integer, primary_key=True, autoincrement=False),
+        Column("kwh", Float, nullable=True),
+        Column("note", String(80), nullable=True),
+    )
+    table.create(engine)
+    with engine.begin() as conn:
+        conn.execute(insert(table), [{"day": "2026-10-08", "src_id": 0, "kwh": 9.9, "note": None}])
+    respx_mock.post(URL).respond(500, text="boom")
+    source_days = SourceDays(
+        engine, EnergyCache(reader, clock, None), lambda: [], table, "src_id", clock, total_id=0
+    )
+    assert await source_days.store(YESTERDAY) == 0
+    with engine.connect() as conn:
+        rows = [(r.day, r.src_id, r.kwh, r.note) for r in conn.execute(select(table))]
+    assert rows == [("2026-10-08", 0, 9.9, None)]

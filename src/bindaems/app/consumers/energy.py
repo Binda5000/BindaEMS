@@ -69,6 +69,7 @@ class WindowEnergy(NamedTuple):
     per_source: dict[int, tuple[float | None, str | None]]
     house_kwh: float | None
     pv_total_kwh: float | None
+    pv_total_note: str | None = None  # Grund ohne Wert: NO_HISTORY oder UNREADABLE
 
 
 def day_start(now: datetime) -> datetime:
@@ -210,6 +211,7 @@ class EnergyCache:
                     by_key[key] = (None, NO_SERIES)
         house: float | None = None
         pv_total: float | None = None
+        pv_note: str | None = UNREADABLE
         try:
             series = await self._core_points([*core.values(), HOUSE, PV_TOTAL], window)
         except InfluxQueryError as exc:
@@ -219,11 +221,11 @@ class EnergyCache:
             for key, tags in core.items():
                 by_key[key] = self._kwh(series.get(tags), window, BUCKET_S * 1000)
             house = self._kwh(series.get(HOUSE), window, BUCKET_S * 1000)[0]
-            pv_total = self._kwh(series.get(PV_TOTAL), window, BUCKET_S * 1000)[0]
+            pv_total, pv_note = self._kwh(series.get(PV_TOTAL), window, BUCKET_S * 1000)
         if ha:
             by_key |= await self._ha_energy(ha, window)
         return WindowEnergy(
-            {source.id: by_key[_key(source)] for source in sources}, house, pv_total
+            {source.id: by_key[_key(source)] for source in sources}, house, pv_total, pv_note
         )
 
     @staticmethod

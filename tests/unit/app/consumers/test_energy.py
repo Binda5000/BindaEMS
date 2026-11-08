@@ -182,7 +182,7 @@ async def test_window_energy_matches_refresh_for_today(respx_mock, reader, clock
         )
     )
     cache = EnergyCache(reader, clock, None)
-    energy, house, _pv = await cache.window_energy([og, other], MIDNIGHT, clock.now())
+    energy, house, *_ = await cache.window_energy([og, other], MIDNIGHT, clock.now())
     # keine Zustandsänderung: der Cache ist noch leer
     assert cache.since is None and cache.house_kwh() is None and cache.energy_kwh(og) is None
     await cache.refresh([og, other])
@@ -204,7 +204,7 @@ async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
     await cache.refresh([og])
     before = (cache.since, cache.energy_kwh(og), cache.house_kwh())
     start, end = MIDNIGHT - timedelta(days=1), MIDNIGHT
-    energy, house, _pv = await cache.window_energy([og], start, end)
+    energy, house, *_ = await cache.window_energy([og], start, end)
     assert (cache.since, cache.energy_kwh(og), cache.house_kwh()) == before
     # der Punkt liegt bei end (Mock ignoriert das Fenster): er zählt nicht
     assert energy == {1: (0.0, None)}
