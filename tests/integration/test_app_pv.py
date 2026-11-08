@@ -1,8 +1,11 @@
+import asyncio
+import contextlib
 from datetime import date
 
 import pytest
 from structlog.testing import capture_logs
 from tests.integration.test_app_runtime import PASSWORD, make_runtime
+from tests.plan_helpers import until
 
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.pv.periods import pv_fill_days
@@ -157,6 +160,58 @@ async def test_pv_fill_task_reaches_back_and_survives_errors(cfg, tmp_path, monk
             await runtime._pv_days_fill()
         assert "Energie der PV je Tag nicht gespeichert" in [e["event"] for e in logs]
     finally:
+        runtime.engine.dispose()
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_pv_fill_job_fills_once_then_waits_for_a_new_entry(
+    cfg, tmp_path, respx_mock, monkeypatch
+) -> None:
+    """Der registrierte Job endet nach dem ersten Lauf nicht (sonst startete ``_supervise`` ihn
+    alle 10 s neu) und rechnet nach dem Anlegen eines Eintrags wieder, ohne Neustart."""
+    respx_mock.route().respond(503)  # kein echter Netzverkehr
+    monkeypatch.setattr("bindaems.app.runtime.PV_FILL_DEBOUNCE_S", 0.0, raising=False)
+    runtime = make_runtime(cfg, tmp_path)
+    calls = spy_pv_fill(runtime, monkeypatch)
+    task = asyncio.create_task(runtime.run())
+    try:
+        with capture_logs() as logs:
+            await until(lambda: len(calls) == 1)
+            await asyncio.sleep(0.2)
+        assert len(calls) == 1
+        ended = [e for e in logs if e["event"] == "Hintergrundaufgabe beendet"]
+        assert [e for e in ended if e.get("task") == "pv-days-fill"] == []
+        await asyncio.to_thread(runtime.pv_sources.create, pv_input(), actor="t", source="ui")
+        await until(lambda: len(calls) == 2)
+        assert calls[1] == (date(2026, 10, 9), pv_fill_days(date(2026, 10, 9)))
+    finally:
+        await runtime.shutdown()
+        await asyncio.wait_for(task, timeout=2)
+        runtime.engine.dispose()
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_entry_created_after_start_gets_its_older_days(
+    cfg, tmp_path, respx_mock, monkeypatch
+) -> None:
+    respx_mock.post("http://influx.lan:8086/query").respond(json={"results": [{}]})
+    monkeypatch.setattr("bindaems.app.runtime.PV_FILL_DEBOUNCE_S", 0.0, raising=False)
+    runtime = make_runtime(cfg, tmp_path)
+    task = asyncio.create_task(runtime._pv_days_fill_loop())
+    try:
+        await asyncio.sleep(0.05)  # erster Lauf ohne Einträge
+        await asyncio.to_thread(runtime.pv_sources.create, pv_input(), actor="t", source="ui")
+        first = date(2025, 1, 1)
+        await until(lambda: runtime.pv_days.daily(first, first) != {}, max_wait_s=30)
+        assert runtime.pv_days.daily(first, first)[1][first] == (
+            None,
+            "kein Verlauf seit Mitternacht",
+        )
+        assert not task.done()
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
         runtime.engine.dispose()
 
 

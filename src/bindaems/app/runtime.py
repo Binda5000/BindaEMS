@@ -154,6 +154,7 @@ LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
 PV_DAYS_NIGHTLY = 3  # nachts: fehlende PV-Tage der letzten 3
+PV_FILL_DEBOUNCE_S = 5.0  # mehrere Änderungen kurz nacheinander lösen einen Nachtrag aus
 CONSUMER_DAYS_NIGHTLY = 3  # nachts: fehlende Tage der letzten 3 (gestern, Fehler nachholen)
 LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
 LEDGER_BACKFILL_WAIT_S = (
@@ -228,8 +229,15 @@ class AppRuntime:
             self.engine, self._clock, self.audit, ha_enabled=ha_database is not None
         )
 
+        # ein neuer Eintrag (aus jedem Thread) weckt den Nachtrag der PV-Tage
+        self._pv_fill_wake = asyncio.Event()
+        self._pv_fill_loop_ref: asyncio.AbstractEventLoop | None = None
         self.pv_sources = PvSourceService(
-            self.engine, self._clock, self.audit, ha_enabled=ha_database is not None
+            self.engine,
+            self._clock,
+            self.audit,
+            ha_enabled=ha_database is not None,
+            on_change=self._wake_pv_fill,
         )
 
         self._http = httpx.AsyncClient()  # Preisquellen, Open-Meteo, InfluxDB
@@ -843,7 +851,7 @@ class AppRuntime:
             ("ops-nightly", self._ops_nightly_loop),
             ("ops-report", self._ops_report_loop),
             ("consumer-energy", self._energy_loop),
-            ("pv-days-fill", self._pv_days_fill),
+            ("pv-days-fill", self._pv_days_fill_loop),
             ("backup-range", self.backup_range_service.run),
             ("outages", self.outages.run),
             ("heartbeat", self.heartbeat.run),
@@ -1327,9 +1335,33 @@ class AppRuntime:
             except Exception:
                 log.exception("Energie der PV je Tag nicht gespeichert")
 
+    def _wake_pv_fill(self) -> None:
+        """Nach einem neuen Eintrag oder einem geänderten Signal (aus jedem Thread): die fehlenden
+        PV-Tage nachholen."""
+        loop = self._pv_fill_loop_ref
+        if loop is None or loop.is_closed():
+            return  # der Lauf beim Start sieht den Eintrag ohnehin
+        with contextlib.suppress(RuntimeError):  # Schleife gerade geschlossen
+            loop.call_soon_threadsafe(self._pv_fill_wake.set)
+
+    async def _pv_days_fill_loop(self) -> None:
+        """Beim Start und nach jedem neuen Eintrag oder geänderten Signal: die fehlenden PV-Tage
+        bis Januar des Vorjahres nachholen (eigene Aufgabe, damit der Start und die Verbraucher
+        nicht warten). Endet nie von selbst, sonst startete ``_supervise`` sie alle 10 s neu.
+
+        Ein Tag, den InfluxDB gerade nicht liefert, kommt erst beim nächsten Weckruf, nachts
+        (``_ledger_nightly``) oder beim nächsten Start wieder dran, nicht in einer Schleife.
+        Mehrere Änderungen kurz nacheinander (``PV_FILL_DEBOUNCE_S``) lösen einen Lauf aus; eine
+        Änderung während eines Laufs löst gleich den nächsten aus."""
+        self._pv_fill_loop_ref = asyncio.get_running_loop()
+        while True:
+            self._pv_fill_wake.clear()
+            await self._pv_days_fill()
+            await self._pv_fill_wake.wait()
+            await asyncio.sleep(PV_FILL_DEBOUNCE_S)
+
     async def _pv_days_fill(self) -> None:
-        """Holt beim Start die fehlenden PV-Tage bis Januar des Vorjahres nach (einmalig, eigene
-        Aufgabe, damit der Start und die Verbraucher nicht warten)."""
+        """Ein Lauf: die fehlenden PV-Tage bis Januar des Vorjahres; ein Fehler kommt ins Log."""
         today = self._clock.now().astimezone(LOCAL_TZ).date()
         try:
             stored = await self.pv_days.fill_missing(today, pv_fill_days(today))

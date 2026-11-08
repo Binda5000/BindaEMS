@@ -145,3 +145,83 @@ def test_changes_are_audited(service: PvSourceService, audit) -> None:
     ]
     assert {(e.actor, e.source) for e in entries} == {("chris", "ui")}
     assert entries[0].target == "Dach Süd"
+
+
+def stored_days(engine) -> list[tuple[int, str]]:
+    with engine.connect() as conn:
+        rows = conn.execute(select(pv_source_day.c.source_id, pv_source_day.c.day)).all()
+    return sorted((row[0], row[1]) for row in rows)
+
+
+def add_days(engine, *source_ids: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            insert(pv_source_day),
+            [{"day": "2026-11-07", "source_id": sid, "kwh": 1.0} for sid in source_ids],
+        )
+
+
+def watched(engine, clock, audit, calls: list[None]) -> PvSourceService:
+    """Service, der jeden Weckruf des Nachtrags in ``calls`` zählt."""
+    return PvSourceService(
+        engine, clock, audit, ha_enabled=True, on_change=lambda: calls.append(None)
+    )
+
+
+def test_create_wakes_the_fill(engine, clock, audit) -> None:
+    calls: list[None] = []
+    service = watched(engine, clock, audit, calls)
+    service.create(make("A"), actor="chris", source="ui")
+    assert len(calls) == 1
+
+
+def test_name_colour_kwp_and_parent_keep_the_days(engine, clock, audit) -> None:
+    calls: list[None] = []
+    service = PvSourceService(engine, clock, audit, ha_enabled=True)
+    a = service.create(make("A"), actor="chris", source="ui")
+    s = service.create(make("S", parent_id=a.id), actor="chris", source="ui")
+    service = watched(engine, clock, audit, calls)
+    add_days(engine, 0, a.id, s.id)
+    service.update(s.id, make("S2", color="#000000", kwp=4.1, sort=3), actor="c", source="ui")
+    service.update(s.id, make("S2", color="#000000", kwp=4.1, sort=3), actor="c", source="ui")
+    assert stored_days(engine) == [(0, "2026-11-07"), (a.id, "2026-11-07"), (s.id, "2026-11-07")]
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        {"power_ref": "pv.west.power_w"},
+        {"source_kind": "ha", "power_ref": "sensor.pv1", "power_unit": "W"},
+    ],
+)
+def test_signal_change_drops_the_days_and_wakes_the_fill(
+    engine, clock, audit, signal: dict[str, Any]
+) -> None:
+    calls: list[None] = []
+    service = PvSourceService(engine, clock, audit, ha_enabled=True)
+    a = service.create(make("A"), actor="chris", source="ui")
+    b = service.create(make("B"), actor="chris", source="ui")
+    service = watched(engine, clock, audit, calls)
+    add_days(engine, 0, a.id, b.id)
+    service.update(a.id, make("A", **signal), actor="chris", source="ui")
+    assert stored_days(engine) == [(0, "2026-11-07"), (b.id, "2026-11-07")]
+    assert len(calls) == 1
+
+
+def test_unit_change_drops_the_days(engine, clock, audit) -> None:
+    service = PvSourceService(engine, clock, audit, ha_enabled=True)
+    ha = {"source_kind": "ha", "power_ref": "sensor.pv1"}
+    a = service.create(make("A", power_unit="W", **ha), actor="chris", source="ui")
+    add_days(engine, a.id)
+    service.update(a.id, make("A", power_unit="kW", **ha), actor="chris", source="ui")
+    assert stored_days(engine) == []
+
+
+def test_string_becomes_top_level_system(service: PvSourceService) -> None:
+    a = service.create(make("A"), actor="chris", source="ui")
+    s = service.create(make("S", parent_id=a.id), actor="chris", source="ui")
+    moved = service.update(s.id, make("S", parent_id=None), actor="chris", source="ui")
+    assert moved.parent_id is None
+    assert service.get(s.id).parent_id is None
+    service.delete(a.id, actor="chris", source="ui")  # A hat keine Strings mehr

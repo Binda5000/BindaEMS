@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Annotated, Literal, Self
 
@@ -87,12 +88,27 @@ def _source(row: Rows) -> PvSource:
     )
 
 
+def _signal(source: PvSource) -> tuple[str, str, str | None]:
+    return (source.source_kind, source.power_ref, source.power_unit)
+
+
 class PvSourceService:
-    def __init__(self, engine: Engine, clock: Clock, audit: AuditLog, *, ha_enabled: bool) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        clock: Clock,
+        audit: AuditLog,
+        *,
+        ha_enabled: bool,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
+        """``on_change`` läuft nach einem neuen Eintrag und nach einem geänderten Signal, damit
+        die app dessen Tage nachholt."""
         self._engine = engine
         self._clock = clock
         self._audit = audit
         self._ha_enabled = ha_enabled
+        self._on_change = on_change
         self._lock = threading.Lock()  # Prüfen und Schreiben ohne fremde Änderung dazwischen
 
     def list(self) -> builtins.list[PvSource]:
@@ -121,11 +137,15 @@ class PvSourceService:
             self._audit.record(
                 actor, source, "pv_source.create", data.name, data.model_dump(), conn=conn
             )
+        self._changed()
         return created
 
     def update(
         self, source_id: int, data: PvSourceInput, *, actor: str, source: Source
     ) -> PvSource:
+        """Ändert einen Eintrag. Ein anderes Signal (Art, Signal, Einheit) verwirft seine
+        gespeicherten Tage, damit der Nachtrag sie neu rechnet; Name, Farbe, kWp und Anlage
+        behalten sie."""
         self._check_source(data)
         with self._lock, self._engine.begin() as conn:
             old = _source(self._get(conn, source_id))
@@ -146,6 +166,9 @@ class PvSourceService:
                 .values(**data.model_dump(), updated_at=self._clock.now())
             )
             updated = PvSource(id=source_id, **data.model_dump())
+            signal_changed = _signal(old) != _signal(updated)
+            if signal_changed:
+                conn.execute(delete(pv_source_day).where(pv_source_day.c.source_id == source_id))
             before, after = asdict(old), asdict(updated)
             self._audit.record(
                 actor,
@@ -155,6 +178,8 @@ class PvSourceService:
                 {"changes": changes(before, after)},
                 conn=conn,
             )
+        if signal_changed:
+            self._changed()
         return updated
 
     def delete(self, source_id: int, *, actor: str, source: Source) -> None:
@@ -169,6 +194,10 @@ class PvSourceService:
             # SQLite vergibt die Nummer des neuesten Eintrags wieder: keine Tage erben
             conn.execute(delete(pv_source_day).where(pv_source_day.c.source_id == source_id))
             self._audit.record(actor, source, "pv_source.delete", old.name, conn=conn)
+
+    def _changed(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
 
     def _check_source(self, data: PvSourceInput) -> None:
         if data.source_kind == "ha" and not self._ha_enabled:
