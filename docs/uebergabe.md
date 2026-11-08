@@ -2235,9 +2235,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   24. **Lebenszeichen und USV-Reichweite ausrollen:** nur mit dem Sammel-Pull, `ems-core` **und** `ems-app` zusammen, **nie `ems-app` allein**
       (die app liest die neuen Felder aus der `config.yaml`, die der core mitliest), **nicht vor dem 23.11.2026** (mit Stufe 2). **Migration `0017`**
       (Tabelle `grid_outage`, läuft beim Start der app von selbst; setzt `0016` aus Punkt 23 voraus). Vorher: (a) auf der Seite System in der
-      Signaltabelle prüfen, dass `consumption_output.l1..l3.power_w` Werte haben, sonst bleibt die Reichweite „zu wenig Daten“; (b) den Wert für
-      `battery.outage_floor_soc_pct` klären (SOC, bei dem das BMS im Inselbetrieb abschaltet; ab Werk 5 %) und erst nach dem Sammel-Pull in die
-      `config.yaml` schreiben; (c) bei healthchecks.io das Konto und den Check „BindaEMS“ anlegen (Periode 5 min, Karenz 10 min, Benachrichtigung
+      Signaltabelle prüfen, dass `consumption_output.l1..l3.power_w` Werte haben, sonst bleibt die Reichweite „zu wenig Daten“; (b) nach dem Sammel-Pull
+      `battery.outage_floor_soc_pct: 0` in die `config.yaml` schreiben (der Betreiber hat am 8.11.2026 bestätigt: das BMS schaltet im
+      Inselbetrieb erst bei 0 % ab; ab Werk 5 %); (c) bei healthchecks.io das Konto und den Check „BindaEMS“ anlegen (Periode 5 min, Karenz 10 min, Benachrichtigung
       aufs Handy) und die URL als `BINDAEMS_PING_URL` in die `.env` eintragen, dann `docker compose up -d --no-deps ems-app`. Prüfen: Seite System, Karte
       „USV und Netzausfälle“ und Baustein „Lebenszeichen“; app stoppen, nach höchstens 15 min kommt die Meldung. Das Protokoll der Netzausfälle
       beginnt erst mit dem Ausrollen. Schritte im Einzelnen: `docs/betrieb.md`, Abschnitt 7, „Lebenszeichen einrichten“. Rückweg: die Felder
