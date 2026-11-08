@@ -8,8 +8,8 @@ gemeinsame Fenster vom 26.10.2026 (`d1875af`). Damit laufen 3c, 3d, 4a, 4b, 4c, 
 (DESS aus seit 19.10.2026, „Netzladen erlaubt“ an), die Klimaanlage im Dry-Run, „Lastmodell verwenden“
 aus. Teil 2 ist vollständig (EVCS „Verbindung unterbrochen“ am 27.10.2026, Victron 17.2-4 am
 3.11.2026).
-**Plan Lebenszeichen und USV-Reichweite** (`docs/superpowers/plans/2026-11-04-lebenszeichen-usv-reichweite.md`) ist umgesetzt: auf dem Branch
-`claude/project-thread-800wyz`, **nicht auf `main`, nicht ausgerollt** (Punkt 24 unter „Offen an der Anlage“). Nur app, UI und HA; der core
+**Plan Lebenszeichen und USV-Reichweite** (`docs/superpowers/plans/2026-11-04-lebenszeichen-usv-reichweite.md`) ist umgesetzt und seit
+8.11.2026 auf `main`, **nicht ausgerollt** (Punkt 24 unter „Offen an der Anlage“). Nur app, UI und HA; der core
 bleibt unverändert.
 **Plan PV je Anlage und String** (`docs/superpowers/plans/2026-11-08-pv-je-anlage-und-string.md`) ist umgesetzt: auf dem Branch
 `claude/project-thread-i85go5`, **nicht auf `main`, nicht ausgerollt** (Punkt 25 unter „Offen an der Anlage“). Nur app und UI, Migration `0018`;

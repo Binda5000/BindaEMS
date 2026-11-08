@@ -2288,8 +2288,8 @@ in der UI, nicht in `config.yaml`; jede Änderung steht im Änderungsprotokoll.
 - **Zeiträume:** Tag, Woche (Montag bis Sonntag), Monat und Jahr mit Blättern und „Heute“, dieselben
   Grenzen wie die Statistik (Wiener Zeit); Zeitraum und Tag stehen in der Adresse
   (`/pv?zeitraum=monat&tag=2026-11-08`). Der Tag zeigt die Leistungskurve in 5-min-Schritten, Woche und
-  Monat Balken je Tag, das Jahr Balken je Monat. Über den Balken wählst du „Anlagen“ oder „Strings“ und
-  „kWh“ oder „kWh/kWp“. Die Tabelle zeigt den Ertrag im gewählten Zeitraum (beim laufenden bis jetzt).
+  Monat Balken je Tag, das Jahr Balken je Monat. Am Diagramm wählst du „Anlagen“ oder „Strings“ und
+  „kWh“ oder „kWh/kWp“. Die Karte je Anlage zeigt den Ertrag im gewählten Zeitraum (beim laufenden bis jetzt).
   Die Statistik hat zusätzlich die Karte „PV je Anlage“.
 - **Strings messen DC, Anlagen AC.** Die Summe der Strings („Strings zusammen“, mit dem Hinweis „DC, vor
   dem Wechselrichter“) liegt deshalb etwas über der Anlage; die Differenz sind die Verluste des
