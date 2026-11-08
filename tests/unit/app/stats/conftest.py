@@ -7,15 +7,17 @@ from tests.helpers import FakeInflux, FakeSink
 from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.sessions import SessionService
 from bindaems.app.charging.tracker import ChargingTracker
-from bindaems.app.consumers.days import ConsumerDays
+from bindaems.app.consumers.days import ConsumerDays, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.core_link import LiveState
+from bindaems.app.db.schema import pv_source_day
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
+from bindaems.app.pv.service import PvSourceService
 from bindaems.app.stats.routes import stats_router
 from bindaems.app.stats.service import StatsService
 from bindaems.shared.timeutil import slots_between
@@ -78,15 +80,51 @@ def energy(influx, clock) -> EnergyCache:
 
 
 @pytest.fixture
+def pv_sources(engine, clock, audit) -> PvSourceService:
+    return PvSourceService(engine, clock, audit, ha_enabled=False)
+
+
+@pytest.fixture
+def pv_energy(influx, clock) -> EnergyCache:
+    return EnergyCache(influx, clock, None)  # type: ignore[arg-type]
+
+
+@pytest.fixture
 def stats(
-    ledger, tracker, costing, consumers, energy, influx, engine, clock, settings_service, cfg
+    ledger,
+    tracker,
+    costing,
+    consumers,
+    energy,
+    pv_sources,
+    pv_energy,
+    influx,
+    engine,
+    clock,
+    settings_service,
+    cfg,
 ) -> StatsService:
     sessions = SessionService(tracker, ledger, costing, clock)
     days = ConsumerDays(engine, energy, consumers, clock)
     checks = LedgerChecks(engine, ledger, influx, clock, cfg)  # type: ignore[arg-type]
     planned = PlannedCharges(engine, clock, cfg)
+    pv_days = SourceDays(
+        engine, pv_energy, pv_sources.list, pv_source_day, "source_id", clock, total_id=0
+    )
     return StatsService(
-        ledger, sessions, consumers, days, energy, checks, settings_service, cfg, clock, planned
+        ledger,
+        sessions,
+        consumers,
+        days,
+        energy,
+        pv_sources,
+        pv_days,
+        pv_energy,
+        checks,
+        settings_service,
+        cfg,
+        clock,
+        planned,
     )
 
 

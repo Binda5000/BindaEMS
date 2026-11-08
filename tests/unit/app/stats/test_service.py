@@ -6,7 +6,14 @@ from tests.app_helpers import ingest, set_tariff
 from tests.unit.app.stats.stats_helpers import T0, TODAY, add_consumer, add_session
 
 from bindaems.app.consumers.days import NO_DAY
-from bindaems.app.db.schema import charging_session, consumer_day, ledger_check, planned_charge
+from bindaems.app.db.schema import (
+    charging_session,
+    consumer_day,
+    ledger_check,
+    planned_charge,
+    pv_source_day,
+)
+from bindaems.app.pv.service import PvSourceInput
 from bindaems.app.stats.service import (
     NOT_YET,
     TodayStats,
@@ -586,3 +593,63 @@ def test_planned_charges_of_the_period(stats, engine) -> None:
         "unknown": 0,
         "changed": 0,
     }
+
+
+def add_pv(pv_sources, name: str, ref: str, *, parent_id=None, kwp=None) -> int:
+    return pv_sources.create(
+        PvSourceInput(
+            name=name,
+            parent_id=parent_id,
+            color="#ffaa00",
+            source_kind="core",
+            power_ref=ref,
+            kwp=kwp,
+        ),
+        actor="chris",
+        source="ui",
+    ).id
+
+
+async def test_pv_sources_use_stored_days_and_the_cache_for_today(
+    stats, engine, pv_sources, pv_energy, influx
+) -> None:
+    from bindaems.app.history.influx import Series
+
+    plant = add_pv(pv_sources, "Dach", "pv.huawei.power_w", kwp=4.1)
+    string = add_pv(pv_sources, "Süd", "pv.south.power_w", parent_id=plant)
+    with engine.begin() as conn:
+        for day, kwh in (("05", 10.0), ("06", 0.0), ("07", 0.0), ("08", 12.0)):
+            conn.execute(
+                insert(pv_source_day).values(day=f"2026-10-{day}", source_id=plant, kwh=kwh)
+            )
+        conn.execute(insert(pv_source_day).values(day="2026-10-05", source_id=0, kwh=99.0))
+    start = epoch_ms(datetime(2026, 10, 8, 22, 0, tzinfo=UTC))
+    influx.series = [
+        Series(
+            "power",
+            {"source": "pv", "id": "huawei"},
+            ["time", "w"],
+            [[start + n * 60_000, 1500.0] for n in range(120)],
+        )
+    ]
+    await pv_energy.refresh(pv_sources.list())  # heute: 1500 W · 2 h = 3,0 kWh
+    plant_row, string_row = stats.period("week", TODAY)["pv_sources"]
+    assert plant_row == {
+        "id": plant,
+        "name": "Dach",
+        "parent_id": None,
+        "kwp": 4.1,
+        "kwh": pytest.approx(25.0),
+        "kwh_per_kwp": 6.1,
+        "note": None,
+    }
+    assert string_row["id"] == string and string_row["parent_id"] == plant
+    assert string_row["kwh"] is None and string_row["note"] == NO_DAY
+    assert string_row["kwp"] is None and string_row["kwh_per_kwp"] is None
+    assert all(row["id"] != 0 for row in stats.period("week", TODAY)["pv_sources"])
+    future = stats.period("day", date(2026, 10, 12))["pv_sources"][0]
+    assert future["kwh"] is None and future["kwh_per_kwp"] is None and future["note"] == NOT_YET
+
+
+def test_no_pv_sources_gives_an_empty_list(stats) -> None:
+    assert stats.period("day", TODAY)["pv_sources"] == []

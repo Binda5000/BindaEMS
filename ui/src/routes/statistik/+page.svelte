@@ -13,6 +13,7 @@
 	import { Resource } from '$lib/resource.svelte';
 	import ChecksCard from '$lib/stats/ChecksCard.svelte';
 	import ConsumersCard from '$lib/stats/ConsumersCard.svelte';
+	import PvCard from '$lib/stats/PvCard.svelte';
 	import CostCard from '$lib/stats/CostCard.svelte';
 	import {
 		PERIODS,
@@ -253,6 +254,7 @@
 				stale={sessionsStale}
 			/>
 			<ConsumersCard stats={current} />
+			<PvCard stats={current} />
 			<PeaksCard stats={current} />
 			<ChecksCard stats={current} {wallboxNames} />
 		</div>

@@ -317,6 +317,32 @@ export function consumerRows(stats: Stats): ConsumerRow[] {
 	}));
 }
 
+export interface PvRow extends ConsumerRow {
+	/** ein String unter seiner Anlage */
+	child: boolean;
+	/** kWh/kWp, „–“ ohne Wert */
+	perKwp: string;
+}
+
+/** Karte „PV je Anlage“: jede Anlage, direkt darunter ihre Strings; ohne Wert „–“ und der Grund */
+export function pvRows(stats: Stats): PvRow[] {
+	const row = (source: Stats['pv_sources'][number], child: boolean): PvRow => ({
+		id: source.id,
+		name: source.name,
+		value: formatEnergy(source.kwh),
+		note: source.kwh === null ? source.note : null,
+		child,
+		perKwp:
+			source.kwh_per_kwp === null ? DASH : `${formatNumber(source.kwh_per_kwp, 2)}${NBSP}kWh/kWp`
+	});
+	return stats.pv_sources
+		.filter((source) => source.parent_id === null)
+		.flatMap((plant) => [
+			row(plant, false),
+			...stats.pv_sources.filter((source) => source.parent_id === plant.id).map((s) => row(s, true))
+		]);
+}
+
 export interface PeakRow {
 	month: string;
 	peak: string;

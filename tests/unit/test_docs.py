@@ -1307,6 +1307,7 @@ def test_stats_endpoint_in_the_guide() -> None:
         "battery_to_vehicles_kwh",
         "planned",
         "consumers",
+        "pv_sources",
         "month_peaks",
         "checks",
         "fees_eur",

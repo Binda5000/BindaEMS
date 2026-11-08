@@ -34,9 +34,10 @@ from bindaems.app.charging.sessions import (
     merge_splits,
     vehicle_name,
 )
-from bindaems.app.consumers.days import NO_DAY, ConsumerDays
+from bindaems.app.consumers.days import NO_DAY, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
+from bindaems.app.consumers.source import PowerSource
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.service import (
     DaySummary,
@@ -45,6 +46,7 @@ from bindaems.app.ledger.service import (
     share,
     summarize_slots,
 )
+from bindaems.app.pv.service import PvSourceService
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.tariff.calc import monthly_fees_eur, power_cost_eur, power_rate
 from bindaems.shared.config import Config
@@ -176,8 +178,11 @@ class StatsService:
         ledger: LedgerService,
         sessions: SessionService,
         consumers: ConsumerService,
-        consumer_days: ConsumerDays,
+        consumer_days: SourceDays,
         energy: EnergyCache,
+        pv_sources: PvSourceService,
+        pv_days: SourceDays,
+        pv_energy: EnergyCache,
         checks: LedgerChecks,
         settings: SettingsService,
         cfg: Config,
@@ -189,6 +194,9 @@ class StatsService:
         self._consumers = consumers
         self._consumer_days = consumer_days
         self._energy = energy
+        self._pv_sources = pv_sources
+        self._pv_days = pv_days
+        self._pv_energy = pv_energy
         self._checks = checks
         self._settings = settings
         self._cfg = cfg
@@ -262,7 +270,13 @@ class StatsService:
             "battery_to_vehicles_kwh": battery_to_vehicles,
             "vehicle_buckets": self._vehicle_buckets(period, buckets, vehicle_days, vehicle_order),
             "planned": asdict(self._planned.summary(first, last)),
-            "consumers": self._consumer_energy(first, last, today),
+            "consumers": [
+                {"id": source.id, "name": source.name, "kwh": kwh, "note": note}
+                for source, kwh, note in _source_energy(
+                    self._consumers.list(), self._consumer_days, self._energy, first, last, today
+                )
+            ],
+            "pv_sources": self._pv_energy_rows(first, last, today),
             "month_peaks": peaks,
             "checks": self._check_summary(first, last),
         }
@@ -396,39 +410,24 @@ class StatsService:
 
     # Verbraucher
 
-    def _consumer_energy(self, first: date, last: date, today: date) -> list[dict[str, Any]]:
-        """Energie je Verbraucher: gespeicherte Tage bis gestern, heute aus dem Cache; Tage in der
-        Zukunft zählen nicht. Ein unbekannter Tag macht die Summe ``None`` mit seinem Grund."""
-        consumers = self._consumers.list()
-        stored_last = min(last, today - timedelta(days=1))
-        stored = self._consumer_days.energy(first, stored_last) if first <= stored_last else {}
-        result: list[dict[str, Any]] = []
-        for consumer in consumers:
-            parts: list[float] = []
-            note: str | None = None
-            if first <= stored_last:
-                kwh, reason = stored.get(consumer.id, (None, NO_DAY))
-                if kwh is None:
-                    note = reason or NO_DAY
-                else:
-                    parts.append(kwh)
-            if first <= today <= last and note is None:
-                kwh = self._energy.energy_kwh(consumer)
-                if kwh is None:
-                    note = self._energy.note(consumer) or NOT_COMPUTED
-                else:
-                    parts.append(kwh)
-            if first > today:
-                note = NOT_YET
-            result.append(
-                {
-                    "id": consumer.id,
-                    "name": consumer.name,
-                    "kwh": math.fsum(parts) if note is None else None,
-                    "note": note,
-                }
+    def _pv_energy_rows(self, first: date, last: date, today: date) -> list[dict[str, Any]]:
+        """Energie je PV-Anlage und String; kWh/kWp (2 Stellen) nur mit kWp und Energie."""
+        return [
+            {
+                "id": source.id,
+                "name": source.name,
+                "parent_id": source.parent_id,
+                "kwp": source.kwp,
+                "kwh": kwh,
+                "kwh_per_kwp": (
+                    round(kwh / source.kwp, 2) if kwh is not None and source.kwp else None
+                ),
+                "note": note,
+            }
+            for source, kwh, note in _source_energy(
+                self._pv_sources.list(), self._pv_days, self._pv_energy, first, last, today
             )
-        return result
+        ]
 
     # Abgleich
 
@@ -450,3 +449,32 @@ def _bucket(start: str, days: Sequence[DaySummary]) -> dict[str, Any]:
         "consumption_kwh": math.fsum(d.consumption_kwh for d in days),
         "net_eur": _sum_known([d.net_cost_eur for d in days]),
     }
+
+
+def _source_energy[S: PowerSource](
+    sources: Sequence[S], days: SourceDays, cache: EnergyCache, first: date, last: date, today: date
+) -> list[tuple[S, float | None, str | None]]:
+    """Energie je Quelle: gespeicherte Tage bis gestern, heute aus dem Cache; Tage in der Zukunft
+    zählen nicht. Ein unbekannter Tag macht die Summe ``None`` mit seinem Grund."""
+    stored_last = min(last, today - timedelta(days=1))
+    stored = days.energy(first, stored_last) if first <= stored_last else {}
+    result: list[tuple[S, float | None, str | None]] = []
+    for source in sources:
+        parts: list[float] = []
+        note: str | None = None
+        if first <= stored_last:
+            kwh, reason = stored.get(source.id, (None, NO_DAY))
+            if kwh is None:
+                note = reason or NO_DAY
+            else:
+                parts.append(kwh)
+        if first <= today <= last and note is None:
+            kwh = cache.energy_kwh(source)
+            if kwh is None:
+                note = cache.note(source) or NOT_COMPUTED
+            else:
+                parts.append(kwh)
+        if first > today:
+            note = NOT_YET
+        result.append((source, math.fsum(parts) if note is None else None, note))
+    return result

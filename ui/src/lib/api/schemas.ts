@@ -1414,6 +1414,19 @@ export const StatsSchema = v.object({
 			note: v.nullable(v.string())
 		})
 	),
+	/** Anlagen und Strings; Strings tragen die `id` ihrer Anlage in `parent_id` */
+	pv_sources: v.array(
+		v.object({
+			id: v.number(),
+			name: v.string(),
+			parent_id: v.nullable(v.number()),
+			kwp: NullableNumber,
+			kwh: NullableNumber,
+			kwh_per_kwp: NullableNumber,
+			/** Grund, wenn `kwh` fehlt */
+			note: v.nullable(v.string())
+		})
+	),
 	month_peaks: v.array(
 		v.object({
 			month: v.string(),
