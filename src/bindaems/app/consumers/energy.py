@@ -21,7 +21,7 @@ from typing import Final, NamedTuple
 import structlog
 
 from bindaems.app.consumers.source import PowerSource
-from bindaems.app.consumers.values import HaRef, ha_selection, number
+from bindaems.app.consumers.values import Energy, HaRef, HaValueCache, ha_selection, number
 from bindaems.app.history.influx import (
     RP_RAW,
     InfluxQueryError,
@@ -61,6 +61,20 @@ def core_tags(ref: str) -> tuple[str, str] | None:
     if found["dc"] is not None:
         return ("pv", "dc")
     return (found["source"], found["id"])
+
+
+def source_energy(
+    source: PowerSource, ha: HaValueCache | None, energy: EnergyCache | None
+) -> Energy:
+    """Energie seit Mitternacht einer Quelle (kWh, Grund); ein HA-Sensor mit falscher Einheit
+    hat keine, denn sein Verlauf hätte dieselbe falsche Einheit."""
+    if energy is None:
+        return (None, None)
+    if source.source_kind == "ha" and ha is not None and source.power_unit is not None:
+        ref = HaRef.from_source(source)
+        if ha.wrong_unit(ref):
+            return (None, ha.note(ref))
+    return (energy.energy_kwh(source), energy.note(source))
 
 
 class WindowEnergy(NamedTuple):

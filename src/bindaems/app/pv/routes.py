@@ -10,10 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
-from bindaems.app.consumers.energy import EnergyCache
+from bindaems.app.consumers.energy import EnergyCache, source_energy
 from bindaems.app.consumers.values import (
-    Energy,
-    HaRef,
     HaValueCache,
     ha_candidates,
     number,
@@ -48,15 +46,6 @@ def pv_router(
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
     Admin = Annotated[SessionInfo, Depends(guard.require("admin"))]
 
-    def source_energy(source: PvSource) -> Energy:
-        if energy is None:
-            return (None, None)
-        if source.source_kind == "ha" and ha is not None and source.power_unit is not None:
-            ref = HaRef.from_source(source)
-            if ha.wrong_unit(ref):  # der Verlauf hätte dieselbe falsche Einheit
-                return (None, ha.note(ref))
-        return (energy.energy_kwh(source), energy.note(source))
-
     @router.get("")
     def read(session: Viewer) -> dict[str, Any]:
         sources = service.list()
@@ -66,7 +55,7 @@ def pv_router(
             sources,
             lambda s: source_power(s, live, ha),
             lambda s: source_note(s, ha),
-            source_energy,
+            lambda s: source_energy(s, ha, energy),
             total,
             total_kwh,
         )
