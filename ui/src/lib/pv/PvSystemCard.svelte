@@ -46,26 +46,32 @@
 	<dl class="figures">
 		<div>
 			<dt>{label}</dt>
-			<dd>{@render value(formatKwh(card.kwh))}</dd>
-			{#if card.kwh === null && card.energyNote}
-				<p class="note">{card.energyNote}</p>
-			{:else if card.since}
-				<p class="note">{card.since}</p>
-			{/if}
+			<dd>
+				{@render value(formatKwh(card.kwh))}
+				{#if card.kwh === null && card.energyNote}
+					<p class="note">{card.energyNote}</p>
+				{:else if card.since}
+					<p class="note">{card.since}</p>
+				{/if}
+			</dd>
 		</div>
 		<div>
 			<dt>je kWp</dt>
-			<dd>{formatPerKwp(card.perKwp)}</dd>
-			{#if card.kwp === null}
-				<p class="note">ohne kWp</p>
-			{/if}
+			<dd>
+				{formatPerKwp(card.perKwp)}
+				{#if card.kwp === null}
+					<p class="note">ohne kWp</p>
+				{/if}
+			</dd>
 		</div>
 		<div>
 			<dt>Jetzt</dt>
-			<dd>{@render value(formatPower(card.powerW))}</dd>
-			{#if card.powerW === null && card.powerNote}
-				<p class="note">{card.powerNote}</p>
-			{/if}
+			<dd>
+				{@render value(formatPower(card.powerW))}
+				{#if card.powerW === null && card.powerNote}
+					<p class="note">{card.powerNote}</p>
+				{/if}
+			</dd>
 		</div>
 	</dl>
 
@@ -144,6 +150,8 @@
 		margin: 0.125rem 0 0;
 		color: var(--muted);
 		font-size: 0.8125rem;
+		font-weight: 400;
+		line-height: 1.5;
 		overflow-wrap: anywhere;
 	}
 

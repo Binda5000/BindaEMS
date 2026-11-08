@@ -14,10 +14,18 @@ function show(card: Card, admin = false, onEdit = vi.fn(), onAddString = vi.fn()
 	return render(PvSystemCard, { card, label: 'Diese Woche', admin, onEdit, onAddString });
 }
 
-/** Wert unter der Beschriftung `label` (dt → dd) */
+/** Wert unter der Beschriftung `label` (dt → dd), ohne den Hinweis darunter */
 function figure(label: string): string {
 	const term = screen.getByText(label, { selector: 'dt' });
-	return (term.nextElementSibling?.textContent ?? '').replace(/\s+/g, ' ').trim();
+	const value = term.nextElementSibling?.cloneNode(true) as Element | undefined;
+	value?.querySelectorAll('.note').forEach((note) => note.remove());
+	return (value?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Hinweis unter der Beschriftung `label` (im dd, nicht daneben) */
+function figureNote(label: string): string | null {
+	const term = screen.getByText(label, { selector: 'dt' });
+	return term.nextElementSibling?.querySelector('p.note')?.textContent ?? null;
 }
 
 it('zeigt Name, kWp und Quelle sowie die drei Kennzahlen', () => {
@@ -36,14 +44,14 @@ it('zeigt 0 W als Wert, ohne Wert „–“ und den Grund', () => {
 	document.body.innerHTML = '';
 	show({ ...card, powerW: null, powerNote: 'kein Wert in den letzten 24 h' });
 	expect(figure('Jetzt')).toBe('–');
-	expect(screen.getByText('kein Wert in den letzten 24 h')).toBeInTheDocument();
+	expect(figureNote('Jetzt')).toBe('kein Wert in den letzten 24 h');
 });
 
 it('nennt den Grund, wenn die Energie im Zeitraum fehlt, und den ersten Tag mit Wert', () => {
 	const card = weekCard();
 	show({ ...card, kwh: null, perKwp: null, energyNote: 'Verlauf nicht lesbar' });
 	expect(figure('Diese Woche')).toBe('–');
-	expect(screen.getByText('Verlauf nicht lesbar')).toBeInTheDocument();
+	expect(figureNote('Diese Woche')).toBe('Verlauf nicht lesbar');
 	document.body.innerHTML = '';
 	const year = cards(pvTree(), pvYear())[0]!;
 	show(year);

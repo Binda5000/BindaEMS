@@ -83,7 +83,9 @@
 	const admin = $derived(hasRole(page.data.user, 'admin'));
 	const sources = $derived(tree.data?.sources ?? []);
 	const systems = $derived(tree.data ? cards(tree.data, energy) : []);
-	const head = $derived(tree.data ? headline(tree.data, energy) : null);
+	const head = $derived(
+		tree.data ? headline(tree.data, energy, shown?.query.running ?? running) : null
+	);
 	// „jetzt“ rückt mit jeder neuen Kurve nach
 	const now = $derived.by(() => {
 		void query?.curve?.data;

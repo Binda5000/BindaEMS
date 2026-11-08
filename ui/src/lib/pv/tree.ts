@@ -159,11 +159,18 @@ export interface PvHeadline {
 	unassignedKwh: number | null;
 }
 
-/** Kopfzeile „PV gesamt … · jetzt …“, darunter „davon nicht zugeordnet“, wenn es ins Gewicht fällt */
-export function headline(tree: PvResponse, period?: PvPeriod): PvHeadline {
+/**
+ * Kopfzeile „PV gesamt … · jetzt …“, darunter „davon nicht zugeordnet“, wenn es ins Gewicht fällt.
+ * Die Leistung jetzt zählt dafür nur im laufenden Zeitraum (`running`).
+ */
+export function headline(
+	tree: PvResponse,
+	period: PvPeriod | undefined,
+	running: boolean
+): PvHeadline {
 	const rest = tree.tree.find((node) => node.kind === 'unassigned');
 	const kwh = period?.unassigned?.sum_kwh ?? null;
-	const watts = rest?.power_w ?? null;
+	const watts = running ? (rest?.power_w ?? null) : null;
 	const shown =
 		kwh !== null && (kwh >= UNASSIGNED_MIN_KWH || (watts !== null && watts >= UNASSIGNED_MIN_W));
 	return {

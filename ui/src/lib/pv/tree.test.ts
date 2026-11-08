@@ -111,19 +111,33 @@ describe('cards', () => {
 
 describe('headline', () => {
 	it('nennt PV gesamt im Zeitraum und jetzt, „nicht zugeordnet“ erst ab 0,1 kWh oder 50 W', () => {
-		expect(headline(pvTree(), pvWeek())).toEqual({ kwh: 49.6, powerW: 2960, unassignedKwh: null });
+		expect(headline(pvTree(), pvWeek(), true)).toEqual({
+			kwh: 49.6,
+			powerW: 2960,
+			unassignedKwh: null
+		});
 		const period = pvWeek();
 		period.unassigned = { kwh: [], sum_kwh: 1.2 };
-		expect(headline(pvTree(), period).unassignedKwh).toBe(1.2);
+		expect(headline(pvTree(), period, true).unassignedKwh).toBe(1.2);
 		const tree = pvTree();
 		tree.tree[1] = { ...tree.tree[1]!, power_w: 60 };
-		expect(headline(tree, pvWeek()).unassignedKwh).toBe(0);
+		expect(headline(tree, pvWeek(), true).unassignedKwh).toBe(0);
+	});
+
+	it('nimmt die Leistung jetzt nur für den laufenden Zeitraum', () => {
+		const tree = pvTree();
+		tree.tree[1] = { ...tree.tree[1]!, power_w: 60 };
+		// voriges Jahr: dass jetzt 60 W nicht zugeordnet sind, sagt über damals nichts
+		expect(headline(tree, pvWeek(), false).unassignedKwh).toBeNull();
+		const period = pvWeek();
+		period.unassigned = { kwh: [], sum_kwh: 1.2 };
+		expect(headline(tree, period, false).unassignedKwh).toBe(1.2);
 	});
 
 	it('kennt ohne Anlagen kein „nicht zugeordnet“', () => {
 		const period = pvWeek();
 		period.unassigned = null;
-		expect(headline(pvTree([]), period).unassignedKwh).toBeNull();
+		expect(headline(pvTree([]), period, true).unassignedKwh).toBeNull();
 	});
 });
 
