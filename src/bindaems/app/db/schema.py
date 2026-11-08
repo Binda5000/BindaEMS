@@ -381,6 +381,34 @@ consumer_day = Table(
     Column("note", String(80), nullable=True),
 )
 
+# PV-Anlagen (oberste Ebene) und ihre Strings (Kinder); Leistung aus core-Signal oder HA-Entität
+pv_source = Table(
+    "pv_source",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(60), nullable=False),
+    Column("parent_id", Integer, ForeignKey("pv_source.id", ondelete="RESTRICT"), nullable=True),
+    Column("color", String(7), nullable=False),
+    Column("source_kind", String(8), nullable=False),
+    Column("power_ref", String(200), nullable=False),
+    Column("power_unit", String(4), nullable=True),
+    Column("kwp", Float, nullable=True),
+    Column("sort", Integer, nullable=False),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("updated_at", UtcDateTime(), nullable=False),
+    Index("ix_pv_source_parent_id", "parent_id"),
+)
+
+# PV-Ertrag je Quelle und lokalem Tag; ``source_id`` 0 ist „PV gesamt“ (reserviert)
+pv_source_day = Table(
+    "pv_source_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("source_id", Integer, primary_key=True, autoincrement=False),
+    Column("kwh", Float, nullable=True),
+    Column("note", String(80), nullable=True),
+)
+
 # Geplante Ladung für die Abnahme „Ziel-SOC“ (Plan 4b, Präzisierung 16): eine Zeile je Session in
 # „Geplant“ und Abfahrt. ``outcome`` ist ``open``, ``reached``, ``missed``, ``early``, ``unknown``
 # oder ``changed``; ``end_soc_*`` ist der letzte Ladestand vor der Abfahrt, ``end_soc_at`` dessen

@@ -26,11 +26,13 @@ from bindaems.app.db.schema import (
     ops_day,
     ops_finding,
     planned_charge,
+    pv_source,
+    pv_source_day,
     settings_version,
     thermal_model,
 )
 
-HEAD = "0017"  # neueste Migration
+HEAD = "0018"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -832,3 +834,42 @@ def test_migration_0017_creates_grid_outage(engine: Engine) -> None:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0016"
     migrate(engine)
     assert "grid_outage" in inspect(engine).get_table_names()
+
+
+def test_migration_0018_creates_the_pv_tables_and_downgrades(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "pv_source") == {
+        "id": False,
+        "name": False,
+        "parent_id": True,
+        "color": False,
+        "source_kind": False,
+        "power_ref": False,
+        "power_unit": True,
+        "kwp": True,
+        "sort": False,
+        "created_at": False,
+        "updated_at": False,
+    }
+    assert _columns(inspector, "pv_source_day") == {
+        "day": False,
+        "source_id": False,
+        "kwh": True,
+        "note": True,
+    }
+    assert inspector.get_pk_constraint("pv_source_day")["constrained_columns"] == [
+        "day",
+        "source_id",
+    ]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("pv_source")] == [
+        ("ix_pv_source_parent_id", ["parent_id"])
+    ]
+    assert pv_source.c.parent_id.foreign_keys and pv_source_day.c.day is not None
+    _downgrade(engine, "0017")
+    tables = inspect(engine).get_table_names()
+    assert "pv_source" not in tables and "pv_source_day" not in tables
+    assert "grid_outage" in tables and "consumer_day" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0017"
+    migrate(engine)
+    assert {"pv_source", "pv_source_day"} <= set(inspect(engine).get_table_names())
