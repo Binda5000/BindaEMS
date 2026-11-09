@@ -186,6 +186,7 @@ thermal:
         venting: {node: 56, digital: 3}
         heating: {node: 56, digital: 4}
         running: {node: 56, digital: 5}
+        # oil_burner: {node: 56, digital: 6}   # Brennerstatus der Ölheizung (Plan Ölheizung), nur gelesen
       # Schwellen der Strategie (alle optional; hier die Standardwerte)
       # strategy: {more_above_w: 800, import_above_w: 300, battery_soc_pct: 90, less_max_steps: 2}
       # Freigabe für den Live-Betrieb, erst nach Prüfprotokoll Teil 2, Punkt thermal (Spec 8.7)

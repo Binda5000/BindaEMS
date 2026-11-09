@@ -7071,7 +7071,7 @@ thermal:
 | `max_offset_k`, `step_k`, `step_interval_s` | harte Grenzen der Safety-Schicht (Spec 8.2): höchstens 3 K, ein Vielfaches von `step_k`; `step_k` ist fest 0,5 K; frühestens `step_interval_s` (mindestens 60 s) zwischen zwei Erhöhungen |
 | `send_interval_s` | Takt des Sendens, auch unverändert (5 bis 60 s); die UVR fällt nach 5 min ohne Paket auf 0 |
 | `stale_after_s` | So lange ohne gültiges Paket ist die Quelle „nicht verbunden“ (60 bis 290 s, Standard 180 s) |
-| `receive` | Empfangstabelle: welcher Wert des C.M.I. (Knoten, Analog- oder Digitalausgang, Einheit) welche Größe ist. Pflicht sind `actual_c`, `setpoint_c`, `offset_active_k`, `cooling`, `venting`, `heating` und `running`; `power_kw` und `cmd_on` sind optional |
+| `receive` | Empfangstabelle: welcher Wert des C.M.I. (Knoten, Analog- oder Digitalausgang, Einheit) welche Größe ist. Pflicht sind `actual_c`, `setpoint_c`, `offset_active_k`, `cooling`, `venting`, `heating` und `running`; `power_kw`, `cmd_on` und `oil_burner` (Brennerstatus der Ölheizung, nur ein Digitalwert, nur gelesen) sind optional |
 | `strategy` | Schwellen der Strategie (alle optional): `more_above_w`, `import_above_w`, `battery_soc_pct`, `less_max_steps` |
 | `live_allowed` | Freigabe für den Live-Betrieb, erst nach dem Prüfprotokoll Teil 2, Punkt `thermal` |
 

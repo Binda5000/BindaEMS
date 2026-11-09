@@ -295,8 +295,14 @@ class CoeChannel(_Model):
         return self
 
 
+OIL_BURNER_SIGNAL: Final = "oil_burner"  # Feldname und Signalende des Brennerstatus
+
+
 class CoeReceive(_Model):
-    """Empfangstabelle: Welcher Wert des C.M.I. welche Größe der Klimaanlage ist."""
+    """Empfangstabelle: Welcher Wert des C.M.I. welche Größe der Klimaanlage ist.
+
+    ``oil_burner`` ist der Brennerstatus der Ölheizung (nur gelesen, Plan Ölheizung).
+    """
 
     actual_c: CoeChannel
     setpoint_c: CoeChannel
@@ -307,6 +313,13 @@ class CoeReceive(_Model):
     running: CoeChannel
     power_kw: CoeChannel | None = None
     cmd_on: CoeChannel | None = None
+    oil_burner: CoeChannel | None = None
+
+    @model_validator(mode="after")
+    def _oil_burner_is_digital(self) -> Self:
+        if self.oil_burner is not None and self.oil_burner.digital is None:
+            raise ValueError("oil_burner muss ein Digitalwert sein.")
+        return self
 
     def channels(self) -> dict[str, CoeChannel]:
         """Die belegten Kanäle unter ihrem Feldnamen (ohne die optionalen, die fehlen)."""

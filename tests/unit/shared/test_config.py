@@ -10,8 +10,10 @@ from pydantic import ValidationError
 from bindaems.core.control.fleet import GUEST, guest_key
 from bindaems.shared.config import (
     HA_VEHICLE_SUFFIXES,
+    OIL_BURNER_SIGNAL,
     AppConfig,
     CoeChannel,
+    CoeReceive,
     Config,
     ConfigError,
     ControlConfig,
@@ -1043,3 +1045,26 @@ def test_ping_url_is_not_validated_so_core_and_app_still_start(
     assert url is not None and url.get_secret_value() == "https://hc-ping.com/abc"
     monkeypatch.setenv("BINDAEMS_PING_URL", "")
     assert load_secrets().ping_url is None
+
+
+def _receive_table() -> dict[str, Any]:
+    return _example_dict()["thermal"]["devices"]["klima"]["receive"]
+
+
+def test_oil_burner_is_optional_and_digital() -> None:
+    table = _receive_table()
+    receive = CoeReceive.model_validate(table | {"oil_burner": {"node": 56, "digital": 6}})
+    assert receive.channels()[OIL_BURNER_SIGNAL].digital == 6
+    assert OIL_BURNER_SIGNAL not in CoeReceive.model_validate(table).channels()
+
+
+def test_oil_burner_must_be_digital() -> None:
+    with pytest.raises(ValidationError, match="Digitalwert"):
+        CoeReceive.model_validate(
+            _receive_table() | {"oil_burner": {"node": 56, "analog": 6, "unit": 1}}
+        )
+
+
+def test_oil_burner_must_not_share_a_value() -> None:
+    with pytest.raises(ValidationError, match="running und oil_burner"):
+        CoeReceive.model_validate(_receive_table() | {"oil_burner": {"node": 56, "digital": 5}})
