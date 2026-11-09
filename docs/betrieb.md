@@ -5916,6 +5916,131 @@ bleiben beim Vorheizen höchstens 0,5 K über dem eingestellten Band (Sichtprüf
 Unangenehmes gemerkt. Mit Schalter aus steht für „lohnt nicht“ und „ließ sich nicht berechnen“
 gleichermaßen `off`; ob eine Rechnung scheiterte, zeigt in Teil A darum das Log der app.
 
+## Ölheizung: Wärmebedarf
+
+Die Ölheizung ist im Winter die Hauptheizung (das Warmwasser macht im Sommer die Solarthermie). Seit dem
+Plan „Ölheizung: Wärmebedarf messen“ (`docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`)
+misst BindaEMS, **wie viel Wärme das Haus braucht**: aus den Brennerstunden, den Heizgradtagen und dem
+Strom der Klimaanlage beim Heizen. Die Zahlen sind die Grundlage für den Plan zur Wärmepumpe (6b) und für
+den Investitionsrechner. BindaEMS **liest** den Brenner nur; es schaltet nichts.
+
+### Quelle und `config.yaml`
+
+Die Quelle ist der Ausgang 5 „Anf.Brenner“ des CAN-Knotens 1. Das ist die **Anforderung** an den Brenner,
+nicht die Flammenmeldung. Schaltet der Kesselthermostat bei anstehender Anforderung kurz ab, zählt diese
+Zeit trotzdem: **Die gerechneten Werte sind eine obere Grenze** (die Gegenprobe am Tank unten zeigt, wie
+nah sie liegen). Der Brenner ist einstufig; läuft er, dann mit 27 kW und 2,9 l/h.
+
+Das C.M.I. sendet den Wert als **Digital 6** im selben Paket wie die übrigen Werte der Klimaanlage
+(CAN-Knoten 56, siehe „Klimaanlage (Phase 6a)“, „config.yaml“). In der `config.yaml` kommt eine Zeile
+unter `receive` des Klimageräts dazu:
+
+```yaml
+thermal:
+  devices:
+    klima:
+      receive:
+        # … die übrigen Werte wie in 6a …
+        oil_burner: {node: 56, digital: 6}   # Anf.Brenner, CAN-Knoten 1, Ausgang 5
+```
+
+Der core speichert den Wert als Signal `thermal.klima.oil_burner` (Zustand) und schreibt ihn wie die
+anderen Betriebsbits **nur bei Änderung** in InfluxDB `status`. **Ohne die Zeile `oil_burner` ist alles
+hier aus:** keine Heizungstage, keine Karten, `heating: null` in der Statistik, `/api/heating/demand`
+antwortet mit 404. Ein core ohne dieses Feld lehnt eine `config.yaml` mit `oil_burner` ab; ziehe darum
+core und app gemeinsam.
+
+### Einstellungen
+
+Unter **Einstellungen** → „Ölheizung“ (versioniert, mit Änderungsprotokoll wie die anderen Karten):
+
+| Feld | Bedeutung |
+|---|---|
+| Nennleistung (kW) | Wärme je Brennerstunde; bei dir 27 kW. Ab Werk leer |
+| Öl je Brennerstunde (l/h) | bei dir 2,9 l/h. Ab Werk leer |
+| Ölpreis (€/l) | optional, für die Kosten in der Karte „Heizung“ |
+| Leistungszahl der Klimaanlage beim Heizen | Standard 3,0, als **Schätzung** gekennzeichnet |
+
+Solange Nennleistung oder Öl je Stunde fehlen, zeigen die Karten die Brennerstunden und „Nennleistung
+fehlt“. Wärme und Öl werden **beim Lesen** gerechnet (Brennerstunden × Nennleistung bzw. × Öl je Stunde);
+ein geänderter Wert gilt darum sofort für alle Tage.
+
+### Was die app speichert
+
+Je lokalem Tag eine Zeile in `heating_day` (Migration `0019`): Brennerstunden, bekannte Stunden,
+Tageslänge, Endzustand des Brenners, Heizgradtage, Tagesmittel der Außentemperatur und der Strom der
+Klimaanlage beim Heizen.
+
+- **Brennerstunden:** Stufenfunktion aus `status`. Anfangswert ist der letzte Wert vor dem Tag, sonst der
+  gespeicherte Endzustand des Vortags, sonst unbekannt. Gezählt wird nur in Viertelstunden, in denen die
+  Quelle lebt (mindestens ein Messwert `actual_c` der Klimaanlage in `thermal`); fällt das C.M.I. bei
+  laufendem Brenner aus, ist diese Zeit **unbekannt**, nicht Brennerzeit.
+- **Vollständiger Tag:** die bekannte Zeit erreicht mindestens **95 %** der Tageslänge (23, 24 oder
+  25 h). Eine Stunde Ausfall in 24 h zählt also noch als vollständig.
+- **Heizgradtage:** Heizgrenze 15 °C (wie im Investitionsrechner), je Tag `Σ max(0, 15 − T) · ¼ h ÷ 24 h`
+  über die Viertelstunden des Wetterarchivs, in K·d. Fehlen mehr als 10 % der Viertelstunden, hat der Tag
+  keine Heizgradtage.
+- **Klimaanlage:** Strom in den Viertelstunden mit Betriebsart „Heizen“. Viertelstunden ohne klare
+  Betriebsart zählen nicht; ihre Energie steht als Hinweis am Tag, wenn sie 0,1 kWh übersteigt. Ohne
+  Leistungskanal (`power_kw`) ist der Klima-Teil unbekannt, und der Bedarf ist nur die Öl-Wärme.
+- **Heute und vergangene Tage:** Vergangene Tage kommen aus SQLite. **Heute** rechnet die app alle 5 min
+  bis jetzt neu und hält das Ergebnis nur im Speicher; heute wird nie gespeichert.
+- **Nachholen:** nachts um 02:45 Uhr die fehlenden Tage der letzten 3, beim Start die fehlenden der
+  letzten 31, immer aufsteigend (der Endzustand des Vortags ist der Anfangswert des nächsten). Ein Tag
+  ohne jeden Brennerwert bekommt eine Zeile mit Grund und wird nicht erneut gerechnet; ein Lesefehler
+  schreibt nichts, der Tag kommt beim nächsten Lauf wieder dran.
+
+### Was die Karten zeigen
+
+Beide Karten stehen auf **Statistik** und nur bei eingerichtetem Brenner.
+
+- **„Heizung“** für den gewählten Zeitraum: Brennerstunden, Wärme aus Öl, Öl in Litern und Euro, die
+  Klimaanlage beim Heizen als Strom und geschätzte Wärme (Strom × Leistungszahl), Heizgradtage und die
+  Zahl der vollständigen Tage. „Heute“ zählt bis jetzt, wie die anderen Karten.
+- **„Wärmebedarf“** für die Heizsaison (1. Juli bis 30. Juni, „Heizsaison 2026/27“), in der der gewählte
+  Tag liegt: Punktwolke der Tage über den Heizgradtagen mit Ausgleichsgerade, **Grundbedarf** (im
+  Wesentlichen Warmwasser plus Bereitschaftsverluste des Kessels), **Wärme je Heizgradtag**, R², Zahl der
+  Tage, Summen der Saison, Strom der Klimaanlage je Monat und ein CSV-Download.
+  - Wärmebedarf je Tag `Q = Öl-Wärme + Klima-Strom × Leistungszahl`; Regression
+    `Q = Grundbedarf + Wärme je K·d × Heizgradtage` über die Tage, die vollständig sind, Heizgradtage haben
+    und mindestens 1,0 K·d kalt waren.
+  - Ab **14** solchen Tagen gibt es ein Ergebnis; davor steht „Noch {n} von 14 Tagen.“ Wird der Grundbedarf
+    negativ, rechnet die Anpassung ohne Grundbedarf (durch den Ursprung) und sagt das.
+  - Im Winter enthält der Bedarf Heizung und Warmwasser; einen getrennten Messwert dafür gibt es nicht.
+
+Dieselben Zahlen liefert `GET /api/heating/demand` (optional `?tag=JJJJ-MM-TT`, ab Rolle Betrachter): Saison,
+Punkte, Anpassung oder Grund, Summen, Klima-Strom je Monat, Heizgrenze und Leistungszahl.
+
+### Gegenprobe am Tank
+
+Die Brennerstunden sind eine obere Grenze (siehe oben). Vergleiche über den Winter die **gerechneten Liter**
+mit dem Tank (Lieferschein oder Messstab). Liegt der Tank deutlich darunter, unterbricht der
+Kesselthermostat die Anforderung spürbar. Ändere dann **nicht** die Nennleistung und „Öl je
+Brennerstunde“, sondern notiere das Verhältnis; ein eigener kleiner Folgeplan „Korrekturfaktor“ würde es
+einrechnen.
+
+### Ölheizung ausrollen
+
+Core **und** app gemeinsam, mit Stufe 2 des Sammel-Pulls (ab 23.11.2026), mit fester Version; nie
+`ems-app` allein. Die app legt beim Start die Tabelle `heating_day` an (Migration `0019`; oder die nächste
+freie Nummer, wenn vorher ein anderer Plan auf `main` eine belegt). Es wird nichts geschaltet.
+
+1. Regelbetrieb aus (System → „Bedienung“), Datenbank sichern, dann core und app gemeinsam ziehen
+   (`docker compose pull && docker compose up -d`).
+2. Im C.M.I. unter CoE-Ausgänge „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) als **Digital 6** an BindaEMS
+   (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer
+   Blockierzeit (etwa 10 s), Intervall wie die anderen Werte.
+3. In `config.yaml` unter `thermal.devices.klima.receive` die Zeile `oil_burner: {node: 56, digital: 6}`
+   eintragen; ems-core neu starten.
+4. Mit `coe_probe listen` (core gestoppt; die Knotennummer beim ersten Empfang bestätigen) oder in Grafana
+   prüfen, dass der Wert ankommt und beim Brennerstart auf 1 springt.
+5. Unter Einstellungen → „Ölheizung“ 27 kW und 2,9 l/h eintragen, optional den Ölpreis der letzten Lieferung.
+6. Regelbetrieb an. Prüfen: auf **Statistik** erscheinen die Karten „Heizung“ und „Wärmebedarf“; die Tage
+   füllen sich über Nacht.
+
+Rückweg: die Zeile `oil_burner` aus der `config.yaml` nehmen (die Karten verschwinden) und die Datenbank
+auf `0018` zurücknehmen.
+
 ## Planung
 
 Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der
