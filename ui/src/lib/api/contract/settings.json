@@ -186,6 +186,12 @@
       "report": "daily",
       "report_at": "07:30"
     },
+    "heating": {
+      "burner_kw": null,
+      "oil_l_per_h": null,
+      "oil_price_eur_l": null,
+      "ac_cop": 3.0
+    },
     "wallbox_names": {
       "twc": "Garage"
     },

@@ -304,6 +304,16 @@ class ThermalPlanSettings(_Model):
     margin_ct: Annotated[float, Field(ge=0, le=20, allow_inf_nan=False)] = 2.0
 
 
+class HeatingSettings(_Model):
+    """Ölheizung: Kesselwerte für Wärmebedarf und Ölverbrauch aus den Brennerstunden und das
+    Verhältnis (COP) der Klimageräte beim Heizen."""
+
+    burner_kw: Annotated[float, Field(ge=1, le=100, allow_inf_nan=False)] | None = None
+    oil_l_per_h: Annotated[float, Field(gt=0, le=20, allow_inf_nan=False)] | None = None
+    oil_price_eur_l: Annotated[float, Field(ge=0, le=5, allow_inf_nan=False)] | None = None
+    ac_cop: Annotated[float, Field(ge=1, le=8, allow_inf_nan=False)] = 3.0
+
+
 class LearningSettings(_Model):
     """Lernen der Hauslast (Plan 5a): Modell ein oder aus, bis zu 8 HA-Sensoren als Merkmale."""
 
@@ -339,6 +349,7 @@ class RuntimeSettings(_Model):
     planning: PlanningSettings = Field(default_factory=PlanningSettings)
     learning: LearningSettings = Field(default_factory=LearningSettings)
     ops: OpsSettings = Field(default_factory=OpsSettings)
+    heating: HeatingSettings = Field(default_factory=HeatingSettings)
     # eigene Namen der Ladestationen (Schlüssel wie in config.yaml); ohne Namen gilt der Typ
     wallbox_names: dict[WallboxKey, DisplayName] = Field(default_factory=dict)
     # Lademodus nach dem Abstecken je Ladestation (Schlüssel wie in config.yaml); ohne Eintrag

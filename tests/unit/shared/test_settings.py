@@ -8,6 +8,7 @@ from bindaems.shared.settings import (
     DrivingSettings,
     EnergyComponent,
     FeedInSettings,
+    HeatingSettings,
     LearningSettings,
     OpsSettings,
     RuntimeSettings,
@@ -286,3 +287,33 @@ def test_storm_kinds_must_not_be_empty() -> None:
 
     with pytest.raises(ValidationError):
         StormSettings(kinds=[])
+
+
+def test_heating_defaults() -> None:
+    h = RuntimeSettings().heating
+    assert (h.burner_kw, h.oil_l_per_h, h.oil_price_eur_l) == (None, None, None)
+    assert h.ac_cop == 3.0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"burner_kw": 0},
+        {"burner_kw": 101},
+        {"oil_l_per_h": 0},
+        {"oil_l_per_h": 21},
+        {"oil_price_eur_l": -0.1},
+        {"oil_price_eur_l": 5.1},
+        {"ac_cop": 0.5},
+        {"ac_cop": 8.5},
+        {"ac_cop": float("nan")},
+    ],
+)
+def test_heating_bounds_rejected(kwargs: dict[str, float]) -> None:
+    with pytest.raises(ValidationError):
+        HeatingSettings(**kwargs)  # type: ignore[arg-type]
+
+
+def test_old_settings_without_heating_load() -> None:
+    s = RuntimeSettings.model_validate({"prices": {}})
+    assert s.heating == HeatingSettings()
