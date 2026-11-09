@@ -66,6 +66,7 @@ export function heatDemand(overrides: Partial<HeatDemand> = {}): HeatDemand {
 		ac_by_month: { '2026-10': 12.5, '2026-11': 40.25 },
 		heating_limit_c: 15,
 		ac_cop: 3,
+		ac_power_known: true,
 		...overrides
 	});
 }

@@ -42,7 +42,7 @@ it('zeigt Saison, Ergebnis der Anpassung, Summen und Klimaanlage je Monat', asyn
 	expect(table).toHaveTextContent('40,3 kWh');
 	expect(
 		screen.getByText(
-			'Die Wärme aus Öl ist Brennerlaufzeit × Nennleistung; Bereitschaftsverluste des Kessels sind darin enthalten. Die Wärme der Klimaanlage ist Strom × 3 (Schätzung).'
+			'Die Wärme aus Öl ist Brennerlaufzeit × Nennleistung; Bereitschaftsverluste des Kessels sind darin enthalten. Die Wärme der Klimaanlage ist Strom × 3,0 (Schätzung).'
 		)
 	).toBeInTheDocument();
 });
@@ -103,4 +103,23 @@ it('speichert die CSV unter dem Namen der Saison', async () => {
 	expect(await blobs[0].text()).toContain('Tag;Brennerstunden');
 	Reflect.deleteProperty(URL, 'createObjectURL');
 	Reflect.deleteProperty(URL, 'revokeObjectURL');
+});
+
+it('nennt ohne Leistung der Klimaanlage nur Öl und lässt den Satz zur Klimaanlage weg', async () => {
+	api.heatDemand.mockResolvedValue(heatDemand({ ac_power_known: false }));
+	render(HeatDemandCard, { day: '2026-10-24' });
+	expect(
+		await screen.findByText('Klimaanlage ohne Leistung: Wärmebedarf nur aus Öl.')
+	).toBeInTheDocument();
+	expect(
+		screen.getByText(/Die Wärme aus Öl ist Brennerlaufzeit × Nennleistung/)
+	).toBeInTheDocument();
+	expect(screen.queryByText(/Strom ×/)).not.toBeInTheDocument();
+});
+
+it('zeigt den Hinweis zur Klimaanlage nicht, wenn die Leistung bekannt ist', async () => {
+	api.heatDemand.mockResolvedValue(heatDemand());
+	render(HeatDemandCard, { day: '2026-10-24' });
+	await screen.findByText('Heizsaison 2026/27');
+	expect(screen.queryByText(/Klimaanlage ohne Leistung/)).not.toBeInTheDocument();
 });

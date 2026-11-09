@@ -1644,7 +1644,9 @@ export const HeatDemandSchema = v.object({
 	/** Strom der Klimaanlage beim Heizen je Monat (`JJJJ-MM`) in kWh */
 	ac_by_month: v.record(v.string(), v.number()),
 	heating_limit_c: v.number(),
-	ac_cop: v.number()
+	ac_cop: v.number(),
+	/** Leistung der Klimaanlage konfiguriert; sonst ist der Bedarf nur Öl */
+	ac_power_known: v.boolean()
 });
 export type HeatDemand = v.InferOutput<typeof HeatDemandSchema>;
 

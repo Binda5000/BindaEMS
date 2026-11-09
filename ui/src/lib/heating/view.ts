@@ -3,7 +3,7 @@ import type { EChartsCoreOption } from 'echarts/core';
 import type { HeatDemand, HeatingStats } from '$lib/api/schemas';
 import { baseOption, valueAxis } from '$lib/charts/options';
 import type { Palette } from '$lib/charts/palette';
-import { DASH, NBSP, formatDay, formatEur, formatNumber, formatNumberMax } from '$lib/format';
+import { DASH, NBSP, formatDay, formatEur, formatNumber } from '$lib/format';
 import { MONTHS } from '$lib/stats/period';
 
 type Maybe = number | null;
@@ -33,7 +33,7 @@ export function heatingRows(heating: HeatingStats): HeatingRow[] {
 		heating.oil_l === null
 			? DASH
 			: `${unit(heating.oil_l, 1, 'l')}${heating.oil_eur === null ? '' : ` · ${formatEur(heating.oil_eur)}`}`;
-	return [
+	const rows: HeatingRow[] = [
 		{ id: 'burner', label: 'Brenner lief', value: unit(heating.burner_h, 1, 'h') },
 		{ id: 'oil_heat', label: 'Wärme aus Öl', value: kwhText(heating.oil_heat_kwh) },
 		{ id: 'oil', label: 'Öl', value: oil },
@@ -60,7 +60,10 @@ export function heatingRows(heating: HeatingStats): HeatingRow[] {
 			value: `${heating.complete_days} von ${heating.days}`
 		}
 	];
+	return heating.ac_power_known ? rows : rows.filter((row) => row.id !== 'ac');
 }
+
+export const AC_POWER_UNKNOWN = 'Klimaanlage ohne Leistung: Wärmebedarf nur aus Öl.';
 
 export const SETTINGS_MISSING = 'Nennleistung fehlt: unter Einstellungen → Ölheizung eintragen.';
 
@@ -68,6 +71,7 @@ export const SETTINGS_MISSING = 'Nennleistung fehlt: unter Einstellungen → Öl
 export function heatingHints(heating: HeatingStats, first: string): string[] {
 	const hints: string[] = [];
 	if (heating.settings_missing) hints.push(SETTINGS_MISSING);
+	if (!heating.ac_power_known) hints.push(AC_POWER_UNKNOWN);
 	if (heating.first_day !== null && heating.first_day > first) {
 		hints.push(`Brennerstatus ab ${dateText(heating.first_day)}.`);
 	}
@@ -110,10 +114,10 @@ export function acMonthRows(demand: HeatDemand): { month: string; label: string;
 }
 
 export function acNote(demand: HeatDemand): string {
-	return (
-		'Die Wärme aus Öl ist Brennerlaufzeit × Nennleistung; Bereitschaftsverluste des Kessels sind ' +
-		`darin enthalten. Die Wärme der Klimaanlage ist Strom × ${formatNumberMax(demand.ac_cop, 1)} (Schätzung).`
-	);
+	const oil =
+		'Die Wärme aus Öl ist Brennerlaufzeit × Nennleistung; Bereitschaftsverluste des Kessels sind darin enthalten.';
+	if (!demand.ac_power_known) return oil;
+	return `${oil} Die Wärme der Klimaanlage ist Strom × ${formatNumber(demand.ac_cop, 1)} (Schätzung).`;
 }
 
 interface Dot {

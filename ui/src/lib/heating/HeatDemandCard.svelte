@@ -9,6 +9,7 @@
 	import { Resource } from '$lib/resource.svelte';
 	import { theme } from '$lib/theme.svelte';
 	import {
+		AC_POWER_UNKNOWN,
 		acMonthRows,
 		acNote,
 		fitLines,
@@ -87,6 +88,9 @@
 			</ul>
 			<EChart {option} label="Wärmebedarf je Tag, Heizsaison {demand.season}" height="18rem" />
 			<p class="muted small">{acNote(demand)}</p>
+			{#if !demand.ac_power_known}
+				<p class="muted small">{AC_POWER_UNKNOWN}</p>
+			{/if}
 			<p>{seasonTotalsText(demand)}</p>
 			{#if months.length > 0}
 				<table aria-label="Klimaanlage heizt, Strom je Monat">

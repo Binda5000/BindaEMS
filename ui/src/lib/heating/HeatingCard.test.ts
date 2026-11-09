@@ -56,3 +56,15 @@ it('lässt den Preis weg, wenn er fehlt, und nennt den Beginn des Brennerstatus'
 	expect(rowOf('Öl')).toHaveTextContent(/^Öl722,5 l$/);
 	expect(screen.getByText('Brennerstatus ab 05.10.2026.')).toBeInTheDocument();
 });
+
+it('nennt ohne Leistung der Klimaanlage nur Öl und blendet die Zeile „Klimaanlage heizt“ aus', () => {
+	render(HeatingCard, {
+		heating: heatingStats({ ac_power_known: false, ac_heat_el_kwh: null, ac_heat_kwh: null }),
+		first: '2026-10-01'
+	});
+	expect(
+		screen.getByText('Klimaanlage ohne Leistung: Wärmebedarf nur aus Öl.')
+	).toBeInTheDocument();
+	expect(screen.queryByText('Klimaanlage heizt', { selector: 'th' })).not.toBeInTheDocument();
+	expect(rowOf('Wärmebedarf')).toBeInTheDocument();
+});
