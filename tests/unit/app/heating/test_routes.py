@@ -93,6 +93,18 @@ def test_demand_returns_season_points_and_fit(client, engine) -> None:
     assert set(body["fit"]) == {"per_kd", "base_kwh_day", "r2", "n", "through_origin"}
 
 
+def test_demand_reports_that_the_ac_power_is_known(client) -> None:
+    assert client.get("/api/heating/demand?tag=2026-12-15").json()["ac_power_known"] is True
+
+
+def test_demand_reports_an_unknown_ac_power(
+    make_client, days, settings_service, clock, guard, auth
+) -> None:
+    client = make_client(heating_router(days, settings_service, clock, guard, ac_power_known=False))
+    login_as(client, auth, "viewer")
+    assert client.get("/api/heating/demand?tag=2026-12-15").json()["ac_power_known"] is False
+
+
 def test_demand_without_enough_days_has_reason(client, engine) -> None:
     _store(engine, 5)
     body = client.get("/api/heating/demand?tag=2026-12-15").json()

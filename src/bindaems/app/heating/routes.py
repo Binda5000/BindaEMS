@@ -79,6 +79,7 @@ def heating_router(
             "ac_by_month": by_month,
             "heating_limit_c": HEATING_LIMIT_C,
             "ac_cop": config.ac_cop,
+            "ac_power_known": ac_power_known,
         }
         out: dict[str, Any] = rounded(body)
         return out
