@@ -31,6 +31,7 @@
 10. **Geld:** Stromkosten = Energie (Bezug × Bezugspreis brutto − Einspeisung × Einspeisepreis) + Leistungspreis je Monat auf die höchste Viertelstunde. Grundgebühren zählen nicht (gleich in allen Varianten). Ersparnis/Jahr = Strom „Heute“ − Strom Variante + `ersparnis_sonst_eur_jahr` (etwa Heizöl und Kesselwartung, von dir). Netto-Investition = `investition_eur − foerderung_eur`. Amortisation = Netto ÷ Ersparnis (bei Ersparnis ≤ 0 „nie“), Saldo über `nutzungsdauer_jahre` = Ersparnis × Jahre − Netto. Ohne Zins und Preissteigerung.
 11. **Ergebnis als Markdown-Bericht**, keine Seite in der App. **Entschieden vom Betreiber am 04.11.2026: „Markdown-Bericht“.**
 12. **Nicht in diesem Plan:** Optimierer je Variante, Netzladen, Pufferspeicher/Steuerung der Wärmepumpe, Alterung von PV und Akku, Zins, HA-Werte aus der Zeit vor BindaEMS, eine Seite in der App.
+13. **Gemessener Wärmebedarf (Vorschlag vom 09.11.2026, aus dem Plan „Ölheizung: Wärmebedarf messen“, `docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`, dessen Entscheidung 9):** Ist die Tabelle `heating_day` vorhanden und liefert `fit_demand` für die letzte Heizsaison (`season_of`) ein Ergebnis, schreibt `export_invest` es in die Jahresdatei (Grundbedarf kWh/Tag, Wärme je K·d, Bestimmtheitsmaß, Zahl der Tage, Saison, Klima-Heizstrom je Monat). In der Variante darf dann `heizwaerme_kwh: gemessen` stehen: Heizwärme je Slot = Wärme je K·d × `max(0, 15 − T) · ¼ h ÷ 24 h`; Warmwasser = Grundbedarf je Tag an Tagen mit mindestens 1 K·d, im Fenster `warmwasser_fenster` (im Sommer macht es die Solarthermie, `warmwasser_kwh_tag` muss dann fehlen); `klima_heizen_kwh` je Monat aus den gemessenen Tagen, wenn die Variante ihn nicht selbst nennt. Ohne Auswertung in der Datei bricht `gemessen` mit „Kein gemessener Wärmebedarf in der Datei: Auswertung der Ölheizung fehlt oder hat zu wenige Tage“ ab. Der Wert von Hand bleibt möglich. Umsetzung als Task 9, erst wenn der Plan „Ölheizung“ auf `main` ist.
 
 ## Global Constraints
 
@@ -398,6 +399,43 @@ def test_year_with_example_variants_runs_under_10_s(tmp_path) -> None:  # 365 Ta
 - [ ] **Step 3: `report.py`, `invest_days.py`, Doku umsetzen**
 - [ ] **Step 4: grün, ganze Prüfkette mit Abdeckung**
 - [ ] **Step 5: Commit** — `feat(tools): invest_days rechnet Varianten und schreibt den Bericht` und `docs: Investitionsrechner in Betrieb, Spec und Übergabe`
+
+---
+
+### Task 9: Gemessener Wärmebedarf aus der Ölheizung (Entscheidung 13)
+
+Voraussetzung: Plan „Ölheizung: Wärmebedarf messen“ ist auf `main` (Tabelle `heating_day`, `app/heating/fit.py`); der Branch wird vorher darauf rebased.
+
+**Files:**
+- Modify: `src/bindaems/tools/invest/data.py`, `src/bindaems/tools/export_invest.py`, `src/bindaems/tools/invest/variants.py`, `src/bindaems/tools/invest/heatpump.py`, `deploy/invest-varianten.example.yaml`, `docs/betrieb.md` (Abschnitt „Investitionsrechner“)
+- Test: `tests/unit/tools/test_export_invest.py`, `tests/unit/tools/invest/test_variants.py`, `tests/unit/tools/invest/test_heatpump.py`
+
+**Interfaces:**
+- Consumes: `fit_demand`, `season_of`, `HEATING_LIMIT_C` aus `app/heating/fit.py` (ersetzt die eigene Konstante gleichen Werts), `HeatingDays.period`, `HeatingSettings` aus den Einstellungen; `ac_power_known` wie in der Statistik (`device.receive.power_kw is not None`).
+- Produces: `InvestHeating(season: str, per_kd: NonNegativeFinite, base_kwh_day: NonNegativeFinite, r2: Finite, n: int, climate_heat_el_kwh: dict[MonthKey, NonNegativeFinite])` und `InvestFile.heating: InvestHeating | None = None` (alte Dateien laden ohne das Feld). `HeatPump.heizwaerme_kwh: NonNegativeFinite | Literal["gemessen"]`; Validator: bei `gemessen` kein `warmwasser_kwh_tag`. `check_against` meldet `gemessen` ohne `InvestFile.heating` mit dem Text aus Entscheidung 13.
+- Saison: die jüngste Saison, für die `fit_demand` ein `HeatFit` liefert (zuerst die laufende, dann die vorige); sonst `heating=None` und eine Zeile „Wärmebedarf: {Grund}“ auf stdout.
+
+- [ ] **Step 1: Tests schreiben**
+
+```python
+def test_export_writes_heating_fit(app_db) -> None:  # 20 vollständige Tage in heating_day
+    assert file.heating.season == "2026/27" and file.heating.per_kd == pytest.approx(fit.per_kd)
+
+def test_export_without_heating_table_rows_has_none(app_db) -> None:
+def test_measured_heat_per_slot() -> None:
+    # per_kd 30, Slot mit 5 °C → 30 · 10 · 0,25 / 24 kWh
+    assert run.slot_heat_kwh[i] == pytest.approx(30 * 10 * 0.25 / 24)
+
+def test_measured_hot_water_only_on_heating_days() -> None:  # Tag mit 0,5 K·d → kein Warmwasser
+def test_measured_climate_from_file_unless_variant_sets_it() -> None:
+def test_gemessen_without_fit_is_reported(invest_file) -> None:
+def test_gemessen_with_hot_water_per_day_rejected() -> None:
+```
+
+- [ ] **Step 2: scheitern lassen** — `uv run pytest tests/unit/tools/test_export_invest.py tests/unit/tools/invest -q` → FAIL
+- [ ] **Step 3: umsetzen**
+- [ ] **Step 4: grün, Prüfkette**
+- [ ] **Step 5: Commit** — `feat(tools): Investitionsrechner rechnet die Wärmepumpe mit dem gemessenen Wärmebedarf`
 
 ---
 
