@@ -10,6 +10,7 @@ import type {
 	PriceComponent,
 	LearningSettings,
 	OpsSettings,
+	HeatingSettings,
 	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
@@ -172,7 +173,16 @@ export interface SettingsDraft {
 	/** Standard-Lademodus nach dem Abstecken nach Schlüssel; leer = unverändert */
 	wallboxDefaultModes: Record<string, ChargeMode | ''>;
 	ops: OpsDraft;
+	heating: HeatingDraft;
 	comment: string;
+}
+
+/** Ölheizung als Eingabetexte; leer (außer Leistungszahl) = nicht eingetragen */
+export interface HeatingDraft {
+	burnerKw: string;
+	oilLPerH: string;
+	oilPriceEurL: string;
+	acCop: string;
 }
 
 /** Tagesbericht in Home Assistant: wann er kommt und um welche Uhrzeit (`HH:MM`, Ortszeit) */
@@ -459,6 +469,12 @@ export function draftFrom(
 			...settings.wallbox_default_modes
 		},
 		ops: { report: settings.ops.report, reportAt: settings.ops.report_at },
+		heating: {
+			burnerKw: decimalText(settings.heating.burner_kw),
+			oilLPerH: decimalText(settings.heating.oil_l_per_h),
+			oilPriceEurL: decimalText(settings.heating.oil_price_eur_l),
+			acCop: decimalText(settings.heating.ac_cop)
+		},
 		comment: ''
 	};
 }
@@ -951,6 +967,8 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 	const reportAt = draft.ops.reportAt.trim();
 	if (!REPORT_AT_RE.test(reportAt)) errors['ops.report_at'] = REPORT_AT_ERROR;
 
+	const heating = applyHeating(draft.heating, settings.heating, errors);
+
 	if (
 		Object.keys(errors).length > 0 ||
 		vatPct === null ||
@@ -975,9 +993,71 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 			learning: { ...settings.learning, ...learning },
 			wallbox_names: wallboxNames,
 			wallbox_default_modes: wallboxDefaultModes,
-			ops: { ...settings.ops, report: draft.ops.report, report_at: reportAt }
+			ops: { ...settings.ops, report: draft.ops.report, report_at: reportAt },
+			heating
 		},
 		tariffChanged: importPricesChanged(settings.tariff, tariff)
+	};
+}
+
+/**
+ * Zahl in [min, max] (bei `exclusiveMin` über `min`); leer ist `null`, wenn es `optional` ist, sonst
+ * ein Fehler. Außerhalb oder keine Zahl: `undefined` mit Fehlertext unter `key`.
+ */
+function heatingNumber(
+	text: string,
+	key: string,
+	errors: Record<string, string>,
+	rule: { min: number; max: number; exclusiveMin?: boolean; optional: boolean; message: string }
+): number | null | undefined {
+	const value = parseDecimal(text);
+	if (value === null && rule.optional) return null;
+	const low = rule.exclusiveMin
+		? value !== null && value !== 'invalid' && value <= rule.min
+		: false;
+	if (value === null || value === 'invalid' || value < rule.min || value > rule.max || low) {
+		errors[key] = rule.message;
+		return undefined;
+	}
+	return value;
+}
+
+function applyHeating(
+	draft: HeatingDraft,
+	current: HeatingSettings,
+	errors: Record<string, string>
+): HeatingSettings {
+	const burner = heatingNumber(draft.burnerKw, 'heating.burner_kw', errors, {
+		min: 1,
+		max: 100,
+		optional: true,
+		message: 'Zahl von 1 bis 100, z. B. 27'
+	});
+	const oil = heatingNumber(draft.oilLPerH, 'heating.oil_l_per_h', errors, {
+		min: 0,
+		max: 20,
+		exclusiveMin: true,
+		optional: true,
+		message: 'Zahl über 0 bis 20, z. B. 2,9'
+	});
+	const price = heatingNumber(draft.oilPriceEurL, 'heating.oil_price_eur_l', errors, {
+		min: 0,
+		max: 5,
+		optional: true,
+		message: 'Zahl von 0 bis 5, z. B. 0,98'
+	});
+	const cop = heatingNumber(draft.acCop, 'heating.ac_cop', errors, {
+		min: 1,
+		max: 8,
+		optional: false,
+		message: 'Zahl von 1 bis 8, z. B. 3,0'
+	});
+	return {
+		...current,
+		burner_kw: burner ?? null,
+		oil_l_per_h: oil ?? null,
+		oil_price_eur_l: price ?? null,
+		ac_cop: cop ?? current.ac_cop
 	};
 }
 

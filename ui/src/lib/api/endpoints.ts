@@ -171,6 +171,9 @@ export const api = {
 			s.StatsSchema,
 			o
 		),
+	/** Wärmebedarf der Heizsaison, in der `day` liegt; 404 ohne Brennerstatus */
+	heatDemand: (day: string, o?: Load): Promise<s.HeatDemand> =>
+		get(withQuery('/api/heating/demand', { tag: day }), s.HeatDemandSchema, o),
 	/** Ladesessions der Tage `first` bis `last`, neueste zuerst; `vehicle` ist ein Schlüssel */
 	chargingSessions: (
 		first: string,

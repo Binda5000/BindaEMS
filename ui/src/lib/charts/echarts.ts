@@ -13,6 +13,7 @@ export function loadECharts(): Promise<ECharts> {
 		core.use([
 			charts.LineChart,
 			charts.BarChart,
+			charts.ScatterChart,
 			components.GridComponent,
 			components.TooltipComponent,
 			components.LegendComponent,

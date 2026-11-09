@@ -11,6 +11,7 @@
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
+	import HeatingEditor from './HeatingEditor.svelte';
 	import LearningEditor from './LearningEditor.svelte';
 	import PlanningEditor from './PlanningEditor.svelte';
 	import TariffEditor from './TariffEditor.svelte';
@@ -78,7 +79,7 @@
 		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
 	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
 	const SHOWN_KEYS = [
-		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes|ops)\./,
+		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes|ops|heating)\./,
 		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
 		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
 		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
@@ -327,6 +328,8 @@
 			{@render fieldError('ops.report_at')}
 		</div>
 	</fieldset>
+
+	<HeatingEditor bind:draft={draft.heating} {errors} />
 
 	<div class="field">
 		<label for="{uid}-comment">Kommentar (optional)</label>

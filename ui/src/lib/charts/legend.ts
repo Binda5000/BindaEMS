@@ -29,7 +29,7 @@ function seriesOf(option: WithLegend): StyledSeries[] {
 }
 
 function markOf(series: StyledSeries | undefined, icon: string | undefined): LegendItem['mark'] {
-	if (icon === 'rect' || series?.type === 'bar') return 'rect';
+	if (icon === 'rect' || series?.type === 'bar' || series?.type === 'scatter') return 'rect';
 	if (series?.lineStyle?.width === 0) return 'area';
 	return series?.lineStyle?.type === 'dashed' ? 'dashed' : 'line';
 }

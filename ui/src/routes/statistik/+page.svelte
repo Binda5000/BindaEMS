@@ -13,6 +13,8 @@
 	import ChecksCard from '$lib/stats/ChecksCard.svelte';
 	import ConsumersCard from '$lib/stats/ConsumersCard.svelte';
 	import PeriodBar from '$lib/stats/PeriodBar.svelte';
+	import HeatDemandCard from '$lib/heating/HeatDemandCard.svelte';
+	import HeatingCard from '$lib/heating/HeatingCard.svelte';
 	import PvCard from '$lib/stats/PvCard.svelte';
 	import CostCard from '$lib/stats/CostCard.svelte';
 	import {
@@ -70,6 +72,8 @@
 	interface Query {
 		title: string;
 		running: boolean;
+		/** gewählter Tag des Zeitraums */
+		day: string;
 		first: string;
 		last: string;
 		stats: Resource<Stats>;
@@ -88,6 +92,7 @@
 		const next: Query = {
 			title,
 			running,
+			day: key.day,
 			first: range.first,
 			last: range.last,
 			stats: new Resource((o) => api.stats(key.period, key.day, o), options)
@@ -227,6 +232,10 @@
 			/>
 			<ConsumersCard stats={current} />
 			<PvCard stats={current} />
+			{#if current.heating}
+				<HeatingCard heating={current.heating} first={current.first} />
+				<HeatDemandCard day={view?.day ?? day} />
+			{/if}
 			<PeaksCard stats={current} />
 			<ChecksCard stats={current} {wallboxNames} />
 		</div>

@@ -211,3 +211,30 @@ test('Fahrverhalten im Editor: Ziel-SOC mindestens über höchstens wird nicht g
 	await expect(page.getByText('Ziel-SOC mindestens liegt über höchstens.')).toBeVisible();
 	await expect(page.getByText(/Version \d+ gespeichert/)).toHaveCount(0);
 });
+
+test('admin trägt die Ölheizung ein und leert sie wieder', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	const group = page.getByRole('group', { name: 'Ölheizung' });
+	await group.getByLabel('Nennleistung (kW)').fill('0');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(group.getByText('Zahl von 1 bis 100, z. B. 27')).toBeVisible();
+	await group.getByLabel('Nennleistung (kW)').fill('27');
+	await group.getByLabel('Öl je Brennerstunde (l/h)').fill('2,9');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+	const card = page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Ölheizung', level: 2 }) });
+	await expect(card.getByText('27,0 kW')).toBeVisible();
+	await expect(card.getByText('2,9 l/h')).toBeVisible();
+	await expect(card.getByText('nicht eingetragen')).toHaveCount(1); // Ölpreis
+
+	// der Demo-Zustand ist geteilt: leeren
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	await group.getByLabel('Nennleistung (kW)').fill('');
+	await group.getByLabel('Öl je Brennerstunde (l/h)').fill('');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(card.getByText('nicht eingetragen')).toHaveCount(3);
+});

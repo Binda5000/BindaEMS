@@ -675,6 +675,23 @@ export const OpsSettingsSchema = v.looseObject({
 });
 export type OpsSettings = v.InferOutput<typeof OpsSettingsSchema>;
 
+/** Ölheizung: Nennleistung (kW), Öl je Brennerstunde (l/h) und Ölpreis (€/l), je `null` =
+ * nicht eingetragen; Leistungszahl der Klimaanlage beim Heizen */
+export const HeatingSettingsSchema = v.looseObject({
+	burner_kw: NullableNumber,
+	oil_l_per_h: NullableNumber,
+	oil_price_eur_l: NullableNumber,
+	ac_cop: v.number()
+});
+export type HeatingSettings = v.InferOutput<typeof HeatingSettingsSchema>;
+
+export const DEFAULT_HEATING: HeatingSettings = {
+	burner_kw: null,
+	oil_l_per_h: null,
+	oil_price_eur_l: null,
+	ac_cop: 3
+};
+
 export const RuntimeSettingsSchema = v.looseObject({
 	prices: PriceSettingsSchema,
 	tariff: v.looseObject({
@@ -695,7 +712,9 @@ export const RuntimeSettingsSchema = v.looseObject({
 	/** Modus, den die App nach dem Abstecken setzt; ohne Eintrag bleibt der Modus unverändert */
 	wallbox_default_modes: v.optional(v.record(v.string(), ChargeModeSchema), {}),
 	/** Tagesbericht in Home Assistant; ältere Stände haben den Abschnitt nicht */
-	ops: v.optional(OpsSettingsSchema, { report: 'daily', report_at: '07:30' })
+	ops: v.optional(OpsSettingsSchema, { report: 'daily', report_at: '07:30' }),
+	/** Ölheizung; ältere Stände haben den Abschnitt nicht */
+	heating: v.optional(HeatingSettingsSchema, DEFAULT_HEATING)
 });
 export type RuntimeSettings = v.InferOutput<typeof RuntimeSettingsSchema>;
 
@@ -1428,6 +1447,27 @@ export const CheckTotalSchema = v.object({
 });
 export type CheckTotal = v.InferOutput<typeof CheckTotalSchema>;
 
+/** `heating` der Statistik: Brennerstunden, Öl und Wärmebedarf des Zeitraums; Summen zählen nur
+ * bekannte Werte (`null`: keiner bekannt) */
+export const HeatingStatsSchema = v.object({
+	burner_h: NullableNumber,
+	oil_heat_kwh: NullableNumber,
+	oil_l: NullableNumber,
+	oil_eur: NullableNumber,
+	ac_heat_el_kwh: NullableNumber,
+	ac_heat_kwh: NullableNumber,
+	demand_kwh: NullableNumber,
+	hdd_kd: NullableNumber,
+	days: v.number(),
+	complete_days: v.number(),
+	/** erster Tag mit Brennerwert */
+	first_day: v.nullable(DateText),
+	/** Nennleistung nicht eingetragen */
+	settings_missing: v.boolean(),
+	ac_power_known: v.boolean()
+});
+export type HeatingStats = v.InferOutput<typeof HeatingStatsSchema>;
+
 export const StatsSchema = v.object({
 	period: StatsPeriodSchema,
 	first: DateText,
@@ -1550,9 +1590,63 @@ export const StatsSchema = v.object({
 		days: v.number(),
 		flagged_days: v.array(DateText),
 		totals: v.array(CheckTotalSchema)
-	})
+	}),
+	/** `null` ohne Brennerstatus */
+	heating: v.optional(v.nullable(HeatingStatsSchema), null)
 });
 export type Stats = v.InferOutput<typeof StatsSchema>;
+
+/** Ein Tag der Heizsaison in `GET /api/heating/demand` */
+export const HeatDemandPointSchema = v.object({
+	day: DateText,
+	hdd_kd: NullableNumber,
+	outdoor_mean_c: NullableNumber,
+	burner_h: NullableNumber,
+	oil_heat_kwh: NullableNumber,
+	oil_l: NullableNumber,
+	ac_heat_el_kwh: NullableNumber,
+	ac_heat_kwh: NullableNumber,
+	demand_kwh: NullableNumber,
+	complete: v.boolean(),
+	/** der Tag geht in die Anpassung ein */
+	used: v.boolean(),
+	note: v.nullable(v.string())
+});
+export type HeatDemandPoint = v.InferOutput<typeof HeatDemandPointSchema>;
+
+/** `GET /api/heating/demand?tag=` (404 ohne Brennerstatus): Tage der Heizsaison und die Gerade
+ * Wärmebedarf = Grundbedarf + Steigung × Heizgradtage */
+export const HeatDemandSchema = v.object({
+	/** z. B. `2026/27` */
+	season: v.string(),
+	first: DateText,
+	last: DateText,
+	points: v.array(HeatDemandPointSchema),
+	fit: v.nullable(
+		v.object({
+			per_kd: v.number(),
+			base_kwh_day: v.number(),
+			r2: v.number(),
+			n: v.number(),
+			through_origin: v.boolean()
+		})
+	),
+	/** Grund, wenn `fit` fehlt */
+	reason: v.nullable(v.string()),
+	totals: v.object({
+		oil_heat_kwh: NullableNumber,
+		oil_l: NullableNumber,
+		oil_eur: NullableNumber,
+		ac_heat_el_kwh: NullableNumber,
+		demand_kwh: NullableNumber,
+		hdd_kd: NullableNumber
+	}),
+	/** Strom der Klimaanlage beim Heizen je Monat (`JJJJ-MM`) in kWh */
+	ac_by_month: v.record(v.string(), v.number()),
+	heating_limit_c: v.number(),
+	ac_cop: v.number()
+});
+export type HeatDemand = v.InferOutput<typeof HeatDemandSchema>;
 
 export const ChargingSessionSchema = v.object({
 	id: v.number(),

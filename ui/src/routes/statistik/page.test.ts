@@ -2,10 +2,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { page } from '$app/state';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { chargingSession, limits, stats } from '$lib/testing/fixtures';
+import { heatDemand, heatingStats } from '$lib/testing/heating';
 import Page from './+page.svelte';
 
 const { api, goto } = vi.hoisted(() => ({
-	api: { stats: vi.fn(), chargingSessions: vi.fn(), limits: vi.fn() },
+	api: { stats: vi.fn(), chargingSessions: vi.fn(), limits: vi.fn(), heatDemand: vi.fn() },
 	goto: vi.fn()
 }));
 vi.mock('$lib/api/endpoints', async (original) => ({
@@ -537,4 +538,25 @@ it('benennt die CSV nach Zeitraum und Auto der gezeigten Sessions', async () => 
 		Reflect.deleteProperty(URL, 'createObjectURL');
 		Reflect.deleteProperty(URL, 'revokeObjectURL');
 	}
+});
+
+it('zeigt ohne Brennerstatus weder „Heizung“ noch „Wärmebedarf“ und fragt den Bedarf nicht ab', async () => {
+	render(Page);
+	await screen.findByRole('heading', { name: 'Energie' });
+	expect(screen.queryByRole('heading', { name: 'Heizung' })).not.toBeInTheDocument();
+	expect(screen.queryByRole('heading', { name: 'Wärmebedarf' })).not.toBeInTheDocument();
+	expect(api.heatDemand).not.toHaveBeenCalled();
+});
+
+it('zeigt mit Brennerstatus „Heizung“ und „Wärmebedarf“ des gewählten Tages nach „PV je Anlage“', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-05');
+	api.stats.mockResolvedValue(stats({ heating: heatingStats() }));
+	api.heatDemand.mockResolvedValue(heatDemand());
+	render(Page);
+	const heating = await screen.findByRole('heading', { name: 'Heizung', level: 2 });
+	expect(await screen.findByRole('heading', { name: 'Wärmebedarf', level: 2 })).toBeInTheDocument();
+	expect(api.heatDemand.mock.lastCall?.[0]).toBe('2026-10-05');
+	const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+	expect(headings.indexOf('Heizung')).toBe(headings.indexOf('Wärmebedarf') - 1);
+	expect(heating).toBeInTheDocument();
 });
