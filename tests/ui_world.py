@@ -30,6 +30,7 @@ from tests.app_helpers import (
     influx_q,
     mock_all_sources,
     set_feed_in,
+    set_heating,
     set_tariff,
     set_wallbox_names,
     with_grid_usage,
@@ -52,6 +53,7 @@ from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
 from bindaems.app.daytype import is_holiday
 from bindaems.app.db.schema import (
     charging_session,
+    heating_day,
     model_registry,
     planned_charge,
     user_table,
@@ -82,7 +84,7 @@ from bindaems.core.api.app import create_api
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
-from bindaems.shared.config import Config, Secrets, soc_signal
+from bindaems.shared.config import CoeChannel, Config, Secrets, soc_signal
 from bindaems.shared.control import (
     ChargeMode,
     CommandKind,
@@ -683,7 +685,12 @@ def _demo_config(cfg: Config, data_dir: Path, ui_dir: Path | None) -> Config:
         }
     )
     core = cfg.core.model_copy(update={"data_dir": data_dir / "core"})  # Absicht der Demo
-    return cfg.model_copy(update={"app": app, "core": core})
+    # mit Brennerstatus der Ölheizung (Plan Ölheizung): Karten „Heizung“ und „Wärmebedarf“
+    klima = cfg.thermal.devices["klima"]
+    receive = klima.receive.model_copy(update={"oil_burner": CoeChannel(node=56, digital=6)})
+    devices = {**cfg.thermal.devices, "klima": klima.model_copy(update={"receive": receive})}
+    thermal = cfg.thermal.model_copy(update={"devices": devices})
+    return cfg.model_copy(update={"app": app, "core": core, "thermal": thermal})
 
 
 def _build_core(cfg: Config, secrets: Secrets, clock: ManualClock) -> CoreRuntime:
@@ -1461,6 +1468,32 @@ async def _statistics(app: AppRuntime) -> None:
     assert await app.consumer_days.fill_missing(today, days=7) == 7
 
 
+def _heating_days(app: AppRuntime) -> None:
+    """Brennerstunden, Heizgradtage und Klima-Strom der sieben Tage vor heute (Plan Ölheizung)."""
+    settings = app.settings.current().settings
+    heating = settings.heating.model_copy(
+        update={"burner_kw": 27.0, "oil_l_per_h": 2.9, "oil_price_eur_l": 1.1}
+    )
+    set_heating(app.settings, heating)
+    with app.engine.begin() as conn:
+        for n in range(7):
+            day = LAST_DAY - timedelta(days=6 - n)
+            hdd = 4.0 + n
+            conn.execute(
+                insert(heating_day).values(
+                    day=day.isoformat(),
+                    burner_h=round(hdd / 1.5, 2),
+                    known_h=24.0,
+                    day_h=24.0,
+                    burner_end=False,
+                    hdd_kd=hdd,
+                    outdoor_mean_c=15.0 - hdd,
+                    ac_heat_el_kwh=1.5,
+                    note=None,
+                )
+            )
+
+
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
@@ -1508,6 +1541,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         # Der Verlauf vor dem Plan: so plant er mit der Monatsspitze, die auch Boost-Mehrkosten
         # und Statistik zeigen (aus dem Verlauf, nicht nur aus den vier Slots von heute)
         await _statistics(app)
+        _heating_days(app)
         await _learning(app)
         # Plan aus den Prognosen und Preisen; der Solver läuft im selben Prozess (wie in Tests)
         app.planning._solver = solve_inline

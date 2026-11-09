@@ -97,7 +97,11 @@ test('Statistik speichert die Ladesessions als CSV', async ({ page }) => {
 	await page.clock.setFixedTime(T_DEMO);
 	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
 	const download = page.waitForEvent('download');
-	await page.getByRole('button', { name: 'CSV herunterladen' }).click();
+	await page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Ladesessions', level: 2 }) })
+		.getByRole('button', { name: 'CSV herunterladen' })
+		.click();
 	expect((await download).suggestedFilename()).toBe('ladesessions-2026-10-01-2026-10-31.csv');
 });
 
@@ -253,7 +257,8 @@ function heatDemandBody() {
 		},
 		ac_by_month: { '2026-09': 10.5, '2026-10': 42 },
 		heating_limit_c: 15,
-		ac_cop: 3
+		ac_cop: 3,
+		ac_power_known: true
 	};
 }
 
@@ -325,6 +330,14 @@ test('Statistik speichert den Wärmebedarf als CSV', async ({ page }) => {
 });
 
 test('Statistik ohne Brenner zeigt weder Heizung noch Wärmebedarf', async ({ page }) => {
+	// das Demo-Backend hat einen Brenner: ohne ihn liefert die Statistik `heating: null`
+	await page.route('**/api/stats?*', async (route) => {
+		const response = await route.fetch();
+		await route.fulfill({ response, json: { ...(await response.json()), heating: null } });
+	});
+	await page.route('**/api/heating/demand*', (route) =>
+		route.fulfill({ status: 404, json: { detail: 'Brennerstatus fehlt' } })
+	);
 	await login(page, 'gast');
 	await page.clock.setFixedTime(T_DEMO);
 	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');

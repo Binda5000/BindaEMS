@@ -67,6 +67,7 @@ GET_ENDPOINTS = {
     "stats-day": "/api/stats?period=day&date=2026-10-08",
     "stats-month": "/api/stats?period=month&date=2026-10-09",
     "stats-year": "/api/stats?period=year&date=2026-10-09",
+    "heating-demand": "/api/heating/demand?tag=2026-10-09",
     "charging-sessions": "/api/charging/sessions?from=2026-09-25&to=2026-10-09",
     "users": "/api/users",
     "audit": "/api/audit",

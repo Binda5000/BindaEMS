@@ -1,0 +1,121 @@
+{
+  "season": "2026/27",
+  "first": "2026-07-01",
+  "last": "2027-06-30",
+  "points": [
+    {
+      "day": "2026-10-02",
+      "hdd_kd": 4.0,
+      "outdoor_mean_c": 11.0,
+      "burner_h": 2.67,
+      "oil_heat_kwh": 72.09,
+      "oil_l": 7.743,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 76.59,
+      "complete": true,
+      "used": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-03",
+      "hdd_kd": 5.0,
+      "outdoor_mean_c": 10.0,
+      "burner_h": 3.33,
+      "oil_heat_kwh": 89.91,
+      "oil_l": 9.657,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 94.41,
+      "complete": true,
+      "used": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-04",
+      "hdd_kd": 6.0,
+      "outdoor_mean_c": 9.0,
+      "burner_h": 4.0,
+      "oil_heat_kwh": 108.0,
+      "oil_l": 11.6,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 112.5,
+      "complete": true,
+      "used": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-05",
+      "hdd_kd": 7.0,
+      "outdoor_mean_c": 8.0,
+      "burner_h": 4.67,
+      "oil_heat_kwh": 126.09,
+      "oil_l": 13.543,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 130.59,
+      "complete": true,
+      "used": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-06",
+      "hdd_kd": 8.0,
+      "outdoor_mean_c": 7.0,
+      "burner_h": 5.33,
+      "oil_heat_kwh": 143.91,
+      "oil_l": 15.457,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 148.41,
+      "complete": true,
+      "used": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-07",
+      "hdd_kd": 9.0,
+      "outdoor_mean_c": 6.0,
+      "burner_h": 6.0,
+      "oil_heat_kwh": 162.0,
+      "oil_l": 17.4,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 166.5,
+      "complete": true,
+      "used": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-08",
+      "hdd_kd": 10.0,
+      "outdoor_mean_c": 5.0,
+      "burner_h": 6.67,
+      "oil_heat_kwh": 180.09,
+      "oil_l": 19.343,
+      "ac_heat_el_kwh": 1.5,
+      "ac_heat_kwh": 4.5,
+      "demand_kwh": 184.59,
+      "complete": true,
+      "used": true,
+      "note": null
+    }
+  ],
+  "fit": null,
+  "reason": "Noch 7 von 14 Tagen.",
+  "totals": {
+    "oil_heat_kwh": 882.09,
+    "oil_l": 94.743,
+    "oil_eur": 104.217,
+    "ac_heat_el_kwh": 10.5,
+    "demand_kwh": 913.59,
+    "hdd_kd": 49.0
+  },
+  "ac_by_month": {
+    "2026-10": 10.5
+  },
+  "heating_limit_c": 15.0,
+  "ac_cop": 3.0,
+  "ac_power_known": true
+}

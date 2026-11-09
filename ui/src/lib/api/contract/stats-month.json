@@ -540,7 +540,21 @@
       "power_eur": 32.995
     }
   ],
-  "heating": null,
+  "heating": {
+    "burner_h": 32.67,
+    "oil_heat_kwh": 882.09,
+    "oil_l": 94.743,
+    "oil_eur": 104.217,
+    "ac_heat_el_kwh": 10.5,
+    "ac_heat_kwh": 31.5,
+    "demand_kwh": 913.59,
+    "hdd_kd": 49.0,
+    "days": 7,
+    "complete_days": 7,
+    "first_day": "2026-10-02",
+    "settings_missing": false,
+    "ac_power_known": true
+  },
   "checks": {
     "days": 7,
     "flagged_days": [

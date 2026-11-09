@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "created_at": "2026-10-09T08:00:00+00:00",
   "actor": "admin",
   "source": "ui",
@@ -187,9 +187,9 @@
       "report_at": "07:30"
     },
     "heating": {
-      "burner_kw": null,
-      "oil_l_per_h": null,
-      "oil_price_eur_l": null,
+      "burner_kw": 27.0,
+      "oil_l_per_h": 2.9,
+      "oil_price_eur_l": 1.1,
       "ac_cop": 3.0
     },
     "wallbox_names": {

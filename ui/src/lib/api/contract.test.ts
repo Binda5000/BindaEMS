@@ -39,6 +39,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'stats-day': s.StatsSchema,
 	'stats-month': s.StatsSchema,
 	'stats-year': s.StatsSchema,
+	'heating-demand': s.HeatDemandSchema,
 	'charging-sessions': v.array(s.ChargingSessionSchema),
 	users: v.array(s.UserSchema),
 	audit: v.array(s.AuditEntrySchema),

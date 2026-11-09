@@ -185,8 +185,10 @@ it('rückt um Mitternacht auf den neuen Tag weiter', async () => {
 
 it('zeigt unter den Kosten Autos, Laden je Auto, Ladesessions, Verbraucher, PV je Anlage, Monatsspitzen und Abgleich', async () => {
 	navigate('?zeitraum=monat&datum=2026-10-09');
+	api.heatDemand.mockResolvedValue(heatDemand());
 	render(Page);
 	await screen.findByRole('table', { name: 'Ladesessions' });
+	await screen.findByRole('heading', { name: 'Wärmebedarf', level: 2 });
 	const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
 	expect(headings).toEqual([
 		'Oktober 2026',
@@ -198,6 +200,8 @@ it('zeigt unter den Kosten Autos, Laden je Auto, Ladesessions, Verbraucher, PV j
 		'Ladesessions',
 		'Verbraucher',
 		'PV je Anlage',
+		'Heizung',
+		'Wärmebedarf',
 		'Monatsspitzen',
 		'Abgleich mit den Zählern'
 	]);
@@ -541,6 +545,7 @@ it('benennt die CSV nach Zeitraum und Auto der gezeigten Sessions', async () => 
 });
 
 it('zeigt ohne Brennerstatus weder „Heizung“ noch „Wärmebedarf“ und fragt den Bedarf nicht ab', async () => {
+	api.stats.mockResolvedValue(stats({ heating: null }));
 	render(Page);
 	await screen.findByRole('heading', { name: 'Energie' });
 	expect(screen.queryByRole('heading', { name: 'Heizung' })).not.toBeInTheDocument();

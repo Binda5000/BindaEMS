@@ -17,12 +17,12 @@ function renderEditor(errors: Record<string, string> = {}) {
 	};
 }
 
-it('zeigt die vier Felder, leer = nicht eingetragen, Leistungszahl 3,0', () => {
+it('zeigt die vier Felder, Werte der Anlage, Leistungszahl 3,0', () => {
 	renderEditor();
 	expect(screen.getByRole('group', { name: 'Ölheizung' })).toBeInTheDocument();
-	expect(screen.getByLabelText('Nennleistung (kW)')).toHaveValue('');
-	expect(screen.getByLabelText('Öl je Brennerstunde (l/h)')).toHaveValue('');
-	expect(screen.getByLabelText('Ölpreis (€/l, leer = ohne Euro)')).toHaveValue('');
+	expect(screen.getByLabelText('Nennleistung (kW)')).toHaveValue('27');
+	expect(screen.getByLabelText('Öl je Brennerstunde (l/h)')).toHaveValue('2,9');
+	expect(screen.getByLabelText('Ölpreis (€/l, leer = ohne Euro)')).toHaveValue('1,1');
 	const cop = screen.getByLabelText('Leistungszahl der Klimaanlage beim Heizen');
 	expect(cop).toHaveValue('3');
 	expect(cop).toHaveAccessibleDescription('Schätzung: Wärme je kWh Strom.');
@@ -51,6 +51,15 @@ it('sendet leere Felder als null und die Leistungszahl als Zahl', () => {
 	const result = applyDraft(current, draft);
 	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
 	expect(result.settings.heating).toEqual({
+		burner_kw: 27,
+		oil_l_per_h: 2.9,
+		oil_price_eur_l: 1.1,
+		ac_cop: 3
+	});
+	draft.heating = { burnerKw: '', oilLPerH: '', oilPriceEurL: '', acCop: '3' };
+	const empty = applyDraft(current, draft);
+	if (!('settings' in empty)) throw new Error(JSON.stringify(empty.errors));
+	expect(empty.settings.heating).toEqual({
 		burner_kw: null,
 		oil_l_per_h: null,
 		oil_price_eur_l: null,

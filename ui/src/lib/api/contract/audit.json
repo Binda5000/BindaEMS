@@ -1,6 +1,6 @@
 [
   {
-    "id": 14,
+    "id": 15,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
@@ -18,7 +18,7 @@
     }
   },
   {
-    "id": 13,
+    "id": 14,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
@@ -36,7 +36,7 @@
     }
   },
   {
-    "id": 12,
+    "id": 13,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
@@ -54,14 +54,14 @@
     }
   },
   {
-    "id": 11,
+    "id": 12,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
     "action": "settings.update",
     "target": "einstellungen",
     "details": {
-      "version": 5,
+      "version": 6,
       "changes": [
         {
           "path": "learning.ha_sensors[0]",
@@ -82,6 +82,34 @@
           "path": "learning.driving.automation.egolf",
           "old": null,
           "new": false
+        }
+      ]
+    }
+  },
+  {
+    "id": 11,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "test",
+    "source": "ui",
+    "action": "settings.update",
+    "target": "einstellungen",
+    "details": {
+      "version": 5,
+      "changes": [
+        {
+          "path": "heating.burner_kw",
+          "old": null,
+          "new": 27.0
+        },
+        {
+          "path": "heating.oil_l_per_h",
+          "old": null,
+          "new": 2.9
+        },
+        {
+          "path": "heating.oil_price_eur_l",
+          "old": null,
+          "new": 1.1
         }
       ]
     }
