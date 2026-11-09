@@ -72,6 +72,8 @@ from bindaems.app.ha.notify import (
     websocket_service_call,
 )
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
+from bindaems.app.heating.days import HeatingDays
+from bindaems.app.heating.routes import heating_router
 from bindaems.app.history.influx import RP_LONG, InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
@@ -157,6 +159,7 @@ PV_DAYS_NIGHTLY = 3  # nachts: fehlende PV-Tage der letzten 3
 PV_FILL_DEBOUNCE_S = 5.0  # mehrere Änderungen kurz nacheinander lösen einen Nachtrag aus
 PV_HA_HOLD = timedelta(minutes=30)  # so lange gilt ein HA-Wert der PV höchstens (dann Lücke)
 CONSUMER_DAYS_NIGHTLY = 3  # nachts: fehlende Tage der letzten 3 (gestern, Fehler nachholen)
+HEATING_TODAY_PERIOD_S = 300.0  # so oft rechnet der Heizungstag von heute neu
 LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
 LEDGER_BACKFILL_WAIT_S = (
     600.0  # so lange wartet der Abgleich beim Start höchstens auf den ersten Nachtrag
@@ -344,6 +347,22 @@ class AppRuntime:
                 clock=self._clock,
                 ready=self._weather_backfilled.wait,
             )
+        # Heizungstage (Plan Ölheizung): nur mit Klimagerät, dessen Empfangstabelle den
+        # Brennerstatus hat
+        self.heating_days: HeatingDays | None = None
+        self._ac_power_known = False
+        if device is not None:
+            receive = cfg.thermal.devices[device].receive
+            if receive.oil_burner is not None:
+                self._ac_power_known = receive.power_kw is not None
+                self.heating_days = HeatingDays(
+                    self.engine,
+                    self.reader,
+                    self.weather,
+                    device,
+                    self._clock,
+                    ac_power_known=self._ac_power_known,
+                )
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
@@ -475,6 +494,8 @@ class AppRuntime:
             cfg,
             self._clock,
             self.planned_charges,
+            self.heating_days,
+            self._ac_power_known,
         )
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
@@ -627,6 +648,13 @@ class AppRuntime:
                 ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),
                 stats_router(self.stats, guard),
+                heating_router(
+                    self.heating_days,
+                    self.settings,
+                    self._clock,
+                    guard,
+                    ac_power_known=self._ac_power_known,
+                ),
                 planning_router(
                     self.planning,
                     self.settings,
@@ -866,6 +894,8 @@ class AppRuntime:
         ]
         if self.thermal_model is not None:
             jobs.append(("thermal-model", self.thermal_model.run))
+        if self.heating_days is not None:
+            jobs.append(("heating-today", self._heating_today_loop))
         if self.ha_values is not None:
             jobs.append(("ha-values", partial(self._ha_values_loop, self.ha_values)))
         if self.ha_publisher is not None:
@@ -1335,6 +1365,15 @@ class AppRuntime:
                 log.info("Energie der Verbraucher je Tag gespeichert", days=stored)
         except Exception:
             log.exception("Energie der Verbraucher je Tag nicht gespeichert")
+        if self.heating_days is not None:
+            try:
+                stored = await self.heating_days.fill_missing(
+                    today, FILL_DAYS if start else CONSUMER_DAYS_NIGHTLY
+                )
+                if stored:
+                    log.info("Heizungstage gespeichert", days=stored)
+            except Exception:
+                log.exception("Heizungstage nicht gespeichert")
         if not start:  # beim Start füllt ``pv-days-fill`` (mehr Tage, eigene Aufgabe)
             try:
                 stored = await self.pv_days.fill_missing(today, PV_DAYS_NIGHTLY)
@@ -1367,6 +1406,17 @@ class AppRuntime:
             await self._pv_days_fill()
             await self._pv_fill_wake.wait()
             await asyncio.sleep(PV_FILL_DEBOUNCE_S)
+
+    async def _heating_today_loop(self) -> None:
+        """Rechnet heute für die Heizungstage alle 300 s neu (zuerst gleich beim Start). Endet nie
+        von selbst, sonst startete ``_supervise`` sie alle 10 s neu; jeder Fehler kommt ins Log."""
+        while True:
+            try:
+                if self.heating_days is not None:
+                    await self.heating_days.refresh_today()
+            except Exception:
+                log.exception("Heizungstag heute nicht berechnet")
+            await asyncio.sleep(HEATING_TODAY_PERIOD_S)
 
     async def _pv_days_fill(self) -> None:
         """Ein Lauf: die fehlenden PV-Tage bis Januar des Vorjahres; ein Fehler kommt ins Log."""

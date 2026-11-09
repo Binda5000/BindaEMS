@@ -653,3 +653,61 @@ async def test_pv_sources_use_stored_days_and_the_cache_for_today(
 
 def test_no_pv_sources_gives_an_empty_list(stats) -> None:
     assert stats.period("day", TODAY)["pv_sources"] == []
+
+
+def _heating_row(engine, day: date, burner_h: float | None, known_h: float = 24.0) -> None:
+    from bindaems.app.db.schema import heating_day
+
+    with engine.begin() as conn:
+        conn.execute(
+            insert(heating_day).values(
+                day=day.isoformat(),
+                burner_h=burner_h,
+                known_h=known_h,
+                day_h=24.0,
+                burner_end=None,
+                hdd_kd=8.0,
+            )
+        )
+
+
+def _with_boiler(settings_service, burner_kw: float | None) -> None:
+    current = settings_service.current()
+    heating = current.settings.heating.model_copy(
+        update={"burner_kw": burner_kw, "oil_l_per_h": 2.9, "oil_price_eur_l": 1.0}
+    )
+    settings_service.update(
+        current.settings.model_copy(update={"heating": heating}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+
+
+def test_heating_block_is_null_without_burner(stats) -> None:
+    assert stats.period("month", TODAY)["heating"] is None
+
+
+def test_heating_block_sums_known_days(make_stats, heating_days, engine, settings_service) -> None:
+    _with_boiler(settings_service, 27.0)
+    _heating_row(engine, date(2026, 10, 5), 3.0)
+    _heating_row(engine, date(2026, 10, 6), 2.0)
+    _heating_row(engine, date(2026, 10, 7), None, known_h=0.0)
+    heating = make_stats(heating_days).period("week", TODAY)["heating"]
+    assert heating["burner_h"] == pytest.approx(5.0)
+    assert heating["oil_heat_kwh"] == pytest.approx(135.0)
+    assert heating["oil_l"] == pytest.approx(14.5)
+    assert heating["oil_eur"] == pytest.approx(14.5)
+    assert heating["demand_kwh"] == pytest.approx(135.0)
+    assert heating["hdd_kd"] == pytest.approx(24.0)
+    assert heating["days"] == 3 and heating["complete_days"] == 2
+    assert heating["first_day"] == "2026-10-05"
+    assert heating["settings_missing"] is False and heating["ac_power_known"] is False
+    assert heating["ac_heat_el_kwh"] is None and heating["ac_heat_kwh"] is None
+
+
+def test_heating_block_without_nominal_power(make_stats, heating_days, engine) -> None:
+    _heating_row(engine, date(2026, 10, 5), 3.0)
+    heating = make_stats(heating_days).period("week", TODAY)["heating"]
+    assert heating["settings_missing"] and heating["oil_heat_kwh"] is None
+    assert heating["burner_h"] == pytest.approx(3.0)

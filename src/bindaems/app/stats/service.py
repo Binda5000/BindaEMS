@@ -38,6 +38,8 @@ from bindaems.app.consumers.days import NO_DAY, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.source import PowerSource
+from bindaems.app.heating.days import HeatingDays
+from bindaems.app.heating.fit import day_heat, known_total
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.service import (
     DaySummary,
@@ -188,6 +190,8 @@ class StatsService:
         cfg: Config,
         clock: Clock,
         planned: PlannedCharges,
+        heating_days: HeatingDays | None = None,
+        ac_power_known: bool = False,
     ) -> None:
         self._ledger = ledger
         self._sessions = sessions
@@ -202,6 +206,8 @@ class StatsService:
         self._cfg = cfg
         self._clock = clock
         self._planned = planned
+        self._heating_days = heating_days
+        self._ac_power_known = ac_power_known
 
     def local_today(self) -> date:
         return self._clock.now().astimezone(LOCAL_TZ).date()
@@ -278,6 +284,7 @@ class StatsService:
             ],
             "pv_sources": self._pv_energy_rows(first, last, today),
             "month_peaks": peaks,
+            "heating": self._heating(first, last, settings),
             "checks": self._check_summary(first, last),
         }
 
@@ -428,6 +435,32 @@ class StatsService:
                 self._pv_sources.list(), self._pv_days, self._pv_energy, first, last, today
             )
         ]
+
+    # Heizung
+
+    def _heating(self, first: date, last: date, settings: RuntimeSettings) -> dict[str, Any] | None:
+        """Brennerstunden, Öl und Wärmebedarf des Zeitraums; ``None`` ohne Brennerstatus. Summen
+        zählen nur bekannte Werte."""
+        if self._heating_days is None:
+            return None
+        known = self._ac_power_known
+        days = self._heating_days.period(first, last)
+        heats = [day_heat(d, settings.heating, ac_power_known=known) for d in days]
+        return {
+            "burner_h": known_total(d.burner_h for d in days),
+            "oil_heat_kwh": known_total(h.oil_heat_kwh for h in heats),
+            "oil_l": known_total(h.oil_l for h in heats),
+            "oil_eur": known_total(h.oil_eur for h in heats),
+            "ac_heat_el_kwh": known_total(d.ac_heat_el_kwh for d in days) if known else None,
+            "ac_heat_kwh": known_total(h.ac_heat_kwh for h in heats),
+            "demand_kwh": known_total(h.demand_kwh for h in heats),
+            "hdd_kd": known_total(d.hdd_kd for d in days),
+            "days": len(days),
+            "complete_days": sum(1 for d in days if d.complete),
+            "first_day": next((d.day.isoformat() for d in days if d.burner_h is not None), None),
+            "settings_missing": settings.heating.burner_kw is None,
+            "ac_power_known": known,
+        }
 
     # Abgleich
 

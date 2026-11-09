@@ -285,6 +285,7 @@
     }
   ],
   "month_peaks": [],
+  "heating": null,
   "checks": {
     "days": 1,
     "flagged_days": [],

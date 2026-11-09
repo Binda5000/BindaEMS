@@ -90,7 +90,7 @@ def pv_energy(influx, clock) -> EnergyCache:
 
 
 @pytest.fixture
-def stats(
+def make_stats(
     ledger,
     tracker,
     costing,
@@ -103,28 +103,53 @@ def stats(
     clock,
     settings_service,
     cfg,
-) -> StatsService:
-    sessions = SessionService(tracker, ledger, costing, clock)
-    days = ConsumerDays(engine, energy, consumers, clock)
-    checks = LedgerChecks(engine, ledger, influx, clock, cfg)  # type: ignore[arg-type]
-    planned = PlannedCharges(engine, clock, cfg)
-    pv_days = SourceDays(
-        engine, pv_energy, pv_sources.list, pv_source_day, "source_id", clock, total_id=0
-    )
-    return StatsService(
-        ledger,
-        sessions,
-        consumers,
-        days,
-        energy,
-        pv_sources,
-        pv_days,
-        pv_energy,
-        checks,
-        settings_service,
-        cfg,
+):
+    def build(heating_days=None, ac_power_known=False) -> StatsService:
+        sessions = SessionService(tracker, ledger, costing, clock)
+        days = ConsumerDays(engine, energy, consumers, clock)
+        checks = LedgerChecks(engine, ledger, influx, clock, cfg)  # type: ignore[arg-type]
+        planned = PlannedCharges(engine, clock, cfg)
+        pv_days = SourceDays(
+            engine, pv_energy, pv_sources.list, pv_source_day, "source_id", clock, total_id=0
+        )
+        return StatsService(
+            ledger,
+            sessions,
+            consumers,
+            days,
+            energy,
+            pv_sources,
+            pv_days,
+            pv_energy,
+            checks,
+            settings_service,
+            cfg,
+            clock,
+            planned,
+            heating_days,
+            ac_power_known,
+        )
+
+    return build
+
+
+@pytest.fixture
+def stats(make_stats) -> StatsService:
+    return make_stats()
+
+
+@pytest.fixture
+def heating_days(engine, clock):
+    from bindaems.app.heating.days import HeatingDays
+    from bindaems.app.learning.weather import WeatherArchive
+
+    return HeatingDays(
+        engine,
+        None,  # type: ignore[arg-type]
+        WeatherArchive(engine),
+        "klima",
         clock,
-        planned,
+        ac_power_known=False,
     )
 
 

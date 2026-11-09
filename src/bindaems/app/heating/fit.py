@@ -1,7 +1,7 @@
 """Wärmebedarf aus Brennerstunden und Heizgradtagen (rein, ohne Runden)."""
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Final
@@ -113,3 +113,9 @@ def season_of(day: date) -> tuple[date, date, str]:
     start_year = day.year if day.month >= 7 else day.year - 1
     label = f"{start_year}/{(start_year + 1) % 100:02d}"
     return date(start_year, 7, 1), date(start_year + 1, 6, 30), label
+
+
+def known_total(values: Iterable[float | None]) -> float | None:
+    """Summe der bekannten Werte; ``None``, wenn keiner bekannt ist."""
+    known = [value for value in values if value is not None]
+    return math.fsum(known) if known else None

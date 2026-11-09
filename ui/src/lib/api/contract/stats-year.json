@@ -334,6 +334,7 @@
       "power_eur": 32.995
     }
   ],
+  "heating": null,
   "checks": {
     "days": 7,
     "flagged_days": [
