@@ -14,7 +14,8 @@
 
 | Was | Wo heute | Folge |
 |---|---|---|
-| Brennerstatus der Ölheizung | in der UVR610 (Binda, 9.11.2026), nicht in BindaEMS | eine Zeile mehr in der CoE-Sendeliste des C.M.I. und in `receive` |
+| Brennerstatus der Ölheizung | am CAN-Bus: Knoten 1, Ausgang 5 „Anf.Brenner“ (Binda, 9.11.2026), nicht in BindaEMS | eine Zeile mehr in der CoE-Sendeliste des C.M.I. und in `receive`. Es ist die **Anforderung** an den Brenner, nicht die Flammenmeldung: schaltet der Kesselthermostat bei anstehender Anforderung kurz ab, zählt diese Zeit trotzdem. Die Werte sind darum eine obere Grenze; die Gegenprobe am Tank zeigt, wie nah sie liegen |
+| Brennerstufen | einstufig (Binda, 9.11.2026) | läuft er, dann mit 27 kW und 2,9 l/h |
 | Kessel | 27 kW Nennleistung, 2,9 l Öl je Stunde (Binda, 9.11.2026). Plausibel: 2,9 l/h × rund 10 kWh/l ≈ 29 kW Brennstoff, 27 kW Wärme ≈ 93 % | Wärme = Brennerstunden × 27 kWh, Öl = Brennerstunden × 2,9 l |
 | Warmwasser | im Winter vom Kessel, im Sommer von der Solarthermie | der gemessene Winterbedarf enthält Heizung und Warmwasser; der Grundbedarf je Tag der Regression ist im Wesentlichen das Warmwasser (plus Bereitschaftsverluste des Kessels) |
 | Klimaanlage | heizt die übrigen Räume; elektrische Leistung (F51) und Betriebsbits seit 6a in InfluxDB, je Viertelstunde lesbar mit `read_thermal_slots` | ihre Heizwärme gehört zum Bedarf des Hauses (die Wärmepumpe übernimmt sie, Spec „Für 6b“); Wärme = Strom × angenommene Leistungszahl |
@@ -39,11 +40,11 @@
 
 ## Was du an der Anlage tust (nach dem Ausrollen)
 
-1. Im C.M.I. unter CoE-Ausgänge den Brennerstatus der UVR als **Digital 6** an BindaEMS (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer Blockierzeit (etwa 10 s), Intervall wie die anderen Werte.
+1. Im C.M.I. unter CoE-Ausgänge „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) als **Digital 6** an BindaEMS (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer Blockierzeit (etwa 10 s), Intervall wie die anderen Werte.
 2. In `config.yaml` unter `thermal.devices.klima.receive`: `oil_burner: {node: 56, digital: 6}`; ems-core neu starten (Regelbetrieb vorher aus, wie bei jeder core-Änderung).
 3. Mit `coe_probe listen` (core gestoppt) oder in Grafana prüfen, dass der Wert ankommt und beim Brennerstart auf 1 springt.
 4. Unter Einstellungen → Ölheizung 27 kW und 2,9 l/h eintragen, optional den Ölpreis der letzten Lieferung.
-5. Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen (Lieferschein oder Messstab).
+5. Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen (Lieferschein oder Messstab). Liegt der Tank deutlich darunter, unterbricht der Kesselthermostat die Anforderung spürbar; dann den Wert „Öl je Brennerstunde“ und die Nennleistung nicht ändern, sondern das Verhältnis notieren (eigener kleiner Folgeplan „Korrekturfaktor“, falls nötig).
 
 ## Global Constraints
 
@@ -368,7 +369,7 @@ Wörtliche Texte:
 - [ ] **Step 1:** Texte schreiben, `pytest tests/unit/test_docs.py` grün.
 - [ ] **Step 2: Gesamte Prüfkette einmal, Commit** `docs: Ölheizung Wärmebedarf in Betrieb, Spec und Übergabe`
 
-## Offene Fragen an dich (beeinflussen nur die Auslegung, nicht den Code)
+## Geklärt (9.11.2026)
 
-- **Ist der Brenner einstufig?** Der Plan nimmt es an (immer 27 kW, wenn er läuft). Bei einem zweistufigen Brenner wären die Zahlen eine obere Grenze; die Gegenprobe am Tank zeigt es.
-- **Welcher Ausgang der UVR trägt den Brennerstatus?** Nur für deine Zeile im C.M.I.; BindaEMS braucht nur, dass er als Digital 6 (oder eine andere freie Nummer, dann in `config.yaml` anpassen) ankommt.
+- **Der Brenner ist einstufig:** läuft er, dann mit 27 kW und 2,9 l/h.
+- **Quelle:** CAN-Knoten 1, Ausgang 5 „Anf.Brenner“; das C.M.I. sendet ihn als Digital 6 (in `config.yaml` `oil_burner: {node: 56, digital: 6}`, Knoten wie die übrigen Werte im Paket, beim ersten Empfang mit `coe_probe` bestätigen).
