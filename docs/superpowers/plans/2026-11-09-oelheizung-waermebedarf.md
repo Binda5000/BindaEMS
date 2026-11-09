@@ -41,7 +41,7 @@
 ## Was du an der Anlage tust (nach dem Ausrollen)
 
 1. Im C.M.I. unter CoE-Ausgänge „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) als **Digital 6** an BindaEMS (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer Blockierzeit (etwa 10 s), Intervall wie die anderen Werte.
-2. In `config.yaml` unter `thermal.devices.klima.receive`: `oil_burner: {node: 56, digital: 6}`; ems-core neu starten (Regelbetrieb vorher aus, wie bei jeder core-Änderung).
+2. In `config.yaml` unter `thermal.devices.klima.receive`: `oil_burner: {node: 56, digital: 6}`; core und app neu starten (`docker compose restart ems-core ems-app`; Regelbetrieb vorher aus, wie bei jeder core-Änderung; die app liest die `config.yaml` nur beim Start).
 3. Mit `coe_probe listen` (core gestoppt) oder in Grafana prüfen, dass der Wert ankommt und beim Brennerstart auf 1 springt.
 4. Unter Einstellungen → Ölheizung 27 kW und 2,9 l/h eintragen, optional den Ölpreis der letzten Lieferung.
 5. Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen (Lieferschein oder Messstab). Liegt der Tank deutlich darunter, unterbricht der Kesselthermostat die Anforderung spürbar; dann den Wert „Öl je Brennerstunde“ und die Nennleistung nicht ändern, sondern das Verhältnis notieren (eigener kleiner Folgeplan „Korrekturfaktor“, falls nötig).

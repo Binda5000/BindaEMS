@@ -1917,3 +1917,19 @@ def test_betrieb_doc_names_ops_page() -> None:
         "0016",
     ):
         assert topic in text, topic
+
+
+def test_oil_heating_rollout_restarts_core_and_app() -> None:
+    # Die app liest config.yaml nur beim Start: Ohne Neustart von ems-app bleiben die Karten aus
+    # (Rollout) oder stehen (Rückweg).
+    restart = "docker compose restart ems-core ems-app"
+    betrieb = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    section = betrieb.split("## Ölheizung: Wärmebedarf", 1)[1].split("\n## ", 1)[0]
+    assert section.count(restart) >= 2, "Rollout und Rückweg"
+    plan = Path("docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md").read_text("utf-8")
+    assert restart in plan.split("Was du an der Anlage tust", 1)[1]
+    uebergabe = " ".join(Path("docs/uebergabe.md").read_text("utf-8").split())
+    item = uebergabe.split("26. **Ölheizung: Wärmebedarf ausrollen:**", 1)[1]
+    item = item.split(" - Teil 2", 1)[0]
+    assert item.count(restart) >= 2
+    assert "ems-core neu starten" not in section + item

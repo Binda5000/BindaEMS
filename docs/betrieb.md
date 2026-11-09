@@ -6031,15 +6031,15 @@ freie Nummer, wenn vorher ein anderer Plan auf `main` eine belegt). Es wird nich
    (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer
    Blockierzeit (etwa 10 s), Intervall wie die anderen Werte.
 3. In `config.yaml` unter `thermal.devices.klima.receive` die Zeile `oil_burner: {node: 56, digital: 6}`
-   eintragen; ems-core neu starten.
+   eintragen; core und app neu starten (`docker compose restart ems-core ems-app`), die app liest die `config.yaml` nur beim Start.
 4. Mit `coe_probe listen` (core gestoppt; die Knotennummer beim ersten Empfang bestätigen) oder in Grafana
    prüfen, dass der Wert ankommt und beim Brennerstart auf 1 springt.
 5. Unter Einstellungen → „Ölheizung“ 27 kW und 2,9 l/h eintragen, optional den Ölpreis der letzten Lieferung.
 6. Regelbetrieb an. Prüfen: auf **Statistik** erscheinen die Karten „Heizung“ und „Wärmebedarf“; die Tage
    füllen sich über Nacht.
 
-Rückweg: die Zeile `oil_burner` aus der `config.yaml` nehmen (die Karten verschwinden) und die Datenbank
-auf `0018` zurücknehmen.
+Rückweg: die Zeile `oil_burner` aus der `config.yaml` nehmen, `docker compose restart ems-core ems-app` (die Karten verschwinden) und die
+Datenbank auf `0018` zurücknehmen.
 
 ## Planung
 

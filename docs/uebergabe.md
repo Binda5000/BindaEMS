@@ -2260,11 +2260,11 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       oder die nächste freie Nummer), Datenbank vorher sichern. Nichts wird geschaltet, der Brenner wird nur gelesen. Die Quelle ist die **Anforderung** „Anf.Brenner“,
       nicht die Flamme; die Werte sind eine obere Grenze. Fünf Schritte: (1) im C.M.I. unter CoE-Ausgänge „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) als **Digital 6** an
       BindaEMS (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer Blockierzeit (etwa 10 s), Intervall wie die anderen
-      Werte; (2) in `config.yaml` unter `thermal.devices.klima.receive` `oil_burner: {node: 56, digital: 6}` eintragen, ems-core neu starten (Regelbetrieb vorher aus);
+      Werte; (2) in `config.yaml` unter `thermal.devices.klima.receive` `oil_burner: {node: 56, digital: 6}` eintragen, `docker compose restart ems-core ems-app` (Regelbetrieb vorher aus; die app liest die `config.yaml` nur beim Start);
       (3) mit `coe_probe listen` (core gestoppt) oder in Grafana prüfen, dass der Wert ankommt und beim Brennerstart auf 1 springt; (4) unter Einstellungen → „Ölheizung“
       27 kW und 2,9 l/h eintragen, optional den Ölpreis; (5) Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen; liegt er deutlich darunter,
       Werte nicht ändern, sondern das Verhältnis notieren (Folgeplan „Korrekturfaktor“). Prüfen: Statistik zeigt „Heizung“ und „Wärmebedarf“, ab 14 kalten Tagen ein
-      Ergebnis. Rückweg: Zeile `oil_burner` aus der `config.yaml`, Datenbank auf `0018` zurücknehmen. Betrieb: `docs/betrieb.md`, „Ölheizung: Wärmebedarf“.
+      Ergebnis. Rückweg: Zeile `oil_burner` aus der `config.yaml`, `docker compose restart ems-core ems-app`, Datenbank auf `0018` zurücknehmen. Betrieb: `docs/betrieb.md`, „Ölheizung: Wärmebedarf“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
