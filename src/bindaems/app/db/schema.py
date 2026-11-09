@@ -474,3 +474,20 @@ grid_outage = Table(
     Column("covered_s", Float, nullable=False),
     Index("ix_grid_outage_start", "start"),
 )
+
+# Heizungstage (Plan Ölheizung): Brennerstunden, bekannte Stunden und Tageslänge, Endzustand des
+# Brenners (Anfangswert des nächsten Tages), Heizgradtage, Tagesmittel und Strom der Klimaanlage
+# beim Heizen je lokalem Tag; Wärme und Öl rechnet die app beim Lesen
+heating_day = Table(
+    "heating_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("burner_h", Float, nullable=True),
+    Column("known_h", Float, nullable=False),
+    Column("day_h", Float, nullable=False),
+    Column("burner_end", Boolean, nullable=True),
+    Column("hdd_kd", Float, nullable=True),
+    Column("outdoor_mean_c", Float, nullable=True),
+    Column("ac_heat_el_kwh", Float, nullable=True),
+    Column("note", String(80), nullable=True),
+)

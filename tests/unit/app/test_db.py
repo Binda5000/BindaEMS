@@ -19,6 +19,7 @@ from bindaems.app.db.schema import (
     driving_profile,
     forecast_record,
     grid_outage,
+    heating_day,
     ledger_check,
     ledger_cost,
     metadata,
@@ -32,7 +33,7 @@ from bindaems.app.db.schema import (
     thermal_model,
 )
 
-HEAD = "0018"  # neueste Migration
+HEAD = "0019"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -873,3 +874,32 @@ def test_migration_0018_creates_the_pv_tables_and_downgrades(engine: Engine) -> 
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0017"
     migrate(engine)
     assert {"pv_source", "pv_source_day"} <= set(inspect(engine).get_table_names())
+
+
+def test_migration_0019_creates_heating_day_and_downgrades(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "heating_day") == {
+        "day": False,
+        "burner_h": True,
+        "known_h": False,
+        "day_h": False,
+        "burner_end": True,
+        "hdd_kd": True,
+        "outdoor_mean_c": True,
+        "ac_heat_el_kwh": True,
+        "note": True,
+    }
+    assert inspector.get_pk_constraint("heating_day")["constrained_columns"] == ["day"]
+    with engine.begin() as conn:
+        conn.execute(
+            insert(heating_day).values(day="2026-11-03", known_h=24.0, day_h=24.0, burner_end=True)
+        )
+        stored = conn.execute(select(heating_day)).mappings().one()
+    assert stored["burner_end"] is True and stored["burner_h"] is None
+    _downgrade(engine, "0018")
+    tables = inspect(engine).get_table_names()
+    assert "heating_day" not in tables and "pv_source_day" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0018"
+    migrate(engine)
+    assert "heating_day" in inspect(engine).get_table_names()
