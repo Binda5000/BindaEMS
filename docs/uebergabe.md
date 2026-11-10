@@ -14,8 +14,8 @@ bleibt unverändert.
 **Plan PV je Anlage und String** (`docs/superpowers/plans/2026-11-08-pv-je-anlage-und-string.md`) ist umgesetzt und seit
 8.11.2026 auf `main`, **nicht ausgerollt** (Punkt 25 unter „Offen an der Anlage“). Nur app und UI, Migration `0018`;
 der core bleibt unverändert.
-**Plan Ölheizung: Wärmebedarf messen** (`docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`) ist umgesetzt, auf dem Branch
-`claude/project-thread-yeu6f7`, **noch nicht auf `main` und nicht ausgerollt** (Punkt 26 unter „Offen an der Anlage“). **Core und app**, Migration `0019`;
+**Plan Ölheizung: Wärmebedarf messen** (`docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`) ist umgesetzt und seit
+10.11.2026 auf `main`, **nicht ausgerollt** (Punkt 26 unter „Offen an der Anlage“). **Core und app**, Migration `0019`;
 Quelle ist der Brenner „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) über Digital 6 des C.M.I. Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
@@ -2254,8 +2254,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       1.1.2025 im Hintergrund nach (`pv-days-fill`, ohne Neustart, einige Minuten), ein geändertes Signal rechnet die Tage des Eintrags neu.
       Prüfen: Summe „Strings zusammen“ liegt etwas über der Anlage (DC gegen AC), „Nicht zugeordnet“ ist klein, ein Monat zeigt vor den
       Template-Sensoren „–“. Rückweg: die Datenbank auf `0017` zurücknehmen. Betrieb: `docs/betrieb.md`, „PV-Anlagen“.
-  26. **Ölheizung: Wärmebedarf ausrollen:** umgesetzt auf dem Branch `claude/project-thread-yeu6f7`, **noch nicht auf `main`** und nicht ausgerollt; erst nach dem
-      Merge, mit Stufe 2 des Sammel-Pulls (ab 23.11.2026). **Core und app** zusammen mit fester Version, nie `ems-app` allein (der core muss das neue Feld `oil_burner`
+  26. **Ölheizung: Wärmebedarf ausrollen:** umgesetzt und seit 10.11.2026 auf `main`, **nicht ausgerollt**;
+      mit Stufe 2 des Sammel-Pulls (ab 23.11.2026). **Core und app** zusammen mit fester Version, nie `ems-app` allein (der core muss das neue Feld `oil_burner`
       kennen, sonst lehnt er die `config.yaml` ab). **Migration `0019`** (Tabelle `heating_day`, läuft beim Start der app von selbst; setzt `0018` aus Punkt 25 voraus,
       oder die nächste freie Nummer), Datenbank vorher sichern. Nichts wird geschaltet, der Brenner wird nur gelesen. Die Quelle ist die **Anforderung** „Anf.Brenner“,
       nicht die Flamme; die Werte sind eine obere Grenze. Fünf Schritte: (1) im C.M.I. unter CoE-Ausgänge „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) als **Digital 6** an
