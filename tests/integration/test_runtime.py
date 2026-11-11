@@ -467,6 +467,7 @@ async def test_wiring_alarm_does_not_block_control(runtime_env) -> None:
     run(rt, clock, DECISIVE_SAMPLES)
     health = rt.health()
     wiring = [a for a in health.alarms if a["id"] == "wiring.multi_phases"]
+    assert [a["severity"] for a in wiring] == ["warning"]
     assert [a["message"] for a in wiring] == [
         "Phasen von Multi und Netzzähler passen nicht zusammen: Der Verbrauch auf L1 wäre "
         "rechnerisch -3100 W. Passend wäre: Multi-L1 am Netz auf L2, Multi-L2 auf L3, "
