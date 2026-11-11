@@ -16,6 +16,7 @@ grid:
 battery:
   usable_kwh: 30
   reserve_soc_pct: 20   # USV-Reserve: harte Untergrenze für den Akku-SOC
+  # outage_floor_soc_pct: 5   # SOC, bei dem das BMS im Inselbetrieb abschaltet (höchstens reserve_soc_pct); Untergrenze der USV-Reichweite
   max_charge_w: 10000
   max_discharge_w: 12000
 
@@ -152,6 +153,7 @@ app:
   core_url: http://ems-core:8081
   trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
   cookie_secure: true
+  # ping_interval_s: 300   # Takt des Lebenszeichens in s (60 bis 3600); es wird nur gesendet, wenn BINDAEMS_PING_URL gesetzt ist
 
 # Wärme und Kälte (Phase 6a): die Klimaanlage an der UVR610. Der core liest vom C.M.I. per CoE V2 (UDP)
 # Ist, Soll, Betriebsart, Rückmeldung, Leistung und das Echo des Versatzes und sendet der UVR einen
@@ -184,6 +186,7 @@ thermal:
         venting: {node: 56, digital: 3}
         heating: {node: 56, digital: 4}
         running: {node: 56, digital: 5}
+        # oil_burner: {node: 56, digital: 6}   # Brennerstatus der Ölheizung (Plan Ölheizung), nur gelesen
       # Schwellen der Strategie (alle optional; hier die Standardwerte)
       # strategy: {more_above_w: 800, import_above_w: 300, battery_soc_pct: 90, less_max_steps: 2}
       # Freigabe für den Live-Betrieb, erst nach Prüfprotokoll Teil 2, Punkt thermal (Spec 8.7)
@@ -217,6 +220,8 @@ control:
   tesla_reserve_commands: 4 # Tesla: so viele Befehle je Stunde bleiben frei (unter commands.per_hour); ist das Budget bis darauf verbraucht, ändert die Regelung den Strom nur noch auf Verlangen der Wächter. Die Reserve hält Start, Stopp und Aus nicht zurück; Senkungen der Wächter gehen hinaus (die Limits der Safety-Schicht gelten weiter, nur der Stopp in Aus umgeht sie)
   tesla_against_s: 120       # Tesla: lädt er so lange in s ohne Unterbrechung gegen seinen Modus (Tessie: mindestens 1 A), sendet die Regelung "Laden aus" erneut
   tesla_against_retry_s: 600 # Tesla: frühestens so viele s nach diesem Befehl folgt der nächste Versuch, solange er gegen den Modus lädt
+  evcs_against_s: 60         # EVCS: zeigt das Rücklesen so lange in s ohne Unterbrechung Laden an, obwohl der Modus nicht laden will, sendet die Regelung "Laden aus" erneut
+  evcs_against_retry_s: 300  # EVCS: frühestens so viele s nach diesem Befehl folgt der nächste Versuch, solange sie gegen den Modus lädt
 
 # Ablage des core (Volume core-data): intent.json, write_budget.json, rate_limits.json und das
 # Entscheidungslog decisions/ (Tagesdateien, höchstens 7 Tage und 50 MB).

@@ -151,6 +151,25 @@ test('Einstellungen der Planung melden ungültige Zahlen am Feld', async ({ page
 	await expect(page.getByLabel('Roundtrip-Wirkungsgrad (%)')).toBeFocused();
 });
 
+test('Unwetter-Reserve: Ansicht und ohne Warnart kein Speichern', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	// das Demo-Backend hat die Unwetter-Reserve eingeschaltet (Standardwerte sonst)
+	const view = page.getByRole('heading', { name: 'Planung' }).locator('..');
+	await expect(view.getByRole('heading', { name: 'Unwetter-Reserve' })).toBeVisible();
+	await expect(view.getByText('Warnstufe').locator('+ dd')).toHaveText('ab orange');
+	await expect(view.getByText('Warnarten').locator('+ dd')).toHaveText('Sturm, Gewitter');
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	const group = page.getByRole('group', { name: 'Unwetter-Reserve' });
+	await expect(group.getByRole('checkbox', { name: 'Unwetter-Reserve' })).toBeChecked();
+	await expect(group.getByLabel('Ziel-SOC (%)')).toHaveValue('40');
+	await group.getByRole('checkbox', { name: 'Sturm' }).uncheck();
+	await group.getByRole('checkbox', { name: 'Gewitter' }).uncheck();
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(group.getByText('Mindestens eine Warnart wählen')).toBeVisible();
+	await expect(page.getByText(/Version \d+ gespeichert/)).toHaveCount(0);
+});
+
 test('admin wählt einen Sensor für das Lastmodell und speichert ihn', async ({ page }) => {
 	await login(page, 'admin');
 	await page.goto('/einstellungen');
@@ -191,4 +210,31 @@ test('Fahrverhalten im Editor: Ziel-SOC mindestens über höchstens wird nicht g
 	await page.getByRole('button', { name: 'Speichern' }).click();
 	await expect(page.getByText('Ziel-SOC mindestens liegt über höchstens.')).toBeVisible();
 	await expect(page.getByText(/Version \d+ gespeichert/)).toHaveCount(0);
+});
+
+test('admin trägt die Ölheizung ein und stellt sie wieder her', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	const group = page.getByRole('group', { name: 'Ölheizung' });
+	await group.getByLabel('Nennleistung (kW)').fill('0');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(group.getByText('Zahl von 1 bis 100, z. B. 27')).toBeVisible();
+	await group.getByLabel('Nennleistung (kW)').fill('27');
+	await group.getByLabel('Öl je Brennerstunde (l/h)').fill('2,9');
+	await group.getByLabel('Ölpreis (€/l, leer = ohne Euro)').fill('');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+	const card = page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Ölheizung', level: 2 }) });
+	await expect(card.getByText('27,0 kW')).toBeVisible();
+	await expect(card.getByText('2,9 l/h')).toBeVisible();
+	await expect(card.getByText('nicht eingetragen')).toHaveCount(1); // Ölpreis
+
+	// der Demo-Zustand ist geteilt (Anlage mit Brenner): den Ölpreis wieder eintragen
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	await group.getByLabel('Ölpreis (€/l, leer = ohne Euro)').fill('1,1');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(card.getByText('nicht eingetragen')).toHaveCount(0);
 });

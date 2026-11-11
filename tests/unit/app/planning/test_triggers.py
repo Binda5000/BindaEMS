@@ -268,3 +268,15 @@ def test_settings_relevant_for_thermal_planning():
     assert settings_relevant(base, base.model_copy(update={"learning": learning}))
     other = base.learning.model_copy(update={"load_model_enabled": False})
     assert not settings_relevant(base, base.model_copy(update={"learning": other}))
+
+
+def test_changed_storm_comes_after_vehicles_and_before_settings():
+    old = Fingerprint(None, 0, None, None, support_pct=70.0)
+    new = replace(
+        old,
+        vehicles=(("tesla", "evcs", True, 80.0, None, False, None),),
+        storm=((1, 1, at("2026-10-16T12:00:00+00:00"), at("2026-10-16T14:00:00+00:00")),),
+        support_pct=60.0,
+    )
+    assert changed(old, new) == ["vehicles", "storm", "settings"]
+    assert changed(new, new) == []

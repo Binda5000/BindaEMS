@@ -14,7 +14,7 @@ import pytest
 from tests.unit.tools.sim.conftest import T0, at
 
 from bindaems.shared.coe import decode, offset_packet
-from bindaems.shared.config import CoeOffsetConfig, Config
+from bindaems.shared.config import CoeChannel, CoeOffsetConfig, Config
 from bindaems.shared.control import CommandKind
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.timeutil import ManualClock
@@ -151,6 +151,20 @@ def test_the_cmi_sends_the_receive_table(cfg: Config) -> None:
     raw = {(v.node, v.output, v.analog): v.raw for v in values}
     active = channels["offset_active_k"]
     assert raw[(active.node, active.analog, True)] == -5  # Zehntel K
+
+
+def test_sim_sends_oil_burner(cfg: Config) -> None:
+    found = device(cfg)
+    receive = found.receive.model_copy(update={"oil_burner": CoeChannel(node=56, digital=6)})
+    unit = AirConditioner(KLIMA, found.model_copy(update={"receive": receive}))
+    unit.mode = "kuehlen"
+    unit.step(T0, 0.0)
+    for burning in (True, False):
+        unit.oil_burner_on = burning
+        values = [value for packet in unit.packets() for value in decode(packet)]
+        assert [v.raw for v in values if (v.node, v.output, v.analog) == (56, 6, False)] == [
+            int(burning)
+        ]
 
 
 def test_a_silent_or_disconnected_cmi_sends_nothing(cfg: Config) -> None:

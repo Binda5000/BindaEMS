@@ -30,7 +30,7 @@ from bindaems.app.planning.intents import (
     drop_held_battery,
 )
 from bindaems.app.planning.optimizer import OptimizerResult, solve
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
+from bindaems.app.planning.plausibility import R1_TOL_KWH, check_plan, export_while_charged_kwh
 from bindaems.app.planning.service import plan_once
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, IntentPlan, intent_plan
 from bindaems.shared.timeutil import SLOT
@@ -107,6 +107,124 @@ def test_unprofitable_grid_charge_keeps_its_recharge_part() -> None:
     kinds = derive_intents(inputs, result)
     assert kinds[0] == _recharge(1500.0)
     assert kinds[1].kind is BatteryIntentKind.HALTEN
+
+
+def _storm_ahead(*, grid_charge: bool, slots: int = 2) -> PlanInputs:
+    """Akku 96 kWh, Reserve 20 %, SOC 22 %, Haus 600 W, ohne PV, ein Preis, kein Restwert; in
+    allen Slots die Untergrenze 40 % der Unwetter-Reserve."""
+    return scenario(
+        prices=[10.0] * slots,
+        pv=[0.0] * slots,
+        load=[600.0] * slots,
+        soc_pct=22.0,
+        grid_charge=grid_charge,
+        battery=state(usable_kwh=96.0),
+        storm_floors=[40.0] * slots,
+    )
+
+
+@pytest.mark.parametrize("grid_charge", [False, True])
+def test_storm_charge_becomes_flagged_netzladen(grid_charge: bool) -> None:
+    # Aufladen für die Unwetter-Reserve (``gr_s``, Entscheidung 6) wird ``NETZLADEN`` mit Flag wie
+    # das Nachladen, auch bei ausgeschaltetem Schalter, höchstens 3000 W; es muss sich nicht
+    # rechnen (ein Preis, kein Restwert), ``_drop_unprofitable`` lässt es stehen
+    inputs = _storm_ahead(grid_charge=grid_charge, slots=3)
+    soc0 = 0.22 * 96.0
+    result = flows_result(
+        [
+            flow(gr_h=600, gr_s=2500, soc_end_kwh=soc0 + 0.6),
+            flow(gr_h=600, gr_b=40, gr_s=3500, soc_end_kwh=soc0 + 1.4),
+            flow(gr_h=600, soc_end_kwh=soc0 + 1.4),
+        ]
+    )
+    intents = derive_intents(inputs, result)
+    assert intents[:2] == [_recharge(2500.0), _recharge(3000.0)]
+    assert intents[2].kind is BatteryIntentKind.HALTEN
+
+
+def test_unprofitable_grid_charge_keeps_its_storm_part() -> None:
+    # Netzladen 2000 W rechnet sich nicht; gestrichen wird nur dieser Teil, das Aufladen für die
+    # Unwetter-Reserve (1500 W) bleibt
+    inputs = _storm_ahead(grid_charge=True)
+    soc0 = 0.22 * 96.0
+    result = flows_result(
+        [
+            flow(gr_h=600, gr_b=2000, gr_s=1500, soc_end_kwh=soc0 + 0.8),
+            flow(gr_h=600, soc_end_kwh=soc0 + 0.8),
+        ]
+    )
+    kinds = derive_intents(inputs, result)
+    assert kinds[0] == _recharge(1500.0)
+    assert kinds[1].kind is BatteryIntentKind.HALTEN
+
+
+def test_partial_discharge_in_storm_window_rounds_to_hold() -> None:
+    # Plan Unwetter-Reserve, Entscheidung 10: Der Optimierer entlädt im Fenster nur den Teil über
+    # der Untergrenze (1100 von 1800 W). Nach der Regel ohne Fenster wäre das Eigenverbrauch, und
+    # die Nachrechnung entlüde 0,5 kWh unter 40 % (Befund). Mit Untergrenze hält der Slot.
+    def inputs_with(floors: list[float | None]) -> PlanInputs:
+        return scenario(
+            prices=[20.0, 20.0],
+            pv=[0.0, 0.0],
+            load=[1800.0, 1800.0],
+            battery=small_battery(),
+            soc_pct=41.0,
+            start="2026-10-16T12:00:00+00:00",
+            storm_floors=floors,
+        )
+
+    result = flows_result(
+        [
+            flow(gr_h=700, bt_h=1100, soc_end_kwh=4.1 - 1100 * SLOT_H / 1000 / eta(88.0)),
+            flow(gr_h=1800, soc_end_kwh=4.1 - 1100 * SLOT_H / 1000 / eta(88.0)),
+        ]
+    )
+    plain = derive_intents(inputs_with([None, None]), result)
+    assert plain[0].kind is BatteryIntentKind.EIGENVERBRAUCH
+    storm = inputs_with([40.0, 40.0])
+    intents = derive_intents(storm, result)
+    assert intents == [BatteryIntent(kind=BatteryIntentKind.HALTEN)] * 2
+    assert check_plan(storm, result, intents, resimulate(storm, intents)) == []
+
+
+def test_storm_charge_is_not_trimmed_by_r1() -> None:
+    # Ruling R6: Aufladen für die Unwetter-Reserve setzt im Optimierer kein ``z_t``. Füllt die PV
+    # danach den Akku und speist ein, kürzt ``_keep_rule_r1`` es nicht; ein Netzladen ohne Flag
+    # an derselben Stelle wird gekürzt.
+    inputs = scenario(
+        prices=[5.0, 8.0],
+        pv=[0.0, 9000.0],
+        load=[500.0, 500.0],
+        battery=small_battery(),
+        soc_pct=85.0,
+        storm_floors=[95.0, 95.0],
+    )
+    result = flows_result(
+        [
+            flow(gr_h=500, gr_s=3000, soc_end_kwh=9.2),
+            flow(pv_h=500, pv_b=3000, pv_x=5500, soc_end_kwh=9.9),
+        ]
+    )
+    intents = derive_intents(inputs, result)
+    assert intents[0] == _recharge(3000.0)
+    lo_kwh = params_of(inputs).lo_kwh
+    assert export_while_charged_kwh(resimulate(inputs, intents), 0, lo_kwh) > R1_TOL_KWH
+    # mit Restwert rechnet sich das Netzladen, gekürzt wird es wegen Regel R1
+    switched = inputs.model_copy(
+        update={
+            "planning": inputs.planning.model_copy(update={"grid_charge_allowed": True}),
+            "end_value_ct": 30.0,
+        }
+    )
+    plain = flows_result(
+        [
+            flow(gr_h=500, gr_b=3000, soc_end_kwh=9.2),
+            flow(pv_h=500, pv_b=3000, pv_x=5500, soc_end_kwh=9.9),
+        ]
+    )
+    assert derive_intents(switched, plain)[0] != BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000.0
+    )
 
 
 def test_grid_charge_below_one_step_of_headroom_is_not_netzladen() -> None:

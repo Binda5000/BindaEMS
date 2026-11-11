@@ -22,7 +22,9 @@ from tests.ui_world import (
     DEMO_TOTP_SECRET,
     T_DEMO,
     World,
+    add_pv_sources,
     build_world,
+    refresh_pv,
 )
 
 from bindaems.app.charging.planned import PlannedSummary
@@ -42,6 +44,11 @@ GET_ENDPOINTS = {
     "limits": "/api/limits",
     "consumers": "/api/consumers",
     "consumer-candidates": "/api/consumers/candidates",
+    "pv": "/api/pv",
+    "pv-candidates": "/api/pv/candidates",
+    "pv-day": "/api/pv/day?date=2026-10-08",
+    "pv-period-month": "/api/pv/period?period=month&day=2026-10-09",
+    "pv-period-year": "/api/pv/period?period=year&day=2026-10-09",
     "history-catalog": "/api/history/catalog",
     "history": "/api/history?series=grid,soc.battery&from=2026-10-09T06:00:00Z"
     "&to=2026-10-09T08:00:00Z",
@@ -60,6 +67,7 @@ GET_ENDPOINTS = {
     "stats-day": "/api/stats?period=day&date=2026-10-08",
     "stats-month": "/api/stats?period=month&date=2026-10-09",
     "stats-year": "/api/stats?period=year&date=2026-10-09",
+    "heating-demand": "/api/heating/demand?tag=2026-10-09",
     "charging-sessions": "/api/charging/sessions?from=2026-09-25&to=2026-10-09",
     "users": "/api/users",
     "audit": "/api/audit",
@@ -69,6 +77,10 @@ GET_ENDPOINTS = {
     "decisions-latest": "/api/decisions/latest",
     "plan": "/api/plan",
     "plan-review": "/api/plan/review",
+    "ops-check": "/api/ops/check",
+    "ops-findings": "/api/ops/findings?days=14",
+    "ops-switches": "/api/ops/switches",
+    "backup": "/api/backup",
 }
 OTHER = {
     "live-hello",
@@ -187,8 +199,16 @@ def matches_contract(name: str, body: object) -> bool:
     return path.is_file() and path.read_text(encoding="utf-8") == text
 
 
+async def contract_world(cfg, data_dir: Path) -> World:
+    """Die Demo-Welt mit PV-Anlage und Strings samt gespeicherten Tagen (für /api/pv)."""
+    world = await build_world(cfg, data_dir)
+    add_pv_sources(world.app)
+    await refresh_pv(world.app)
+    return world
+
+
 async def test_api_responses_match_ui_contract(cfg, tmp_path) -> None:
-    world = await build_world(cfg, tmp_path)
+    world = await contract_world(cfg, tmp_path)
     try:
         actual = await asyncio.to_thread(collect_responses, world)  # GET, WebSocket, POST, 422
         actual.update(await live_messages(world))
@@ -203,7 +223,7 @@ async def test_demo_world_is_deterministic(cfg, tmp_path) -> None:
     # Sonst wechselten die Vertragsdateien bei jedem Lauf
     bodies = []
     for name in ("a", "b"):
-        world = await build_world(cfg, tmp_path / name)
+        world = await contract_world(cfg, tmp_path / name)
         try:
             body = await asyncio.to_thread(collect_responses, world)
             body.update(await live_messages(world))
@@ -387,6 +407,24 @@ async def test_demo_world_has_a_thermal_model(cfg, tmp_path) -> None:
     steps = [slot["thermal_steps"] for slot in plan["slots"]]
     assert max(steps) > 0 > min(steps)  # vorheizen und absenken
     assert all("KLIMA_MEHR" not in slot["codes"] for slot in plan["slots"])  # nur Vorschau
+
+
+async def test_demo_world_has_operations_data(cfg, tmp_path) -> None:
+    # Grundlage der Seite „Betrieb“: Auffälligkeiten der letzten 7 Tage wie nach dem Start der
+    # app, darunter das Netzladen ohne Plan in der Nacht auf gestern, und ruhige Tage
+    world = await build_world(cfg, tmp_path)
+    try:
+        by_day = world.app.findings.days(FIRST_DAY, LAST_DAY)
+    finally:
+        world.close()
+    assert sorted(by_day) == [LAST_DAY - timedelta(days=n) for n in range(6, -1, -1)]
+    rules = {day: [item.rule for item in found] for day, found in by_day.items()}
+    assert "grid_charge_unplanned" in rules[LAST_DAY]
+    assert "not_checked" not in {rule for found in rules.values() for rule in found}
+    assert [] in rules.values()
+    grid = next(item for item in by_day[LAST_DAY] if item.rule == "grid_charge_unplanned")
+    assert grid.link == "/entscheidungen?range=2026-10-08&actuator=victron"
+    assert grid.text.startswith("Akku lud 02:00–05:00 ")
 
 
 async def test_reprice_keeps_the_demo_costs(cfg, tmp_path) -> None:

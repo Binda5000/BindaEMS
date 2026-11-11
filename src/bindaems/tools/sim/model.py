@@ -328,6 +328,7 @@ class AirConditioner:
         self.silent = False
         self.deaf = False
         self.echo = True
+        self.oil_burner_on = False  # Brennerstatus der Ölheizung, falls die Tabelle ihn liest
         self.active_k = 0.0
         self.received: list[tuple[datetime, float]] = []
         self._deliver: Callable[[bytes, tuple[str, int]], None] | None = None
@@ -418,6 +419,7 @@ class AirConditioner:
             "cooling": self.mode == "kuehlen",
             "venting": self.mode == "lueften",
             "heating": self.mode == "heizen",
+            "oil_burner": self.oil_burner_on,
         }
         if channel.digital is not None:
             return CoeValue(channel.node, channel.digital, False, DIGITAL_UNIT, int(flags[key]))

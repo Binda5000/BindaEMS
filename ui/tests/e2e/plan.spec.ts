@@ -52,6 +52,18 @@ test('operator plans again', async ({ page }) => {
 	await expect(page.getByText('Plan von').first()).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Ablauf' })).toBeVisible();
 	await expect(page.locator('.notice.error')).toHaveCount(0);
+	// Unwetter-Reserve: Das Demo-Backend kennt eine Gewitterwarnung (orange) von 18:00 bis 21:00 am
+	// 09.10.; der Browser rechnet „heute“ nach seiner Uhr, darum steht der Tag davor
+	await expect(
+		page.getByRole('list', { name: 'Unwetterwarnungen' }).getByRole('listitem')
+	).toHaveText([/^Unwetterwarnung: Gewitter \(orange\) .*18:00–21:00$/]);
+	await expect(
+		page
+			.getByText(
+				'Unwetter-Reserve: Gewitter (orange) bis 21:00 Uhr, der Akku hält mindestens 40 %.'
+			)
+			.first()
+	).toBeVisible();
 	expect(watch.cspViolations).toEqual([]);
 	expect(watch.errors).toEqual([]);
 });

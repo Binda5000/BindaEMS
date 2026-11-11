@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import math
-from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Final, Literal
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -28,6 +27,7 @@ from bindaems.app.history.influx import (
     quote_ident,
     quote_str,
 )
+from bindaems.app.history.steps import StatusSteps, read_status_steps, series_rows
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import SLOT, ensure_utc, slots_between
@@ -76,18 +76,6 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
-def _rows(series: Sequence[Series]) -> list[tuple[datetime, dict[str, Any]]]:
-    rows: list[tuple[datetime, dict[str, Any]]] = []
-    for item in series:
-        for row in item.values:
-            if not row or isinstance(row[0], bool) or not isinstance(row[0], int):
-                continue
-            ts = datetime.fromtimestamp(row[0] / 1000, UTC)
-            rows.append((ts, dict(zip(item.columns, row, strict=False))))
-    rows.sort(key=lambda entry: entry[0])
-    return rows
-
-
 async def _query(reader: InfluxReader, text: str) -> list[Series]:
     try:
         return await reader.query(text)
@@ -111,7 +99,7 @@ async def _means(
     )
     return {
         ts: {field: _number(cells.get(field)) for field in fields}
-        for ts, cells in _rows(await _query(reader, text))
+        for ts, cells in series_rows(await _query(reader, text))
     }
 
 
@@ -131,7 +119,7 @@ async def _pv(reader: InfluxReader, window: str) -> dict[datetime, float]:
     for item in await _query(reader, text):
         series_id = item.tags.get("id", "")
         ids.add(series_id)
-        for ts, cells in _rows([item]):
+        for ts, cells in series_rows([item]):
             value = _number(cells.get("p_w"))
             if value is not None:
                 parts.setdefault(ts, {})[series_id] = value
@@ -139,75 +127,15 @@ async def _pv(reader: InfluxReader, window: str) -> dict[datetime, float]:
     return {ts: sum(values.values()) for ts, values in parts.items() if required <= values.keys()}
 
 
-@dataclass(frozen=True)
-class _Steps:
-    """Stufenfunktion eines Bits: ``seed`` vor dem Fenster und die Änderungen darin."""
-
-    seed: bool | None
-    times: list[datetime]
-    values: list[bool]
-
-    def share(self, start: datetime, end: datetime) -> float | None:
-        """Zeitanteil „wahr“ in ``[start, end)``; ``None``, wenn der Anfang unbekannt ist."""
-        index = bisect_right(self.times, start) - 1
-        state = self.values[index] if index >= 0 else self.seed
-        if state is None:
-            return None
-        true_s = 0.0
-        cursor = start
-        for ts, value in zip(self.times[index + 1 :], self.values[index + 1 :], strict=True):
-            if ts >= end:
-                break
-            if state:
-                true_s += (ts - cursor).total_seconds()
-            state, cursor = value, ts
-        if state:
-            true_s += (end - cursor).total_seconds()
-        return true_s / (end - start).total_seconds()
-
-
-def _bit_of(item_id: str, device: str) -> str | None:
-    prefix = f"thermal.{device}."
-    bit = item_id.removeprefix(prefix) if item_id.startswith(prefix) else None
-    return bit if bit in _BITS else None
-
-
 async def _steps(
     reader: InfluxReader, device: str, start: datetime, end: datetime
-) -> dict[str, _Steps]:
-    ids = " OR ".join(f'"id" = {quote_str(f"thermal.{device}.{bit}")}' for bit in _BITS)
-    # Werte sind maskiert, Feld und Messung sind Konstanten
-    changes = await _query(
-        reader,
-        f'SELECT "value_bool" FROM "status" WHERE ({ids}) AND {_window(start, end)} '  # noqa: S608
-        'GROUP BY "id"',
-    )
-    earlier = await _query(
-        reader,
-        f'SELECT last("value_bool") FROM "status" WHERE ({ids}) '  # noqa: S608
-        f'AND time < {epoch_ms(start)}ms GROUP BY "id"',
-    )
-    seeds: dict[str, bool | None] = dict.fromkeys(_BITS)
-    for item in earlier:
-        bit = _bit_of(item.tags.get("id", ""), device)
-        for _, cells in _rows([item]):
-            value = cells.get("last")
-            if bit is not None and isinstance(value, bool):
-                seeds[bit] = value
-    events: dict[str, list[tuple[datetime, bool]]] = {bit: [] for bit in _BITS}
-    for item in changes:
-        bit = _bit_of(item.tags.get("id", ""), device)
-        if bit is None:
-            continue
-        for ts, cells in _rows([item]):
-            value = cells.get("value_bool")
-            if isinstance(value, bool):
-                events[bit].append((ts, value))
-    result: dict[str, _Steps] = {}
-    for bit in _BITS:
-        ordered = sorted(events[bit], key=lambda event: event[0])
-        result[bit] = _Steps(seeds[bit], [t for t, _ in ordered], [v for _, v in ordered])
-    return result
+) -> dict[str, StatusSteps]:
+    ids = {bit: f"thermal.{device}.{bit}" for bit in _BITS}
+    try:
+        steps = await read_status_steps(reader, list(ids.values()), start, end)
+    except InfluxQueryError as exc:
+        raise ThermalDataError(f"Die Daten der Klimaanlage sind nicht lesbar: {exc}") from exc
+    return {bit: steps[item_id] for bit, item_id in ids.items()}
 
 
 def _flag(share: float | None) -> bool | None:

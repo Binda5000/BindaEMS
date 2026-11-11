@@ -42,6 +42,7 @@
 	const prices = new Resource((o) => api.prices(null, o), { intervalMs: 300_000 });
 	const forecast = new Resource((o) => api.forecast(o), { intervalMs: 300_000 });
 	const load = new Resource((o) => api.loadForecast(o), { intervalMs: 300_000 });
+	const backup = new Resource((o) => api.backup(o), { intervalMs: 60_000 });
 	const plan = new Resource((o) => api.plan(o), { intervalMs: 60_000 });
 	// heute 0 Uhr in Wien bis jetzt, bei jeder Ladung neu (auch über Mitternacht)
 	const history = new Resource(
@@ -69,6 +70,7 @@
 			load,
 			decisions,
 			plan,
+			backup,
 			history,
 			day
 		].map((r) => r.start());
@@ -127,7 +129,7 @@
 
 	<div class="tiles">
 		<div class="battery">
-			<BatteryTile view={battery} stale={live.stale} {nowMs} />
+			<BatteryTile view={battery} stale={live.stale} {nowMs} backup={backup.data} />
 		</div>
 		<KpiTile
 			data-testid="kpi-pv"

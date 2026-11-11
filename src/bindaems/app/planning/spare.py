@@ -41,7 +41,9 @@ def now_battery_flags(
 
     Das gilt, wenn der Schalter ``planning.car_battery_allowed`` an ist, die Absicht
     ``EIGENVERBRAUCH`` ist, keine Netzenergie im Akku sein kann (Entscheidung 2,
-    ``grid_in_battery``, auch von vor dem Horizont) und sich Akkustrom rechnet:
+    ``grid_in_battery``, auch von vor dem Horizont), der Slot keine Untergrenze der
+    Unwetter-Reserve hat (``storm_floor_pct``, Plan Unwetter-Reserve, Entscheidung 7) und sich
+    Akkustrom rechnet:
     ``import_ct − wear_ct − margin_ct ≥ v / η_dis`` mit ``v = spare_value_ct``. Dass der Plan vom
     Optimierer kommt, prüft der Aufrufer.
     """
@@ -54,7 +56,11 @@ def now_battery_flags(
     )
     flags: list[bool] = []
     for index, intent in enumerate(intents):
-        if intent.kind is not BatteryIntentKind.EIGENVERBRAUCH or grid_inside[index]:
+        if (
+            intent.kind is not BatteryIntentKind.EIGENVERBRAUCH
+            or grid_inside[index]
+            or inputs.slots[index].storm_floor_pct is not None
+        ):
             flags.append(False)
             continue
         gain_ct = inputs.slots[index].import_ct - planning.wear_ct - planning.margin_ct

@@ -46,6 +46,7 @@ HA_SYSTEM_IDS = (
     "battery_plan_next",
     "planned_soc",
     "budget",
+    "storm_reserve",
     "grid_power",
     "pv_power",
     "battery_power",
@@ -56,6 +57,10 @@ HA_SYSTEM_IDS = (
     "problem_competitor",
     "problem_prices",
     "problem_device_offline",
+    "ops_check",
+    "usv_reichweite",
+    "usv_reichweite_reserve",
+    "netzausfall",
     "watchdog_tripped",
     "regulation",
     "guest_mode",
@@ -79,6 +84,7 @@ HA_VEHICLE_SUFFIXES = (
     "boost_stop",
     "wallbox",
     "charge_energy",
+    "charge_estimate",
     "target_soc",
     "now_max_a",
     "departure",
@@ -156,11 +162,15 @@ class BatteryConfig(_Model):
     max_charge_w: Annotated[float, Field(gt=0)]
     max_discharge_w: Annotated[float, Field(gt=0)]
     soc_max_pct: Annotated[float, Field(gt=0, le=100)] = 100.0
+    # SOC, bei dem das BMS im Inselbetrieb abschaltet (Untergrenze der USV-Reichweite)
+    outage_floor_soc_pct: Annotated[float, Field(ge=0, le=100)] = 5.0
 
     @model_validator(mode="after")
     def _reserve_below_max(self) -> Self:
         if self.reserve_soc_pct >= self.soc_max_pct:
             raise ValueError("reserve_soc_pct muss kleiner als soc_max_pct sein")
+        if self.outage_floor_soc_pct > self.reserve_soc_pct:
+            raise ValueError("outage_floor_soc_pct darf nicht über reserve_soc_pct liegen")
         return self
 
 
@@ -285,8 +295,14 @@ class CoeChannel(_Model):
         return self
 
 
+OIL_BURNER_SIGNAL: Final = "oil_burner"  # Feldname und Signalende des Brennerstatus
+
+
 class CoeReceive(_Model):
-    """Empfangstabelle: Welcher Wert des C.M.I. welche Größe der Klimaanlage ist."""
+    """Empfangstabelle: Welcher Wert des C.M.I. welche Größe der Klimaanlage ist.
+
+    ``oil_burner`` ist der Brennerstatus der Ölheizung (nur gelesen, Plan Ölheizung).
+    """
 
     actual_c: CoeChannel
     setpoint_c: CoeChannel
@@ -297,6 +313,13 @@ class CoeReceive(_Model):
     running: CoeChannel
     power_kw: CoeChannel | None = None
     cmd_on: CoeChannel | None = None
+    oil_burner: CoeChannel | None = None
+
+    @model_validator(mode="after")
+    def _oil_burner_is_digital(self) -> Self:
+        if self.oil_burner is not None and self.oil_burner.digital is None:
+            raise ValueError("oil_burner muss ein Digitalwert sein.")
+        return self
 
     def channels(self) -> dict[str, CoeChannel]:
         """Die belegten Kanäle unter ihrem Feldnamen (ohne die optionalen, die fehlen)."""
@@ -566,6 +589,7 @@ class AppConfig(_Model):
     cookie_secure: bool = True
     ui_dir: Path | None = Path("/app/ui")
     decisions_keep_days: Annotated[int, Field(ge=1, le=3650)] = 180  # Entscheidungslog in SQLite
+    ping_interval_s: Annotated[float, Field(ge=60, le=3600)] = 300.0  # Takt des Lebenszeichens
 
     @field_validator("trusted_proxies")
     @classmethod
@@ -636,6 +660,13 @@ class ControlConfig(_Model):
       klar), bevor die Regelung „Laden aus“ erneut sendet.
     - ``tesla_against_retry_s``: Frühestens so viele s später folgt je Fahrzeug ein weiterer
       Versuch, solange es gegen den Modus lädt.
+
+    Selbststart an der EVCS (Plan EVCS-Selbststart):
+
+    - ``evcs_against_s``: So lange in s zeigt das Rücklesen der EVCS ohne Unterbrechung Laden an,
+      obwohl der Modus des Fahrzeugs nicht laden will, bevor die Regelung „Laden aus“ erneut sendet.
+    - ``evcs_against_retry_s``: Frühestens so viele s später folgt je Fahrzeug ein weiterer
+      Versuch, solange die EVCS gegen den Modus lädt.
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0
@@ -660,6 +691,8 @@ class ControlConfig(_Model):
     tesla_reserve_commands: Annotated[int, Field(ge=0)] = 4
     tesla_against_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 120.0
     tesla_against_retry_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 600.0
+    evcs_against_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 60.0
+    evcs_against_retry_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 300.0
 
 
 class CoreConfig(_Model):
@@ -900,6 +933,7 @@ class Secrets(BaseSettings):
     ha_token: SecretStr | None = None
     influx_password: SecretStr | None = None
     ha_mqtt_password: SecretStr | None = None
+    ping_url: SecretStr | None = None
     internal_token: SecretStr
 
     @field_validator("internal_token")

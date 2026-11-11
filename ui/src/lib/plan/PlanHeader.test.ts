@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import PlanHeader from './PlanHeader.svelte';
-import { NOW, PLAN, RESPONSE } from '$lib/testing/plan';
+import { NOW, PLAN, RESPONSE, iso } from '$lib/testing/plan';
 
 // Der Zeitplan nennt den Abfahrtstag nach der Uhr (Ruling F-7): die Uhr steht auf dem Plan-Beginn
 beforeEach(() => {
@@ -186,4 +186,24 @@ it('nennt „Ladelimit“ nicht: Der Zeitplan kennt das Ziel der Absicht nicht',
 		expect(screen.queryByText(/Ladelimit/)).toBeNull();
 		unmount();
 	}
+});
+
+it('zeigt die Unwetterwarnungen des Plans im Kopf, ohne Warnung keine', () => {
+	const { unmount } = render(PlanHeader, { data: RESPONSE, canOperate: false });
+	expect(screen.queryByText(/^Unwetterwarnung:/)).toBeNull();
+	unmount();
+	const warning = {
+		warn_id: 7,
+		version: 1,
+		kind: 'gewitter' as const,
+		level: 2 as const,
+		begin: iso('14:00'),
+		end: iso('16:00'),
+		text: 'Gewitter'
+	};
+	render(PlanHeader, {
+		data: { ...RESPONSE, plan: { ...PLAN, storm: { target_pct: 40, warnings: [warning] } } },
+		canOperate: false
+	});
+	expect(screen.getByText('Unwetterwarnung: Gewitter (orange) 14:00–16:00')).toBeInTheDocument();
 });

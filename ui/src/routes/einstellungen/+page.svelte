@@ -12,6 +12,7 @@
 	import LimitsView from '$lib/settings/LimitsView.svelte';
 	import { defaultRepriceRange } from '$lib/settings/model';
 	import LearningView from '$lib/settings/LearningView.svelte';
+	import HeatingView from '$lib/settings/HeatingView.svelte';
 	import ThermalPlanView from '$lib/settings/ThermalPlanView.svelte';
 	import PlanningView from '$lib/settings/PlanningView.svelte';
 	import RepriceForm from '$lib/settings/RepriceForm.svelte';
@@ -182,6 +183,10 @@
 
 		<Card title="Vorheizen und Vorkühlen">
 			<ThermalPlanView learning={current.settings.learning} />
+		</Card>
+
+		<Card title="Ölheizung">
+			<HeatingView heating={current.settings.heating} />
 		</Card>
 	{:else if !settings.error}
 		<p class="muted">Lädt …</p>

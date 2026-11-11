@@ -16,20 +16,14 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import Connection, Engine, Row, delete, insert, select, update
+from sqlalchemy import Connection, Engine, delete, insert, select, update
 
 from bindaems.app.audit import AuditLog, Source
+from bindaems.app.db.fields import HA_REF_RE, DbId, Name, Rows, changes
 from bindaems.app.db.schema import consumer_day, consumer_table
 from bindaems.shared.timeutil import Clock
 
 CORE_REF_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)*\.power_w$")
-HA_REF_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
-MAX_ID = 2**63 - 1  # größte Ganzzahl in SQLite
-
-_Row = Row[*tuple[Any, ...]]
-
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
-DbId = Annotated[int, Field(ge=1, le=MAX_ID)]
 
 
 class ConsumerInput(BaseModel):
@@ -89,7 +83,7 @@ class ConsumerError(Exception):
         self.status = status
 
 
-def _consumer(row: _Row) -> Consumer:
+def _consumer(row: Rows) -> Consumer:
     return Consumer(
         id=row.id,
         name=row.name,
@@ -167,13 +161,13 @@ class ConsumerService:
             )
             consumer = Consumer(id=consumer_id, **_fields(data))
             before, after = asdict(old), asdict(consumer)
-            changes = {
-                key: {"old": before[key], "new": value}
-                for key, value in after.items()
-                if before[key] != value
-            }
             self._audit.record(
-                actor, source, "consumer.update", data.name, {"changes": changes}, conn=conn
+                actor,
+                source,
+                "consumer.update",
+                data.name,
+                {"changes": changes(before, after)},
+                conn=conn,
             )
         return consumer
 
@@ -195,7 +189,7 @@ class ConsumerService:
             raise ConsumerError("HA-Datenbank (influxdb.ha_database) ist nicht konfiguriert", 422)
 
     @staticmethod
-    def _get(conn: Connection, consumer_id: int) -> _Row:
+    def _get(conn: Connection, consumer_id: int) -> Rows:
         row = conn.execute(select(consumer_table).where(consumer_table.c.id == consumer_id)).first()
         if row is None:
             raise ConsumerError("Verbraucher nicht gefunden", 404)

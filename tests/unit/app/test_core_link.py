@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -492,3 +493,19 @@ async def test_client_uses_the_health_timeout_for_health_and_five_seconds_otherw
         await client.health()
         await client.intent()
     assert timeouts["/v1/health"]["read"] == 3.0 and timeouts["/v1/intent"]["read"] == 5.0
+
+
+def test_disconnected_since_is_start_then_real_time_none_while_connected() -> None:
+    clock = ManualClock(T_APP)
+    live = LiveState()
+    client = FakeCoreClient([], [])
+    feed = LiveFeed(client, live, clock)  # type: ignore[arg-type]
+    clock.advance(50)
+    assert feed.disconnected_since == T_APP  # nie verbunden: Start der app
+    feed._connected()
+    assert feed.disconnected_since is None
+    clock.advance(100)
+    feed._disconnected()
+    assert feed.disconnected_since == T_APP + timedelta(seconds=150)
+    clock.advance(30)
+    assert feed.disconnected_since == T_APP + timedelta(seconds=150)

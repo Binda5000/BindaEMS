@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { beforeEach, expect, it, vi } from 'vitest';
 import controlJson from '$lib/api/contract/control.json';
 import pricesJson from '$lib/api/contract/prices.json';
+import { BACKUP } from '$lib/testing/backup';
 import { ApiError } from '$lib/api/errors';
 import {
 	ControlResponseSchema,
@@ -24,12 +25,14 @@ const { api, user } = vi.hoisted(() => ({
 		loadForecast: vi.fn(),
 		forecastQuality: vi.fn(),
 		limits: vi.fn(),
+		backup: vi.fn(),
 		health: vi.fn(),
 		refreshPrices: vi.fn(),
 		control: vi.fn(),
 		setRegulation: vi.fn(),
 		setActuators: vi.fn(),
-		acknowledge: vi.fn()
+		acknowledge: vi.fn(),
+		opsCheck: vi.fn()
 	},
 	user: { role: 'admin' as Role }
 }));
@@ -65,7 +68,9 @@ beforeEach(() => {
 	api.loadForecast.mockReturnValue(new Promise(() => {}));
 	api.forecastQuality.mockReturnValue(new Promise(() => {}));
 	api.limits.mockReturnValue(new Promise(() => {}));
+	api.backup.mockReturnValue(new Promise(() => {}));
 	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
+	api.opsCheck.mockReturnValue(new Promise(() => {}));
 });
 
 it('zeigt gleichlautende Hinweise und Preisfehler ohne abzustürzen', async () => {
@@ -91,14 +96,43 @@ it('zeigt die Karten Lastprognose und Prognosegüte', async () => {
 	expect(api.forecastQuality).toHaveBeenCalledWith(14, expect.anything());
 });
 
+it('zeigt die Karte USV und Netzausfälle mit den Daten von /api/backup', async () => {
+	api.backup.mockResolvedValue(BACKUP);
+	showSystem(system());
+	expect(
+		await screen.findByRole('heading', { level: 2, name: 'USV und Netzausfälle' })
+	).toBeInTheDocument();
+	expect(await screen.findByText('Reichweite jetzt')).toBeInTheDocument();
+	expect(api.backup).toHaveBeenCalledTimes(1);
+});
+
+it('verweist ganz oben mit dem Ergebnis des Betriebschecks auf die Seite Betrieb', async () => {
+	api.opsCheck.mockResolvedValue({
+		level: 'warn',
+		checked_at: '2026-10-09T08:00:00+00:00',
+		items: [
+			{ id: 'core', label: 'core', level: 'ok', text: 'core verbunden', link: null },
+			{ id: 'plan', label: 'Plan', level: 'warn', text: 'kein Plan', link: null }
+		]
+	});
+	showSystem(system());
+	const link = await screen.findByRole('link', { name: 'Betriebscheck: 1 Warnung' });
+	expect(link).toHaveAttribute('href', '/betrieb');
+	expect(within(link.closest('p')!).getByRole('img', { name: 'Warnung' })).toBeInTheDocument();
+	// die Zeile steht vor der ersten Karte
+	const first = screen.getByRole('heading', { level: 2, name: 'Komponenten' });
+	expect(link.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	expect(api.opsCheck).toHaveBeenCalledTimes(1);
+});
+
 // --- Komponenten und Selbstprüfung ---------------------------------------------------------
 
 it('zählt die Komponenten in der Kopfzeile und stellt die gestörte nach vorn', async () => {
 	showSystem(system());
 	const components = card('Komponenten');
-	expect(await within(components).findByText('10 von 11 in Ordnung')).toBeInTheDocument();
+	expect(await within(components).findByText('12 von 13 in Ordnung')).toBeInTheDocument();
 	const rows = within(components).getAllByRole('listitem');
-	expect(rows).toHaveLength(11);
+	expect(rows).toHaveLength(13);
 	expect(within(rows[0]!).getByText('Home Assistant')).toBeInTheDocument();
 	expect(within(rows[0]!).getByRole('img', { name: 'gestört' })).toBeInTheDocument();
 	expect(rows[1]).toHaveTextContent(/^\s*core\s*verbunden\s*$/);

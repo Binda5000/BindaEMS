@@ -15,6 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
+from bindaems.app.charging.estimate import ESTIMATED_MODES, ChargeEstimate, estimate_charge
 from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE, guest_range
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
@@ -27,6 +28,7 @@ from bindaems.app.learning.driving_profile import (
     weekday_of,
 )
 from bindaems.app.ledger.service import MonthPeak
+from bindaems.app.monitoring.backup_range import BackupRange
 from bindaems.app.planning.execution import ExecutionState, execution_state
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.thermal_shift import STEP_K
@@ -53,6 +55,7 @@ from bindaems.shared.control import (
     Intent,
     VehicleIntent,
     _local_instant,
+    next_departure,
 )
 from bindaems.shared.domain import Value
 from bindaems.shared.numbers import finite_number
@@ -147,6 +150,8 @@ class HaInputs:
     )
     support_soc_pct: float | None = None  # Unterstützungsschwelle (Absicht, sonst Konfiguration)
     stats: TodayStats | None = None  # Ersparnis und Autarkie (Plan 4a); None = unbekannt
+    ops_level: str | None = None  # Gesamtstufe des Betriebschecks (ok, warn, error, unknown)
+    ops_text: Sequence[str] = ()  # Texte der gelben und roten Prüfungen des Betriebschecks
     # je Fahrzeug (Schlüssel aus ``config.yaml``) die laufende oder letzte Ladesession; ein
     # fehlender Schlüssel oder ``None`` heißt: keine bekannt
     sessions: Mapping[str, ChargingSession | None] = field(default_factory=dict)
@@ -162,6 +167,17 @@ class HaInputs:
     thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     # Plan 5c: Schalter „Vorheizen und Vorkühlen“ (``learning.thermal.enabled``); None = unbekannt
     thermal_plan_enabled: bool | None = None
+    # Unwetter-Reserve: Untergrenze des Akkus im aktuellen Slot in %, Ende und Text der Warnung;
+    # None = keine Untergrenze
+    storm_floor_pct: float | None = None
+    storm_until: datetime | None = None
+    storm_text: str | None = None
+    # je Fahrzeug die Mehrkosten des Leistungspreises bei voller Leistung (``boost_cost``); leer,
+    # wenn kein Leistungspreis gilt
+    boost_cost_eur: Mapping[str, float] = field(default_factory=dict)
+    # USV-Reichweite des Akkus bei Netzausfall; None = unbekannt
+    backup: BackupRange | None = None
+    outage_since: datetime | None = None  # Beginn des laufenden Netzausfalls; None = keiner
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -741,6 +757,18 @@ def _price_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     }
 
 
+# Zustände des Sensors „Betriebscheck“ je Stufe des Betriebschecks
+OPS_STATES: Final = {"ok": "ok", "warn": "warnung", "error": "fehler", "unknown": "unbekannt"}
+
+
+def _ops_check(inputs: HaInputs) -> str:
+    return OPS_STATES.get(inputs.ops_level or "", OPS_STATES["unknown"])
+
+
+def _ops_check_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    return {"befunde": list(inputs.ops_text)}
+
+
 def _month_peak_kw(inputs: HaInputs) -> str:
     return fmt(None if inputs.month_peak is None else inputs.month_peak.kw, 1)
 
@@ -798,6 +826,112 @@ def _charge_energy(key: str) -> Callable[[HaInputs], str]:
         return UNKNOWN if session is None else fmt(session.split.kwh, 1)
 
     return value
+
+
+def charge_estimate(cfg: Config, key: str, inputs: HaInputs) -> ChargeEstimate | None:
+    """Die Ladeschätzung für das Fahrzeug ``key``; ``None``, wenn sie sich nicht rechnen lässt.
+
+    Das ist ohne gültigen Plan oder Zeitpunkt der Fall, wenn das Auto laut Health nicht steckt
+    oder keine Wallbox hat, und wenn sein Ladestand nur angenommen ist. Das Ziel von „Geplant“ ist
+    das der Absicht, wie im core (``effective_target``) ohne Abgleich des Ladelimits höchstens das
+    Ladelimit des Autos; die anderen Modi laden bis zu diesem Limit (unbekannt: bis voll). Die
+    Abfahrt ist die nächste. In „Sofort“ gilt das Limit ``now_max_a`` der Absicht.
+    """
+    plan, now = inputs.plan, inputs.now
+    entry = _entry(inputs.vehicles, key)
+    if plan is None or now is None or entry is None or entry.get("plugged") is not True:
+        return None
+    at = entry.get("wallbox")
+    wallbox = cfg.wallboxes.get(at) if isinstance(at, str) else None
+    soc = finite_number(entry.get("soc_pct"))
+    if wallbox is None or soc is None or entry.get("soc_source") not in ("measured", "estimated"):
+        return None
+    wish = VehicleIntent() if inputs.intent is None else inputs.intent.vehicles.get(key)
+    wish = wish or VehicleIntent()
+    vehicle = cfg.vehicles[key]
+    target = float(wish.target_soc_pct)
+    limit = finite_number(entry.get("charge_limit_pct"))
+    if limit is not None and not vehicle.charge_limit_sync:
+        target = min(target, limit)
+    volt = cfg.grid.voltage_nominal_v
+    max_w = full_power_w(vehicle, wallbox, volt)
+    now_w = max_w
+    if wish.now_max_a is not None:
+        now_w = min(max_w, wish.now_max_a * volt * vehicle.phases)
+    return estimate_charge(
+        plan.slots,
+        key=key,
+        now=now,
+        soc_pct=soc,
+        target_soc_pct=target,
+        limit_soc_pct=limit,
+        departure_at=next_departure(wish.departure, now, wish.departure_on),
+        usable_kwh=vehicle.usable_kwh,
+        efficiency=vehicle.charge_efficiency_pct / 100,
+        min_w=vehicle.min_a * volt * vehicle.phases,
+        max_w=max_w,
+        now_w=now_w,
+        power_cost_eur=inputs.boost_cost_eur.get(key),
+    )
+
+
+def _local_iso(moment: datetime | None) -> str | None:
+    """Ortszeit ISO, auf die volle Minute aufgerundet: Ab jetzt gerechnete Zeiten änderten sonst
+    mit jedem Publish die Attribute (neue retained Nachricht, neue Zeile im Recorder)."""
+    return None if moment is None else _ceil_minute(moment).astimezone(LOCAL_TZ).isoformat()
+
+
+def _charge_estimate_state(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        estimate = charge_estimate(cfg, key, inputs)
+        if estimate is None:
+            return UNKNOWN
+        return fmt(estimate.modes[ChargeMode.PLANNED].cost_eur, 2)
+
+    return value
+
+
+def _charge_estimate_attributes(cfg: Config, key: str) -> Callable[[HaInputs], Mapping[str, Any]]:
+    """Ladestand, Ziel von „Geplant“, Abfahrt, Ende des Fensters, Bedarf und je Modus Stopp
+    (``target_soc_pct``), Energie, Kosten, Ende, Ladestand und Erreichbarkeit; Zeiten in Ortszeit
+    auf die volle Minute, ``None`` ohne Schätzung."""
+
+    names = {
+        ChargeMode.PLANNED: "planned",
+        ChargeMode.NOW: "now",
+        ChargeMode.PV: "pv",
+        ChargeMode.MIN_PV: "min_pv",
+    }
+
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        estimate = charge_estimate(cfg, key, inputs)
+        if estimate is None:
+            keys = ("soc_pct", "target_soc_pct", "departure_at", "until", "need_kwh")
+            return dict.fromkeys(keys) | {"price_estimated": None} | dict.fromkeys(names.values())
+        result: dict[str, Any] = {
+            "soc_pct": round(estimate.soc_pct, 1),
+            "target_soc_pct": estimate.target_soc_pct,
+            "departure_at": _local_iso(estimate.departure_at),
+            "until": _local_iso(estimate.until),
+            "need_kwh": round(estimate.need_kwh, 1),
+            "price_estimated": estimate.price_estimated,
+        }
+        for mode in ESTIMATED_MODES:
+            item = estimate.modes[mode]
+            entry: dict[str, Any] = {
+                "target_soc_pct": item.target_soc_pct,
+                "energy_kwh": item.energy_kwh,
+                "cost_eur": item.cost_eur,
+                "finish_at": _local_iso(item.finish_at),
+                "soc_pct": item.soc_pct,
+                "reachable": item.reachable,
+            }
+            if mode is ChargeMode.NOW:
+                entry["power_cost_eur"] = item.power_cost_eur
+            result[names[mode]] = entry
+        return result
+
+    return attributes
 
 
 def _kwh(value: float | None) -> float | None:
@@ -896,6 +1030,51 @@ def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
             for slot in inputs.plan.slots
             if slot.start.astimezone(LOCAL_TZ).minute == 0
         ],
+    }
+
+
+def _backup_hours(reserve: bool) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        if inputs.backup is None:
+            return UNKNOWN
+        return fmt(inputs.backup.reserve_h if reserve else inputs.backup.now_h, 1)
+
+    return value
+
+
+def _backup_attributes(cfg: Config) -> Callable[[HaInputs], Mapping[str, Any]]:
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        backup = inputs.backup
+        return {
+            "reserve_h": None if backup is None else backup.reserve_h,
+            "night_h": None if backup is None else backup.night_h,
+            "load_w": None if backup is None else backup.load_w,
+            "load_source": None if backup is None else backup.load_source,
+            "floor_soc_pct": cfg.battery.outage_floor_soc_pct,
+            "ohne_pv": True,
+        }
+
+    return attributes
+
+
+def _outage_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    """Beginn des laufenden Ausfalls lokal (wie bei ``prices``); ohne Ausfall ``None``."""
+    since = inputs.outage_since
+    return {"seit": None if since is None else since.astimezone(LOCAL_TZ).isoformat()}
+
+
+def _storm_floor(inputs: HaInputs) -> str:
+    return fmt(0.0 if inputs.storm_floor_pct is None else inputs.storm_floor_pct, 0)
+
+
+def _storm_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    """Ende der Warnung (lokal wie bei ``prices``) und ihr Text; ohne Untergrenze ``None``."""
+    if inputs.storm_floor_pct is None:
+        return {"bis": None, "warnung": None}
+    until = inputs.storm_until
+    return {
+        "bis": until.astimezone(LOCAL_TZ).isoformat() if until is not None else None,
+        "warnung": inputs.storm_text,
     }
 
 
@@ -1055,6 +1234,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             state_class="measurement",
             attributes=_execution,
         ),
+        EntitySpec(
+            "storm_reserve",
+            "sensor",
+            "Unwetter-Reserve",
+            main,
+            _storm_floor,
+            unit="%",
+            state_class="measurement",
+            attributes=_storm_attributes,
+        ),
         _power("grid_power", "Netzleistung", main, _derived_w("grid_w")),
         _power("pv_power", "PV-Leistung", main, _derived_w("pv_total_w")),
         _power("battery_power", "Akkuleistung", main, _derived_w("battery_w")),
@@ -1068,6 +1257,36 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             unit="%",
             device_class="battery",
             state_class="measurement",
+        ),
+        EntitySpec(
+            "usv_reichweite",
+            "sensor",
+            "USV-Reichweite",
+            main,
+            _backup_hours(reserve=False),
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+            attributes=_backup_attributes(cfg),
+        ),
+        EntitySpec(
+            "usv_reichweite_reserve",
+            "sensor",
+            "USV-Reichweite ab Reserve",
+            main,
+            _backup_hours(reserve=True),
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+        ),
+        EntitySpec(
+            "netzausfall",
+            "binary_sensor",
+            "Netzausfall",
+            main,
+            lambda i: on_off(i.outage_since is not None),
+            device_class="problem",
+            attributes=_outage_attributes,
         ),
         EntitySpec(
             "ems_mode",
@@ -1110,6 +1329,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             lambda i: on_off(None if i.adapters_offline is None else bool(i.adapters_offline)),
             device_class="problem",
             attributes=lambda i: {"adapters": list(i.adapters_offline or [])},
+        ),
+        EntitySpec(
+            "ops_check",
+            "sensor",
+            "Betriebscheck",
+            main,
+            _ops_check,
+            device_class="enum",
+            options=tuple(OPS_STATES.values()),
+            attributes=_ops_check_attributes,
         ),
         EntitySpec(
             "watchdog_tripped",
@@ -1210,6 +1439,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 unit="kWh",
                 device_class="energy",  # ohne ``state_class``: HA warnt bei ``measurement``
                 attributes=_charge_energy_attributes(key),
+            ),
+            EntitySpec(
+                f"{oid}_charge_estimate",
+                "sensor",
+                "Ladeschätzung",
+                device,
+                _charge_estimate_state(cfg, key),
+                unit="EUR",
+                device_class="monetary",
+                attributes=_charge_estimate_attributes(cfg, key),
             ),
             EntitySpec(
                 f"{oid}_target_soc",
@@ -1454,6 +1693,12 @@ def build_inputs(
     driving_profiles: Mapping[str, VehicleProfile] | None = None,
     auto_target: Mapping[str, bool] | None = None,
     thermal_plan_enabled: bool | None = None,
+    storm_floor_pct: float | None = None,
+    storm_until: datetime | None = None,
+    storm_text: str | None = None,
+    boost_cost_eur: Mapping[str, float] | None = None,
+    backup: BackupRange | None = None,
+    outage_since: datetime | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -1545,6 +1790,12 @@ def build_inputs(
         driving_profiles=dict(driving_profiles or {}),
         auto_target=dict(auto_target or {}),
         thermal_plan_enabled=thermal_plan_enabled,
+        storm_floor_pct=storm_floor_pct,
+        storm_until=storm_until,
+        storm_text=storm_text,
+        boost_cost_eur=dict(boost_cost_eur or {}),
+        backup=backup,
+        outage_since=outage_since,
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

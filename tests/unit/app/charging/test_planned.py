@@ -14,6 +14,7 @@ from bindaems.app.charging.planned import (
 )
 from bindaems.app.charging.tracker import ChargingTracker, StoredSession, WallboxSeen
 from bindaems.app.db.schema import charging_session, planned_charge
+from bindaems.app.ops.findings import MissedTarget
 
 DEPARTURE = T0 + timedelta(hours=8)  # 18:00 Ortszeit
 
@@ -575,6 +576,49 @@ def test_summary_counts_closed_rows_by_departure_day(charges, engine) -> None:
     assert charges.summary(date(2026, 10, 11), date(2026, 10, 11)) == PlannedSummary(
         reached=0, feasible=0, missed=0, infeasible=0, early=0, unknown=0, changed=0
     )
+
+
+def test_missed_lists_outcome_missed_of_day(charges, engine) -> None:
+    with engine.begin() as conn:
+        session_id = conn.execute(
+            insert(charging_session)
+            .returning(charging_session.c.id)
+            .values(wallbox="twc", vehicle="tesla", start=T0, end=None, last_seen=T0)
+        ).scalar_one()
+        base = {
+            "session_id": session_id,
+            "vehicle": "tesla",
+            "started_at": T0,
+            "start_soc_pct": 40.0,
+            "start_soc_source": "measured",
+            "feasible": True,
+        }
+        cases = [
+            # 9. Oktober, Ortszeit (UTC + 2)
+            (datetime(2026, 10, 9, 5, 0, tzinfo=UTC), 80, 61.0, "missed"),
+            (datetime(2026, 10, 8, 22, 0, tzinfo=UTC), 70, None, "missed"),  # 00:00 am 9.
+            (datetime(2026, 10, 9, 6, 0, tzinfo=UTC), 80, 79.5, "reached"),
+            (datetime(2026, 10, 9, 7, 0, tzinfo=UTC), 80, 50.0, "unknown"),
+            (datetime(2026, 10, 9, 21, 0, tzinfo=UTC), 80, None, "open"),
+            # andere Tage
+            (datetime(2026, 10, 8, 21, 59, tzinfo=UTC), 80, 60.0, "missed"),
+            (datetime(2026, 10, 9, 22, 0, tzinfo=UTC), 80, 60.0, "missed"),
+        ]
+        for departure, target, end_soc, outcome in cases:
+            conn.execute(
+                insert(planned_charge).values(
+                    **base,
+                    departure_at=departure,
+                    target_soc_pct=target,
+                    end_soc_pct=end_soc,
+                    outcome=outcome,
+                )
+            )
+    assert charges.missed(date(2026, 10, 9)) == [
+        MissedTarget("Tesla Model 3", 70.0, None, datetime(2026, 10, 8, 22, 0, tzinfo=UTC)),
+        MissedTarget("Tesla Model 3", 80.0, 61.0, datetime(2026, 10, 9, 5, 0, tzinfo=UTC)),
+    ]
+    assert charges.missed(date(2026, 10, 11)) == []
 
 
 def test_known_soc_during_boost_replaces_an_assumed_start(charges, session, engine, clock) -> None:

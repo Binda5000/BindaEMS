@@ -15,6 +15,11 @@ import thermal from './contract/learning-thermal.json';
 import qualityDaily from './contract/forecast-quality-daily.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
+import pvDay from './contract/pv-day.json';
+import pvMonth from './contract/pv-period-month.json';
+import opsCheck from './contract/ops-check.json';
+import opsFindings from './contract/ops-findings.json';
+import opsSwitches from './contract/ops-switches.json';
 
 const fetchMock = vi.fn();
 
@@ -217,6 +222,33 @@ it('liest die Statistik eines Zeitraums mit GET', async () => {
 	expect(result.vehicles.map((vehicle) => vehicle.key)).toContain('tesla');
 });
 
+it('liest den Ertrag der PV im Zeitraum und die Tageskurve mit GET', async () => {
+	reply(pvMonth);
+	const result = await api.pvPeriod('month', '2026-11-08');
+	expect(sent().url).toBe('/api/pv/period?period=month&day=2026-11-08');
+	expect(result.buckets).toHaveLength(31);
+	fetchMock.mockClear();
+	reply(pvDay);
+	await api.pvDay('2026-10-08');
+	expect(sent().url).toBe('/api/pv/day?date=2026-10-08');
+});
+
+it('ändert einen PV-Eintrag mit PATCH und CSRF-Token', async () => {
+	const input = {
+		name: 'Süd',
+		parent_id: 1,
+		color: '#d18f00',
+		source_kind: 'ha' as const,
+		power_ref: 'sensor.pv1_leistung',
+		power_unit: 'W' as const,
+		kwp: 4.1,
+		sort: 0
+	};
+	reply({ id: 2, ...input });
+	await api.updatePv(2, input);
+	expect(sent()).toEqual({ url: '/api/pv/2', method: 'PATCH', body: input, csrf: 'tok-123' });
+});
+
 it('liest die Statistik ohne Datum für heute', async () => {
 	reply(statsMonth);
 	await api.stats('year');
@@ -320,4 +352,23 @@ it('schaltet die Automatik eines Autos und prüft ihren Zustand', async () => {
 		csrf: 'tok-123'
 	});
 	expect(state.state).toBe('inactive');
+});
+
+it('liest Betriebscheck, Auffälligkeiten und Schalter mit GET', async () => {
+	reply(opsCheck);
+	const check = await api.opsCheck();
+	expect(sent()).toMatchObject({ url: '/api/ops/check', method: 'GET' });
+	expect(check.items.length).toBeGreaterThan(0);
+
+	fetchMock.mockReset();
+	reply(opsFindings);
+	const findings = await api.opsFindings(14);
+	expect(sent()).toMatchObject({ url: '/api/ops/findings?days=14', method: 'GET' });
+	expect(findings.days).toHaveLength(14);
+
+	fetchMock.mockReset();
+	reply(opsSwitches);
+	const switches = await api.opsSwitches();
+	expect(sent()).toMatchObject({ url: '/api/ops/switches', method: 'GET' });
+	expect(switches.switches.some((entry) => entry.changed)).toBe(true);
 });

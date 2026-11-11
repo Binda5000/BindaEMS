@@ -583,6 +583,32 @@ export const PriceSettingsSchema = v.looseObject({
 });
 export type PriceSettings = v.InferOutput<typeof PriceSettingsSchema>;
 
+/** Arten der amtlichen Warnungen von GeoSphere Austria (Plan Unwetter-Reserve) */
+export const StormKindSchema = v.picklist([
+	'sturm',
+	'regen',
+	'schnee',
+	'glatteis',
+	'gewitter',
+	'hitze',
+	'kaelte'
+]);
+export type StormKind = v.InferOutput<typeof StormKindSchema>;
+/** Warnstufe: 1 gelb, 2 orange, 3 rot */
+export const StormLevelSchema = v.picklist([1, 2, 3]);
+export type StormLevel = v.InferOutput<typeof StormLevelSchema>;
+
+export const StormSettingsSchema = v.looseObject({
+	enabled: v.boolean(),
+	/** Untergrenze des Akkus während einer Warnung in %, ganze Zahl 10 bis 100 */
+	target_soc_pct: v.number(),
+	/** ab dieser Stufe zählt eine Warnung */
+	min_level: StormLevelSchema,
+	/** Warnarten, die zählen (mindestens eine) */
+	kinds: v.array(StormKindSchema)
+});
+export type StormSettings = v.InferOutput<typeof StormSettingsSchema>;
+
 export const PlanningSettingsSchema = v.looseObject({
 	grid_charge_allowed: v.boolean(),
 	/** Akku ins Auto, wenn übrig; ältere Einstellungen kennen den Schalter nicht */
@@ -594,7 +620,14 @@ export const PlanningSettingsSchema = v.looseObject({
 	inertia_ct: v.number(),
 	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat, 0 = aus);
 	 * ältere Einstellungen kennen ihn nicht */
-	peak_soft_ct_per_kw: v.optional(v.number(), 100)
+	peak_soft_ct_per_kw: v.optional(v.number(), 100),
+	/** Unwetter-Reserve; ältere Einstellungen kennen sie nicht */
+	storm: v.optional(StormSettingsSchema, () => ({
+		enabled: false,
+		target_soc_pct: 40,
+		min_level: 2 as const,
+		kinds: ['sturm' as const, 'gewitter' as const]
+	}))
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 
@@ -635,6 +668,30 @@ export const LearningSettingsSchema = v.looseObject({
 });
 export type LearningSettings = v.InferOutput<typeof LearningSettingsSchema>;
 
+/** Tagesbericht: täglich, nur bei Auffälligkeiten oder aus; Uhrzeit `HH:MM` (Ortszeit) */
+export const OpsSettingsSchema = v.looseObject({
+	report: v.picklist(['daily', 'findings', 'off']),
+	report_at: v.string()
+});
+export type OpsSettings = v.InferOutput<typeof OpsSettingsSchema>;
+
+/** Ölheizung: Nennleistung (kW), Öl je Brennerstunde (l/h) und Ölpreis (€/l), je `null` =
+ * nicht eingetragen; Leistungszahl der Klimaanlage beim Heizen */
+export const HeatingSettingsSchema = v.looseObject({
+	burner_kw: NullableNumber,
+	oil_l_per_h: NullableNumber,
+	oil_price_eur_l: NullableNumber,
+	ac_cop: v.number()
+});
+export type HeatingSettings = v.InferOutput<typeof HeatingSettingsSchema>;
+
+export const DEFAULT_HEATING: HeatingSettings = {
+	burner_kw: null,
+	oil_l_per_h: null,
+	oil_price_eur_l: null,
+	ac_cop: 3
+};
+
 export const RuntimeSettingsSchema = v.looseObject({
 	prices: PriceSettingsSchema,
 	tariff: v.looseObject({
@@ -653,7 +710,11 @@ export const RuntimeSettingsSchema = v.looseObject({
 	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
 	wallbox_names: v.optional(v.record(v.string(), v.string()), {}),
 	/** Modus, den die App nach dem Abstecken setzt; ohne Eintrag bleibt der Modus unverändert */
-	wallbox_default_modes: v.optional(v.record(v.string(), ChargeModeSchema), {})
+	wallbox_default_modes: v.optional(v.record(v.string(), ChargeModeSchema), {}),
+	/** Tagesbericht in Home Assistant; ältere Stände haben den Abschnitt nicht */
+	ops: v.optional(OpsSettingsSchema, { report: 'daily', report_at: '07:30' }),
+	/** Ölheizung; ältere Stände haben den Abschnitt nicht */
+	heating: v.optional(HeatingSettingsSchema, DEFAULT_HEATING)
 });
 export type RuntimeSettings = v.InferOutput<typeof RuntimeSettingsSchema>;
 
@@ -789,6 +850,117 @@ export const CandidatesSchema = v.object({
 });
 export type Candidates = v.InferOutput<typeof CandidatesSchema>;
 
+// --- PV-Anlagen ----------------------------------------------------------------------------
+
+/** Anlage (`parent_id` leer) oder String einer Anlage */
+export const PvSourceSchema = v.object({
+	id: v.number(),
+	name: v.string(),
+	parent_id: v.nullable(v.number()),
+	color: v.string(),
+	source_kind: v.picklist(['core', 'ha']),
+	power_ref: v.string(),
+	power_unit: v.nullable(v.picklist(['W', 'kW'])),
+	kwp: NullableNumber,
+	sort: v.number()
+});
+export type PvSource = v.InferOutput<typeof PvSourceSchema>;
+
+/** Knoten im Baum der PV: Anlagen mit ihren Strings, zuletzt „Nicht zugeordnet“ */
+export interface PvNode {
+	id: number | null;
+	name: string;
+	color: string;
+	kind: 'system' | 'string' | 'unassigned';
+	power_w: number | null;
+	kwh_today: number | null;
+	kwp: number | null;
+	kwh_per_kwp: number | null;
+	/** warum ein Wert fehlt (Leistung, sonst Energie) */
+	note: string | null;
+	children: PvNode[];
+	strings_power_w: number | null;
+	strings_kwh_today: number | null;
+}
+
+export const PvNodeSchema: v.GenericSchema<PvNode> = v.object({
+	id: v.nullable(v.number()),
+	name: v.string(),
+	color: v.string(),
+	kind: v.picklist(['system', 'string', 'unassigned']),
+	power_w: NullableNumber,
+	kwh_today: NullableNumber,
+	kwp: NullableNumber,
+	kwh_per_kwp: NullableNumber,
+	note: v.nullable(v.string()),
+	children: v.array(v.lazy(() => PvNodeSchema)),
+	strings_power_w: NullableNumber,
+	strings_kwh_today: NullableNumber
+});
+
+export const PvResponseSchema = v.object({
+	/** PV gesamt jetzt (alle Quellen des core) */
+	total_w: NullableNumber,
+	/** PV gesamt seit Mitternacht */
+	total_kwh: NullableNumber,
+	/** Anlagen; ist eine angelegt, zuletzt „Nicht zugeordnet“ */
+	tree: v.array(PvNodeSchema),
+	sources: v.array(PvSourceSchema),
+	energy_since: v.nullable(Iso)
+});
+export type PvResponse = v.InferOutput<typeof PvResponseSchema>;
+
+/** Vorschläge: core-Signale als Text (anders als bei den Verbrauchern), HA-Sensoren mit Einheit */
+export const PvCandidatesSchema = v.object({
+	core: v.array(v.string()),
+	ha: v.array(v.object({ entity_id: v.string(), unit: v.picklist(['W', 'kW']) })),
+	ha_error: v.nullable(v.string())
+});
+export type PvCandidates = v.InferOutput<typeof PvCandidatesSchema>;
+
+/** Tageskurve je Eintrag: Punkte `[ms, W]` in 5-Minuten-Schritten, ohne Wert fehlt der Punkt */
+export const PvDaySchema = v.object({
+	date: DateText,
+	series: v.array(
+		v.object({
+			id: v.number(),
+			points: v.array(v.tuple([v.number(), v.number()])),
+			/** warum die Kurve leer ist */
+			note: v.nullable(v.string())
+		})
+	)
+});
+export type PvDay = v.InferOutput<typeof PvDaySchema>;
+
+const PvBucketsKwh = v.array(NullableNumber);
+
+/**
+ * Ertrag im Zeitraum: je Bucket (Tag bzw. Monat im Jahr) und als Summe der bekannten Tage. Ein
+ * Bucket ohne bekannten Tag ist `null` (keine Daten), nicht 0.
+ */
+export const PvPeriodSchema = v.object({
+	period: v.picklist(['day', 'week', 'month', 'year']),
+	first: DateText,
+	last: DateText,
+	buckets: v.array(v.object({ start: DateText, end: DateText })),
+	total: v.object({ kwh: PvBucketsKwh, sum_kwh: NullableNumber }),
+	/** PV gesamt minus Anlagen; `null`, solange keine Anlage angelegt ist */
+	unassigned: v.nullable(v.object({ kwh: PvBucketsKwh, sum_kwh: NullableNumber })),
+	sources: v.array(
+		v.object({
+			id: v.number(),
+			kwh: PvBucketsKwh,
+			sum_kwh: NullableNumber,
+			kwh_per_kwp: NullableNumber,
+			/** erster Tag mit Wert im Zeitraum */
+			first_known: v.nullable(DateText),
+			/** Grund, wenn `sum_kwh` fehlt */
+			note: v.nullable(v.string())
+		})
+	)
+});
+export type PvPeriod = v.InferOutput<typeof PvPeriodSchema>;
+
 // --- Verlauf -----------------------------------------------------------------------------
 
 export const CatalogEntrySchema = v.object({ id: v.string(), label: v.string(), unit: v.string() });
@@ -889,6 +1061,54 @@ export const LoadForecastSchema = v.object({
 	status: ComponentStatusSchema
 });
 export type LoadForecast = v.InferOutput<typeof LoadForecastSchema>;
+
+// --- USV-Reichweite und Netzausfälle (GET /api/backup) ---------------------------------------
+
+export const BackupOutageSchema = v.object({
+	start: Iso,
+	end: v.nullable(Iso),
+	/** Ende aus dem Neustart geschätzt, nicht beobachtet */
+	end_estimated: v.boolean(),
+	duration_s: v.number(),
+	soc_start: NullableNumber,
+	soc_end: NullableNumber,
+	soc_min: NullableNumber,
+	/** mittlere Last an AC-Out; `null`, solange zu wenig Zeit mit Messwerten abgedeckt ist */
+	mean_w: NullableNumber,
+	load_kwh: v.number()
+});
+export type BackupOutage = v.InferOutput<typeof BackupOutageSchema>;
+
+export const BackupSchema = v.object({
+	/** Reichweite in Stunden ab jetzt bis zur Untergrenze, ab Reserve (was die Reserve allein trägt) und bei Nachtlast */
+	now_h: NullableNumber,
+	reserve_h: NullableNumber,
+	night_h: NullableNumber,
+	/** angenommene Last an AC-Out in W; `load_source`: Tagesmittel oder laufender Ausfall */
+	load_w: NullableNumber,
+	load_source: v.nullable(v.picklist(['tag', 'ausfall'])),
+	floor_soc_pct: v.number(),
+	basis: v.nullable(
+		v.object({
+			first_day: DateText,
+			last_day: DateText,
+			day_slots: v.number(),
+			night_slots: v.number(),
+			night_w: NullableNumber
+		})
+	),
+	/** offener Netzausfall */
+	outage: v.nullable(v.object({ start: Iso, soc_start: NullableNumber, mean_w: NullableNumber })),
+	/** jüngster zuerst */
+	outages: v.array(BackupOutageSchema),
+	ping: v.object({
+		configured: v.boolean(),
+		ok: v.boolean(),
+		last_sent: v.nullable(Iso),
+		text: v.nullable(v.string())
+	})
+});
+export type Backup = v.InferOutput<typeof BackupSchema>;
 
 /** Art der Prognose: PV, die ausgegebene Last und die beiden Schatten (Profil, Modell) */
 export const QualityKindSchema = v.picklist(['pv', 'load', 'load_profile', 'load_model']);
@@ -1227,6 +1447,27 @@ export const CheckTotalSchema = v.object({
 });
 export type CheckTotal = v.InferOutput<typeof CheckTotalSchema>;
 
+/** `heating` der Statistik: Brennerstunden, Öl und Wärmebedarf des Zeitraums; Summen zählen nur
+ * bekannte Werte (`null`: keiner bekannt) */
+export const HeatingStatsSchema = v.object({
+	burner_h: NullableNumber,
+	oil_heat_kwh: NullableNumber,
+	oil_l: NullableNumber,
+	oil_eur: NullableNumber,
+	ac_heat_el_kwh: NullableNumber,
+	ac_heat_kwh: NullableNumber,
+	demand_kwh: NullableNumber,
+	hdd_kd: NullableNumber,
+	days: v.number(),
+	complete_days: v.number(),
+	/** erster Tag mit Brennerwert */
+	first_day: v.nullable(DateText),
+	/** Nennleistung nicht eingetragen */
+	settings_missing: v.boolean(),
+	ac_power_known: v.boolean()
+});
+export type HeatingStats = v.InferOutput<typeof HeatingStatsSchema>;
+
 export const StatsSchema = v.object({
 	period: StatsPeriodSchema,
 	first: DateText,
@@ -1324,6 +1565,19 @@ export const StatsSchema = v.object({
 			note: v.nullable(v.string())
 		})
 	),
+	/** Anlagen und Strings; Strings tragen die `id` ihrer Anlage in `parent_id` */
+	pv_sources: v.array(
+		v.object({
+			id: v.number(),
+			name: v.string(),
+			parent_id: v.nullable(v.number()),
+			kwp: NullableNumber,
+			kwh: NullableNumber,
+			kwh_per_kwp: NullableNumber,
+			/** Grund, wenn `kwh` fehlt */
+			note: v.nullable(v.string())
+		})
+	),
 	month_peaks: v.array(
 		v.object({
 			month: v.string(),
@@ -1336,9 +1590,65 @@ export const StatsSchema = v.object({
 		days: v.number(),
 		flagged_days: v.array(DateText),
 		totals: v.array(CheckTotalSchema)
-	})
+	}),
+	/** `null` ohne Brennerstatus */
+	heating: v.optional(v.nullable(HeatingStatsSchema), null)
 });
 export type Stats = v.InferOutput<typeof StatsSchema>;
+
+/** Ein Tag der Heizsaison in `GET /api/heating/demand` */
+export const HeatDemandPointSchema = v.object({
+	day: DateText,
+	hdd_kd: NullableNumber,
+	outdoor_mean_c: NullableNumber,
+	burner_h: NullableNumber,
+	oil_heat_kwh: NullableNumber,
+	oil_l: NullableNumber,
+	ac_heat_el_kwh: NullableNumber,
+	ac_heat_kwh: NullableNumber,
+	demand_kwh: NullableNumber,
+	complete: v.boolean(),
+	/** der Tag geht in die Anpassung ein */
+	used: v.boolean(),
+	note: v.nullable(v.string())
+});
+export type HeatDemandPoint = v.InferOutput<typeof HeatDemandPointSchema>;
+
+/** `GET /api/heating/demand?tag=` (404 ohne Brennerstatus): Tage der Heizsaison und die Gerade
+ * Wärmebedarf = Grundbedarf + Steigung × Heizgradtage */
+export const HeatDemandSchema = v.object({
+	/** z. B. `2026/27` */
+	season: v.string(),
+	first: DateText,
+	last: DateText,
+	points: v.array(HeatDemandPointSchema),
+	fit: v.nullable(
+		v.object({
+			per_kd: v.number(),
+			base_kwh_day: v.number(),
+			r2: v.number(),
+			n: v.number(),
+			through_origin: v.boolean()
+		})
+	),
+	/** Grund, wenn `fit` fehlt */
+	reason: v.nullable(v.string()),
+	totals: v.object({
+		oil_heat_kwh: NullableNumber,
+		oil_l: NullableNumber,
+		oil_eur: NullableNumber,
+		ac_heat_el_kwh: NullableNumber,
+		demand_kwh: NullableNumber,
+		hdd_kd: NullableNumber
+	}),
+	/** Strom der Klimaanlage beim Heizen je Monat (`JJJJ-MM`) in kWh */
+	ac_by_month: v.record(v.string(), v.number()),
+	heating_limit_c: v.number(),
+	ac_cop: v.number(),
+	/** Leistung der Klimaanlage konfiguriert; sonst ist der Bedarf nur Öl */
+	ac_power_known: v.boolean()
+});
+export type HeatDemand = v.InferOutput<typeof HeatDemandSchema>;
 
 export const ChargingSessionSchema = v.object({
 	id: v.number(),
@@ -1423,6 +1733,17 @@ export interface ConsumerInput {
 	sort?: number;
 }
 
+export interface PvSourceInput {
+	name: string;
+	parent_id: number | null;
+	color: string;
+	source_kind: 'core' | 'ha';
+	power_ref: string;
+	power_unit: 'W' | 'kW' | null;
+	kwp: number | null;
+	sort: number;
+}
+
 // --- Zeitplan des Akkus (Plan 3b) --------------------------------------------------------
 
 export const BatteryIntentKindSchema = v.picklist(['EIGENVERBRAUCH', 'HALTEN', 'NETZLADEN']);
@@ -1430,6 +1751,7 @@ export type BatteryIntentKind = v.InferOutput<typeof BatteryIntentKindSchema>;
 
 export const PlanReasonCodeSchema = v.picklist([
 	'NACHLADEN_RESERVE',
+	'UNWETTER_RESERVE',
 	'NETZLADEN_GUENSTIG',
 	'HALTEN_FUER_SPITZE',
 	'BUDGET_SPITZE',
@@ -1465,7 +1787,8 @@ export const PlanTriggerSchema = v.picklist([
 	'settings',
 	'manual',
 	'vehicles',
-	'thermal'
+	'thermal',
+	'storm'
 ]);
 export type PlanTrigger = v.InferOutput<typeof PlanTriggerSchema>;
 
@@ -1507,7 +1830,10 @@ export const PlanSlotSchema = v.object({
 	 */
 	thermal_w: v.optional(v.number(), 0),
 	thermal_steps: v.optional(NullableNumber, null),
-	thermal_grid_w: v.optional(v.number(), 0)
+	thermal_grid_w: v.optional(v.number(), 0),
+	/** Untergrenze der Unwetter-Reserve am Slotende in %; `null` außerhalb eines Fensters, ältere
+	 * Pläne haben das Feld nicht */
+	storm_reserve_pct: v.optional(NullableNumber, null)
 });
 export type PlanSlot = v.InferOutput<typeof PlanSlotSchema>;
 
@@ -1534,6 +1860,25 @@ export const PlanThermalSchema = v.object({
 	reason: v.picklist(['ok', 'off', 'no_model', 'mode', 'not_worth', 'solver'])
 });
 export type PlanThermal = v.InferOutput<typeof PlanThermalSchema>;
+
+/** Eine amtliche Unwetterwarnung im Plan; `begin` und `end` sind der Geltungszeitraum */
+export const PlanStormWarningSchema = v.object({
+	warn_id: v.number(),
+	version: v.number(),
+	kind: StormKindSchema,
+	level: StormLevelSchema,
+	begin: Iso,
+	end: Iso,
+	text: v.string()
+});
+export type PlanStormWarning = v.InferOutput<typeof PlanStormWarningSchema>;
+
+/** Unwetter-Reserve im Plan: Untergrenze in % und die passenden Warnungen */
+export const PlanStormSchema = v.object({
+	target_pct: v.number(),
+	warnings: v.array(PlanStormWarningSchema)
+});
+export type PlanStorm = v.InferOutput<typeof PlanStormSchema>;
 
 /** Zusammenfassung des Plans für ein geplantes Auto (Plan 4b) */
 export const PlanVehicleSchema = v.object({
@@ -1590,6 +1935,8 @@ export const PlanSchema = v.object({
 	vehicles: v.array(PlanVehicleSchema),
 	/** `null` ohne Klimaanlage; ältere Pläne haben das Feld nicht */
 	thermal: v.optional(v.nullable(PlanThermalSchema), null),
+	/** `null` ohne Unwetterwarnung im Horizont; ältere Pläne haben das Feld nicht */
+	storm: v.optional(v.nullable(PlanStormSchema), null),
 	slots: v.array(PlanSlotSchema)
 });
 export type Plan = v.InferOutput<typeof PlanSchema>;
@@ -1672,3 +2019,72 @@ export const GridChargeReplySchema = v.object({
 	settings_version: v.number()
 });
 export type GridChargeReply = v.InferOutput<typeof GridChargeReplySchema>;
+
+// --- Betrieb im Blick --------------------------------------------------------------------
+
+/** Stufe einer Prüfung des Betriebschecks und des ganzen Checks */
+export const OpsLevelSchema = v.picklist(['ok', 'warn', 'error', 'unknown']);
+export type OpsLevel = v.InferOutput<typeof OpsLevelSchema>;
+
+/** Eine Prüfung: Satz deutsch vom Server, `link` zu der Seite, die mehr zeigt */
+export const OpsCheckItemSchema = v.object({
+	id: v.string(),
+	label: v.string(),
+	level: OpsLevelSchema,
+	text: v.string(),
+	link: v.nullable(v.string())
+});
+export type OpsCheckItem = v.InferOutput<typeof OpsCheckItemSchema>;
+
+/** Antwort von `GET /api/ops/check` */
+export const OpsCheckSchema = v.object({
+	level: OpsLevelSchema,
+	checked_at: Iso,
+	items: v.array(OpsCheckItemSchema)
+});
+export type OpsCheck = v.InferOutput<typeof OpsCheckSchema>;
+
+/** Eine Auffälligkeit; `rule` bleibt Text, damit neue Regeln die Seite nicht brechen */
+export const OpsFindingSchema = v.object({
+	rule: v.string(),
+	level: v.picklist(['info', 'warn']),
+	start: v.nullable(Iso),
+	end: v.nullable(Iso),
+	text: v.string(),
+	link: v.nullable(v.string()),
+	data: Details
+});
+export type OpsFinding = v.InferOutput<typeof OpsFindingSchema>;
+
+/** Antwort von `GET /api/ops/findings`: die Tage bis gestern, neueste zuerst, und der Bericht über gestern */
+export const OpsFindingsSchema = v.object({
+	days: v.array(
+		v.object({
+			day: DateText,
+			/** falsch, solange der Tag nicht gerechnet ist */
+			computed: v.boolean(),
+			findings: v.array(OpsFindingSchema)
+		})
+	),
+	report: v.nullable(v.object({ day: DateText, text: v.string() }))
+});
+export type OpsFindings = v.InferOutput<typeof OpsFindingsSchema>;
+
+/** Ein Schalter; `since`, `actor` und `source` fehlen, wenn das Protokoll keine Änderung kennt */
+export const OpsSwitchSchema = v.object({
+	id: v.string(),
+	label: v.string(),
+	group: v.string(),
+	value: v.string(),
+	factory: v.string(),
+	changed: v.boolean(),
+	since: v.nullable(Iso),
+	actor: v.nullable(v.string()),
+	source: v.nullable(Source),
+	link: v.string()
+});
+export type OpsSwitch = v.InferOutput<typeof OpsSwitchSchema>;
+
+/** Antwort von `GET /api/ops/switches` */
+export const OpsSwitchesSchema = v.object({ switches: v.array(OpsSwitchSchema) });
+export type OpsSwitches = v.InferOutput<typeof OpsSwitchesSchema>;

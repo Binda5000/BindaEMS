@@ -30,6 +30,7 @@ from tests.app_helpers import (
     influx_q,
     mock_all_sources,
     set_feed_in,
+    set_heating,
     set_tariff,
     set_wallbox_names,
     with_grid_usage,
@@ -52,6 +53,7 @@ from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
 from bindaems.app.daytype import is_holiday
 from bindaems.app.db.schema import (
     charging_session,
+    heating_day,
     model_registry,
     planned_charge,
     user_table,
@@ -73,6 +75,7 @@ from bindaems.app.planning.service import plan_once
 from bindaems.app.planning.thermal_shift import ShiftedSlot, ShiftInput, ShiftResult
 from bindaems.app.planning.thermal_stage import apply_thermal
 from bindaems.app.prices.store import SlotRow
+from bindaems.app.pv.service import PvSourceInput
 from bindaems.app.runtime import AppRuntime
 from bindaems.app.tariff.calc import import_price
 from bindaems.core.adapters.base import AdapterHealth
@@ -81,7 +84,7 @@ from bindaems.core.api.app import create_api
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
-from bindaems.shared.config import Config, Secrets, soc_signal
+from bindaems.shared.config import CoeChannel, Config, Secrets, soc_signal
 from bindaems.shared.control import (
     ChargeMode,
     CommandKind,
@@ -92,14 +95,14 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind, SlotFlows
 from bindaems.shared.influx.lineprotocol import epoch_ms
-from bindaems.shared.plan import Plan
+from bindaems.shared.plan import Plan, StormWarning
 from bindaems.shared.settings import (
     DrivingSettings,
     MonthlyFeeComponent,
     PowerComponent,
     TariffSettings,
 )
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock, local_day_slots
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, ManualClock, local_day_slots
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
 DEMO_PASSWORD = "demo-passwort-1"
@@ -306,7 +309,14 @@ DEMO_DECISIONS = [
 HA_BY_ENTITY = {
     ("sensor", "kueche_power"): (230.0, "W"),
     ("sensor", "wohnzimmer_temperatur"): (21.5, "°C"),
+    ("sensor", "pv1_leistung"): (750.0, "W"),
+    ("sensor", "pv2_leistung"): (950.0, "W"),
 }
+# Strings des Huawei als HA-Template-Sensoren (U × I): Spitze in W um 14:00; HA schreibt sie erst
+# seit dem 21.09.2026 nach InfluxDB (davor „noch keine Daten“); um 10:00 die Werte oben
+HA_PV_STRINGS = {("sensor", "pv1_leistung"): 1500.0, ("sensor", "pv2_leistung"): 1900.0}
+HA_PV_SINCE = datetime(2026, 9, 21, tzinfo=LOCAL_TZ)
+PV_DEMO_DAYS = 40  # so viele Tage vor heute speichert die Demo je PV-Eintrag
 HA_BY_UNIT = {("sensor", "waschmaschine_power"): (2.4, "W")}
 # Sensoren zur Auswahl für das Lastmodell (letzter Wert und Einheit je Entität, Schema je Entität);
 # ohne Einheit ist der Wert ein Zustand, den HA als Zahl schreibt (an = 1)
@@ -327,17 +337,20 @@ _ID_TAG = re.compile(r"\"id\"='(?P<id>[^']*)'")
 POWER_SHAPES = {
     "grid": (500.0, -1400.0),
     "pv_total": (0.0, 3400.0),
+    "huawei": (0.0, 3300.0),  # AC-Zähler des Huawei: der Rest von PV gesamt ist nicht zugeordnet
     "battery": (-250.0, 1300.0),
     "house_load": (900.0, 450.0),
     "consumption": (1100.0, 1800.0),
     "obergeschoss": (450.0, 300.0),
     "buero": (120.0, 60.0),
 }
+PV_WEATHER = ("pv_total", "huawei")  # PV-Reihen, deren frühere Tage mit dem Wetter schwanken
 _LAST = re.compile(r'^SELECT last\("value"\) AS "v", ')
-# Energie seit Mitternacht: Minutenmittel des core und HA-Werte (heute und der letzte davor)
+# Energie seit Mitternacht und PV-Tageskurve: Mittel des core je Schritt (Verbraucher aus RP raw,
+# PV aus RP long) und HA-Werte (heute und der letzte davor)
 _CORE_ENERGY = re.compile(
-    r'^SELECT mean\("p_w"\) AS "w" FROM "raw"\."power" .*time >= (?P<start>\d+)ms '
-    r"AND time < (?P<end>\d+)ms"
+    r'^SELECT mean\("p_w"\) AS "w" FROM "(?:raw|long)"\."power" .*time >= (?P<start>\d+)ms '
+    r"AND time < (?P<end>\d+)ms GROUP BY time\((?P<step>\d+)s\)"
 )
 _SOURCE_ID = re.compile(r"\"source\"='(?P<source>[^']*)' AND \"id\"='(?P<id>[^']*)'")
 _HA_ENERGY = re.compile(
@@ -345,8 +358,14 @@ _HA_ENERGY = re.compile(
     r"AND time < (?P<end>\d+)ms"
 )
 HA_ENERGY_STEP_MS = 900_000  # HA schreibt bei Änderung; hier alle 15 min
+_GROUP_STEP = re.compile(r"GROUP BY time\((?P<step>\d+)s\)")
 _ENTITY = re.compile(r"\"domain\"='(?P<domain>[^']*)' AND \"entity_id\"='(?P<object_id>[^']*)'")
 _SHOW_SERIES = re.compile(r'^SHOW SERIES FROM "W","kW"$')
+# kleinster Akku-SOC je Viertelstunde (Auffälligkeiten, ``soc_min_query``)
+_SOC_MIN = re.compile(
+    r'^SELECT min\("pct"\) AS "v" FROM "[^"]+"\."soc" WHERE .*time >= (?P<start>\d+)ms '
+    r"AND time < (?P<end>\d+)ms GROUP BY time\((?P<step>\d+)s\)"
+)
 
 
 def measurements(tick: int) -> dict[str, float]:
@@ -415,7 +434,17 @@ def _curve(measurement: str, ms: int, series_id: str) -> float:
     if measurement == "forecast":
         return round(max(0.0, 3.5 * sun), 3)  # kW
     base, solar = POWER_SHAPES.get(series_id, (150.0, 700.0))
+    if series_id in PV_WEATHER:
+        solar *= _weather(ms)
     return round(base + solar * max(0.0, sun), 1)  # Leistung in W
+
+
+def _weather(ms: int) -> float:
+    """Anteil der Sonne an einem früheren Tag (0,4 bis 1); heute immer 1, damit die Werte von
+    heute bleiben, wie sie sind."""
+    if ms >= epoch_ms(local_day_slots(T_DEMO.astimezone(LOCAL_TZ).date())[0]):
+        return 1.0
+    return round(0.7 + 0.3 * math.sin(ms // 86_400_000 * 2.1), 3)
 
 
 def _influx_result(series: list[dict[str, Any]]) -> httpx.Response:
@@ -436,38 +465,68 @@ def _ha_power_entities() -> dict[tuple[str, str], tuple[str, float]]:
     return found
 
 
+def _sun_w(peak: float, ms: int) -> float:
+    """Leistung einer PV-Fläche mit Spitze ``peak`` (Form wie ``_curve``)."""
+    hour = (ms / 3_600_000) % 24
+    return round(peak * _weather(ms) * max(0.0, math.sin(2 * math.pi * (hour - 6) / 24)), 1)
+
+
+def _ha_values(
+    entity: tuple[str, str], value: float, agg: str, start: int, end: int, step_ms: int | None
+) -> list[list[float]]:
+    """HA-Werte einer Entität in ``[start, end)``: ``last`` der letzte, sonst einer je 15 min.
+
+    Die PV-Strings ändern sich laufend (U × I): sie haben einen Wert je Schritt ``step_ms`` der
+    Abfrage."""
+    step = HA_ENERGY_STEP_MS
+    peak = HA_PV_STRINGS.get(entity)
+    if peak is None:
+        if agg == "last":
+            return [[end - 60_000, value]]
+        first = -(-start // step) * step
+        return [
+            [ms, round(value * (1 + 0.3 * math.sin(ms / 7_200_000)), 1)]
+            for ms in range(first, end, step)
+        ]
+    since = epoch_ms(HA_PV_SINCE)
+    if agg == "last":
+        return [[end - 60_000, _sun_w(peak, end - 60_000)]] if end - 60_000 >= since else []
+    step = step_ms or step
+    first = -(-max(start, since) // step) * step
+    return [[ms, _sun_w(peak, ms)] for ms in range(first, end, step)]
+
+
 def _energy_influx(query: str) -> httpx.Response | None:
-    """Antworten für ``consumers.energy``: Minutenmittel des core, HA-Werte bei Änderung."""
+    """Antworten für ``consumers.energy`` und die PV-Tageskurve: Mittel des core je Schritt,
+    HA-Werte bei Änderung (je 15 min); nichts nach der Uhr der Demo."""
+    now = epoch_ms(T_DEMO)
     if core := _CORE_ENERGY.search(query):
-        start, end = int(core["start"]), int(core["end"])
-        first = -(-start // 60_000) * 60_000
+        start, end, step = int(core["start"]), min(int(core["end"]), now), int(core["step"]) * 1000
+        first = -(-start // step) * step
         return _influx_result(
             [
                 {
                     "name": "power",
                     "tags": {"source": source, "id": id_},
                     "columns": ["time", "w"],
-                    "values": [[ms, _curve("power", ms, id_)] for ms in range(first, end, 60_000)],
+                    "values": [[ms, _curve("power", ms, id_)] for ms in range(first, end, step)],
                 }
                 for source, id_ in _SOURCE_ID.findall(query)
             ]
         )
     if ha := _HA_ENERGY.search(query):
-        start, end = int(ha["start"]), int(ha["end"])
+        start, end = int(ha["start"]), min(int(ha["end"]), now)
+        grouped = _GROUP_STEP.search(query)
+        step = int(grouped["step"]) * 1000 if grouped else None
         series = []
         for domain, object_id in _ENTITY.findall(query):
             found = _ha_power_entities().get((domain, object_id))
             if found is None:
                 continue
             name, value = found
-            if ha["agg"] == "last":
-                values = [[end - 60_000, value]]
-            else:
-                first = -(-start // HA_ENERGY_STEP_MS) * HA_ENERGY_STEP_MS
-                values = [
-                    [ms, round(value * (1 + 0.3 * math.sin(ms / 7_200_000)), 1)]
-                    for ms in range(first, end, HA_ENERGY_STEP_MS)
-                ]
+            values = _ha_values((domain, object_id), value, ha["agg"], start, end, step)
+            if not values:
+                continue
             tags = {"domain": domain, "entity_id": object_id}
             series.append({"name": name, "tags": tags, "columns": ["time", "w"], "values": values})
         return _influx_result(series)
@@ -479,6 +538,10 @@ def _influx(request: httpx.Request) -> httpx.Response:
     query = influx_q(request)
     if (energy := _energy_influx(query)) is not None:
         return energy
+    if soc := _SOC_MIN.search(query):
+        start, end, step = int(soc["start"]), int(soc["end"]), int(soc["step"]) * 1000
+        values = [[ms, _curve("soc", ms, "battery")] for ms in range(start, end, step)]
+        return _influx_result([{"name": "soc", "columns": ["time", "v"], "values": values}])
     if mean := _MEAN.search(query):
         start, end = int(mean["start"]), int(mean["end"])
         interval = max(int(mean["step"]), 900) * 1000
@@ -622,7 +685,12 @@ def _demo_config(cfg: Config, data_dir: Path, ui_dir: Path | None) -> Config:
         }
     )
     core = cfg.core.model_copy(update={"data_dir": data_dir / "core"})  # Absicht der Demo
-    return cfg.model_copy(update={"app": app, "core": core})
+    # mit Brennerstatus der Ölheizung (Plan Ölheizung): Karten „Heizung“ und „Wärmebedarf“
+    klima = cfg.thermal.devices["klima"]
+    receive = klima.receive.model_copy(update={"oil_burner": CoeChannel(node=56, digital=6)})
+    devices = {**cfg.thermal.devices, "klima": klima.model_copy(update={"receive": receive})}
+    thermal = cfg.thermal.model_copy(update={"devices": devices})
+    return cfg.model_copy(update={"app": app, "core": core, "thermal": thermal})
 
 
 def _build_core(cfg: Config, secrets: Secrets, clock: ManualClock) -> CoreRuntime:
@@ -699,7 +767,57 @@ def _create_consumers(app: AppRuntime) -> list[HaRef]:
             power_unit="W",
         )
     )
-    return [HaRef.from_consumer(c) for c in app.consumers.list() if c.source_kind == "ha"]
+    return [HaRef.from_source(c) for c in app.consumers.list() if c.source_kind == "ha"]
+
+
+def add_pv_sources(app: AppRuntime) -> None:
+    """Die Anlage „Huawei“ (AC-Zähler am Victron) mit ihren Strings „Süd“ und „West“ aus HA.
+
+    Die Demo-Welt legt sie nicht an (das tut der Ablauf „PV-Anlagen“ im Browser); die
+    Vertragsdateien brauchen sie."""
+
+    def create(data: PvSourceInput) -> int:
+        return app.pv_sources.create(data, actor="admin", source="ui").id
+
+    huawei = create(
+        PvSourceInput(
+            name="Huawei",
+            color="#6e7781",
+            source_kind="core",
+            power_ref="pv.huawei.power_w",
+            kwp=9.8,
+        )
+    )
+    for name, color, entity, kwp, sort in (
+        ("Süd", "#d18f00", "sensor.pv1_leistung", 4.1, 0),
+        ("West", "#1f6feb", "sensor.pv2_leistung", 5.7, 1),
+    ):
+        create(
+            PvSourceInput(
+                name=name,
+                parent_id=huawei,
+                color=color,
+                source_kind="ha",
+                power_ref=entity,
+                power_unit="W",
+                kwp=kwp,
+                sort=sort,
+            )
+        )
+
+
+async def refresh_pv(app: AppRuntime) -> None:
+    """Was die Aufgaben der app für die PV tun (in der Demo laufen sie nicht): HA-Werte, Energie
+    seit Mitternacht und die gespeicherten Tage (``PV_DEMO_DAYS`` zurück)."""
+    sources = app.pv_sources.list()
+    if app.ha_values is not None:
+        # der Cache ersetzt seinen Inhalt als Ganzes: Verbraucher und PV zusammen
+        everything = [*app.consumers.list(), *sources]
+        await app.ha_values.refresh(
+            [HaRef.from_source(s) for s in everything if s.source_kind == "ha"]
+        )
+    await app.pv_energy.refresh(sources)
+    await app.pv_days.fill_missing(T_DEMO.astimezone(LOCAL_TZ).date(), PV_DEMO_DAYS)
 
 
 def _rate_forecasts(app: AppRuntime) -> None:
@@ -1117,6 +1235,43 @@ def demo_thermal_stage() -> Iterator[None]:
         yield
 
 
+# Unwetter-Reserve im Demo-Backend (Plan Unwetter-Reserve, Task 6): eine Gewitterwarnung (orange)
+# am Abend des 09.10., 18:00 bis 21:00 Ortszeit. Nur ``tests.e2e.ui_server`` schaltet sie ein; die
+# Vertragsdateien bleiben ohne Warnung.
+DEMO_STORM = StormWarning(
+    warn_id=4711,
+    version=1,
+    kind="gewitter",
+    level=2,
+    begin=datetime(2026, 10, 9, 18, 0, tzinfo=LOCAL_TZ),
+    end=datetime(2026, 10, 9, 21, 0, tzinfo=LOCAL_TZ),
+    text="Gewitter mit Starkregen und Sturmböen",
+)
+
+
+async def demo_storm(app: AppRuntime) -> None:
+    """Für das Demo-Backend: Unwetter-Reserve an und die Warnung ``DEMO_STORM`` bekannt, ohne
+    Abruf bei GeoSphere Austria (der Dienst ``storm.run`` läuft in der Demo nicht). Die Pläne des
+    Planungsdienstes danach halten den Akku im Fenster auf 40 %."""
+    current = app.settings.current()
+    planning = current.settings.planning
+    storm = planning.storm.model_copy(update={"enabled": True})
+    app.settings.update(
+        current.settings.model_copy(
+            update={"planning": planning.model_copy(update={"storm": storm})}
+        ),
+        base_version=current.version,
+        actor="admin",
+        source="ui",
+    )
+
+    async def fetch(*_: Any) -> list[StormWarning]:
+        return [DEMO_STORM]
+
+    app.storm._fetch = fetch
+    await app.storm.refresh()
+
+
 async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
     """Ein Plan um 09:01 neben dem von 10:00, damit „Plan gegen Ist“ für 09:00 bis 10:00 Plan
     und Ist zeigt.
@@ -1137,6 +1292,44 @@ async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
         }
     )
     app.planning._store.save(plan_once(earlier, await solve_inline(earlier)), earlier)
+
+
+async def _yesterday_plan(app: AppRuntime, plan: Plan) -> None:
+    """Ein Plan für gestern (08.10.) ohne Netzladen: Gegen ihn fällt das Netzladen des Verlaufs
+    von 02:00 bis 05:00 als „ohne Plan“ auf, und der Tagesbericht vergleicht mit dem Plan.
+
+    Er entsteht aus den Eingangsdaten des Plans von 10:00, auf Mitternacht von gestern
+    zurückgesetzt, und gilt der Einfachheit halber den ganzen Tag (im Betrieb plant die app alle
+    paar Minuten neu); seine Slots enden um Mitternacht, „Plan gegen Ist“ von heute sieht ihn nicht.
+    """
+    assert plan.id is not None
+    inputs = app.planning._store.inputs_of(plan.id)
+    assert inputs is not None
+    first, *_, last = local_day_slots(LAST_DAY)
+    back = T_DEMO - first
+    earlier = inputs.model_copy(
+        update={
+            "created_at": first,
+            "slots": [
+                slot.model_copy(update={"start": slot.start - back}) for slot in inputs.slots
+            ],
+        }
+    )
+    solved = plan_once(earlier, await solve_inline(earlier))
+    assert not any(slot.charge_grid_w > 0 for slot in solved.slots)  # Netzladen ist aus
+    day = solved.model_copy(
+        update={
+            "valid_until": last + SLOT,
+            "slots": [slot for slot in solved.slots if slot.start <= last],
+        }
+    )
+    app.planning._store.save(day, earlier)
+
+
+async def _findings(app: AppRuntime) -> None:
+    """Auffälligkeiten der letzten 7 Tage bis gestern, wie die app sie beim Start nachholt."""
+    for back in range(7, 0, -1):
+        await app.findings.run_day(T_DEMO.astimezone(LOCAL_TZ).date() - timedelta(days=back))
 
 
 def _demo_tariff(app: AppRuntime) -> TariffSettings:
@@ -1275,6 +1468,32 @@ async def _statistics(app: AppRuntime) -> None:
     assert await app.consumer_days.fill_missing(today, days=7) == 7
 
 
+def _heating_days(app: AppRuntime) -> None:
+    """Brennerstunden, Heizgradtage und Klima-Strom der sieben Tage vor heute (Plan Ölheizung)."""
+    settings = app.settings.current().settings
+    heating = settings.heating.model_copy(
+        update={"burner_kw": 27.0, "oil_l_per_h": 2.9, "oil_price_eur_l": 1.1}
+    )
+    set_heating(app.settings, heating)
+    with app.engine.begin() as conn:
+        for n in range(7):
+            day = LAST_DAY - timedelta(days=6 - n)
+            hdd = 4.0 + n
+            conn.execute(
+                insert(heating_day).values(
+                    day=day.isoformat(),
+                    burner_h=round(hdd / 1.5, 2),
+                    known_h=24.0,
+                    day_h=24.0,
+                    burner_end=False,
+                    hdd_kd=hdd,
+                    outdoor_mean_c=15.0 - hdd,
+                    ac_heat_el_kwh=1.5,
+                    note=None,
+                )
+            )
+
+
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
@@ -1322,6 +1541,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         # Der Verlauf vor dem Plan: so plant er mit der Monatsspitze, die auch Boost-Mehrkosten
         # und Statistik zeigen (aus dem Verlauf, nicht nur aus den vier Slots von heute)
         await _statistics(app)
+        _heating_days(app)
         await _learning(app)
         # Plan aus den Prognosen und Preisen; der Solver läuft im selben Prozess (wie in Tests)
         app.planning._solver = solve_inline
@@ -1337,6 +1557,8 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
             plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
+        await _yesterday_plan(app, plan)
+        await _findings(app)
         await _driving(app)
         # erst nach dem Plan: er bleibt mit dem Profil gerechnet, die Ausgabe nennt das Modell
         await app.load_forecast.refresh()

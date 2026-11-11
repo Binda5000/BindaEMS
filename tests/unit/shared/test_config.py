@@ -10,8 +10,10 @@ from pydantic import ValidationError
 from bindaems.core.control.fleet import GUEST, guest_key
 from bindaems.shared.config import (
     HA_VEHICLE_SUFFIXES,
+    OIL_BURNER_SIGNAL,
     AppConfig,
     CoeChannel,
+    CoeReceive,
     Config,
     ConfigError,
     ControlConfig,
@@ -429,6 +431,8 @@ FINITE_CONTROL_FIELDS = (
     "peak_margin_kw",
     "tesla_against_s",
     "tesla_against_retry_s",
+    "evcs_against_s",
+    "evcs_against_retry_s",
 )
 
 
@@ -690,7 +694,14 @@ def test_self_start_defaults_to_120_s_and_10_min() -> None:
     assert (control.tesla_against_s, control.tesla_against_retry_s) == (120.0, 600.0)
 
 
-@pytest.mark.parametrize("field", ["tesla_against_s", "tesla_against_retry_s"])
+def test_evcs_self_start_defaults() -> None:
+    control = load_config(EXAMPLE).control
+    assert (control.evcs_against_s, control.evcs_against_retry_s) == (60.0, 300.0)
+
+
+@pytest.mark.parametrize(
+    "field", ["tesla_against_s", "tesla_against_retry_s", "evcs_against_s", "evcs_against_retry_s"]
+)
 @pytest.mark.parametrize("value", [0, -1])
 def test_self_start_times_must_be_positive(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
@@ -996,3 +1007,64 @@ def test_suffix_collision_is_detected(tmp_path, key, entity) -> None:
 
     with pytest.raises(ConfigError, match=rf"vehicles\.{key}: .*{entity}.*vehicles\.tesla"):
         load_config(write_cfg(tmp_path, mutate))
+
+
+def test_outage_floor_defaults_to_5() -> None:
+    assert load_config(EXAMPLE).battery.outage_floor_soc_pct == 5.0
+
+
+def test_outage_floor_above_reserve_rejected(tmp_path: Path) -> None:
+    p = write_cfg(
+        tmp_path,
+        lambda d: d["battery"].update(reserve_soc_pct=20, outage_floor_soc_pct=25),
+    )
+    with pytest.raises(ConfigError, match="outage_floor_soc_pct darf nicht über reserve_soc_pct"):
+        load_config(p)
+
+
+@pytest.mark.parametrize(("value", "ok"), [(59, False), (3601, False), (60, True), (3600, True)])
+def test_ping_interval_bounds(tmp_path: Path, value: float, ok: bool) -> None:
+    p = write_cfg(tmp_path, lambda d: d.setdefault("app", {}).update(ping_interval_s=value))
+    if ok:
+        assert load_config(p).app.ping_interval_s == value
+    else:
+        with pytest.raises(ConfigError):
+            load_config(p)
+    assert load_config(EXAMPLE).app.ping_interval_s == 300.0
+
+
+def test_ping_url_is_not_validated_so_core_and_app_still_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
+    monkeypatch.setenv("BINDAEMS_PING_URL", "http://x")
+    url = load_secrets().ping_url
+    assert url is not None and url.get_secret_value() == "http://x"
+    monkeypatch.setenv("BINDAEMS_PING_URL", "https://hc-ping.com/abc")
+    url = load_secrets().ping_url
+    assert url is not None and url.get_secret_value() == "https://hc-ping.com/abc"
+    monkeypatch.setenv("BINDAEMS_PING_URL", "")
+    assert load_secrets().ping_url is None
+
+
+def _receive_table() -> dict[str, Any]:
+    return _example_dict()["thermal"]["devices"]["klima"]["receive"]
+
+
+def test_oil_burner_is_optional_and_digital() -> None:
+    table = _receive_table()
+    receive = CoeReceive.model_validate(table | {"oil_burner": {"node": 56, "digital": 6}})
+    assert receive.channels()[OIL_BURNER_SIGNAL].digital == 6
+    assert OIL_BURNER_SIGNAL not in CoeReceive.model_validate(table).channels()
+
+
+def test_oil_burner_must_be_digital() -> None:
+    with pytest.raises(ValidationError, match="Digitalwert"):
+        CoeReceive.model_validate(
+            _receive_table() | {"oil_burner": {"node": 56, "analog": 6, "unit": 1}}
+        )
+
+
+def test_oil_burner_must_not_share_a_value() -> None:
+    with pytest.raises(ValidationError, match="running und oil_burner"):
+        CoeReceive.model_validate(_receive_table() | {"oil_burner": {"node": 56, "digital": 5}})

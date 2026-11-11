@@ -22,6 +22,7 @@ from tests.helpers import stop
 from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
+from bindaems.app.control.boost_cost import boost_cost
 from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
 from bindaems.app.db.schema import charging_session, planned_charge
@@ -31,8 +32,8 @@ from bindaems.app.runtime import AppRuntime, StatsInputs
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent, SupportIntent
 from bindaems.shared.decisions import decision_to_json
-from bindaems.shared.settings import PlanningSettings
-from bindaems.shared.timeutil import ManualClock
+from bindaems.shared.settings import PlanningSettings, PowerComponent
+from bindaems.shared.timeutil import LOCAL_TZ, ManualClock
 
 TOKEN = "x" * 32
 
@@ -104,6 +105,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "core",
         "prices",
         "forecast",
+        "storm",
         "load-forecast",
         "load-model",
         "driving",
@@ -111,6 +113,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "planning",
         "ledger",
         "influx",
+        "Lebenszeichen",
         "ha",
         "ha-notify",
     ]
@@ -131,6 +134,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "/api/ledger/days?from=2026-10-09&to=2026-10-09",
         "/api/limits",
         "/api/state",
+        "/api/backup",
     ):
         assert client.get(path).status_code == 200, path
 
@@ -897,6 +901,113 @@ async def test_shutdown_closes_the_thermal_model_before_dispose(runtime, monkeyp
     assert "Berechnung des Wärmemodells läuft beim Beenden noch" in [e["event"] for e in logs]
 
 
+def _with_oil_burner(cfg: Config) -> Config:
+    from bindaems.shared.config import CoeChannel
+
+    devices = {}
+    for key, device in cfg.thermal.devices.items():
+        receive = device.receive.model_copy(update={"oil_burner": CoeChannel(node=56, digital=6)})
+        devices[key] = device.model_copy(update={"receive": receive})
+    return cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": devices})})
+
+
+async def test_runtime_builds_heating_days_only_with_oil_burner(
+    cfg: Config, tmp_path, monkeypatch
+) -> None:
+    plain = make_runtime(cfg, tmp_path / "plain")
+    try:
+        assert plain.heating_days is None
+    finally:
+        plain.engine.dispose()
+    rt = make_runtime(_with_oil_burner(cfg), tmp_path / "burner")
+    try:
+        assert rt.heating_days is not None
+        client = TestClient(rt.app, base_url="https://testserver")
+        rt.auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+        client.post("/api/auth/login", json={"username": "chris", "password": PASSWORD})
+        assert client.get("/api/heating/demand").status_code == 200
+        assert "heating" in client.get("/api/stats", params={"period": "day"}).json()
+    finally:
+        rt.engine.dispose()
+
+
+def test_without_oil_burner_the_demand_route_answers_404(cfg: Config, tmp_path) -> None:
+    rt = make_runtime(cfg, tmp_path)
+    try:
+        client = TestClient(rt.app, base_url="https://testserver")
+        rt.auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+        client.post("/api/auth/login", json={"username": "chris", "password": PASSWORD})
+        assert client.get("/api/heating/demand").status_code == 404
+        assert client.get("/api/stats", params={"period": "day"}).json()["heating"] is None
+    finally:
+        rt.engine.dispose()
+
+
+async def test_ledger_nightly_fills_the_heating_days(cfg: Config, tmp_path, monkeypatch) -> None:
+    rt = make_runtime(_with_oil_burner(cfg), tmp_path)
+    try:
+        calls: list[int] = []
+
+        async def fill(today: date, days: int) -> int:
+            calls.append(days)
+            return 2
+
+        assert rt.heating_days is not None
+        monkeypatch.setattr(rt.heating_days, "fill_missing", fill)
+        spy_ledger_checks(rt, monkeypatch)
+        spy_gap_estimator(rt, monkeypatch)
+        await rt._ledger_nightly(7, start=True)
+        await rt._ledger_nightly(7)
+        assert calls == [31, 3]
+    finally:
+        rt.engine.dispose()
+
+
+async def test_ledger_nightly_survives_a_failing_heating_fill(
+    cfg: Config, tmp_path, monkeypatch
+) -> None:
+    rt = make_runtime(_with_oil_burner(cfg), tmp_path)
+    try:
+
+        async def fill(today: date, days: int) -> int:
+            raise RuntimeError("Datenbank gesperrt")
+
+        assert rt.heating_days is not None
+        monkeypatch.setattr(rt.heating_days, "fill_missing", fill)
+        spy_ledger_checks(rt, monkeypatch)
+        spy_gap_estimator(rt, monkeypatch)
+        with capture_logs() as logs:
+            await rt._ledger_nightly(7)
+        assert "Heizungstage nicht gespeichert" in [e["event"] for e in logs]
+    finally:
+        rt.engine.dispose()
+
+
+async def test_heating_today_loop_refreshes_every_300_s_and_survives_errors(
+    cfg: Config, tmp_path, monkeypatch
+) -> None:
+    rt = make_runtime(_with_oil_burner(cfg), tmp_path)
+    try:
+        assert rt.heating_days is not None
+        results: list[Exception | None] = [RuntimeError("Datenbank gesperrt"), None]
+
+        async def refresh() -> None:
+            outcome = results.pop(0)
+            if outcome is not None:
+                raise outcome
+
+        monkeypatch.setattr(rt.heating_days, "refresh_today", refresh)
+        sleeps: list[float] = []
+        monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=2))
+        with capture_logs() as logs, pytest.raises(StopScheduler):
+            await rt._heating_today_loop()
+        assert sleeps == [300.0, 300.0]
+        assert results == []
+        assert "Heizungstag heute nicht berechnet" in [e["event"] for e in logs]
+    finally:
+        rt.engine.dispose()
+
+
 def test_without_a_coe_device_the_thermal_model_is_absent(cfg: Config, tmp_path) -> None:
     # Plan 5c, Task 5: ohne Gerät der Art ``coe_offset`` kein Dienst und keine Komponente
     thermal = cfg.thermal.model_copy(update={"devices": {}})
@@ -1183,6 +1294,18 @@ async def test_warnings_without_mqtt_get_their_ha_inputs(cfg, tmp_path, respx_mo
         runtime.engine.dispose()
 
 
+def test_ha_inputs_carry_the_ops_check(runtime, monkeypatch) -> None:
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.ops_level == "error"  # ohne verbundenen core
+    assert any(text.startswith("core:") for text in inputs.ops_text)
+
+    def broken(*_args: object) -> None:
+        raise RuntimeError("Datenbank weg")
+
+    monkeypatch.setattr("bindaems.app.runtime.current_check", broken)
+    assert runtime._build_ha_inputs(Intent(version=1)).ops_level is None
+
+
 async def test_ha_inputs_carry_the_intent(runtime, monkeypatch) -> None:
     valid = Intent(version=5, control=True)
 
@@ -1237,6 +1360,46 @@ async def test_ha_inputs_carry_the_plan_and_the_grid_charge_switch(runtime, monk
     assert inputs.grid_charge_allowed is True
     set_planning(runtime.settings, PlanningSettings(grid_charge_allowed=False))
     assert runtime._build_ha_inputs(Intent(version=1)).grid_charge_allowed is False
+
+
+async def test_ha_inputs_boost_cost_only_with_power_rate(runtime) -> None:
+    # ohne gültigen Leistungspreis bleibt es leer, mit Satz kommt der Wert aus ``boost_cost``
+    now = runtime._clock.now()
+    day = now.astimezone(LOCAL_TZ).date()
+    current = runtime.settings.current()
+    without = [
+        c.model_copy(update={"valid_from": date(2099, 1, 1)})
+        if isinstance(c, PowerComponent)
+        else c
+        for c in current.settings.tariff.components
+    ]
+    tariff = current.settings.tariff.model_copy(update={"components": without})
+    runtime.settings.update(
+        current.settings.model_copy(update={"tariff": tariff}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+    assert runtime._build_ha_inputs(Intent(version=1)).boost_cost_eur == {}
+    current = runtime.settings.current()
+    rated = [
+        c.model_copy(update={"value_eur": 60.0, "valid_from": None})
+        if isinstance(c, PowerComponent)
+        else c
+        for c in current.settings.tariff.components
+    ]
+    tariff = current.settings.tariff.model_copy(update={"components": rated})
+    runtime.settings.update(
+        current.settings.model_copy(update={"tariff": tariff}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+    expected = boost_cost(runtime._cfg, tariff, None, day)
+    assert expected["applies"] is True
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.boost_cost_eur == {v["id"]: v["cost_eur"] for v in expected["vehicles"]}
+    assert set(inputs.boost_cost_eur) == set(runtime._cfg.vehicles)
 
 
 async def test_ha_intent_falls_back_when_the_core_has_none_or_is_down(runtime, monkeypatch) -> None:
@@ -1720,3 +1883,21 @@ async def test_runtime_starts_weather_backfill_as_one_shot_job(runtime, respx_mo
     await asyncio.wait_for(asyncio.shield(job), timeout=2)  # endet von selbst, ohne Neustart
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
+
+
+async def test_runtime_supervises_monitoring_jobs(runtime, respx_mock) -> None:
+    respx_mock.route().respond(503)  # kein echter Netzverkehr
+    task = asyncio.create_task(runtime.run())
+    await until(
+        lambda: {"backup-range", "outages", "heartbeat"} <= {j.get_name() for j in runtime._tasks}
+    )
+    assert runtime.backup_range().now_h is None  # ohne SOC und Lastgrundlage
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_heartbeat_reading_takes_the_disconnect_time_from_the_live_feed(runtime) -> None:
+    reading = runtime._heartbeat_reading()
+    assert reading.connected is False
+    assert reading.down_since == runtime.live_feed.disconnected_since
+    assert reading.down_since is not None  # nie verbunden: Start der app

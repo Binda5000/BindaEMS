@@ -38,6 +38,7 @@ from bindaems.app.planning.optimizer import (
     grid_charge_cap_w,
     recharge_cap_w,
     solve,
+    storm_charge_caps_w,
 )
 from bindaems.app.planning.plausibility import R1_TOL_KWH, check_plan, export_while_charged_kwh
 from bindaems.app.planning.vehicles import (
@@ -47,9 +48,10 @@ from bindaems.app.planning.vehicles import (
     horizon_need,
     need_kwh,
 )
+from bindaems.app.storm.windows import storm_floors
 from bindaems.shared.config import Phase
-from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, BatteryIntentKind
-from bindaems.shared.settings import TariffSettings
+from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, BatteryIntentKind, StormWarning
+from bindaems.shared.settings import StormSettings, TariffSettings
 from bindaems.shared.timeutil import SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
@@ -872,7 +874,7 @@ def phase_grid_w(inputs: PlanInputs, flow: SlotFlows, phase: Phase) -> float:
         flow.ev.get(car.key, (0.0, 0.0))[1] * phase_shares(car.grid_phases).get(phase, 0.0)
         for car in inputs.vehicles
     )
-    return (flow.gr_h + flow.gr_b + flow.gr_r) / 3 + cars
+    return (flow.gr_h + flow.gr_b + flow.gr_r + flow.gr_s) / 3 + cars
 
 
 def _tesla(**overrides: Any) -> PlanVehicleInput:
@@ -1232,3 +1234,346 @@ def test_recharged_energy_stays_in_the_battery() -> None:
     for f in result.flows:
         charged += params_of(inputs).eta_ch * f.gr_r * SLOT_KWH
         assert f.soc_end_kwh >= soc0 + charged - 1e-6
+
+
+# Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidungen 5 und 6)
+
+_STORM = StormWarning(
+    warn_id=7,
+    version=1,
+    kind="gewitter",
+    level=2,
+    begin=at("2026-10-16T12:00:00+00:00"),  # 14:00 Ortszeit
+    end=at("2026-10-16T14:00:00+00:00"),  # 16:00 Ortszeit
+    text="Gewitter",
+)
+_WINDOW = range(44, 56)  # 13:00 (eine Stunde Vorlauf) bis 16:00 Ortszeit
+_FLOOR_KWH = 0.4 * _BIG_KWH
+_TOL_KWH = 0.005 * _BIG_KWH  # 0,5 Prozentpunkte
+
+
+def _storm(
+    *,
+    soc_pct: float,
+    prices: list[float] | None = None,
+    load: list[float] | None = None,
+    pv: list[float] | None = None,
+    grid_charge: bool = False,
+    battery: BatteryState | None = None,
+    vehicles: list[PlanVehicleInput] | None = None,
+    warning: StormWarning | None = _STORM,
+    car_battery: bool = False,
+) -> PlanInputs:
+    """Akku 96 kWh, Reserve 20 %, Ziel 40 %, ohne PV und ohne Restwert; 96 Slots ab 02:00
+    Ortszeit, Haus 600 W, 30 ct und 10 ct von 02:00 bis 04:00; mit Warnung Gewitter (orange) von
+    14:00 bis 16:00 Ortszeit, die Untergrenzen je Slot wie ``assemble_inputs``."""
+    prices = prices if prices is not None else [10.0] * 8 + [30.0] * 88
+    count = len(prices)
+    starts = [at(SCENARIO_START) + i * SLOT for i in range(count)]
+    warnings = [warning] if warning is not None else []
+    floors = storm_floors(
+        starts, warnings, StormSettings(enabled=True), reserve_pct=20.0, soc_max_pct=100.0
+    )
+    return scenario(
+        prices=prices,
+        pv=pv if pv is not None else [0.0] * count,
+        load=load if load is not None else [600.0] * count,
+        soc_pct=soc_pct,
+        grid_charge=grid_charge,
+        battery=battery or state(usable_kwh=_BIG_KWH),
+        vehicles=vehicles,
+        car_battery=car_battery,
+        storm_floors=floors,
+        storm_warnings=warnings,
+    )
+
+
+def test_storm_floors_lie_in_the_window() -> None:
+    inputs = _storm(soc_pct=60.0)
+    floors = [s.storm_floor_pct for s in inputs.slots]
+    assert [t for t, f in enumerate(floors) if f is not None] == list(_WINDOW)
+    assert {f for f in floors if f is not None} == {40.0}
+
+
+def test_holds_battery_for_storm_window() -> None:
+    # Haus 2500 W in teuren Blöcken: ohne Warnung entlädt der Plan vor dem Fenster weit unter
+    # 40 % und am Ende bis 20 %. Mit Warnung hält er im Fenster 40 %; was er vor dem Fenster
+    # entladen darf (60 % → 40 %), nimmt er in den teuren Slots ganz und rundet nur in einem
+    # 600-W-Slot im Fenster, damit die Nachrechnung um weniger als 0,5 Prozentpunkte abweicht.
+    prices = [10.0] * 8 + [30.0] * 28 + [22.0] * 8 + [28.0] * 12 + [21.0] * 40
+    load = [600.0] * 8 + [2500.0] * 28 + [2500.0] * 8 + [600.0] * 12 + [2500.0] * 40
+    without = solve(_storm(soc_pct=60.0, prices=prices, load=load, warning=None))
+    assert without.status == "optimal"
+    assert min(without.flows[t].soc_end_kwh for t in _WINDOW) < _FLOOR_KWH - 3.0
+    assert without.flows[-1].soc_end_kwh == pytest.approx(_RESERVE_KWH, abs=0.01)
+
+    inputs = _storm(soc_pct=60.0, prices=prices, load=load)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert result.storm_shortfall_kwh == pytest.approx(0.0, abs=1e-6)
+    assert all(f.gr_s == 0 for f in result.flows)  # SOC₀ über dem Ziel: kein Aufladen
+    for t in _WINDOW:
+        assert result.flows[t].soc_end_kwh >= _FLOOR_KWH - 1e-6
+    assert result.flows[-1].soc_end_kwh == pytest.approx(_RESERVE_KWH, abs=0.01)
+    intents = derive_intents(inputs, result)
+    steps = resimulate(inputs, intents)
+    for t in _WINDOW:
+        assert steps[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH
+    assert check_plan(inputs, result, intents, steps) == []
+
+
+def test_storm_charge_with_switch_off() -> None:
+    inputs = _storm(soc_pct=22.0)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert all(f.gr_b == 0 and f.gr_r == 0 for f in result.flows)
+    charged = sum(params_of(inputs).eta_ch * f.gr_s * SLOT_KWH for f in result.flows)
+    assert charged == pytest.approx(_FLOOR_KWH - 0.22 * _BIG_KWH, abs=0.01)
+    # die Untergrenze gilt am Ende jedes Slots ab 13:00 (eine Stunde Vorlauf)
+    assert all(result.flows[t].soc_end_kwh >= _FLOOR_KWH - 1e-6 for t in _WINDOW)
+    intents = derive_intents(inputs, result)
+    charging = [t for t, i in enumerate(intents) if i.kind is BatteryIntentKind.NETZLADEN]
+    assert charging and all(intents[t].reserve_recharge for t in charging)
+    assert all(0 < intents[t].grid_charge_w <= RESERVE_RECHARGE_MAX_W for t in charging)
+    # zuerst die billigen Slots (02:00 bis 04:00), mit voller Leistung
+    assert [intents[t].grid_charge_w for t in range(8)] == [RESERVE_RECHARGE_MAX_W] * 8
+    assert max(charging) <= _WINDOW[-1]
+    steps = resimulate(inputs, intents)
+    for t in _WINDOW:
+        assert steps[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH
+    assert check_plan(inputs, result, intents, steps) == []
+
+
+def test_storm_charge_caps_follow_window_and_soc() -> None:
+    caps = storm_charge_caps_w(_storm(soc_pct=22.0))
+    assert caps == [RESERVE_RECHARGE_MAX_W] * 56 + [0.0] * 40
+    assert storm_charge_caps_w(_storm(soc_pct=40.0)) == [0.0] * 96
+    assert storm_charge_caps_w(_storm(soc_pct=22.0, warning=None)) == [0.0] * 96
+    limited = _storm(
+        soc_pct=22.0, battery=state(usable_kwh=_BIG_KWH, max_grid_charge_setpoint_w=2600.0)
+    )
+    assert storm_charge_caps_w(limited)[0] == 2000.0  # 2600 W Sollwert − 600 W Haus
+
+
+# billig in der Nacht (02:00 bis 04:00), teuer am Morgen vor der PV (04:00 bis 08:00), sonst 30 ct
+_MORNING_PRICES = [10.0] * 8 + [40.0] * 16 + [30.0] * 72
+
+
+def test_pv_fills_storm_reserve_first() -> None:
+    # Haus 1500 W und ein teurer Morgen: Nachts aufladen und den Akku am Morgen leeren lohnte
+    # sich, wenn das Aufgeladene vor dem Fenster wieder hinaus dürfte; die PV füllt die
+    # Untergrenze umsonst
+    pv = pv_arc(SCENARIO_START, 96, 8000.0)
+    inputs = _storm(soc_pct=22.0, pv=pv, prices=_MORNING_PRICES, load=[1500.0] * 96)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert sum(f.gr_s for f in result.flows) < 1
+    intents = derive_intents(inputs, result)
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in intents)
+    steps = resimulate(inputs, intents)
+    assert all(steps[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH for t in _WINDOW)
+
+
+def test_storm_charge_is_no_arbitrage() -> None:
+    # Ruling R9 (Befund des Reviews): Ohne die Bedingung „bleibt im Akku“ lud der Plan nachts
+    # 1,9 kWh zu 10 ct, entlud sie am Morgen zu 40 ct und war um 06:00 wieder an der Reserve; die
+    # PV füllte die Untergrenze trotzdem (Ziel 80,8 ct mit Warnung gegen 125,1 ct ohne).
+    pv = pv_arc(SCENARIO_START, 96, 9000.0)
+    kw: dict[str, Any] = {"soc_pct": 22.0, "pv": pv, "prices": _MORNING_PRICES}
+    kw["load"] = [1500.0] * 96
+    without = solve(_storm(**kw, warning=None))
+    inputs = _storm(**kw)
+    result = solve(inputs)
+    assert result.status == without.status == "optimal"
+    assert result.objective_ct is not None and without.objective_ct is not None
+    assert result.objective_ct >= without.objective_ct - 0.01
+    assert sum(f.gr_s for f in result.flows) < 1
+    intents = derive_intents(inputs, result)
+    assert all(i.kind is not BatteryIntentKind.NETZLADEN for i in intents)
+    assert result.storm_shortfall_kwh == pytest.approx(0.0, abs=1e-6)
+
+
+def test_storm_charge_stays_until_the_window_ends() -> None:
+    # Aufgeladenes verlässt den Akku nicht vor dem Ende des letzten Fensters: SOC am Slotende
+    # mindestens Reserve plus das bis dahin Aufgeladene; danach darf das Haus es verbrauchen
+    inputs = _storm(soc_pct=22.0, prices=_MORNING_PRICES, load=[1500.0] * 96)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    eta_ch = params_of(inputs).eta_ch
+    charged = 0.0
+    for t, f in enumerate(result.flows[: _WINDOW[-1] + 1]):
+        charged += eta_ch * f.gr_s * SLOT_KWH
+        assert f.soc_end_kwh >= _RESERVE_KWH + charged - 1e-6, t
+    assert charged == pytest.approx(_FLOOR_KWH - 0.22 * _BIG_KWH, abs=0.01)
+    assert result.flows[-1].soc_end_kwh < _FLOOR_KWH - 5.0  # danach nimmt es das Haus
+
+
+def test_storm_charge_boundary_between_reserve_and_floor() -> None:
+    # Ruling I1: Liegt der SOC zu Beginn zwischen Reserve und Untergrenze, hält der Plan das
+    # Aufgeladene nur über ``min(SOC₀, Reserve)``, nicht über dem SOC₀. Die Probe: nachts 5,6 kWh
+    # zu 10 ct aufladen (höchstens 3 kW, höchstens bis zur Untergrenze), und der Akku gibt vor dem
+    # Fenster Energie über der Reserve ans Haus ab (SOC fällt unter SOC₀ + Aufgeladenes), die PV
+    # und das Aufladen füllen ihn zum Fenster auf.
+    inputs = _storm(
+        soc_pct=30.0,
+        prices=_MORNING_PRICES,
+        load=[1500.0] * 96,
+        pv=pv_arc(SCENARIO_START, 96, 2500.0),
+    )
+    soc0 = 0.30 * _BIG_KWH
+    result = solve(inputs)
+    assert result.status == "optimal"
+    eta_ch = params_of(inputs).eta_ch
+    charged = 0.0
+    gave_house = False
+    for t, f in enumerate(result.flows[: _WINDOW[-1] + 1]):
+        assert f.gr_s + f.gr_r <= RESERVE_RECHARGE_MAX_W + 1e-6, t
+        charged += eta_ch * f.gr_s * SLOT_KWH
+        assert f.soc_end_kwh >= _RESERVE_KWH + charged - 1e-6, t  # die Basis ist die Reserve
+        if t < _WINDOW[0] and f.soc_end_kwh < soc0 + charged - 0.5:
+            gave_house = True
+    assert 1.0 < charged <= _FLOOR_KWH - soc0 + 1e-6  # nie mehr als bis zur Untergrenze
+    assert gave_house  # Entladung über der Reserve vor dem Fenster ist erlaubt
+    assert all(result.flows[t].soc_end_kwh >= _FLOOR_KWH - _TOL_KWH for t in _WINDOW)
+
+
+def test_no_battery_to_car_with_storm_charge() -> None:
+    # Ruling R7: Kann der Plan für die Unwetter-Reserve aufladen, gibt der Akku keinem Auto etwas;
+    # die Plausibilität zählt das Aufladen als Netzenergie im Akku (``car_grid``). Ohne Warnung
+    # nimmt das Auto, das erst am Abend kommt, PV-Energie aus dem Akku.
+    pv = pv_arc(SCENARIO_START, 96, 9000.0)
+    car = _tesla(expected=True, arrival_at=slot(72), departure_at=slot(95), need_kwh=10.0)
+    kw: dict[str, Any] = {"soc_pct": 22.0, "pv": pv, "vehicles": [car], "car_battery": True}
+    without = solve(_storm(**kw, warning=None))
+    assert battery_kwh(without) > 1.0
+    inputs = _storm(**kw)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert all(not f.ev_battery for f in result.flows)
+    assert sum(f.gr_s for f in result.flows) > 0 or result.flows[_WINDOW[0]].pv_b > 0
+    intents = derive_intents(inputs, result)
+    issues = check_plan(inputs, result, intents, resimulate(inputs, intents))
+    assert not any("Akku ins Auto" in i for i in issues)
+
+
+def test_battery_to_car_stays_with_floor_above_the_soc() -> None:
+    # Liegt der SOC zu Beginn schon über der Untergrenze, gibt es kein Aufladen und Akku ins
+    # Auto bleibt wie ohne Warnung möglich
+    pv = pv_arc(SCENARIO_START, 96, 9000.0)
+    car = _tesla(expected=True, arrival_at=slot(72), departure_at=slot(95), need_kwh=10.0)
+    result = solve(_storm(soc_pct=60.0, pv=pv, vehicles=[car], car_battery=True))
+    assert result.status == "optimal"
+    assert battery_kwh(result) > 1.0
+
+
+def test_storm_already_running_stays_feasible() -> None:
+    # Die Warnung läuft schon, der Akku steht unter der Reserve: Das Ziel ist nicht zu erreichen,
+    # der Plan bleibt lösbar, lädt so schnell wie erlaubt und meldet die Fehlmenge.
+    running = _STORM.model_copy(
+        update={"begin": at(SCENARIO_START), "end": at(SCENARIO_START) + 16 * SLOT}
+    )
+    inputs = _storm(soc_pct=18.0, prices=[30.0] * 96, warning=running)
+    assert inputs.slots[0].storm_floor_pct == 40.0
+    result = solve(inputs)
+    assert result.status == "optimal"
+    for f in result.flows:
+        assert f.gr_r + f.gr_s <= RESERVE_RECHARGE_MAX_W + 1e-6
+    assert result.storm_shortfall_kwh > 0
+    assert sum(f.gr_r + f.gr_s for f in result.flows[:16]) == pytest.approx(
+        16 * RESERVE_RECHARGE_MAX_W, rel=1e-6
+    )
+    intents = derive_intents(inputs, result)
+    charging = [i for i in intents if i.kind is BatteryIntentKind.NETZLADEN]
+    assert charging and all(
+        i.reserve_recharge and i.grid_charge_w <= RESERVE_RECHARGE_MAX_W for i in charging
+    )
+    assert check_plan(inputs, result, intents, resimulate(inputs, intents)) == []
+
+
+def test_no_storm_charge_after_window() -> None:
+    # Nach dem Fenster wäre es billiger, aber dort gibt es kein Aufladen für die Reserve mehr
+    prices = [30.0] * 56 + [2.0] * 40
+    inputs = _storm(soc_pct=22.0, prices=prices)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert all(f.gr_s == 0 for f in result.flows[_WINDOW[-1] + 1 :])
+    assert sum(f.gr_s for f in result.flows[: _WINDOW[0]]) > 0
+    assert all(f.gr_b == 0 for f in result.flows)
+
+
+def test_storm_charge_respects_phase_limit() -> None:
+    # Der Tesla muss im billigen Slot 0 voll laden (3680 W je Phase), das Haus nimmt 200 W je
+    # Phase: Fürs Aufladen bleiben dort 3 · 490 W, der Rest kommt später.
+    tesla = _tesla(departure_at=slot(1), need_kwh=11040.0 * SLOT_KWH)
+    inputs = _storm(
+        soc_pct=22.0,
+        prices=[5.0] + [30.0] * 95,
+        battery=state(usable_kwh=_BIG_KWH, grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[tesla],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert car_w(result.flows[0]) == pytest.approx(11040.0)
+    assert 1000.0 < result.flows[0].gr_s <= 3 * (4370 - 200 - 3680) + 1
+    for f in result.flows:
+        for phase in PHASES:
+            assert phase_grid_w(inputs, f, phase) <= PHASE_LIMIT_W + 1
+
+
+def test_storm_charge_counts_in_the_known_peak() -> None:
+    # Mit einem erwarteten Auto rechnet die Spitze den Bezug selbst nach; das Aufladen zählt mit.
+    expected = _tesla(
+        key="egolf", expected=True, arrival_at=slot(90), departure_at=slot(95), need_kwh=1.0
+    )
+    inputs = _storm(soc_pct=22.0, vehicles=[expected]).model_copy(
+        update={"peak_months": [month("2026-10", 0.0)]}
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert sum(f.gr_s for f in result.flows) > 0
+    top_w = max(f.gr_h + f.gr_s for f in result.flows)
+    assert top_w > 700.0  # mehr als das Haus allein
+    assert result.peaks_kw["2026-10"] >= top_w / 1000 - 1e-6
+
+
+def _old_inputs() -> PlanInputs:
+    """Nachladen auf die Reserve, ein Auto, Phasengrenze, PV und Restwert, ohne Warnung."""
+    prices = [30.0] * 4 + [10.0] * 8 + [30.0] * 36 + [8.0] * 8 + [40.0] * 40
+    car = _tesla(departure_at=slot(20))
+    return scenario(
+        prices=prices,
+        pv=pv_arc(SCENARIO_START, len(prices), 1500.0),
+        load=[600.0] * len(prices),
+        soc_pct=16.0,
+        battery=state(usable_kwh=_BIG_KWH, grid_phase_import_w=PHASE_LIMIT_W),
+        vehicles=[car],
+        end_value_ct=20.0,
+        feed_in=6.0,
+    )
+
+
+def test_old_inputs_without_storm_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Gespeicherte Eingangsdaten ohne die Felder der Unwetter-Reserve lösen wie vorher: dasselbe
+    # Ziel wie vor der Unwetter-Reserve (gemessen auf 1c45f41), und das Modell hat keine Variable
+    # und keine Bedingung dafür.
+    data = _old_inputs().model_dump(mode="json")
+    assert data.pop("storm_warnings") == []
+    assert data["planning"].pop("storm") is not None
+    for item in data["slots"]:
+        assert item.pop("storm_floor_pct") is None
+    inputs = PlanInputs.model_validate(data)
+    seen: list[pulp.LpProblem] = []
+    original = pulp.LpProblem.solve
+
+    def record(self: pulp.LpProblem, *args: Any, **kwargs: Any) -> Any:
+        seen.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", record)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert result.objective_ct == pytest.approx(382.9000590712005, abs=1e-6)
+    assert sum(f.gr_r for f in result.flows) > 1000.0
+    assert all(f.gr_s == 0 for f in result.flows) and result.storm_shortfall_kwh == 0.0
+    names = [v.name for v in seen[0].variables()] + [c.name for c in seen[0].constraints()]
+    assert not [n for n in names if "unwetter" in n or n.startswith(("gr_s", "fehl_s"))]

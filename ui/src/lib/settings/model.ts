@@ -9,9 +9,14 @@ import type {
 	PowerComponent,
 	PriceComponent,
 	LearningSettings,
+	OpsSettings,
+	HeatingSettings,
 	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
+	StormKind,
+	StormLevel,
+	StormSettings,
 	ThermalPlanSettings,
 	TimeWindow
 } from '$lib/api/schemas';
@@ -69,7 +74,36 @@ export interface PlanningDraft {
 	inertiaCt: string;
 	/** gedachter Satz für die Monatsspitze ohne Leistungspreis (ct je kW und Monat) */
 	peakSoftCt: string;
+	storm: StormDraft;
 }
+
+/** Unwetter-Reserve: Schalter, Ziel-SOC als Text, Warnstufe und Warnarten */
+export interface StormDraft {
+	enabled: boolean;
+	targetSocPct: string;
+	minLevel: StormLevel;
+	kinds: StormKind[];
+}
+
+/** Die Warnarten in der Reihenfolge von GeoSphere Austria (`warntypid` 1 bis 7) */
+export const STORM_KINDS: readonly StormKind[] = [
+	'sturm',
+	'regen',
+	'schnee',
+	'glatteis',
+	'gewitter',
+	'hitze',
+	'kaelte'
+];
+
+/** Auswahl der Warnstufe im Editor und in der Leseansicht */
+export const STORM_MIN_LEVEL_LABELS: Record<StormLevel, string> = {
+	1: 'ab gelb',
+	2: 'ab orange',
+	3: 'nur rot'
+};
+
+export const STORM_KINDS_ERROR = 'Mindestens eine Warnart wählen';
 
 /** Fahrverhalten: Puffer und Grenzen als Text, die Anwesenheits-Entität je Fahrzeug (leer = keine) */
 export interface DrivingDraft {
@@ -138,7 +172,23 @@ export interface SettingsDraft {
 	wallboxNames: Record<string, string>;
 	/** Standard-Lademodus nach dem Abstecken nach Schlüssel; leer = unverändert */
 	wallboxDefaultModes: Record<string, ChargeMode | ''>;
+	ops: OpsDraft;
+	heating: HeatingDraft;
 	comment: string;
+}
+
+/** Ölheizung als Eingabetexte; leer (außer Leistungszahl) = nicht eingetragen */
+export interface HeatingDraft {
+	burnerKw: string;
+	oilLPerH: string;
+	oilPriceEurL: string;
+	acCop: string;
+}
+
+/** Tagesbericht in Home Assistant: wann er kommt und um welche Uhrzeit (`HH:MM`, Ortszeit) */
+export interface OpsDraft {
+	report: OpsSettings['report'];
+	reportAt: string;
 }
 
 export type DraftResult =
@@ -170,6 +220,9 @@ const DECIMAL_RE = /^-?\d+(?:[.,]\d+)?$/;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^(\d{2}):(\d{2})(?::00)?$/;
+/** Uhrzeit des Tagesberichts wie `OpsSettings.report_at` der app */
+const REPORT_AT_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const REPORT_AT_ERROR = 'Uhrzeit als HH:MM, z. B. 07:30';
 const NAME_MAX = 80;
 const ID_MAX = 40;
 const QUARTER_ERROR = 'Uhrzeit auf einer Viertelstunde, z. B. 10:15';
@@ -344,7 +397,13 @@ function planningDraft(planning: PlanningSettings): PlanningDraft {
 		wearCt: decimalText(planning.wear_ct),
 		endValueFactor: decimalText(planning.end_value_factor),
 		inertiaCt: decimalText(planning.inertia_ct),
-		peakSoftCt: decimalText(planning.peak_soft_ct_per_kw)
+		peakSoftCt: decimalText(planning.peak_soft_ct_per_kw),
+		storm: {
+			enabled: planning.storm.enabled,
+			targetSocPct: String(planning.storm.target_soc_pct),
+			minLevel: planning.storm.min_level,
+			kinds: [...planning.storm.kinds]
+		}
 	};
 }
 
@@ -408,6 +467,13 @@ export function draftFrom(
 		wallboxDefaultModes: {
 			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
 			...settings.wallbox_default_modes
+		},
+		ops: { report: settings.ops.report, reportAt: settings.ops.report_at },
+		heating: {
+			burnerKw: decimalText(settings.heating.burner_kw),
+			oilLPerH: decimalText(settings.heating.oil_l_per_h),
+			oilPriceEurL: decimalText(settings.heating.oil_price_eur_l),
+			acCop: decimalText(settings.heating.ac_cop)
 		},
 		comment: ''
 	};
@@ -644,8 +710,27 @@ function planningNumber(
 	return value;
 }
 
+/** Ganze Prozent 10 bis 100 und mindestens eine Warnart; die Warnarten in fester Reihenfolge */
+function applyStorm(
+	draft: StormDraft,
+	current: StormSettings,
+	errors: Record<string, string>
+): StormSettings {
+	const target = wholeNumber(draft.targetSocPct, 'planning.storm.target_soc_pct', errors, 10, 100);
+	const kinds = STORM_KINDS.filter((kind) => draft.kinds.includes(kind));
+	if (kinds.length === 0) errors['planning.storm.kinds'] = STORM_KINDS_ERROR;
+	return {
+		...current,
+		enabled: draft.enabled,
+		target_soc_pct: target ?? current.target_soc_pct,
+		min_level: draft.minLevel,
+		kinds
+	};
+}
+
 function applyPlanning(
 	draft: PlanningDraft,
+	current: PlanningSettings,
 	errors: Record<string, string>
 ): PlanningSettings | null {
 	const before = Object.keys(errors).length;
@@ -692,7 +777,8 @@ function applyPlanning(
 			0,
 			null,
 			SOFT_PEAK_ERROR
-		)
+		),
+		storm: applyStorm(draft.storm, current.storm, errors)
 	};
 	if (Object.keys(errors).length > before) return null;
 	return planning as PlanningSettings;
@@ -858,7 +944,7 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		if (valid && typeof ct === 'number') monthly[month] = ct;
 	});
 
-	const planning = applyPlanning(draft.planning, errors);
+	const planning = applyPlanning(draft.planning, settings.planning, errors);
 
 	const learning = applyLearning(draft.learning, settings.learning, errors);
 
@@ -877,6 +963,11 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 	for (const [key, mode] of Object.entries(draft.wallboxDefaultModes)) {
 		if (mode !== '') wallboxDefaultModes[key] = mode; // ohne Wahl bleibt der Modus unverändert
 	}
+
+	const reportAt = draft.ops.reportAt.trim();
+	if (!REPORT_AT_RE.test(reportAt)) errors['ops.report_at'] = REPORT_AT_ERROR;
+
+	const heating = applyHeating(draft.heating, settings.heating, errors);
 
 	if (
 		Object.keys(errors).length > 0 ||
@@ -901,9 +992,72 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 			planning: { ...settings.planning, ...planning },
 			learning: { ...settings.learning, ...learning },
 			wallbox_names: wallboxNames,
-			wallbox_default_modes: wallboxDefaultModes
+			wallbox_default_modes: wallboxDefaultModes,
+			ops: { ...settings.ops, report: draft.ops.report, report_at: reportAt },
+			heating
 		},
 		tariffChanged: importPricesChanged(settings.tariff, tariff)
+	};
+}
+
+/**
+ * Zahl in [min, max] (bei `exclusiveMin` über `min`); leer ist `null`, wenn es `optional` ist, sonst
+ * ein Fehler. Außerhalb oder keine Zahl: `undefined` mit Fehlertext unter `key`.
+ */
+function heatingNumber(
+	text: string,
+	key: string,
+	errors: Record<string, string>,
+	rule: { min: number; max: number; exclusiveMin?: boolean; optional: boolean; message: string }
+): number | null | undefined {
+	const value = parseDecimal(text);
+	if (value === null && rule.optional) return null;
+	const low = rule.exclusiveMin
+		? value !== null && value !== 'invalid' && value <= rule.min
+		: false;
+	if (value === null || value === 'invalid' || value < rule.min || value > rule.max || low) {
+		errors[key] = rule.message;
+		return undefined;
+	}
+	return value;
+}
+
+function applyHeating(
+	draft: HeatingDraft,
+	current: HeatingSettings,
+	errors: Record<string, string>
+): HeatingSettings {
+	const burner = heatingNumber(draft.burnerKw, 'heating.burner_kw', errors, {
+		min: 1,
+		max: 100,
+		optional: true,
+		message: 'Zahl von 1 bis 100, z. B. 27'
+	});
+	const oil = heatingNumber(draft.oilLPerH, 'heating.oil_l_per_h', errors, {
+		min: 0,
+		max: 20,
+		exclusiveMin: true,
+		optional: true,
+		message: 'Zahl über 0 bis 20, z. B. 2,9'
+	});
+	const price = heatingNumber(draft.oilPriceEurL, 'heating.oil_price_eur_l', errors, {
+		min: 0,
+		max: 5,
+		optional: true,
+		message: 'Zahl von 0 bis 5, z. B. 0,98'
+	});
+	const cop = heatingNumber(draft.acCop, 'heating.ac_cop', errors, {
+		min: 1,
+		max: 8,
+		optional: false,
+		message: 'Zahl von 1 bis 8, z. B. 3,0'
+	});
+	return {
+		...current,
+		burner_kw: burner ?? null,
+		oil_l_per_h: oil ?? null,
+		oil_price_eur_l: price ?? null,
+		ac_cop: cop ?? current.ac_cop
 	};
 }
 

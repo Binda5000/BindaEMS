@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { T_DEMO, login } from './helpers';
 
 test('Statistik wechselt den Zeitraum und zeigt Diagramm und Kosten', async ({ page }) => {
@@ -96,7 +97,11 @@ test('Statistik speichert die Ladesessions als CSV', async ({ page }) => {
 	await page.clock.setFixedTime(T_DEMO);
 	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
 	const download = page.waitForEvent('download');
-	await page.getByRole('button', { name: 'CSV herunterladen' }).click();
+	await page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Ladesessions', level: 2 }) })
+		.getByRole('button', { name: 'CSV herunterladen' })
+		.click();
 	expect((await download).suggestedFilename()).toBe('ladesessions-2026-10-01-2026-10-31.csv');
 });
 
@@ -213,4 +218,130 @@ test('Statistik zeigt Geldwerte in den Kacheln bei 360 px in einer Zeile', async
 		expect(metric.overflows, `${metric.text} läuft über`).toBe(false);
 		expect(metric.lines, `${metric.text} bricht um`).toBeLessThan(1.6);
 	}
+});
+
+/** Tage der Heizsaison 2026/27 (Anfang Oktober) für die Karte „Wärmebedarf“ */
+function heatDemandBody() {
+	const points = Array.from({ length: 24 }, (_, index) => {
+		const hdd = 2 + (index % 12) * 0.9;
+		const demand = 30 + 8.5 * hdd + (index % 3) * 2;
+		return {
+			day: `2026-10-${String(index + 1).padStart(2, '0')}`,
+			hdd_kd: hdd,
+			outdoor_mean_c: 15 - hdd,
+			burner_h: demand / 27,
+			oil_heat_kwh: demand - 2,
+			oil_l: (demand - 2) / 9.3,
+			ac_heat_el_kwh: 1.2,
+			ac_heat_kwh: 3.6,
+			demand_kwh: demand,
+			complete: index !== 5,
+			used: index !== 5 && index % 7 !== 0,
+			note: index === 5 ? 'Brennerstatus lückenhaft' : null
+		};
+	});
+	return {
+		season: '2026/27',
+		first: '2026-07-01',
+		last: '2027-06-30',
+		points,
+		fit: { per_kd: 8.5, base_kwh_day: 31.2, r2: 0.97, n: 20, through_origin: false },
+		reason: null,
+		totals: {
+			oil_heat_kwh: 4521.3,
+			oil_l: 486.1,
+			oil_eur: 531.25,
+			ac_heat_el_kwh: 52.5,
+			demand_kwh: 4678.9,
+			hdd_kd: 160.4
+		},
+		ac_by_month: { '2026-09': 10.5, '2026-10': 42 },
+		heating_limit_c: 15,
+		ac_cop: 3,
+		ac_power_known: true
+	};
+}
+
+/** Statistik und Wärmebedarf mit Brenner (das Demo-Backend hat keinen) */
+async function withBurner(page: Page) {
+	await page.route('**/api/stats?*', async (route) => {
+		const response = await route.fetch();
+		const body = await response.json();
+		body.heating = {
+			burner_h: 120.5,
+			oil_heat_kwh: 4521.3,
+			oil_l: 486.1,
+			oil_eur: 531.25,
+			ac_heat_el_kwh: 52.5,
+			ac_heat_kwh: 157.5,
+			demand_kwh: 4678.9,
+			hdd_kd: 160.4,
+			days: 31,
+			complete_days: 30,
+			first_day: '2026-10-01',
+			settings_missing: false,
+			ac_power_known: true
+		};
+		await route.fulfill({ response, json: body });
+	});
+	await page.route('**/api/heating/demand*', (route) => route.fulfill({ json: heatDemandBody() }));
+}
+
+test('Statistik zeigt mit Brenner die Karten Heizung und Wärmebedarf bei 360 px ohne Scrollen', async ({
+	page
+}) => {
+	await page.setViewportSize({ width: 360, height: 740 });
+	await withBurner(page);
+	await login(page, 'gast');
+	await page.clock.setFixedTime(T_DEMO);
+	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
+	const heating = page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Heizung', level: 2 }) });
+	await expect(heating.getByText('Brenner lief')).toBeVisible();
+	await expect(heating).toContainText('120,5 h');
+	const demand = page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Wärmebedarf', level: 2 }) });
+	await expect(demand.getByText('Heizsaison 2026/27')).toBeVisible();
+	await expect(demand.getByText('R² 0,97 aus 20 Tagen')).toBeVisible();
+	await expect(demand.locator('canvas')).toBeVisible();
+	await expect(
+		demand.getByRole('table', { name: 'Klimaanlage heizt, Strom je Monat' })
+	).toBeVisible();
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+	);
+	expect(overflow).toBeLessThanOrEqual(0);
+});
+
+test('Statistik speichert den Wärmebedarf als CSV', async ({ page }) => {
+	await withBurner(page);
+	await login(page, 'gast');
+	await page.clock.setFixedTime(T_DEMO);
+	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
+	const download = page.waitForEvent('download');
+	await page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Wärmebedarf', level: 2 }) })
+		.getByRole('button', { name: 'CSV herunterladen' })
+		.click();
+	expect((await download).suggestedFilename()).toBe('waermebedarf-2026-27.csv');
+});
+
+test('Statistik ohne Brenner zeigt weder Heizung noch Wärmebedarf', async ({ page }) => {
+	// das Demo-Backend hat einen Brenner: ohne ihn liefert die Statistik `heating: null`
+	await page.route('**/api/stats?*', async (route) => {
+		const response = await route.fetch();
+		await route.fulfill({ response, json: { ...(await response.json()), heating: null } });
+	});
+	await page.route('**/api/heating/demand*', (route) =>
+		route.fulfill({ status: 404, json: { detail: 'Brennerstatus fehlt' } })
+	);
+	await login(page, 'gast');
+	await page.clock.setFixedTime(T_DEMO);
+	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
+	await expect(page.getByRole('heading', { name: 'Energie', level: 2 })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Heizung', level: 2 })).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Wärmebedarf', level: 2 })).toHaveCount(0);
 });

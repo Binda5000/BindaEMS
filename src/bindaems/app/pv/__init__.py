@@ -1,0 +1,1 @@
+"""PV-Anlagen und Strings."""

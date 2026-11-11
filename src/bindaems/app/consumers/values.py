@@ -16,8 +16,10 @@ from typing import Any, Final, Literal
 
 import structlog
 
-from bindaems.app.consumers.service import HA_REF_RE, Consumer
+from bindaems.app.consumers.service import Consumer
+from bindaems.app.consumers.source import PowerSource
 from bindaems.app.core_link import LiveState
+from bindaems.app.db.fields import HA_REF_RE
 from bindaems.app.history.influx import (
     InfluxQueryError,
     InfluxReader,
@@ -55,11 +57,11 @@ class HaRef:
     unit: HaUnit
 
     @classmethod
-    def from_consumer(cls, c: Consumer) -> HaRef:
+    def from_source(cls, c: PowerSource) -> HaRef:
         domain, _, object_id = c.power_ref.partition(".")
         unit = _UNITS.get(c.power_unit)
         if c.source_kind != "ha" or unit is None or not object_id:
-            raise ValueError(f"Verbraucher {c.id} liest keine HA-Entität")
+            raise ValueError(f"Quelle {c.id} liest keine HA-Entität")
         return cls(domain, object_id, unit)
 
 
@@ -130,7 +132,7 @@ class HaValueCache:
             series = await self._reader.query(query, database=self._database)
         except InfluxQueryError as exc:
             self._readings = dict.fromkeys(refs, (None, UNREADABLE))
-            log.warning("HA-Werte der Verbraucher nicht lesbar", error=str(exc))
+            log.warning("HA-Werte der Verbraucher und PV nicht lesbar", error=str(exc))
             return
         found = _readings(series)
         result: dict[HaRef, tuple[float | None, str | None]] = {}
@@ -263,25 +265,26 @@ def build_tree(
     return _settle(root)
 
 
-def consumer_power(consumer: Consumer, live: LiveState, ha: HaValueCache | None) -> float | None:
+def source_power(consumer: PowerSource, live: LiveState, ha: HaValueCache | None) -> float | None:
+    """Live-Leistung einer Quelle: core aus dem LiveState, HA aus dem Cache."""
     if consumer.source_kind == "core":
         return number(live.value(consumer.power_ref))
     if ha is None:
         return None
     try:
-        return ha.power_w(HaRef.from_consumer(consumer))
+        return ha.power_w(HaRef.from_source(consumer))
     except ValueError:
         return None
 
 
-def consumer_note(consumer: Consumer, ha: HaValueCache | None) -> str | None:
-    """Warum ein Verbraucher mit HA-Entität keinen Wert hat."""
+def source_note(consumer: PowerSource, ha: HaValueCache | None) -> str | None:
+    """Warum eine Quelle mit HA-Entität keinen Wert hat."""
     if consumer.source_kind != "ha":
         return None
     if ha is None:
         return NOT_CONFIGURED
     try:
-        return ha.note(HaRef.from_consumer(consumer))
+        return ha.note(HaRef.from_source(consumer))
     except ValueError:
         return None
 
@@ -334,12 +337,10 @@ def _entity_units(series: Sequence[Series]) -> set[tuple[str, HaUnit]]:
     return found
 
 
-async def candidates(cfg: Config, live: LiveState, reader: InfluxReader | None) -> dict[str, Any]:
-    """Mögliche Leistungsquellen für neue Verbraucher; ``ha_error`` sagt, warum HA fehlt."""
-    signals = live.state.get("signals") if live.state is not None else None
-    core = {name for name in signals or {} if CORE_CANDIDATE_RE.fullmatch(name)}
-    if cfg.homeassistant is not None:
-        core |= {name for name in cfg.homeassistant.entities if name.endswith(".power_w")}
+async def ha_candidates(
+    cfg: Config, reader: InfluxReader | None
+) -> tuple[list[dict[str, str]], str | None]:
+    """HA-Entitäten mit Leistung in W oder kW; der zweite Wert sagt, warum HA fehlt."""
     ha: set[tuple[str, HaUnit]] = set()
     error: str | None = None
     database = cfg.influxdb.ha_database
@@ -352,8 +353,14 @@ async def candidates(cfg: Config, live: LiveState, reader: InfluxReader | None) 
         except InfluxQueryError as exc:
             log.warning("HA-Leistungsquellen nicht lesbar", error=str(exc))
             error = f"HA-Datenbank „{database}“ nicht lesbar: {exc}"
-    return {
-        "core": [{"ref": ref} for ref in sorted(core)],
-        "ha": [{"entity_id": entity_id, "unit": unit} for entity_id, unit in sorted(ha)],
-        "ha_error": error,
-    }
+    return [{"entity_id": entity_id, "unit": unit} for entity_id, unit in sorted(ha)], error
+
+
+async def candidates(cfg: Config, live: LiveState, reader: InfluxReader | None) -> dict[str, Any]:
+    """Mögliche Leistungsquellen für neue Verbraucher; ``ha_error`` sagt, warum HA fehlt."""
+    signals = live.state.get("signals") if live.state is not None else None
+    core = {name for name in signals or {} if CORE_CANDIDATE_RE.fullmatch(name)}
+    if cfg.homeassistant is not None:
+        core |= {name for name in cfg.homeassistant.entities if name.endswith(".power_w")}
+    ha, error = await ha_candidates(cfg, reader)
+    return {"core": [{"ref": ref} for ref in sorted(core)], "ha": ha, "ha_error": error}

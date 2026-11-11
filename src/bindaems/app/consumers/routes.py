@@ -10,24 +10,22 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
-from bindaems.app.consumers.energy import EnergyCache
+from bindaems.app.consumers.energy import EnergyCache, source_energy
 from bindaems.app.consumers.service import (
-    MAX_ID,
     Consumer,
     ConsumerError,
     ConsumerInput,
     ConsumerService,
 )
 from bindaems.app.consumers.values import (
-    Energy,
-    HaRef,
     HaValueCache,
     build_tree,
     candidates,
-    consumer_note,
-    consumer_power,
+    source_note,
+    source_power,
 )
 from bindaems.app.core_link import LiveState
+from bindaems.app.db.fields import MAX_ID
 from bindaems.app.history.influx import InfluxReader
 from bindaems.shared.config import Config
 
@@ -51,15 +49,6 @@ def consumers_router(
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
     Admin = Annotated[SessionInfo, Depends(guard.require("admin"))]
 
-    def consumer_energy(consumer: Consumer) -> Energy:
-        if energy is None:
-            return (None, None)
-        if consumer.source_kind == "ha" and ha is not None and consumer.power_unit is not None:
-            ref = HaRef.from_consumer(consumer)
-            if ha.wrong_unit(ref):  # der Verlauf hätte dieselbe falsche Einheit
-                return (None, ha.note(ref))
-        return (energy.energy_kwh(consumer), energy.note(consumer))
-
     @router.get("")
     def read(session: Viewer) -> dict[str, Any]:
         consumers = service.list()
@@ -67,10 +56,10 @@ def consumers_router(
         house_w = float(house) if isinstance(house, int | float) else None
         tree = build_tree(
             consumers,
-            lambda c: consumer_power(c, live, ha),
+            lambda c: source_power(c, live, ha),
             house_w,
-            lambda c: consumer_note(c, ha),
-            consumer_energy,
+            lambda c: source_note(c, ha),
+            lambda c: source_energy(c, ha, energy),
             energy.house_kwh() if energy is not None else None,
         )
         since = energy.since if energy is not None else None

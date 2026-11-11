@@ -38,6 +38,8 @@ CALL_TIMEOUT_S: Final = 10.0
 CHECK_INTERVAL_S: Final = 1.0
 TITLE: Final = "BindaEMS"
 REJECTION_ID: Final = "bindaems_ha_command"
+REPORT_ID: Final = "bindaems_tagesbericht"  # der Bericht von heute ersetzt den von gestern
+REPORT_TITLE: Final = "BindaEMS Tagesbericht"
 WARNING_PREFIX: Final = "bindaems_warning_"  # ``notification_id`` einer Warnung: Präfix + Objekt-ID
 # Warnungen am Gerät „BindaEMS“ (Objekt-ID → Text); „Watchdog ausgelöst“ meldet schon der Alarm
 WARNING_TEXTS: Final = {
@@ -160,7 +162,12 @@ class HaNotifier:
         """Entfernt die Meldung der Warnung; sagt, ob nichts mehr zu entfernen bleibt."""
         return await self._clear(WARNING_PREFIX + warning_id)
 
-    async def _raise(self, notification_id: str, text: str) -> bool:
+    async def report(self, text: str) -> bool:
+        """Sendet den Tagesbericht (ersetzt den des Vortags); sagt, ob die persistente Meldung
+        angelegt ist."""
+        return await self._raise(REPORT_ID, text, title=REPORT_TITLE)
+
+    async def _raise(self, notification_id: str, text: str, *, title: str = TITLE) -> bool:
         """Legt die persistente Meldung an; sagt, ob sie angelegt ist.
 
         Erst danach geht der ``notify``-Dienst hinaus, einmal: Ein neuer Versuch nach einem
@@ -168,12 +175,12 @@ class HaNotifier:
         """
         if not self._allow(text):
             return False
-        data = {"notification_id": notification_id, "title": TITLE, "message": text}
+        data = {"notification_id": notification_id, "title": title, "message": text}
         if not await self._safe("persistent_notification", "create", data):
             return False
         self._active.add(notification_id)
         if self._notify is not None:
-            await self._safe("notify", self._notify, {"title": TITLE, "message": text})
+            await self._safe("notify", self._notify, {"title": title, "message": text})
         return True
 
     async def _clear(self, notification_id: str) -> bool:

@@ -291,6 +291,14 @@ SELF_START_S: Final = 5 * MINUTE_S  # „tesla-selbststart“: der Tesla startet
 SELF_START_WITHIN_S: Final = 210
 IDLE_FROM_S: Final = 9 * MINUTE_S  # … und lädt ab hier nicht mehr
 SELF_START_TESLA_PCT: Final = 50.0
+# Szenario „egolf-autostart“ (Plan EVCS-Selbststart, Task 3)
+AUTOSTART_UNPLUG_S: Final = 5 * MINUTE_S  # der e-Golf wird abgesteckt …
+AUTOSTART_PLUG_S: Final = 5 * MINUTE_S + 10  # … zehn Sekunden später wieder angesteckt …
+AUTOSTART_ON_S: Final = 5 * MINUTE_S + 13  # … und die EVCS schaltet ihn selbst ein (Autostart)
+# … und bekommt binnen 60 s (control.evcs_against_s) plus Lesetakt plus Verzug „Laden aus“
+AUTOSTART_WITHIN_S: Final = 90
+AUTOSTART_IDLE_FROM_S: Final = AUTOSTART_ON_S + 120  # … und lädt ab hier nicht mehr
+AUTOSTART_EGOLF_PCT: Final = 50.0
 # Szenarien „tesla-vorklimatisieren“ und „egolf-voll-bleibt-an“ (Plan Vorklimatisieren über die
 # Wallbox, Task 4)
 CLIMATE_ON_S: Final = 5 * MINUTE_S  # der Tesla klimatisiert und lädt selbst …
@@ -1164,11 +1172,11 @@ def _evcs_off_from(key: str, begin_s: int) -> Check:
     return Check(f"Ab {de(begin_s / MINUTE_S)} min lädt die EVCS „{key}“ nicht.", find)
 
 
-def _stops_within(actuator: str, at_s: int, within_s: int) -> Check:
+def _stops_within(actuator: str, at_s: int, within_s: int, *, reason: str | None = None) -> Check:
     """Der Aktor ``actuator`` bekommt ab der Sekunde ``at_s`` binnen ``within_s`` s „Laden aus“:
     eine Entscheidung über ``charging`` mit dem Wert falsch, die ein Befehl war (nicht abgelehnt,
     zurückgestellt oder eine fremde Änderung); auch ein Dry-Run oder ein Fehlschlag zählt, denn der
-    Befehl ging hinaus."""
+    Befehl ging hinaus. Mit ``reason`` muss die Entscheidung auch diesen Grund tragen."""
 
     def find(result: SimResult) -> list[str]:
         begin = result.scenario.start + timedelta(seconds=at_s)
@@ -1178,14 +1186,19 @@ def _stops_within(actuator: str, at_s: int, within_s: int) -> Check:
             and d.kind is CommandKind.CHARGING
             and d.requested is False
             and d.result not in _HELD_BACK
+            and (reason is None or reason in d.codes)
             and begin <= d.ts <= end
             for d in result.decisions
         )
         if stopped:
             return []
-        return [f"„{actuator}“ bekam nach {at_s} s kein „Laden aus“ binnen {within_s} s."]
+        return [f"„{actuator}“ bekam nach {at_s} s kein „Laden aus“{named} binnen {within_s} s."]
 
-    text = f"„{actuator}“ bekommt „Laden aus“ binnen {within_s} s nach {de(at_s / MINUTE_S)} min."
+    named = "" if reason is None else f" (Grund „{reason}“)"
+    text = (
+        f"„{actuator}“ bekommt „Laden aus“{named} binnen {within_s} s nach "
+        f"{de(at_s / MINUTE_S)} min."
+    )
     return Check(text, find)
 
 
@@ -3247,6 +3260,20 @@ class _Plug:
         model.plug(self.vehicle, self.wallbox)
 
 
+@dataclass(frozen=True, slots=True)
+class _EvcsSwitchedOn:
+    """Die EVCS ``wallbox`` schaltet „Laden an“ selbst ein (Autostart), als Ereignis: Der core
+    sendet nichts dazu, nur das Gerät ändert seinen Zustand."""
+
+    wallbox: str
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        box = model.wallboxes[self.wallbox]
+        if not isinstance(box, Evcs):
+            raise ValueError(f"Wallbox „{self.wallbox}“ ist keine EVCS.")
+        box.start_stop = 1
+
+
 def _unit(model: PlantModel) -> AirConditioner:
     if model.thermal is None:
         raise ValueError("Das Modell hat keine Klimaanlage der Art coe_offset.")
@@ -4136,6 +4163,37 @@ def _egolf_voll_bleibt_an() -> Scenario:
     )
 
 
+def _egolf_autostart() -> Scenario:
+    """Der e-Golf steht an der EVCS in „PV-Überschuss“ am Abend und lädt nicht. Bei 5 min wird er
+    abgesteckt und zehn Sekunden später wieder angesteckt; drei Sekunden danach schaltet die EVCS
+    ihn selbst ein (Autostart, Vorfall vom 05.11.2026). Die Regelung sieht „Laden an“ gegen den
+    Modus, wartet 60 s (``control.evcs_against_s``) und schickt „Laden aus“."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 48
+    checks = (
+        _stops_within(
+            wallbox_actuator(EVCS_BOX), AUTOSTART_ON_S, AUTOSTART_WITHIN_S, reason="self_start"
+        ),
+        _idle_from(EGOLF, AUTOSTART_IDLE_FROM_S),
+    )
+    return Scenario(
+        name="egolf-autostart",
+        title="e-Golf neu angesteckt, EVCS startet selbst",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=30.0, tesla=None, egolf_soc_pct=AUTOSTART_EGOLF_PCT),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (AUTOSTART_UNPLUG_S, _Unplug(EGOLF)),
+            (AUTOSTART_PLUG_S, _Plug(EGOLF, EVCS_BOX)),
+            (AUTOSTART_ON_S, _EvcsSwitchedOn(EVCS_BOX)),
+        ),
+        checks=Checks(checks),
+    )
+
+
 # --- Szenarien 46 und 47: Akku ins Auto, Victron live (Plan Akku ins Auto, Task 8) ---------------
 
 SPARE_BAND_W: Final = 300.0  # Toleranz der Prüfungen auf den Netzbezug in beiden Szenarien
@@ -4436,5 +4494,6 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _egolf_voll_bleibt_an(),
         _akku_uebrig_sofort(),
         _akku_uebrig_geplant(),
+        _egolf_autostart(),
     )
 }

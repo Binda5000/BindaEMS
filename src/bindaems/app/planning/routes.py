@@ -19,7 +19,7 @@ from bindaems.app.planning.review import review
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.planning.store import KEEP_PLANS, PlanStore
 from bindaems.app.settings.service import SettingsService, VersionConflictError
-from bindaems.shared.plan import Plan, PlanSlot, PlanThermal, PlanVehicle
+from bindaems.shared.plan import Plan, PlanSlot, PlanStorm, PlanThermal, PlanVehicle
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, local_day_slots
 
 
@@ -56,6 +56,7 @@ def slot_json(slot: PlanSlot) -> dict[str, Any]:
         "thermal_w": slot.thermal_w,
         "thermal_steps": slot.thermal_steps,
         "thermal_grid_w": slot.thermal_grid_w,
+        "storm_reserve_pct": slot.storm_reserve_pct,
         "codes": [reason.code for reason in slot.reasons],
         "text": slot_text(slot),
     }
@@ -101,6 +102,26 @@ def thermal_json(thermal: PlanThermal, *, enabled: bool) -> dict[str, Any]:
     }
 
 
+def storm_json(storm: PlanStorm) -> dict[str, Any]:
+    """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): Ziel in % und die
+    passenden Warnungen mit Beginn und Ende als ISO-Zeit."""
+    return {
+        "target_pct": storm.target_pct,
+        "warnings": [
+            {
+                "warn_id": warning.warn_id,
+                "version": warning.version,
+                "kind": warning.kind,
+                "level": warning.level,
+                "begin": warning.begin.isoformat(),
+                "end": warning.end.isoformat(),
+                "text": warning.text,
+            }
+            for warning in storm.warnings
+        ],
+    }
+
+
 def plan_json(plan: Plan, *, valid: bool, thermal_enabled: bool) -> dict[str, Any]:
     return {
         "id": plan.id,
@@ -124,6 +145,7 @@ def plan_json(plan: Plan, *, valid: bool, thermal_enabled: bool) -> dict[str, An
         "thermal": (
             None if plan.thermal is None else thermal_json(plan.thermal, enabled=thermal_enabled)
         ),
+        "storm": None if plan.storm is None else storm_json(plan.storm),
         "slots": [slot_json(slot) for slot in plan.slots],
     }
 

@@ -14,8 +14,14 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	settings: s.SettingsCurrentSchema,
 	'settings-versions': v.array(s.SettingsMetaSchema),
 	limits: s.LimitsSchema,
+	backup: s.BackupSchema,
 	consumers: s.ConsumersResponseSchema,
 	'consumer-candidates': s.CandidatesSchema,
+	pv: s.PvResponseSchema,
+	'pv-candidates': s.PvCandidatesSchema,
+	'pv-day': s.PvDaySchema,
+	'pv-period-month': s.PvPeriodSchema,
+	'pv-period-year': s.PvPeriodSchema,
 	'history-catalog': v.array(s.CatalogEntrySchema),
 	history: s.HistoryResponseSchema,
 	prices: s.PricesResponseSchema,
@@ -33,6 +39,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'stats-day': s.StatsSchema,
 	'stats-month': s.StatsSchema,
 	'stats-year': s.StatsSchema,
+	'heating-demand': s.HeatDemandSchema,
 	'charging-sessions': v.array(s.ChargingSessionSchema),
 	users: v.array(s.UserSchema),
 	audit: v.array(s.AuditEntrySchema),
@@ -53,6 +60,9 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	plan: s.PlanResponseSchema,
 	'plan-review': s.PlanReviewSchema,
 	'plan-grid-charge': s.GridChargeReplySchema,
+	'ops-check': s.OpsCheckSchema,
+	'ops-findings': s.OpsFindingsSchema,
+	'ops-switches': s.OpsSwitchesSchema,
 	'error-422': s.ValidationErrorSchema
 };
 
@@ -87,6 +97,45 @@ it('akzeptiert die Nullfälle der API', () => {
 			core: { connected: false, health: null },
 			components: [],
 			warnings: []
+		})
+	).toEqual([]);
+});
+
+it('akzeptiert die gefüllte Antwort von /api/backup', () => {
+	const outage = {
+		start: '2026-11-03T13:03:00+00:00',
+		end: null,
+		end_estimated: false,
+		duration_s: 1000,
+		soc_start: 62.0,
+		soc_end: null,
+		soc_min: 60.5,
+		mean_w: 1180.0,
+		load_kwh: 0.33
+	};
+	expect(
+		issues(s.BackupSchema, {
+			now_h: 31.2,
+			reserve_h: 14.1,
+			night_h: 40.3,
+			load_w: 712.0,
+			load_source: 'tag',
+			floor_soc_pct: 5.0,
+			basis: {
+				first_day: '2026-10-28',
+				last_day: '2026-11-03',
+				day_slots: 672,
+				night_slots: 140,
+				night_w: 551.0
+			},
+			outage: { start: outage.start, soc_start: 62.0, mean_w: 1180.0 },
+			outages: [outage, { ...outage, end: '2026-11-03T13:17:00+00:00', mean_w: null }],
+			ping: {
+				configured: true,
+				ok: true,
+				last_sent: '2026-11-03T13:05:00+00:00',
+				text: 'in Ordnung · CONTROL'
+			}
 		})
 	).toEqual([]);
 });
@@ -617,6 +666,75 @@ describe('Planung in den Einstellungen', () => {
 	});
 });
 
+describe('Unwetter-Reserve in den Einstellungen', () => {
+	const demo = files['./contract/settings.json'] as {
+		settings: { planning: Record<string, unknown> };
+	};
+
+	it('liest planning.storm, ältere Einstellungen ohne mit den Standardwerten', () => {
+		const standard = {
+			enabled: false,
+			target_soc_pct: 40,
+			min_level: 2,
+			kinds: ['sturm', 'gewitter']
+		};
+		expect(demo.settings.planning.storm).toEqual(standard);
+		expect(v.parse(s.PlanningSettingsSchema, demo.settings.planning).storm).toEqual(standard);
+		const older = { ...demo.settings.planning };
+		delete older.storm;
+		expect(v.parse(s.PlanningSettingsSchema, older).storm).toEqual(standard);
+	});
+
+	it('lehnt eine unbekannte Warnart und eine Stufe außerhalb 1 bis 3 ab', () => {
+		const storm = demo.settings.planning.storm as Record<string, unknown>;
+		const planning = (changes: Record<string, unknown>) => ({
+			...demo.settings.planning,
+			storm: { ...storm, ...changes }
+		});
+		expect(issues(s.PlanningSettingsSchema, planning({ kinds: ['hagel'] }))).not.toEqual([]);
+		expect(issues(s.PlanningSettingsSchema, planning({ min_level: 4 }))).not.toEqual([]);
+		expect(issues(s.PlanningSettingsSchema, planning({ kinds: ['kaelte'] }))).toEqual([]);
+	});
+});
+
+describe('Unwetter-Reserve im Plan', () => {
+	const demo = files['./contract/plan.json'] as {
+		plan: { slots: Record<string, unknown>[] } & Record<string, unknown>;
+	};
+
+	it('liest Warnung, Untergrenze und den Grundcode', () => {
+		const warning = {
+			warn_id: 7,
+			version: 1,
+			kind: 'gewitter',
+			level: 2,
+			begin: '2026-10-16T12:00:00+00:00',
+			end: '2026-10-16T14:00:00+00:00',
+			text: 'Gewitter'
+		};
+		const [first, ...rest] = demo.plan.slots;
+		const slots = [{ ...first, storm_reserve_pct: 40, codes: ['UNWETTER_RESERVE'] }, ...rest];
+		const stormy = { ...demo.plan, storm: { target_pct: 40, warnings: [warning] }, slots };
+		const plan = v.parse(s.PlanSchema, stormy);
+		expect(plan.storm?.warnings[0].kind).toBe('gewitter');
+		expect(plan.slots[0].storm_reserve_pct).toBe(40);
+		expect(plan.slots[0].codes).toEqual(['UNWETTER_RESERVE']);
+	});
+
+	it('liest ältere Pläne ohne Unwetter-Reserve', () => {
+		const slots = demo.plan.slots.map((slot) => {
+			const older = { ...slot };
+			delete older.storm_reserve_pct;
+			return older;
+		});
+		const older = { ...demo.plan, slots } as Record<string, unknown>;
+		delete older.storm;
+		const plan = v.parse(s.PlanSchema, older);
+		expect(plan.storm).toBeNull();
+		expect(plan.slots[0].storm_reserve_pct).toBeNull();
+	});
+});
+
 describe('Vorheizen und Vorkühlen im Plan', () => {
 	const demo = files['./contract/plan.json'] as {
 		plan: { thermal: unknown; slots: Record<string, unknown>[] } & Record<string, unknown>;
@@ -672,5 +790,38 @@ describe('Vorheizen und Vorkühlen im Plan', () => {
 		const intent = v.parse(s.IntentSchema, { ...control.intent, plan });
 		expect(intent.plan?.slots.map((slot) => slot.thermal_steps)).toEqual([1, null]);
 		expect(v.parse(s.IntentSchema, control.intent).plan).toBeNull();
+	});
+});
+
+describe('Betrieb im Blick', () => {
+	const findings = files['./contract/ops-findings.json'] as {
+		days: { day: string; computed: boolean; findings: { rule: string; link: string | null }[] }[];
+		report: { day: string; text: string } | null;
+	};
+	const switches = files['./contract/ops-switches.json'] as {
+		switches: { changed: boolean; since: string | null }[];
+	};
+
+	it('die Demo-Welt hat Auffälligkeiten mit Link, ruhige Tage und einen Bericht', () => {
+		const all = findings.days.flatMap((day) => day.findings);
+		const grid = all.find((item) => item.rule === 'grid_charge_unplanned');
+		expect(grid?.link).toMatch(/^\/entscheidungen\?range=\d{4}-\d{2}-\d{2}&actuator=victron$/);
+		expect(findings.days.some((day) => day.computed && day.findings.length === 0)).toBe(true);
+		expect(findings.days.some((day) => !day.computed)).toBe(true);
+		expect(findings.report?.day).toBe(findings.days[0]?.day);
+	});
+
+	it('die Demo-Welt hat geänderte Schalter, mit und ohne Eintrag im Protokoll', () => {
+		expect(switches.switches.some((item) => item.changed)).toBe(true);
+		expect(switches.switches.some((item) => item.since !== null)).toBe(true);
+		expect(switches.switches.some((item) => item.since === null)).toBe(true);
+	});
+
+	it('akzeptiert Einstellungen ohne ops (ältere Stände) mit dem Standard', () => {
+		const settings = files['./contract/settings.json'] as { settings: Record<string, unknown> };
+		const older = { ...settings.settings };
+		delete older.ops;
+		const parsed = v.parse(s.RuntimeSettingsSchema, older);
+		expect(parsed.ops).toEqual({ report: 'daily', report_at: '07:30' });
 	});
 });

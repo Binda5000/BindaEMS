@@ -463,3 +463,35 @@ async def test_cleanup(
     store.add([decision(id="old", ts=clock.now() - timedelta(days=200)), SAMPLE])
     assert await collector.cleanup(180) == 1
     assert _ids(store) == ["s1"]
+
+
+# DecisionStore.counts und failures
+
+
+def test_counts_per_actuator_since(store: DecisionStore) -> None:
+    store.add(
+        [
+            decision(id="c1", ts=at(1), actuator="wallbox.evcs"),
+            decision(id="c2", ts=at(2), actuator="wallbox.evcs", dry_run=True),
+            decision(id="c3", ts=at(3), actuator="wallbox.evcs"),
+            decision(id="c4", ts=at(4), actuator="victron"),
+            decision(id="c5", ts=at(-5), actuator="victron"),  # vor since
+        ]
+    )
+    assert store.counts(at(0)) == {"wallbox.evcs": 3, "victron": 1}
+    assert store.counts(at(0), at(3)) == {"wallbox.evcs": 2}  # until ausgeschlossen
+    assert store.counts(at(10)) == {}
+
+
+def test_failures_ignore_dry_run_and_ok(store: DecisionStore) -> None:
+    store.add(
+        [
+            decision(id="f1", ts=at(1), result=DecisionResult.ERROR),
+            decision(id="f2", ts=at(2), result=DecisionResult.TIMEOUT),
+            decision(id="f3", ts=at(3), result=DecisionResult.NOT_SENT, actuator="victron"),
+            decision(id="f4", ts=at(4), result=DecisionResult.OK),
+            decision(id="f5", ts=at(5), result=DecisionResult.ERROR, dry_run=True),
+            decision(id="f6", ts=at(60), result=DecisionResult.ERROR),  # nach until
+        ]
+    )
+    assert store.failures(at(0), at(30)) == {"wallbox.evcs": 2, "victron": 1}

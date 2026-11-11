@@ -1,12 +1,20 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from structlog.testing import capture_logs
 from tests.app_helpers import T_APP, influx_q, k
 
-from bindaems.app.consumers.energy import EnergyCache, day_start, ha_points, integrate_wh
+from bindaems.app.consumers.energy import (
+    EnergyCache,
+    core_tags,
+    day_start,
+    ha_points,
+    integrate_wh,
+)
 from bindaems.app.consumers.service import Consumer
 from bindaems.app.consumers.values import HaRef
-from bindaems.app.history.influx import Series
+from bindaems.app.history.influx import RP_LONG, Series
 from bindaems.shared.influx.lineprotocol import epoch_ms
 
 URL = "http://influx.lan:8086/query"
@@ -63,7 +71,8 @@ async def test_core_energy_with_house_in_one_query(respx_mock, reader, clock) ->
     query = influx_q(route.calls.last.request)
     assert query == (
         'SELECT mean("p_w") AS "w" FROM "raw"."power" WHERE "phase"=\'total\' AND '  # noqa: S608
-        "((\"source\"='load' AND \"id\"='v1') OR (\"source\"='derived' AND \"id\"='house_load')) "
+        "((\"source\"='load' AND \"id\"='v1') OR (\"source\"='derived' AND \"id\"='house_load') "
+        "OR (\"source\"='derived' AND \"id\"='pv_total')) "
         f"AND time >= {M0}ms AND time < {epoch_ms(T_APP)}ms "
         'GROUP BY time(60s),"source","id" fill(none)'
     )
@@ -123,6 +132,49 @@ async def test_ha_energy_starts_with_the_value_before_midnight(respx_mock, reade
     assert f"time >= {M0 - 7 * 24 * HOUR}ms AND time < {M0}ms" in ha_queries[1]
 
 
+def held_ha(seed_at: int, seed_w: float):
+    """HA schreibt nur bei Änderung und bei „unavailable“ keinen Wert: vor Mitternacht
+    ``seed_w`` (um ``seed_at``), heute 1 kW ab 07:00 und 20 W ab 08:00, danach nichts mehr."""
+    tags = {"domain": "sensor", "entity_id": "pv1"}
+
+    def influx(request: httpx.Request) -> httpx.Response:
+        query = influx_q(request)
+        if query.startswith('SELECT mean("p_w")'):
+            return httpx.Response(200, json=_results())
+        if query.startswith('SELECT last("value")'):
+            return httpx.Response(200, json=_results(_series("W", tags, [(seed_at, seed_w)])))
+        points = [(M0 + 7 * HOUR, 1000.0), (M0 + 8 * HOUR, 20.0)]
+        return httpx.Response(200, json=_results(_series("W", tags, points)))
+
+    return influx
+
+
+async def test_ha_hold_caps_a_held_value(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).mock(side_effect=held_ha(M0 - 15 * MIN, 40.0))
+    pv = _ha("sensor.pv1")
+    cache = EnergyCache(reader, clock, "homeassistant", ha_hold=timedelta(minutes=30))
+    await cache.refresh([pv])
+    # 40 W bis 00:15 (30 min nach 23:45), 1 kW 07:00–07:30, 20 W 08:00–08:30; dazwischen Lücke
+    assert (cache.energy_kwh(pv), cache.note(pv)) == (0.52, None)
+
+
+async def test_ha_hold_old_value_before_midnight_counts_nothing(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).mock(side_effect=held_ha(M0 - 6 * HOUR, 40.0))
+    pv = _ha("sensor.pv1")
+    cache = EnergyCache(reader, clock, "homeassistant", ha_hold=timedelta(minutes=30))
+    await cache.refresh([pv])
+    assert (cache.energy_kwh(pv), cache.note(pv)) == (0.51, None)  # kein unbekannter Tag
+
+
+async def test_consumers_hold_ha_values_without_cap(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).mock(side_effect=held_ha(M0 - 15 * MIN, 40.0))
+    kitchen = _ha("sensor.pv1")
+    cache = EnergyCache(reader, clock, "homeassistant")
+    await cache.refresh([kitchen])
+    # 40 W 00:00–07:00, 1 kW 07:00–08:00, 20 W 08:00–10:00
+    assert cache.energy_kwh(kitchen) == 1.32
+
+
 async def test_ha_energy_without_database(respx_mock, reader, clock) -> None:
     respx_mock.post(URL).respond(json=_results())
     kitchen = _ha("sensor.kueche")
@@ -174,7 +226,7 @@ async def test_window_energy_matches_refresh_for_today(respx_mock, reader, clock
         )
     )
     cache = EnergyCache(reader, clock, None)
-    energy, house = await cache.window_energy([og, other], MIDNIGHT, clock.now())
+    energy, house, *_ = await cache.window_energy([og, other], MIDNIGHT, clock.now())
     # keine Zustandsänderung: der Cache ist noch leer
     assert cache.since is None and cache.house_kwh() is None and cache.energy_kwh(og) is None
     await cache.refresh([og, other])
@@ -196,10 +248,72 @@ async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
     await cache.refresh([og])
     before = (cache.since, cache.energy_kwh(og), cache.house_kwh())
     start, end = MIDNIGHT - timedelta(days=1), MIDNIGHT
-    energy, house = await cache.window_energy([og], start, end)
+    energy, house, *_ = await cache.window_energy([og], start, end)
     assert (cache.since, cache.energy_kwh(og), cache.house_kwh()) == before
     # der Punkt liegt bei end (Mock ignoriert das Fenster): er zählt nicht
     assert energy == {1: (0.0, None)}
     assert house is None
     query = influx_q(route.calls.last.request)
     assert f"time >= {epoch_ms(start)}ms AND time < {epoch_ms(end)}ms" in query
+
+
+@dataclass(frozen=True)
+class _Source:
+    id: int
+    source_kind: str
+    power_ref: str
+    power_unit: str | None
+
+
+async def test_window_energy_accepts_any_power_source(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).respond(
+        json=_results(
+            _series("power", {"source": "pv", "id": "huawei"}, [(M0, 600.0), (M0 + MIN, 600.0)])
+        )
+    )
+    cache = EnergyCache(reader, clock, None)
+    source = _Source(7, "core", "pv.huawei.power_w", None)
+    result = await cache.window_energy([source], MIDNIGHT, clock.now())
+    assert result.per_source == {7: (0.02, None)}
+
+
+def test_pv_dc_maps_to_dc_series() -> None:
+    assert core_tags("pv_dc.power_w") == ("pv", "dc")
+    assert core_tags("pv.huawei.power_w") == ("pv", "huawei")
+    assert core_tags("battery.power_w") is None
+
+
+async def test_pv_total_kwh_from_derived(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).respond(
+        json=_results(
+            _series(
+                "power",
+                {"source": "derived", "id": "pv_total"},
+                [(M0 + n * MIN, 1200.0) for n in range(60)],
+            )
+        )
+    )
+    cache = EnergyCache(reader, clock, None)
+    await cache.refresh([])
+    assert cache.pv_total_kwh() == 1.2
+
+
+async def test_retention_long_reads_long(respx_mock, reader, clock) -> None:
+    route = respx_mock.post(URL).respond(json=_results())
+    source = _Source(1, "core", "pv.huawei.power_w", None)
+    await EnergyCache(reader, clock, None, retention=RP_LONG).refresh([source])
+    assert '"long"."power"' in influx_q(route.calls.last.request)
+    await EnergyCache(reader, clock, None).refresh([source])
+    assert '"raw"."power"' in influx_q(route.calls.last.request)
+
+
+async def test_log_names_the_owner_of_the_cache(respx_mock, reader, clock) -> None:
+    respx_mock.post(URL).respond(500, text="kaputt")
+    pv = _ha("sensor.pv1")
+    core, _ = k(1, 0.0)
+    cache = EnergyCache(reader, clock, "homeassistant", label="PV")
+    with capture_logs() as logs:
+        await cache.refresh([pv, core])
+    events = [e["event"] for e in logs]
+    assert "Energie der PV nicht lesbar" in events
+    assert "HA-Energie der PV nicht lesbar" in events

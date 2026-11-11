@@ -162,6 +162,17 @@ def _ledger_slot(row: _Row) -> LedgerSlot:
     )
 
 
+def share(part: float, total: float) -> float | None:
+    """``part ÷ total``, begrenzt auf 0 bis 1; ``None``, wenn ``total`` nicht über 0 liegt.
+
+    Für Autarkie und Eigenverbrauch (Plan Autarkie nicht negativ): Lädt der Akku aus dem Netz,
+    kann der Bezug eines Tages den Verbrauch übersteigen; die Autarkie ist dann 0, nicht negativ.
+    """
+    if total <= 0:
+        return None
+    return min(1.0, max(0.0, part / total))
+
+
 def summarize_slots(
     day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings, now: datetime
 ) -> DaySummary:
@@ -242,8 +253,8 @@ def summarize_slots(
         cost_eur=cost_eur,
         revenue_eur=revenue_eur,
         net_cost_eur=net_cost_eur,
-        autarky=1 - import_kwh / consumption_kwh if consumption_kwh > 0 else None,
-        self_consumption=(pv_kwh - export_kwh) / pv_kwh if pv_kwh > 0 else None,
+        autarky=share(consumption_kwh - import_kwh, consumption_kwh),
+        self_consumption=share(pv_kwh - export_kwh, pv_kwh),
         savings_no_plant_eur=(
             consumption_kwh * fixed_eur - net_cost_eur if net_cost_eur is not None else None
         ),
@@ -479,6 +490,17 @@ class LedgerService:
         Gleichstand); ohne Slot im Monat ``None``."""
         first = datetime.combine(day.replace(day=1), time(0), tzinfo=LOCAL_TZ)
         after = (first + timedelta(days=32)).replace(day=1)  # erster Tag des Folgemonats
+        return self._peak(first, after)
+
+    def month_peak_before(self, day: date) -> MonthPeak | None:
+        """Wie ``month_peak``, aber nur die Slots vom Monatsersten bis vor den Ortstag ``day``;
+        am Monatsersten ``None``."""
+        first = datetime.combine(day.replace(day=1), time(0), tzinfo=LOCAL_TZ)
+        return self._peak(first, datetime.combine(day, time(0), tzinfo=LOCAL_TZ))
+
+    def _peak(self, first: datetime, after: datetime) -> MonthPeak | None:
+        """Höchster Netzbezug einer Viertelstunde in ``[first, after)`` (früherer Slot bei
+        Gleichstand); ohne Slot ``None``."""
         query = (
             select(ledger_slot.c.slot_start, ledger_slot.c.import_wh)
             .where(ledger_slot.c.slot_start >= first.astimezone(UTC))

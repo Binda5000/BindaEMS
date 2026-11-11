@@ -3,11 +3,20 @@ import type {
 	BatteryIntentKind,
 	PlanReasonCode,
 	PlanSlot,
+	PlanStorm,
 	PlanTrigger,
-	PlanVehicle
+	PlanVehicle,
+	StormKind,
+	StormLevel
 } from '$lib/api/schemas';
-import { expectedLabel, formatNumber, formatNumberMax } from '$lib/format';
-import { parseIso } from '$lib/time';
+import {
+	expectedLabel,
+	formatDayTime,
+	formatNumber,
+	formatNumberMax,
+	formatTime
+} from '$lib/format';
+import { parseIso, todayVienna } from '$lib/time';
 
 export const INTENT_LABELS: Record<BatteryIntentKind, string> = {
 	EIGENVERBRAUCH: 'Eigenverbrauch',
@@ -29,10 +38,47 @@ export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	settings: 'Einstellungen geändert',
 	manual: 'Neu planen',
 	vehicles: 'Fahrzeug geändert',
-	thermal: 'Klimaanlage geändert'
+	thermal: 'Klimaanlage geändert',
+	storm: 'Unwetterwarnung'
 };
 
 export const SOURCE_LABELS = { optimizer: 'Optimierer', fallback: 'Ersatzplan' } as const;
+
+/**
+ * Warnarten von GeoSphere Austria, wie `STORM_KIND_LABELS` in `shared/plan.py` (ein Test in
+ * `tests/unit/test_docs.py` hält beide gleich)
+ */
+export const STORM_KIND_LABELS: Record<StormKind, string> = {
+	sturm: 'Sturm',
+	regen: 'Regen',
+	schnee: 'Schnee',
+	glatteis: 'Glatteis',
+	gewitter: 'Gewitter',
+	hitze: 'Hitze',
+	kaelte: 'Kälte'
+};
+
+export const STORM_LEVEL_LABELS: Record<StormLevel, string> = { 1: 'gelb', 2: 'orange', 3: 'rot' };
+
+/**
+ * Kopf des Zeitplans: „Unwetterwarnung: Gewitter (orange) 14:00–16:00“ je Warnung des Plans, auch
+ * für eine, die erst hinter dem Horizont beginnt (Ruling R12). Ein Zeitpunkt an einem anderen Tag
+ * als heute trägt den Tag („morgen 06:00“, „Mo 12.10. 08:00“); das Ende am Tag des Beginns nur die
+ * Uhrzeit.
+ */
+export function stormWarningLines(storm: PlanStorm | null, now: Date = new Date()): string[] {
+	return (storm?.warnings ?? []).map((warning) => {
+		const begin = parseIso(warning.begin);
+		const end = parseIso(warning.end);
+		const from = begin === null ? formatTime(warning.begin) : formatDayTime(new Date(begin), now);
+		const sameDay =
+			begin !== null && end !== null && todayVienna(new Date(begin)) === todayVienna(new Date(end));
+		const to =
+			end === null || sameDay ? formatTime(warning.end) : formatDayTime(new Date(end), now);
+		const kind = STORM_KIND_LABELS[warning.kind];
+		return `Unwetterwarnung: ${kind} (${STORM_LEVEL_LABELS[warning.level]}) ${from}\u2013${to}`;
+	});
+}
 
 const SLOT_MS = 900_000;
 /** Zusätze zum Hauptcode eines Slots */

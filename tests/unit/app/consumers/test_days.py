@@ -1,11 +1,12 @@
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
-from sqlalchemy import insert, select
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, insert, select
 from tests.app_helpers import influx_q
 
-from bindaems.app.consumers.days import NO_DAY, ConsumerDays
+from bindaems.app.consumers.days import NO_DAY, ConsumerDays, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.db.schema import consumer_day
@@ -207,3 +208,94 @@ async def test_a_recreated_consumer_does_not_inherit_the_days_of_a_deleted_one(
     # die Tage zählen für den neuen Verbraucher als fehlend und werden aus den Rohdaten gefüllt
     assert await days.fill_missing(date(2026, 10, 9), days=2) == 2
     assert _rows(engine)[("2026-10-08", new)] == (0.3, None)
+
+
+async def test_source_days_uses_given_table(engine, reader, clock, respx_mock) -> None:
+    table = Table(
+        "test_source_day",
+        MetaData(),
+        Column("day", String(10), primary_key=True),
+        Column("src_id", Integer, primary_key=True, autoincrement=False),
+        Column("kwh", Float, nullable=True),
+        Column("note", String(80), nullable=True),
+    )
+    table.create(engine)
+
+    @dataclass(frozen=True)
+    class Src:
+        id: int
+        source_kind: str
+        power_ref: str
+        power_unit: str | None
+
+    sources = [Src(4, "core", "load.a.power_w", None)]
+    respx_mock.post(URL).mock(side_effect=lambda request: _answer(request, {"a": 60}))
+    source_days = SourceDays(
+        engine, EnergyCache(reader, clock, None), lambda: sources, table, "src_id", clock
+    )
+    assert await source_days.store(YESTERDAY) == 1
+    with engine.connect() as conn:
+        rows = [(r.day, r.src_id, r.kwh, r.note) for r in conn.execute(select(table))]
+    assert rows == [("2026-10-08", 4, 0.6, None)]
+    assert source_days.energy(YESTERDAY, YESTERDAY) == {4: (0.6, None)}
+    assert source_days.daily(YESTERDAY, YESTERDAY) == {4: {YESTERDAY: (0.6, None)}}
+
+
+async def test_source_days_total_id_stores_pv_total(engine, reader, clock, respx_mock) -> None:
+    table = Table(
+        "test_source_day2",
+        MetaData(),
+        Column("day", String(10), primary_key=True),
+        Column("src_id", Integer, primary_key=True, autoincrement=False),
+        Column("kwh", Float, nullable=True),
+        Column("note", String(80), nullable=True),
+    )
+    table.create(engine)
+    respx_mock.post(URL).respond(
+        json={
+            "results": [
+                {
+                    "statement_id": 0,
+                    "series": [
+                        {
+                            "name": "power",
+                            "tags": {"source": "derived", "id": "pv_total"},
+                            "columns": ["time", "w"],
+                            "values": [[epoch_ms(MIDNIGHT) + n * MIN, 1200.0] for n in range(60)],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    source_days = SourceDays(
+        engine, EnergyCache(reader, clock, None), lambda: [], table, "src_id", clock, total_id=0
+    )
+    assert await source_days.store(YESTERDAY) == 1
+    with engine.connect() as conn:
+        rows = [(r.day, r.src_id, r.kwh, r.note) for r in conn.execute(select(table))]
+    assert rows == [("2026-10-08", 0, 1.2, None)]
+
+
+async def test_source_days_total_keeps_old_row_when_unreadable(
+    engine, reader, clock, respx_mock
+) -> None:
+    table = Table(
+        "test_source_day3",
+        MetaData(),
+        Column("day", String(10), primary_key=True),
+        Column("src_id", Integer, primary_key=True, autoincrement=False),
+        Column("kwh", Float, nullable=True),
+        Column("note", String(80), nullable=True),
+    )
+    table.create(engine)
+    with engine.begin() as conn:
+        conn.execute(insert(table), [{"day": "2026-10-08", "src_id": 0, "kwh": 9.9, "note": None}])
+    respx_mock.post(URL).respond(500, text="boom")
+    source_days = SourceDays(
+        engine, EnergyCache(reader, clock, None), lambda: [], table, "src_id", clock, total_id=0
+    )
+    assert await source_days.store(YESTERDAY) == 0
+    with engine.connect() as conn:
+        rows = [(r.day, r.src_id, r.kwh, r.note) for r in conn.execute(select(table))]
+    assert rows == [("2026-10-08", 0, 9.9, None)]

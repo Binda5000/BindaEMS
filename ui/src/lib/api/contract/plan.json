@@ -52,6 +52,7 @@
       "model_computed_at": "2026-10-09T01:50:00+00:00",
       "reason": "ok"
     },
+    "storm": null,
     "slots": [
       {
         "start": "2026-10-09T08:00:00+00:00",
@@ -77,6 +78,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -107,6 +109,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -137,6 +140,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -167,6 +171,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -197,6 +202,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -226,6 +232,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -255,6 +262,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -284,6 +292,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -313,6 +322,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -343,6 +353,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -373,6 +384,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -403,6 +415,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -433,6 +446,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -463,6 +477,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -493,6 +508,7 @@
         "thermal_w": 1100.0,
         "thermal_steps": 1,
         "thermal_grid_w": 1100.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -523,6 +539,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -553,6 +570,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -583,6 +601,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -613,6 +632,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -643,6 +663,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -673,6 +694,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -703,6 +725,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -733,6 +756,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -763,6 +787,7 @@
         "thermal_w": 60.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -793,6 +818,7 @@
         "thermal_w": 1400.0,
         "thermal_steps": 2,
         "thermal_grid_w": 1400.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -823,6 +849,7 @@
         "thermal_w": 150.0,
         "thermal_steps": 2,
         "thermal_grid_w": 150.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH",
           "ZIEL_SOC_ABFAHRT"
@@ -851,6 +878,7 @@
         "thermal_w": -300.0,
         "thermal_steps": 2,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -878,6 +906,7 @@
         "thermal_w": -300.0,
         "thermal_steps": 2,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -905,6 +934,7 @@
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -932,6 +962,7 @@
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -959,6 +990,7 @@
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -986,6 +1018,7 @@
         "thermal_w": -300.0,
         "thermal_steps": 1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1013,6 +1046,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1040,6 +1074,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1067,6 +1102,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1094,6 +1130,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1121,6 +1158,7 @@
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1148,6 +1186,7 @@
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1175,6 +1214,7 @@
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1202,6 +1242,7 @@
         "thermal_w": -250.0,
         "thermal_steps": -1,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1229,6 +1270,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1256,6 +1298,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1283,6 +1326,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1310,6 +1354,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1337,6 +1382,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1364,6 +1410,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1391,6 +1438,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1418,6 +1466,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1445,6 +1494,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1472,6 +1522,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1499,6 +1550,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1526,6 +1578,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1553,6 +1606,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1580,6 +1634,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1607,6 +1662,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1634,6 +1690,7 @@
         "thermal_w": 0.0,
         "thermal_steps": 0,
         "thermal_grid_w": 0.0,
+        "storm_reserve_pct": null,
         "codes": [
           "EIGENVERBRAUCH"
         ],

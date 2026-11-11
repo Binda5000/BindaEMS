@@ -51,6 +51,26 @@ es Netzladen am Schalter vorbei. Ziel ist ``s_T + short_r ≥ Reserve`` am Horiz
 PV sie füllt. PV in den Akku bleibt vorrangig, weil sie nichts kostet. Mit dem Schalter lädt ein
 Slot zusammen höchstens ``GC_t`` (``gr_b + gr_r ≤ GC_t``).
 
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidungen 5 und 6): Hat ein Slot ``t`` eine
+Untergrenze ``F_t`` (``SlotInput.storm_floor_pct``, in kWh umgerechnet), gilt am Slotende
+``s_t + short_s_t ≥ F_t`` mit ``short_s_t ≥ 0``; je kWh und Slot kostet ``short_s``
+``STORM_SHORTFALL_CT``. Die Untergrenze ist weich, damit das Modell lösbar bleibt, wenn das Ziel
+nicht mehr zu erreichen ist (Warnung schon im Gange, Akku leer); hart bleibt die Reserve
+(``lo``). Liegt der SOC zu Beginn unter der höchsten Untergrenze ``F_max``, gibt es bis zum letzten
+Slot mit Untergrenze ``gr_s`` (Netz → Akku für die Unwetter-Reserve, auch bei ausgeschaltetem
+Schalter) mit ``0 ≤ gr_s ≤ storm_charge_caps_w``. Es teilt sich die Obergrenze des Nachladens
+(``gr_r + gr_s ≤ recharge_cap_w``-Formel), zählt wie ``gr_r`` zur Ladung, zum Bezug, zur Spitze,
+zur Phasengrenze und zur Planträgheit, kostet den Bezugspreis ohne Marge, setzt kein ``z_t``
+(Regel R1) und trägt keinen Restwert. Höchstens ``Σ η_ch · gr_s · Δ ≤ F_max − max(SOC₀,
+Reserve)`` wird aufgeladen. Was aufgeladen ist, bleibt bis zum letzten Slot mit Untergrenze im
+Akku (``s_t ≥ min(SOC₀, Reserve) + Nachgeladenes + Aufgeladenes``, eine Bedingung zusammen mit
+der des Nachladens), sonst wäre es Netzladen am Schalter vorbei; danach darf das Haus es
+verbrauchen. PV bleibt vorrangig, weil sie nichts kostet. Gibt es ``gr_s``, gibt der Akku keinem
+Auto etwas (kein ``bt_ev``): Die Plausibilität zählt das Aufladen als Netzenergie im Akku, und
+Regel R2 bleibt so unberührt. Mit dem Schalter lädt ein Slot zusammen
+höchstens ``GC_t`` (``gr_b + gr_r + gr_s ≤ GC_t``). Ohne Untergrenze gibt es weder ``gr_s`` noch
+eine dieser Bedingungen.
+
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 """
@@ -58,7 +78,7 @@ Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -67,6 +87,7 @@ import pulp
 
 from bindaems.app.planning.battery_model import (
     SLOT_H,
+    BatteryParams,
     SimSlot,
     params_of,
     reserve_kwh,
@@ -85,6 +106,9 @@ R2_CT: Final = 200.0  # Strafe je kWh Netzenergie ins Auto über Regel R2
 R1_EMPTY_TOL_KWH: Final = 0.05  # Akku gilt als leer bei SOC ≤ untere Grenze + Toleranz (Regel R1)
 # Strafe je kWh Einspeisung, solange Netzenergie von vor dem Horizont im Akku sein kann (Regel R1)
 CARRIED_EXPORT_CT: Final = 200.0
+# Strafe je kWh und Slot unter der Untergrenze der Unwetter-Reserve (Entscheidung 5): 1 kWh über
+# 10 Slots kostet so viel wie 1 kWh Fehlmenge eines Autos
+STORM_SHORTFALL_CT: Final = 200.0
 
 _KWH: Final = SLOT_H / 1000  # W über einen Slot → kWh
 
@@ -95,7 +119,8 @@ class SlotFlows:
 
     ``pv_h``/``pv_b``/``pv_x``: PV ins Haus, in den Akku, ins Netz; ``gr_h``/``gr_b``: Netz ins
     Haus, in den Akku; ``bt_h``: Akku ins Haus. ``gr_r``: Netz in den Akku beim Nachladen auf die
-    Reserve (Entscheidung 9), 0 ohne. ``ev``: ``(pv_ev, gr_ev)`` je geplantem Auto, PV
+    Reserve (Entscheidung 9), 0 ohne. ``gr_s``: Netz in den Akku für die Unwetter-Reserve (Plan
+    Unwetter-Reserve, Entscheidung 6), 0 ohne. ``ev``: ``(pv_ev, gr_ev)`` je geplantem Auto, PV
     und Netz ins Auto; es fehlen Autos, die in dem Slot nicht laden können (ab der Abfahrt, ohne
     Bedarf, ein erwartetes Auto vor seiner Ankunft). ``ev_battery``: ``bt_ev`` je Auto, Akku ins
     Auto, nur mit dem Schalter „Akku ins Auto, wenn übrig“ und nur für Autos, die im Slot laden
@@ -112,6 +137,7 @@ class SlotFlows:
     ev: Mapping[str, tuple[float, float]] = field(default_factory=dict)
     ev_battery: Mapping[str, float] = field(default_factory=dict)
     gr_r: float = 0.0
+    gr_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -125,7 +151,8 @@ class OptimizerResult:
     im core, und ein Auto, das nur die Prognose kennt, darf es nicht anheben.
     Je geplantem Auto: ``shortfall_kwh`` die Fehlmenge gegen ``horizon_need_kwh``,
     ``r2_excess_kwh`` die Netzenergie über ``grid_allowed_kwh`` (Regel R2), beide in kWh auf der
-    Wallbox-Seite; leer ohne Lösung.
+    Wallbox-Seite; leer ohne Lösung. ``storm_shortfall_kwh`` ist die Summe der Fehlmengen unter
+    der Untergrenze der Unwetter-Reserve über die Slots (kWh · Slot), 0 ohne.
     """
 
     status: SolverStatus
@@ -136,6 +163,7 @@ class OptimizerResult:
     message: str | None = None
     shortfall_kwh: Mapping[str, float] = field(default_factory=dict)
     r2_excess_kwh: Mapping[str, float] = field(default_factory=dict)
+    storm_shortfall_kwh: float = 0.0
 
 
 def ev_power_w(result: OptimizerResult) -> list[dict[str, float]]:
@@ -198,6 +226,22 @@ def _recharge_cap_w(inputs: PlanInputs, slot: SimSlot) -> float:
     return min(RESERVE_RECHARGE_MAX_W, slot.max_charge_w, max(0.0, setpoint_w - slot.load_w))
 
 
+def storm_charge_caps_w(inputs: PlanInputs) -> list[float]:
+    """Höchstes Aufladen für die Unwetter-Reserve je Slot (Entscheidung 6): die Formel von
+    ``recharge_cap_w`` in den Slots bis zum letzten mit Untergrenze, wenn der SOC zu Beginn unter
+    der höchsten Untergrenze liegt; sonst 0. Nachladen und Aufladen teilen sich diese Grenze."""
+    return _storm_caps_w(inputs, sim_slots(inputs))
+
+
+def _storm_caps_w(inputs: PlanInputs, slots: Sequence[SimSlot]) -> list[float]:
+    floors = [t for t, s in enumerate(inputs.slots) if s.storm_floor_pct is not None]
+    top_pct = max((inputs.slots[t].storm_floor_pct or 0.0 for t in floors), default=0.0)
+    if not floors or inputs.battery.soc_pct >= top_pct:
+        return [0.0] * len(inputs.slots)
+    last = floors[-1]
+    return [_recharge_cap_w(inputs, slot) if t <= last else 0.0 for t, slot in enumerate(slots)]
+
+
 def _month(inputs: PlanInputs, index: int) -> str:
     return ensure_utc(inputs.slots[index].start).astimezone(LOCAL_TZ).strftime("%Y-%m")
 
@@ -250,7 +294,9 @@ class _Car:
         return self.pv[t] + self.grid[t]
 
 
-def _add_car(prob: pulp.LpProblem, inputs: PlanInputs, index: int) -> _Car:
+def _add_car(
+    prob: pulp.LpProblem, inputs: PlanInputs, index: int, *, battery_allowed: bool
+) -> _Car:
     """Variablen und Bedingungen des Autos ``inputs.vehicles[index]``; die Kosten stehen in
     ``_solve``.
 
@@ -270,7 +316,7 @@ def _add_car(prob: pulp.LpProblem, inputs: PlanInputs, index: int) -> _Car:
     }
     battery = (
         {t: prob.add_variable(f"bt_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in window}
-        if inputs.planning.car_battery_allowed
+        if battery_allowed
         else {}
     )
     short = prob.add_variable(f"fehl{index}", lowBound=0)
@@ -321,8 +367,13 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     below_reserve = _below_reserve(inputs)
     recharge_caps = [_recharge_cap_w(inputs, sim) if below_reserve else 0.0 for sim in slots]
     gr_r = {t: var("gr_r", t, cap) for t, cap in enumerate(recharge_caps) if cap > 0}
-    # Netz in den Akku je Slot: Netzladen und Nachladen
-    to_battery = [gr_b[t] + gr_r[t] if t in gr_r else gr_b[t] for t in range(count)]
+    # Aufladen für die Unwetter-Reserve (Entscheidung 6): bis zum Ende des letzten Fensters
+    gr_s = {t: var("gr_s", t, cap) for t, cap in enumerate(_storm_caps_w(inputs, slots)) if cap > 0}
+    # Netz in den Akku je Slot: Netzladen, Nachladen und Aufladen
+    to_battery: list[Any] = []
+    for t in range(count):
+        into = gr_b[t] + gr_r[t] if t in gr_r else gr_b[t]
+        to_battery.append(into + gr_s[t] if t in gr_s else into)
     bt_h = [var("bt_h", t) for t in range(count)]
     y = [prob.add_variable(f"y_{t}", cat=pulp.LpBinary) for t in range(count)]
     z: dict[int, pulp.LpVariable] = {
@@ -334,7 +385,12 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         prob.add_variable(f"s_{t + 1}", lowBound=params.lo_kwh, upBound=params.hi_kwh)
         for t in range(count)
     ]
-    cars = [_add_car(prob, inputs, index) for index in range(len(inputs.vehicles))]
+    # Mit Aufladen für die Unwetter-Reserve gibt der Akku keinem Auto etwas (Ruling R7)
+    car_battery_allowed = planning.car_battery_allowed and not gr_s
+    cars = [
+        _add_car(prob, inputs, index, battery_allowed=car_battery_allowed)
+        for index in range(len(inputs.vehicles))
+    ]
     # Autos, die im Slot laden können; PV und Netz ins Auto je Slot
     active = [[c for c in cars if t in c.pv] for t in range(count)]
     car_pv = [pulp.lpSum(c.pv[t] for c in active[t]) for t in range(count)]
@@ -359,8 +415,11 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         prob += discharge <= sim.max_discharge_w * (1 - y[t]), f"entladen_{t}"
         if t in z:
             prob += gr_b[t] <= caps[t] * z[t], f"netzladen_{t}"
-        if t in gr_r and switch:
-            prob += gr_b[t] + gr_r[t] <= caps[t], f"netzladen_summe_{t}"
+        if (t in gr_r or t in gr_s) and switch:
+            prob += to_battery[t] <= caps[t], f"netzladen_summe_{t}"
+        if t in gr_r and t in gr_s:
+            # Nachladen und Aufladen teilen sich die Grenze des Nachladens
+            prob += gr_r[t] + gr_s[t] <= _recharge_cap_w(inputs, sim), f"unwetter_nachladen_{t}"
         prob += imports[t] <= battery.grid_max_import_w, f"bezug_{t}"
         if phase_limit_w is not None:
             room_w = phase_room_w(phase_limit_w, slot.load_w, slot.pv_w)
@@ -493,8 +552,16 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             prob += dev >= previous - c.power(t), f"traeg_auto{c.index}_ab_{t}"
             terms.append(_KWH * planning.inertia_ct * dev)
 
+    # Slots, in denen Aufgeladenes im Akku bleibt: vom ersten ``gr_s`` bis zum letzten Slot mit
+    # Untergrenze (Ruling R9); dort rechnet ``_add_storm`` das Nachgeladene mit
+    floor_slots = [t for t, s in enumerate(inputs.slots) if s.storm_floor_pct is not None]
+    kept = range(min(gr_s), floor_slots[-1] + 1) if gr_s else range(0)
+    recharged: dict[int, Any] = {}
     if below_reserve:
-        _add_recharge(prob, terms, soc, gr_r, soc0, reserve, params.eta_ch, inputs.end_value_ct)
+        recharged = _add_recharge(
+            prob, terms, soc, gr_r, soc0, reserve, params.eta_ch, inputs.end_value_ct, kept
+        )
+    storm_short = _add_storm(prob, terms, inputs, soc, gr_s, soc0, reserve, params, recharged)
 
     for c in cars:
         terms.append(SHORTFALL_CT * c.short + R2_CT * c.rho)
@@ -524,6 +591,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             ev={c.car.key: (_value(c.pv[t]), _value(c.grid[t])) for c in active[t]},
             ev_battery={c.car.key: _value(c.battery[t]) for c in active[t] if t in c.battery},
             gr_r=_value(gr_r[t]) if t in gr_r else 0.0,
+            gr_s=_value(gr_s[t]) if t in gr_s else 0.0,
         )
         for t in range(count)
     )
@@ -542,6 +610,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         solve_ms=_elapsed_ms(started),
         shortfall_kwh={c.car.key: _value(c.short) for c in cars},
         r2_excess_kwh={c.car.key: _value(c.rho) for c in cars},
+        storm_shortfall_kwh=sum(_value(short) for short in storm_short),
     )
 
 
@@ -554,30 +623,110 @@ def _add_recharge(
     reserve: float,
     eta_ch: float,
     end_value_ct: float,
-) -> None:
+    kept: range = range(0),
+) -> dict[int, Any]:
     """Bedingungen und Ziel des Nachladens auf die Reserve (Entscheidung 9), nur bei ``SOC₀`` unter
     der Reserve: Höchstens die Lücke bis zur Reserve wird nachgeladen (``nachladen_menge``), das
     Nachgeladene bleibt im Akku (``nachgeladen_t`` über die Summe ``r_t`` bis Slot t), und am
     Horizontende steht der Akku an der Reserve oder es fehlt ``short_r`` (``SHORTFALL_CT`` je kWh).
+    Gibt die Summe ``r_t`` je Slot zurück. In den Slots ``kept`` (Aufladen für die Unwetter-Reserve)
+    fehlt ``nachgeladen_t``: Dort steht die gemeinsame Bedingung von ``_add_storm``.
 
     Nachgeladenes trägt keinen Restwert: ``+ end_value_ct · Σ η_ch · gr_r · Δ`` hebt den Anteil an
     ``− end_value_ct · s_T`` auf. Sonst lohnte ``gr_r``, sobald ``import_ct < η_ch · Restwert``, und
     wäre Netzladen am Schalter vorbei, auch wenn die PV die Reserve füllt.
     """
+    totals: dict[int, Any] = {}
     if gr_r:
         recharged = pulp.lpSum(eta_ch * _KWH * g for g in gr_r.values())
         prob += recharged <= reserve - soc0, "nachladen_menge"
         terms.append(end_value_ct * recharged)
-        total: Any = 0  # nachgeladene Energie bis Slot t in kWh
-        for t in range(min(gr_r), len(soc)):
-            if t in gr_r:
-                running = prob.add_variable(f"r_{t}", lowBound=0)
-                prob += running == total + eta_ch * _KWH * gr_r[t], f"r_summe_{t}"
-                total = running
-            prob += soc[t] >= soc0 + total, f"nachgeladen_{t}"
+        totals = _running(prob, "r", gr_r, eta_ch, len(soc))
+        for t, total in totals.items():
+            if t not in kept:
+                prob += soc[t] >= soc0 + total, f"nachgeladen_{t}"
     short = prob.add_variable("fehl_reserve", lowBound=0)
     prob += soc[-1] + short >= reserve, "reserve_ende"
     terms.append(SHORTFALL_CT * short)
+    return totals
+
+
+def _running(
+    prob: pulp.LpProblem,
+    name: str,
+    flows: Mapping[int, pulp.LpVariable],
+    eta_ch: float,
+    stop: int,
+) -> dict[int, Any]:
+    """Geladene Energie ``Σ_{τ≤t} η_ch · flows_τ · Δ`` in kWh je Slot ``t`` vom ersten Slot mit
+    ``flows`` bis vor ``stop``; je Slot mit Fluss eine Variable ``{name}_t`` mit Bedingung
+    ``{name}_summe_t``, sonst gilt die Summe des Slots davor."""
+    totals: dict[int, Any] = {}
+    total: Any = 0
+    for t in range(min(flows), stop):
+        if t in flows:
+            running = prob.add_variable(f"{name}_{t}", lowBound=0)
+            prob += running == total + eta_ch * _KWH * flows[t], f"{name}_summe_{t}"
+            total = running
+        totals[t] = total
+    return totals
+
+
+def _add_storm(
+    prob: pulp.LpProblem,
+    terms: list[Any],
+    inputs: PlanInputs,
+    soc: list[pulp.LpVariable],
+    gr_s: Mapping[int, pulp.LpVariable],
+    soc0: float,
+    reserve: float,
+    params: BatteryParams,
+    recharged: Mapping[int, Any],
+) -> list[pulp.LpVariable]:
+    """Untergrenze und Aufladen der Unwetter-Reserve (Entscheidungen 5 und 6); gibt die
+    Fehlmengen ``short_s`` je Slot mit Untergrenze zurück, ohne Untergrenze keine.
+
+    Je Slot ``t`` mit Untergrenze ``s_t + short_s_t ≥ F_t`` (``unwetter_t``), ``short_s`` kostet
+    ``STORM_SHORTFALL_CT`` je kWh. Aufgeladen wird höchstens bis zur höchsten Untergrenze
+    (``unwetter_menge``: ``Σ η_ch · gr_s · Δ ≤ F_max − max(SOC₀, Reserve)``). Wie beim Nachladen
+    trägt Aufgeladenes keinen Restwert (``+ end_value_ct · Σ η_ch · gr_s · Δ``), sonst lohnte
+    ``gr_s`` über die Untergrenzen hinaus.
+
+    Aufgeladenes bleibt bis zum letzten Slot mit Untergrenze im Akku (Ruling R9, wie
+    ``nachgeladen_t``): ``s_t ≥ min(SOC₀, Reserve) + r_t + Σ_{τ≤t} η_ch · gr_s_τ · Δ``
+    (``unwetter_gehalten_t``) vom ersten Slot mit ``gr_s`` an, mit ``r_t`` dem Nachgeladenen bis
+    Slot t (``recharged``, ohne Nachladen 0). Sonst ginge es vor dem Fenster schon wieder ins Haus,
+    Netzladen am Schalter vorbei, auch wenn die PV die Untergrenze füllt. Danach darf das Haus es
+    verbrauchen (Entscheidung 6).
+    """
+    floors = {
+        t: slot.storm_floor_pct / 100 * params.capacity_kwh
+        for t, slot in enumerate(inputs.slots)
+        if slot.storm_floor_pct is not None
+    }
+    if gr_s:
+        charged = pulp.lpSum(params.eta_ch * _KWH * g for g in gr_s.values())
+        prob += charged <= max(floors.values()) - max(soc0, reserve), "unwetter_menge"
+        terms.append(inputs.end_value_ct * charged)
+        # Basis ``min(SOC₀, Reserve)``, nicht ``SOC₀`` (Ruling I1): Der Akku darf vor dem Fenster
+        # Energie über der Reserve ans Haus abgeben, auch wenn er mit SOC₀ < F startet; nur das
+        # Aufgeladene und das Nachgeladene bleiben. Netzladen ist so höchstens bis ``F_max`` und
+        # mit 3 kW möglich, nie mehr (``unwetter_menge``). Eine Basis SOC₀ hielte auch die
+        # Eigenenergie fest, die nur die Untergrenze im Fenster schützen muss.
+        base = min(soc0, reserve)
+        stored = _running(prob, "unwetter_s", gr_s, params.eta_ch, max(floors) + 1)
+        for t, total in stored.items():
+            prob += (
+                soc[t] >= base + recharged.get(t, 0) + total,
+                f"unwetter_gehalten_{t}",
+            )
+    shorts: list[pulp.LpVariable] = []
+    for t, floor_kwh in floors.items():
+        short = prob.add_variable(f"fehl_unwetter_{t}", lowBound=0)
+        prob += soc[t] + short >= floor_kwh, f"unwetter_{t}"
+        terms.append(STORM_SHORTFALL_CT * short)
+        shorts.append(short)
+    return shorts
 
 
 def _known_peaks_kw(
@@ -587,15 +736,16 @@ def _known_peaks_kw(
     expected: set[str],
 ) -> dict[str, float]:
     """Spitze je Monat ohne die Netzleistung der erwarteten Autos (Ruling F-1): das Größere aus
-    ``peak0`` und dem höchsten Bezug ``gr_h + gr_b + gr_r + Netz in angesteckte Autos`` im
-    Monat."""
+    ``peak0`` und dem höchsten Bezug ``gr_h + gr_b + gr_r + gr_s + Netz in angesteckte Autos``
+    im Monat."""
     result = dict(peak0_kw)
     for t, item in enumerate(flows):
         month = _month(inputs, t)
         if month not in result:
             continue
         cars_w = sum(grid for key, (_, grid) in item.ev.items() if key not in expected)
-        result[month] = max(result[month], (item.gr_h + item.gr_b + item.gr_r + cars_w) / 1000)
+        grid_w = item.gr_h + item.gr_b + item.gr_r + item.gr_s + cars_w
+        result[month] = max(result[month], grid_w / 1000)
     return result
 
 

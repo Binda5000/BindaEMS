@@ -26,6 +26,14 @@ gilt auch bei ausgeschaltetem Schalter und muss sich nicht rechnen. Regel R1 und
 ``grid_in_battery`` zählen den Akku als leer, sobald er höchstens an der Reserve steht
 (``reserve_kwh``), auch wenn der SOC zu Beginn darunter liegt.
 
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidung 6): ``gr_s`` zählt in Ladung und
+Phasengrenze wie ``gr_r``. Ein ``NETZLADEN`` mit ``reserve_recharge`` (Nachladen und Aufladen für
+die Unwetter-Reserve) setzt im Optimierer kein ``z_t``; Regel R1 prüft es deshalb nicht
+(``r1_applies``), sonst wäre jede Einspeisung nach dem Aufladen über die Reserve ein Befund.
+Entlädt die Nachrechnung in einem Slot mit Untergrenze (``SlotInput.storm_floor_pct``) mit
+mindestens ``HOLD_MIN_W`` und endet mehr als ``STORM_TOL_PCT`` Prozentpunkte darunter, ist das ein
+Befund (Entscheidung 10); ein Ziel, das der Akku nicht erreicht, ohne zu entladen, ist keiner.
+
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
@@ -68,8 +76,17 @@ EMPTY_TOL_KWH: Final = R1_TOL_KWH  # so nah an der Reserve gilt der Akku der Nac
 # jede Entladung über der Toleranz der Bilanz; der Optimierer kennt keine Mindestentladung).
 USED_ABOVE_W: Final = BALANCE_TOL_W
 MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss oder Netzbezug
+HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
+STORM_TOL_PCT: Final = 0.5  # so weit darf die Nachrechnung unter der Unwetter-Reserve enden
 
 PaysOffBy = Literal["discharge", "import"]
+
+
+def r1_applies(intent: BatteryIntent) -> bool:
+    """Regel R1 gilt für ``intent``: ``NETZLADEN`` ohne ``reserve_recharge``. Nachladen auf die
+    Reserve und Aufladen für die Unwetter-Reserve setzen im Optimierer kein ``z_t``; für sie
+    gilt sie nicht, Absichten und Plausibilität rechnen hiermit wie der Optimierer."""
+    return intent.kind is BatteryIntentKind.NETZLADEN and not intent.reserve_recharge
 
 
 def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> int:
@@ -284,7 +301,7 @@ def check_plan(
         load_w = flows.pv_h + flows.gr_h + flows.bt_h
         if abs(pv_w - inp.pv_w) > BALANCE_TOL_W or abs(load_w - inp.load_w) > BALANCE_TOL_W:
             report("balance", index, f"Bilanz verletzt um {at}")
-        charge_w = flows.pv_b + flows.gr_b + flows.gr_r
+        charge_w = flows.pv_b + flows.gr_b + flows.gr_r + flows.gr_s
         discharge_w = flows.bt_h + sum(flows.ev_battery.values())
         if (
             charge_w > slot.max_charge_w + BALANCE_TOL_W
@@ -297,7 +314,7 @@ def check_plan(
         if phase_limit_w is not None:
             room_w = phase_room_w(phase_limit_w, inp.load_w, inp.pv_w) + BALANCE_TOL_W
             for phase in PHASES:
-                phase_w = (flows.gr_h + flows.gr_b + flows.gr_r) / 3 + sum(
+                phase_w = (flows.gr_h + flows.gr_b + flows.gr_r + flows.gr_s) / 3 + sum(
                     shares[phase] * flows.ev[car.key][1]
                     for car, shares in car_shares
                     if car.key in flows.ev and phase in shares
@@ -330,12 +347,19 @@ def check_plan(
                     f"Auto {car.name} lädt außerhalb seiner Grenzen um {at}",
                 )
 
-    for index, (item, slot) in enumerate(zip(steps, slots, strict=True)):
+    for index, (item, slot, inp) in enumerate(zip(steps, slots, inputs.slots, strict=True)):
         at = _local_time(inputs, index)
         if item.charge_pv_w + item.charge_grid_w > slot.max_charge_w + BALANCE_TOL_W:
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(item.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
+        floor_pct = inp.storm_floor_pct
+        if (
+            floor_pct is not None
+            and item.discharge_w >= HOLD_MIN_W
+            and item.soc_end_kwh < (floor_pct - STORM_TOL_PCT) / 100 * params.capacity_kwh
+        ):
+            report("storm", index, f"Akku entlädt um {at} unter die Unwetter-Reserve")
 
     switch = inputs.planning.grid_charge_allowed
     for index, intent in enumerate(intents):
@@ -345,7 +369,7 @@ def check_plan(
         if not switch and not recharge_without_switch(intent):
             report("switch", index, f"Netzladen um {at}, obwohl ausgeschaltet")
         while_charged_kwh = export_while_charged_kwh(steps, index, empty_kwh)
-        if while_charged_kwh > R1_TOL_KWH:
+        if r1_applies(intent) and while_charged_kwh > R1_TOL_KWH:
             exported = _kwh_text(while_charged_kwh)
             report(
                 "r1",

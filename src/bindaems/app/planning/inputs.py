@@ -3,6 +3,13 @@
 Friert Horizont, Restwert, Leistungspreis je Monat, Akkuzustand und die geplanten Autos zu einem
 ``PlanInputs`` ein, den Optimierer, Ersatzplan und Szenarien gemeinsam verwenden. Reine
 Rechnung: Die Zeit kommt als Parameter, nichts wird gelesen oder geschrieben.
+
+Unwetter-Reserve (Plan Unwetter-Reserve, Entscheidungen 2 bis 4): ``assemble_inputs`` bekommt die
+bekannten Warnungen und behält die, die laut ``planning.storm`` zählen (``relevant``; bei
+ausgeschaltetem Schalter keine), in ``PlanInputs.storm_warnings``. Jeder Slot, der ``[Beginn −
+1 h, Ende)`` einer davon schneidet, bekommt die Untergrenze ``SlotInput.storm_floor_pct`` =
+``min(Ziel, soc_max_pct)`` in Prozent (``storm_floors``); liegt sie nicht über der Reserve, keine.
+Gespeicherte Eingangsdaten ohne die Felder laden ohne Warnungen und ohne Untergrenzen.
 """
 
 from __future__ import annotations
@@ -17,9 +24,10 @@ from pydantic import AwareDatetime, Field
 from bindaems.app.planning.battery_model import LIMIT_NOW_SLOTS as LIMIT_NOW_SLOTS
 from bindaems.app.planning.battery_model import eta
 from bindaems.app.planning.vehicles import PlanVehicleInput
+from bindaems.app.storm.windows import relevant, storm_floors
 from bindaems.app.tariff.calc import power_rate
 from bindaems.shared.config import Config, _Model
-from bindaems.shared.plan import Plan, PlanTrigger
+from bindaems.shared.plan import Plan, PlanTrigger, StormWarning
 from bindaems.shared.settings import PlanningSettings, TariffSettings
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start
 
@@ -96,7 +104,8 @@ class SlotInput(_Model):
     ``pv_p25_w`` ist die PV-Prognose P25 (Regel R2), ohne Wert gilt ``pv_w``. ``prev_ev_w`` ist
     die Ladeleistung je Auto im vorigen Plan (W, ein fehlendes Auto 0), ``None`` ohne Slot des
     vorigen Plans oder nach den ersten Slots (Planträgheit). Gespeicherte Eingangsdaten ohne die
-    beiden Felder laden mit ``None`` (Plan 4b).
+    beiden Felder laden mit ``None`` (Plan 4b). ``storm_floor_pct`` ist die Untergrenze der
+    Unwetter-Reserve am Slotende in Prozent, ``None`` ohne Warnung (alte Eingangsdaten: ``None``).
     """
 
     start: AwareDatetime
@@ -108,6 +117,7 @@ class SlotInput(_Model):
     prev_battery_w: Finite | None
     pv_p25_w: Finite | None = None
     prev_ev_w: dict[str, Finite] | None = None
+    storm_floor_pct: Finite | None = None
 
 
 class PlanInputs(_Model):
@@ -131,6 +141,8 @@ class PlanInputs(_Model):
     # Zu Beginn des Horizonts kann Netzenergie im Akku sein, aus einem Netzladen vor dem Horizont
     # (Fix-Welle F2, Entscheidung 2; ``grid_in_battery_at_start``); alte Eingangsdaten: nein
     grid_in_battery_at_start: bool = False
+    # die Warnungen, die laut ``planning.storm`` zählen (Plan Unwetter-Reserve); alte: keine
+    storm_warnings: list[StormWarning] = Field(default_factory=list)
 
 
 def _by_start(prices: Sequence[PriceInput]) -> dict[datetime, PriceInput]:
@@ -266,6 +278,7 @@ def assemble_inputs(
     car_floor_kw: float = 0.0,
     pv_p25_w: Mapping[datetime, float] | None = None,
     vehicles: Callable[[list[SlotInput]], list[PlanVehicleInput]] | None = None,
+    storm_warnings: Sequence[StormWarning] = (),
 ) -> PlanInputs:
     """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
 
@@ -273,7 +286,8 @@ def assemble_inputs(
     (``control.peak_target_kw``, ``car_floor_kw``; Gesamtreview I2). ``pv_p25_w`` ist die
     PV-Prognose P25; ein Slot ohne sie bekommt ``None`` und beendet den Horizont nicht.
     ``vehicles`` ergibt die geplanten Autos zu den Slots des Horizonts (``planned_vehicles``, danach
-    ``expected_vehicles``); ohne gibt es keine.
+    ``expected_vehicles``); ohne gibt es keine. ``storm_warnings`` sind die bekannten
+    Unwetterwarnungen; die passenden ergeben die Untergrenze je Slot (``storm_floor_pct``).
 
     Prüfreihenfolge: Akkuzustand, Preis des aktuellen Slots, PV, Last, Horizontlänge. Der
     Horizont endet vor dem ersten Slot ohne PV- oder Lastprognose.
@@ -310,6 +324,18 @@ def assemble_inputs(
         )
     if len(slots) < MIN_SLOTS:
         raise PlanningUnavailable("zu wenig Daten für einen Plan")
+    warnings = relevant(storm_warnings, planning.storm)
+    floors = storm_floors(
+        [s.start for s in slots],
+        warnings,
+        planning.storm,
+        reserve_pct=battery.reserve_pct,
+        soc_max_pct=battery.soc_max_pct,
+    )
+    slots = [
+        s if floor is None else s.model_copy(update={"storm_floor_pct": floor})
+        for s, floor in zip(slots, floors, strict=True)
+    ]
 
     horizon_end = slots[-1].start + SLOT
     return PlanInputs(
@@ -328,6 +354,7 @@ def assemble_inputs(
         car_floor_kw=car_floor_kw,
         slots=slots,
         vehicles=vehicles(slots) if vehicles is not None else [],
+        storm_warnings=warnings,
     )
 
 

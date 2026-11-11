@@ -78,6 +78,7 @@ def recharge_without_switch(intent: BatteryIntent) -> bool:
 
 ReasonCode = Literal[
     "NACHLADEN_RESERVE",
+    "UNWETTER_RESERVE",
     "NETZLADEN_GUENSTIG",
     "HALTEN_FUER_SPITZE",
     "BUDGET_SPITZE",
@@ -113,6 +114,7 @@ PlanTrigger = Literal[
     "manual",
     "vehicles",
     "thermal",
+    "storm",
 ]
 SolverStatus = Literal["optimal", "time_limit", "infeasible", "timeout", "error"]
 
@@ -160,6 +162,9 @@ class PlanSlot(_Model):
     thermal_w: Finite = 0.0
     thermal_grid_w: NonNegativeW = 0.0
     thermal_steps: int | None = None
+    # Untergrenze der Unwetter-Reserve am Slotende in % (Plan Unwetter-Reserve, Entscheidung 4);
+    # ``None`` außerhalb eines Fensters. Alte Pläne laden mit ``None``.
+    storm_reserve_pct: Finite | None = None
     reasons: list[Reason]
 
 
@@ -232,6 +237,51 @@ class PlanThermal(_Model):
     reason: ThermalReason
 
 
+# Unwetterwarnung (Plan Unwetter-Reserve): Art in der Reihenfolge der ``warntypid`` 1–7 von
+# GeoSphere Austria, Stufe 1 gelb, 2 orange, 3 rot.
+StormKind = Literal["sturm", "regen", "schnee", "glatteis", "gewitter", "hitze", "kaelte"]
+StormLevel = Literal[1, 2, 3]
+STORM_KIND_LABELS: Final[dict[StormKind, str]] = {
+    "sturm": "Sturm",
+    "regen": "Regen",
+    "schnee": "Schnee",
+    "glatteis": "Glatteis",
+    "gewitter": "Gewitter",
+    "hitze": "Hitze",
+    "kaelte": "Kälte",
+}
+STORM_LEVEL_LABELS: Final[dict[StormLevel, str]] = {1: "gelb", 2: "orange", 3: "rot"}
+
+
+class StormWarning(_Model):
+    """Eine amtliche Wetterwarnung für den Standort; ``warn_id`` und ``version`` kommen von der
+    Quelle, ``begin`` und ``end`` sind der Geltungszeitraum."""
+
+    warn_id: int
+    version: int
+    kind: StormKind
+    level: StormLevel
+    begin: AwareDatetime
+    end: AwareDatetime
+    text: str
+
+    @model_validator(mode="after")
+    def _end_after_begin(self) -> Self:
+        if self.end <= self.begin:
+            raise ValueError("end muss nach begin liegen")
+        return self
+
+
+class PlanStorm(_Model):
+    """Unwetter-Reserve im Plan (Plan Unwetter-Reserve, Entscheidung 12): ``target_pct`` ist das
+    Ziel der Untergrenze in % (``min(Ziel, soc_max_pct)``), ``warnings`` sind die bekannten
+    passenden Warnungen (Art und Stufe nach den Einstellungen, Ende in der Zukunft), auch wenn
+    ihr Fenster nicht im Horizont liegt; die Fenster je Slot stehen in ``storm_reserve_pct``."""
+
+    target_pct: Finite
+    warnings: list[StormWarning]
+
+
 class Plan(_Model):
     id: int | None = None
     created_at: AwareDatetime
@@ -256,6 +306,9 @@ class Plan(_Model):
     vehicles: list[PlanVehicle] = Field(default_factory=list)
     # ``None`` ohne Klimaanlage der Art ``coe_offset``; alte Pläne laden mit ``None`` (Plan 5c)
     thermal: PlanThermal | None = None
+    # gesetzt, sobald passende Unwetterwarnungen bekannt sind (Schalter an), auch ohne Fenster im
+    # Horizont; alte Pläne laden mit ``None`` (Plan Unwetter-Reserve)
+    storm: PlanStorm | None = None
     slots: Annotated[list[PlanSlot], Field(min_length=1)]
 
     @model_validator(mode="after")

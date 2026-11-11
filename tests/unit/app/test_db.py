@@ -18,16 +18,22 @@ from bindaems.app.db.schema import (
     driving_automation,
     driving_profile,
     forecast_record,
+    grid_outage,
+    heating_day,
     ledger_check,
     ledger_cost,
     metadata,
     model_registry,
+    ops_day,
+    ops_finding,
     planned_charge,
+    pv_source,
+    pv_source_day,
     settings_version,
     thermal_model,
 )
 
-HEAD = "0015"  # neueste Migration
+HEAD = "0019"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -737,3 +743,163 @@ def test_migration_0015_downgrade_removes_the_thermal_settings(tmp_path: Path) -
         ]
     finally:
         engine.dispose()
+
+
+def test_migration_0016_up_and_down(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "ops_finding") == {
+        "id": False,
+        "day": False,
+        "rule": False,
+        "level": False,
+        "start": True,
+        "end": True,
+        "text": False,
+        "link": True,
+        "data": False,
+    }
+    assert inspector.get_pk_constraint("ops_finding")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("ops_finding")] == [
+        ("ix_ops_finding_day", ["day"])
+    ]
+    lengths = {
+        c["name"]: c["type"].length
+        for c in inspector.get_columns("ops_finding")
+        if c["name"] in ("day", "rule", "level", "link")
+    }
+    assert lengths == {"day": 10, "rule": 32, "level": 8, "link": 200}
+    assert _columns(inspector, "ops_day") == {
+        "day": False,
+        "computed_at": False,
+        "report_sent_at": True,
+    }
+    assert inspector.get_pk_constraint("ops_day")["constrained_columns"] == ["day"]
+    t = datetime(2026, 11, 4, 2, 5, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(ops_finding).values(
+                day="2026-11-03",
+                rule="grid_charge_unplanned",
+                level="warn",
+                start=t,
+                end=None,
+                text="Akku lud",
+                link=None,
+                data={"kwh": 4.4},
+            )
+        )
+        conn.execute(insert(ops_day).values(day="2026-11-03", computed_at=t))
+        stored = conn.execute(select(ops_finding)).mappings().one()
+        day = conn.execute(select(ops_day)).mappings().one()
+    assert (stored["start"], stored["data"]) == (t, {"kwh": 4.4})
+    assert (day["computed_at"], day["report_sent_at"]) == (t, None)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
+    _downgrade(engine, "0015")
+    tables = inspect(engine).get_table_names()
+    assert "ops_finding" not in tables and "ops_day" not in tables
+    assert "thermal_model" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0015"
+    migrate(engine)
+    assert {"ops_finding", "ops_day"} <= set(inspect(engine).get_table_names())
+
+
+def test_migration_0017_creates_grid_outage(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "grid_outage") == {
+        "id": False,
+        "start": False,
+        "end": True,
+        "end_estimated": False,
+        "soc_start": True,
+        "soc_end": True,
+        "soc_min": True,
+        "load_wh": False,
+        "covered_s": False,
+    }
+    assert inspector.get_pk_constraint("grid_outage")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("grid_outage")] == [
+        ("ix_grid_outage_start", ["start"])
+    ]
+    t = datetime(2026, 11, 4, 2, 5, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(grid_outage).values(start=t, end_estimated=False, load_wh=0.0, covered_s=0.0)
+        )
+        stored = conn.execute(select(grid_outage)).mappings().one()
+    assert (stored["start"], stored["end"]) == (t, None)
+    _downgrade(engine, "0016")
+    assert "grid_outage" not in inspect(engine).get_table_names()
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0016"
+    migrate(engine)
+    assert "grid_outage" in inspect(engine).get_table_names()
+
+
+def test_migration_0018_creates_the_pv_tables_and_downgrades(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "pv_source") == {
+        "id": False,
+        "name": False,
+        "parent_id": True,
+        "color": False,
+        "source_kind": False,
+        "power_ref": False,
+        "power_unit": True,
+        "kwp": True,
+        "sort": False,
+        "created_at": False,
+        "updated_at": False,
+    }
+    assert _columns(inspector, "pv_source_day") == {
+        "day": False,
+        "source_id": False,
+        "kwh": True,
+        "note": True,
+    }
+    assert inspector.get_pk_constraint("pv_source_day")["constrained_columns"] == [
+        "day",
+        "source_id",
+    ]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("pv_source")] == [
+        ("ix_pv_source_parent_id", ["parent_id"])
+    ]
+    assert pv_source.c.parent_id.foreign_keys and pv_source_day.c.day is not None
+    _downgrade(engine, "0017")
+    tables = inspect(engine).get_table_names()
+    assert "pv_source" not in tables and "pv_source_day" not in tables
+    assert "grid_outage" in tables and "consumer_day" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0017"
+    migrate(engine)
+    assert {"pv_source", "pv_source_day"} <= set(inspect(engine).get_table_names())
+
+
+def test_migration_0019_creates_heating_day_and_downgrades(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "heating_day") == {
+        "day": False,
+        "burner_h": True,
+        "known_h": False,
+        "day_h": False,
+        "burner_end": True,
+        "hdd_kd": True,
+        "outdoor_mean_c": True,
+        "ac_heat_el_kwh": True,
+        "note": True,
+    }
+    assert inspector.get_pk_constraint("heating_day")["constrained_columns"] == ["day"]
+    with engine.begin() as conn:
+        conn.execute(
+            insert(heating_day).values(day="2026-11-03", known_h=24.0, day_h=24.0, burner_end=True)
+        )
+        stored = conn.execute(select(heating_day)).mappings().one()
+    assert stored["burner_end"] is True and stored["burner_h"] is None
+    _downgrade(engine, "0018")
+    tables = inspect(engine).get_table_names()
+    assert "heating_day" not in tables and "pv_source_day" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0018"
+    migrate(engine)
+    assert "heating_day" in inspect(engine).get_table_names()

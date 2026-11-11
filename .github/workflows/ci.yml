@@ -54,7 +54,8 @@ jobs:
         run: pnpm build
 
   e2e:
-    runs-on: ubuntu-latest
+    # Playwright 1.56 kennt ubuntu-latest (26.04) nicht und installiert dort keinen Browser
+    runs-on: ubuntu-24.04
     needs: [python, ui]
     steps:
       - uses: actions/checkout@v4

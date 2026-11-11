@@ -72,6 +72,7 @@ from sqlalchemy import Connection, Engine, func, insert, select, update
 from bindaems.app.charging.tracker import SESSION_GAP, StoredSession
 from bindaems.app.control.intent import health_vehicles
 from bindaems.app.db.schema import charging_session, planned_charge
+from bindaems.app.ops.findings import MissedTarget
 from bindaems.app.planning.vehicles import full_power_w, need_kwh
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode
@@ -336,6 +337,35 @@ class PlannedCharges:
             unknown=count(UNKNOWN),
             changed=count(CHANGED),
         )
+
+    def missed(self, day: date) -> list[MissedTarget]:
+        """Die verfehlten Ziele (``missed``) mit Abfahrt am Ortstag ``day``, nach Abfahrt; der
+        Name kommt aus der Konfiguration, ohne Eintrag dort gilt der Schlüssel."""
+        start, end = local_day_slots(day)[0], local_day_slots(day)[-1] + SLOT
+        table = planned_charge
+        query = (
+            select(
+                table.c.vehicle, table.c.target_soc_pct, table.c.end_soc_pct, table.c.departure_at
+            )
+            .where(
+                table.c.departure_at >= start,
+                table.c.departure_at < end,
+                table.c.outcome == MISSED,
+            )
+            .order_by(table.c.departure_at, table.c.id)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(query).all()
+        vehicles = self._cfg.vehicles
+        return [
+            MissedTarget(
+                vehicle_name=vehicles[row.vehicle].name if row.vehicle in vehicles else row.vehicle,
+                target_soc_pct=row.target_soc_pct,
+                end_soc_pct=row.end_soc_pct,
+                departure_at=ensure_utc(row.departure_at),
+            )
+            for row in rows
+        ]
 
     # --- Zeilen -----------------------------------------------------------------------------
 

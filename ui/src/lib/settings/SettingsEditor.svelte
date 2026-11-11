@@ -11,6 +11,7 @@
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
+	import HeatingEditor from './HeatingEditor.svelte';
 	import LearningEditor from './LearningEditor.svelte';
 	import PlanningEditor from './PlanningEditor.svelte';
 	import TariffEditor from './TariffEditor.svelte';
@@ -78,7 +79,7 @@
 		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
 	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
 	const SHOWN_KEYS = [
-		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes)\./,
+		/^(feedIn|prices|planning|learning|wallboxNames|wallboxDefaultModes|ops|heating)\./,
 		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
 		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
 		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
@@ -299,6 +300,36 @@
 			{/each}
 		</fieldset>
 	{/if}
+
+	<fieldset>
+		<legend>Tagesbericht</legend>
+		<p class="hint">
+			Zur gewählten Uhrzeit eine Meldung in Home Assistant, je nach Auswahl täglich oder nur bei
+			Auffälligkeiten. Sie fasst gestern zusammen: Netzbezug, Kosten, Auffälligkeiten und
+			Betriebscheck. Ohne Home Assistant oder bei „Aus“ steht der Bericht nur auf der Seite Betrieb.
+		</p>
+		<div class="field">
+			<label for="{uid}-ops-report">Bericht in Home Assistant</label>
+			<select id="{uid}-ops-report" bind:value={draft.ops.report}>
+				<option value="daily">Täglich</option>
+				<option value="findings">Nur bei Auffälligkeiten</option>
+				<option value="off">Aus</option>
+			</select>
+		</div>
+		<div class="field">
+			<label for="{uid}-ops-report-at">Uhrzeit</label>
+			<input
+				id="{uid}-ops-report-at"
+				type="time"
+				bind:value={draft.ops.reportAt}
+				aria-invalid={errors['ops.report_at'] ? 'true' : undefined}
+				aria-describedby={describedBy('ops.report_at')}
+			/>
+			{@render fieldError('ops.report_at')}
+		</div>
+	</fieldset>
+
+	<HeatingEditor bind:draft={draft.heating} {errors} />
 
 	<div class="field">
 		<label for="{uid}-comment">Kommentar (optional)</label>

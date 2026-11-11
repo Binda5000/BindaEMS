@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import { expect, it } from 'vitest';
 import { formatSoc } from '$lib/format';
+import { BACKUP } from '$lib/testing/backup';
 import { batteryView, type BatteryView } from './battery';
 import BatteryTile from './BatteryTile.svelte';
 
@@ -129,4 +130,26 @@ it('baut die Ansicht aus dem Zustand', () => {
 	const built = batteryView(null, null, null, 0);
 	render(BatteryTile, { view: built, stale: false, nowMs: NOW });
 	expect(screen.getByText('kein Messwert')).toBeInTheDocument();
+});
+
+it('zeigt die Reichweite bei Netzausfall unter der Planzeile', () => {
+	render(BatteryTile, { view, stale: false, nowMs: NOW, backup: BACKUP });
+	const line = screen.getByText(/^Netzausfall: ≈ 31\sh, ab Reserve ≈ 14\sh$/);
+	expect(line).not.toHaveClass('outage');
+	const plan = screen.getByText(/^Plan:/);
+	expect(plan.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('hebt die Zeile bei laufendem Netzausfall hervor', () => {
+	const backup = {
+		...BACKUP,
+		outage: { start: '2026-10-09T09:03:00+00:00', soc_start: 62, mean_w: 900 }
+	};
+	render(BatteryTile, { view, stale: false, nowMs: NOW, backup });
+	expect(screen.getByText(/^Netzausfall seit 11:03 · reicht noch ≈ 31\sh$/)).toHaveClass('outage');
+});
+
+it('ohne Reichweite fehlt die Zeile', () => {
+	render(BatteryTile, { view, stale: false, nowMs: NOW, backup: { ...BACKUP, now_h: null } });
+	expect(screen.queryByText(/Netzausfall/)).not.toBeInTheDocument();
 });

@@ -1,14 +1,16 @@
 // Akku-Kachel der Übersicht: Ladestand, Leistung, Reserve und der Ausblick aus dem Plan
-import type { CoreState, Limits, PlanResponse, PlanSlot } from '$lib/api/schemas';
+import type { Backup, CoreState, Limits, PlanResponse, PlanSlot } from '$lib/api/schemas';
 import {
 	DASH,
 	formatNumberMax,
 	formatPower,
 	formatSoc,
+	formatDayTime,
 	formatTime,
 	NBSP,
 	weekdayDate
 } from '$lib/format';
+import { hoursText } from '$lib/system/backup';
 import { addDays, parseIso, todayVienna } from '$lib/time';
 import { IDLE_W } from './flow';
 import type { SocQuality } from './socs';
@@ -169,4 +171,24 @@ export function batteryLabel(view: BatteryView): string {
 export function gridChargeText(allowed: boolean | null): string | null {
 	if (allowed === null) return null;
 	return allowed ? 'Netzladen erlaubt' : 'Netzladen aus';
+}
+
+/**
+ * Reichweite der USV als Zeile der Akku-Kachel: „Netzausfall: ≈ 31 h, ab Reserve ≈ 14 h“, bei
+ * offenem Ausfall „Netzausfall seit 14:03 · reicht noch ≈ 18 h“. Ohne Reichweite und ohne
+ * Ausfall `null`.
+ */
+export function backupLine(
+	backup: Backup | null | undefined,
+	nowMs: number
+): { text: string; outage: boolean } | null {
+	if (!backup) return null;
+	const now = hoursText(backup.now_h);
+	if (backup.outage) {
+		const since = `Netzausfall seit ${formatDayTime(new Date(backup.outage.start), new Date(nowMs))}`;
+		return { text: now ? `${since} · reicht noch ${now}` : since, outage: true };
+	}
+	if (!now) return null;
+	const reserve = hoursText(backup.reserve_h);
+	return { text: `Netzausfall: ${now}${reserve ? `, ab Reserve ${reserve}` : ''}`, outage: false };
 }

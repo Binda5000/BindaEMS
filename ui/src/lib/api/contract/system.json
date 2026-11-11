@@ -328,6 +328,13 @@
       "details": {}
     },
     {
+      "name": "storm",
+      "ok": true,
+      "message": "aus",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "load-forecast",
       "ok": true,
       "message": "Lastprognose von 10:00 Uhr",
@@ -373,6 +380,13 @@
       "name": "influx",
       "ok": true,
       "message": "InfluxDB: alles übertragen",
+      "since": null,
+      "details": {}
+    },
+    {
+      "name": "Lebenszeichen",
+      "ok": true,
+      "message": "aus (keine Ping-URL)",
       "since": null,
       "details": {}
     },

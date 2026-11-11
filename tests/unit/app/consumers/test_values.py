@@ -7,8 +7,8 @@ from bindaems.app.consumers.values import (
     HaValueCache,
     build_tree,
     candidates,
-    consumer_note,
     ha_selection,
+    source_note,
 )
 
 URL = "http://influx.lan:8086/query"
@@ -101,9 +101,9 @@ async def test_ha_values_unreadable_database(respx_mock, reader) -> None:
     assert (cache.power_w(ref), cache.note(ref)) == (None, "HA-Datenbank nicht lesbar")
 
 
-def test_consumer_note_without_ha_database() -> None:
+def test_source_note_without_ha_database() -> None:
     consumer = _ha_consumer("sensor.serverschrank_power")
-    assert consumer_note(consumer, None) == "HA-Datenbank nicht eingerichtet (influxdb.ha_database)"
+    assert source_note(consumer, None) == "HA-Datenbank nicht eingerichtet (influxdb.ha_database)"
 
 
 def test_tree_computes_other_per_level() -> None:

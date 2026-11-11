@@ -381,6 +381,34 @@ consumer_day = Table(
     Column("note", String(80), nullable=True),
 )
 
+# PV-Anlagen (oberste Ebene) und ihre Strings (Kinder); Leistung aus core-Signal oder HA-Entität
+pv_source = Table(
+    "pv_source",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(60), nullable=False),
+    Column("parent_id", Integer, ForeignKey("pv_source.id", ondelete="RESTRICT"), nullable=True),
+    Column("color", String(7), nullable=False),
+    Column("source_kind", String(8), nullable=False),
+    Column("power_ref", String(200), nullable=False),
+    Column("power_unit", String(4), nullable=True),
+    Column("kwp", Float, nullable=True),
+    Column("sort", Integer, nullable=False),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("updated_at", UtcDateTime(), nullable=False),
+    Index("ix_pv_source_parent_id", "parent_id"),
+)
+
+# PV-Ertrag je Quelle und lokalem Tag; ``source_id`` 0 ist „PV gesamt“ (reserviert)
+pv_source_day = Table(
+    "pv_source_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("source_id", Integer, primary_key=True, autoincrement=False),
+    Column("kwh", Float, nullable=True),
+    Column("note", String(80), nullable=True),
+)
+
 # Geplante Ladung für die Abnahme „Ziel-SOC“ (Plan 4b, Präzisierung 16): eine Zeile je Session in
 # „Geplant“ und Abfahrt. ``outcome`` ist ``open``, ``reached``, ``missed``, ``early``, ``unknown``
 # oder ``changed``; ``end_soc_*`` ist der letzte Ladestand vor der Abfahrt, ``end_soc_at`` dessen
@@ -403,4 +431,63 @@ planned_charge = Table(
     Column("end_soc_at", UtcDateTime(), nullable=True),
     Column("outcome", String(10), nullable=False),
     Index("ix_planned_charge_departure_at", "departure_at"),
+)
+
+# Auffälligkeiten je lokalem Tag (Betrieb im Blick): ``ops_finding`` hält die Treffer der Regeln,
+# ``ops_day`` die gerechneten Tage; ``report_sent_at`` setzt der Tagesbericht
+ops_finding = Table(
+    "ops_finding",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("day", String(10), nullable=False),  # lokales Datum, ISO
+    Column("rule", String(32), nullable=False),
+    Column("level", String(8), nullable=False),  # info | warn
+    Column("start", UtcDateTime(), nullable=True),
+    Column("end", UtcDateTime(), nullable=True),
+    Column("text", Text, nullable=False),
+    Column("link", String(200), nullable=True),
+    Column("data", JSON, nullable=False),
+    Index("ix_ops_finding_day", "day"),
+)
+
+ops_day = Table(
+    "ops_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("computed_at", UtcDateTime(), nullable=False),
+    Column("report_sent_at", UtcDateTime(), nullable=True),
+)
+
+# Netzausfälle (Victron im Inselbetrieb): Energie nur an AC-Out, ``covered_s`` zählt die Zeit,
+# in der alle drei Phasen einen Wert hatten
+grid_outage = Table(
+    "grid_outage",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("start", UtcDateTime(), nullable=False),
+    Column("end", UtcDateTime(), nullable=True),
+    Column("end_estimated", Boolean, nullable=False),
+    Column("soc_start", Float, nullable=True),
+    Column("soc_end", Float, nullable=True),
+    Column("soc_min", Float, nullable=True),
+    Column("load_wh", Float, nullable=False),
+    Column("covered_s", Float, nullable=False),
+    Index("ix_grid_outage_start", "start"),
+)
+
+# Heizungstage (Plan Ölheizung): Brennerstunden, bekannte Stunden und Tageslänge, Endzustand des
+# Brenners (Anfangswert des nächsten Tages), Heizgradtage, Tagesmittel und Strom der Klimaanlage
+# beim Heizen je lokalem Tag; Wärme und Öl rechnet die app beim Lesen
+heating_day = Table(
+    "heating_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("burner_h", Float, nullable=True),
+    Column("known_h", Float, nullable=False),
+    Column("day_h", Float, nullable=False),
+    Column("burner_end", Boolean, nullable=True),
+    Column("hdd_kd", Float, nullable=True),
+    Column("outdoor_mean_c", Float, nullable=True),
+    Column("ac_heat_el_kwh", Float, nullable=True),
+    Column("note", String(80), nullable=True),
 )

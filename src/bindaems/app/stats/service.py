@@ -3,7 +3,8 @@
 Die Kennzahlen eines Zeitraums entstehen aus den Summen der Tage, nie als Mittel der
 Tageskennzahlen: Autarkie ``1 − Bezug ÷ Verbrauch``, Eigenverbrauch ``(PV − Einspeisung) ÷ PV``,
 Ersparnis wie in ``ledger.service.summarize_slots``. Ein Geldbetrag ist ``None``, sobald ein Tag ihn
-nicht kennt; ein Verhältnis ist ``None``, wenn der Nenner 0 ist (z. B. in der Zukunft).
+nicht kennt; ein Verhältnis ist ``None``, wenn der Nenner 0 ist (z. B. in der Zukunft), und liegt
+sonst zwischen 0 und 1 (``ledger.service.share``; Netzladung des Akkus macht sonst Tage negativ).
 
 Grundgebühren zählen anteilig je Tag bis einschließlich heute; der Leistungspreis zählt je Monat mit
 Abrechnungsdaten aus der Monatsspitze, nur in Monat und Jahr und nur, wo ein Leistungspreis mit Satz
@@ -33,11 +34,21 @@ from bindaems.app.charging.sessions import (
     merge_splits,
     vehicle_name,
 )
-from bindaems.app.consumers.days import NO_DAY, ConsumerDays
+from bindaems.app.consumers.days import NO_DAY, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
+from bindaems.app.consumers.source import PowerSource
+from bindaems.app.heating.days import HeatingDays
+from bindaems.app.heating.fit import day_heat, known_total
 from bindaems.app.ledger.checks import LedgerChecks
-from bindaems.app.ledger.service import DaySummary, LedgerService, LedgerSlot, summarize_slots
+from bindaems.app.ledger.service import (
+    DaySummary,
+    LedgerService,
+    LedgerSlot,
+    share,
+    summarize_slots,
+)
+from bindaems.app.pv.service import PvSourceService
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.tariff.calc import monthly_fees_eur, power_cost_eur, power_rate
 from bindaems.shared.config import Config
@@ -148,8 +159,8 @@ def _sums(days: Sequence[DaySummary], fixed_eur: float) -> _Sums:
         cost_eur=_sum_known([d.cost_eur for d in days]),
         revenue_eur=revenue,
         net_eur=net,
-        autarky=1 - imported / consumption if consumption > 0 else None,
-        self_consumption=(pv - exported) / pv if pv > 0 else None,
+        autarky=share(consumption - imported, consumption),
+        self_consumption=share(pv - exported, pv),
         savings_no_plant_eur=consumption * fixed_eur - net if net is not None else None,
         savings_same_import_eur=(
             imported * fixed_eur - revenue - net
@@ -169,24 +180,34 @@ class StatsService:
         ledger: LedgerService,
         sessions: SessionService,
         consumers: ConsumerService,
-        consumer_days: ConsumerDays,
+        consumer_days: SourceDays,
         energy: EnergyCache,
+        pv_sources: PvSourceService,
+        pv_days: SourceDays,
+        pv_energy: EnergyCache,
         checks: LedgerChecks,
         settings: SettingsService,
         cfg: Config,
         clock: Clock,
         planned: PlannedCharges,
+        heating_days: HeatingDays | None = None,
+        ac_power_known: bool = False,
     ) -> None:
         self._ledger = ledger
         self._sessions = sessions
         self._consumers = consumers
         self._consumer_days = consumer_days
         self._energy = energy
+        self._pv_sources = pv_sources
+        self._pv_days = pv_days
+        self._pv_energy = pv_energy
         self._checks = checks
         self._settings = settings
         self._cfg = cfg
         self._clock = clock
         self._planned = planned
+        self._heating_days = heating_days
+        self._ac_power_known = ac_power_known
 
     def local_today(self) -> date:
         return self._clock.now().astimezone(LOCAL_TZ).date()
@@ -255,8 +276,15 @@ class StatsService:
             "battery_to_vehicles_kwh": battery_to_vehicles,
             "vehicle_buckets": self._vehicle_buckets(period, buckets, vehicle_days, vehicle_order),
             "planned": asdict(self._planned.summary(first, last)),
-            "consumers": self._consumer_energy(first, last, today),
+            "consumers": [
+                {"id": source.id, "name": source.name, "kwh": kwh, "note": note}
+                for source, kwh, note in _source_energy(
+                    self._consumers.list(), self._consumer_days, self._energy, first, last, today
+                )
+            ],
+            "pv_sources": self._pv_energy_rows(first, last, today),
             "month_peaks": peaks,
+            "heating": self._heating(first, last, settings),
             "checks": self._check_summary(first, last),
         }
 
@@ -389,39 +417,50 @@ class StatsService:
 
     # Verbraucher
 
-    def _consumer_energy(self, first: date, last: date, today: date) -> list[dict[str, Any]]:
-        """Energie je Verbraucher: gespeicherte Tage bis gestern, heute aus dem Cache; Tage in der
-        Zukunft zählen nicht. Ein unbekannter Tag macht die Summe ``None`` mit seinem Grund."""
-        consumers = self._consumers.list()
-        stored_last = min(last, today - timedelta(days=1))
-        stored = self._consumer_days.energy(first, stored_last) if first <= stored_last else {}
-        result: list[dict[str, Any]] = []
-        for consumer in consumers:
-            parts: list[float] = []
-            note: str | None = None
-            if first <= stored_last:
-                kwh, reason = stored.get(consumer.id, (None, NO_DAY))
-                if kwh is None:
-                    note = reason or NO_DAY
-                else:
-                    parts.append(kwh)
-            if first <= today <= last and note is None:
-                kwh = self._energy.energy_kwh(consumer)
-                if kwh is None:
-                    note = self._energy.note(consumer) or NOT_COMPUTED
-                else:
-                    parts.append(kwh)
-            if first > today:
-                note = NOT_YET
-            result.append(
-                {
-                    "id": consumer.id,
-                    "name": consumer.name,
-                    "kwh": math.fsum(parts) if note is None else None,
-                    "note": note,
-                }
+    def _pv_energy_rows(self, first: date, last: date, today: date) -> list[dict[str, Any]]:
+        """Energie je PV-Anlage und String; kWh/kWp (2 Stellen) nur mit kWp und Energie."""
+        return [
+            {
+                "id": source.id,
+                "name": source.name,
+                "parent_id": source.parent_id,
+                "kwp": source.kwp,
+                "kwh": kwh,
+                "kwh_per_kwp": (
+                    round(kwh / source.kwp, 2) if kwh is not None and source.kwp else None
+                ),
+                "note": note,
+            }
+            for source, kwh, note in _source_energy(
+                self._pv_sources.list(), self._pv_days, self._pv_energy, first, last, today
             )
-        return result
+        ]
+
+    # Heizung
+
+    def _heating(self, first: date, last: date, settings: RuntimeSettings) -> dict[str, Any] | None:
+        """Brennerstunden, Öl und Wärmebedarf des Zeitraums; ``None`` ohne Brennerstatus. Summen
+        zählen nur bekannte Werte."""
+        if self._heating_days is None:
+            return None
+        known = self._ac_power_known
+        days = self._heating_days.period(first, last)
+        heats = [day_heat(d, settings.heating, ac_power_known=known) for d in days]
+        return {
+            "burner_h": known_total(d.burner_h for d in days),
+            "oil_heat_kwh": known_total(h.oil_heat_kwh for h in heats),
+            "oil_l": known_total(h.oil_l for h in heats),
+            "oil_eur": known_total(h.oil_eur for h in heats),
+            "ac_heat_el_kwh": known_total(d.ac_heat_el_kwh for d in days) if known else None,
+            "ac_heat_kwh": known_total(h.ac_heat_kwh for h in heats),
+            "demand_kwh": known_total(h.demand_kwh for h in heats),
+            "hdd_kd": known_total(d.hdd_kd for d in days),
+            "days": len(days),
+            "complete_days": sum(1 for d in days if d.complete),
+            "first_day": next((d.day.isoformat() for d in days if d.burner_h is not None), None),
+            "settings_missing": settings.heating.burner_kw is None,
+            "ac_power_known": known,
+        }
 
     # Abgleich
 
@@ -443,3 +482,32 @@ def _bucket(start: str, days: Sequence[DaySummary]) -> dict[str, Any]:
         "consumption_kwh": math.fsum(d.consumption_kwh for d in days),
         "net_eur": _sum_known([d.net_cost_eur for d in days]),
     }
+
+
+def _source_energy[S: PowerSource](
+    sources: Sequence[S], days: SourceDays, cache: EnergyCache, first: date, last: date, today: date
+) -> list[tuple[S, float | None, str | None]]:
+    """Energie je Quelle: gespeicherte Tage bis gestern, heute aus dem Cache; Tage in der Zukunft
+    zählen nicht. Ein unbekannter Tag macht die Summe ``None`` mit seinem Grund."""
+    stored_last = min(last, today - timedelta(days=1))
+    stored = days.energy(first, stored_last) if first <= stored_last else {}
+    result: list[tuple[S, float | None, str | None]] = []
+    for source in sources:
+        parts: list[float] = []
+        note: str | None = None
+        if first <= stored_last:
+            kwh, reason = stored.get(source.id, (None, NO_DAY))
+            if kwh is None:
+                note = reason or NO_DAY
+            else:
+                parts.append(kwh)
+        if first <= today <= last and note is None:
+            kwh = cache.energy_kwh(source)
+            if kwh is None:
+                note = cache.note(source) or NOT_COMPUTED
+            else:
+                parts.append(kwh)
+        if first > today:
+            note = NOT_YET
+        result.append((source, math.fsum(parts) if note is None else None, note))
+    return result

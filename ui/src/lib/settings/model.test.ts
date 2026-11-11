@@ -147,6 +147,47 @@ it('ordnet Fehler zum Standard-Lademodus dem Feld der Ladestation zu', () => {
 	).toEqual({ 'wallboxDefaultModes.evcs': 'ungültig' });
 });
 
+it('Tagesbericht: Hin- und Rückweg von ops, ältere Stände bekommen täglich um 07:30', () => {
+	const current = settings();
+	const draft = draftFrom(current);
+	expect(draft.ops).toEqual({ report: 'daily', reportAt: '07:30' });
+	const unchanged = applyDraft(current, draft);
+	if (!('settings' in unchanged)) throw new Error(JSON.stringify(unchanged.errors));
+	expect(unchanged.settings.ops).toEqual({ report: 'daily', report_at: '07:30' });
+
+	draft.ops = { report: 'findings', reportAt: ' 06:45 ' };
+	const changed = applyDraft(current, draft);
+	if (!('settings' in changed)) throw new Error(JSON.stringify(changed.errors));
+	expect(changed.settings.ops).toEqual({ report: 'findings', report_at: '06:45' });
+	expect(changed.tariffChanged).toBe(false);
+
+	const stored = { ...current, ops: { report: 'off' as const, report_at: '21:15', extra: 1 } };
+	const back = draftFrom(stored);
+	expect(back.ops).toEqual({ report: 'off', reportAt: '21:15' });
+	const kept = applyDraft(stored, back);
+	if (!('settings' in kept)) throw new Error(JSON.stringify(kept.errors));
+	expect(kept.settings.ops).toEqual({ report: 'off', report_at: '21:15', extra: 1 });
+});
+
+it('Tagesbericht: die Uhrzeit ist HH:MM wie beim Server', () => {
+	const draft = draftFrom(settings());
+	for (const text of ['7:30', '24:00', '07:60', '', 'abc']) {
+		draft.ops.reportAt = text;
+		expect(errorsOf(draft)).toEqual({ 'ops.report_at': 'Uhrzeit als HH:MM, z. B. 07:30' });
+	}
+	draft.ops.reportAt = '23:59';
+	expect('settings' in applyDraft(settings(), draft)).toBe(true);
+});
+
+it('ordnet Fehler zum Tagesbericht dem Feld zu', () => {
+	expect(
+		editorFieldErrors(
+			[{ loc: ['body', 'settings', 'ops', 'report_at'], msg: 'ungültig', type: 'x' }],
+			settings()
+		)
+	).toEqual({ 'ops.report_at': 'ungültig' });
+});
+
 it('builds ids from names, unique and fixed', () => {
 	expect(componentId('Grundgebühr Lieferant', ['spot'])).toBe('grundgebuehr_lieferant');
 	expect(componentId('Netz', ['netz'])).toBe('netz_2');
@@ -399,7 +440,8 @@ it('shows the planning numbers with a decimal comma', () => {
 		wearCt: '2',
 		endValueFactor: '0,9',
 		inertiaCt: '0,5',
-		peakSoftCt: '100'
+		peakSoftCt: '100',
+		storm: { enabled: false, targetSocPct: '40', minLevel: 2, kinds: ['sturm', 'gewitter'] }
 	});
 });
 
@@ -413,7 +455,8 @@ it('takes over edited planning numbers', () => {
 		wearCt: '1,5',
 		endValueFactor: '0,8',
 		inertiaCt: '0',
-		peakSoftCt: '50,5'
+		peakSoftCt: '50,5',
+		storm: { enabled: false, targetSocPct: '40', minLevel: 2, kinds: ['sturm', 'gewitter'] }
 	};
 	const result = applyDraft(settings(), draft);
 	expect('settings' in result && result.settings.planning).toEqual({
@@ -424,7 +467,8 @@ it('takes over edited planning numbers', () => {
 		wear_ct: 1.5,
 		end_value_factor: 0.8,
 		inertia_ct: 0,
-		peak_soft_ct_per_kw: 50.5
+		peak_soft_ct_per_kw: 50.5,
+		storm: { enabled: false, target_soc_pct: 40, min_level: 2, kinds: ['sturm', 'gewitter'] }
 	});
 });
 
@@ -446,6 +490,61 @@ it('checks the planning numbers', () => {
 	});
 	draft.planning.roundtripPct = '49,9';
 	expect(errorsOf(draft)['planning.roundtrip_pct']).toBe('Zahl von 50 bis 100');
+});
+
+describe('Unwetter-Reserve', () => {
+	it('sendet Schalter, Ziel, Stufe und Warnarten als planning.storm', () => {
+		const draft = draftFrom(settings());
+		// die Warnarten in der Reihenfolge der Auswahl; gespeichert wird in fester Reihenfolge
+		draft.planning.storm = {
+			enabled: true,
+			targetSocPct: '55',
+			minLevel: 3,
+			kinds: ['glatteis', 'sturm', 'kaelte']
+		};
+		const result = applyDraft(settings(), draft);
+		expect('settings' in result && result.settings.planning.storm).toEqual({
+			enabled: true,
+			target_soc_pct: 55,
+			min_level: 3,
+			kinds: ['sturm', 'glatteis', 'kaelte']
+		});
+	});
+
+	it('behält unbekannte Felder der Gruppe', () => {
+		const current = settings();
+		const storm = { ...current.planning.storm, future: 'x' };
+		const withFuture = { ...current, planning: { ...current.planning, storm } };
+		const result = applyDraft(withFuture, draftFrom(withFuture));
+		expect('settings' in result && result.settings.planning.storm).toEqual(storm);
+	});
+
+	it('prüft das Ziel (ganze Zahl von 10 bis 100) und mindestens eine Warnart', () => {
+		for (const text of ['9', '101', '40,5', '', 'abc']) {
+			const draft = draftFrom(settings());
+			draft.planning.storm.targetSocPct = text;
+			expect(errorsOf(draft)['planning.storm.target_soc_pct'], text).toBe(
+				'Ganze Zahl von 10 bis 100'
+			);
+		}
+		const draft = draftFrom(settings());
+		draft.planning.storm.kinds = [];
+		expect(errorsOf(draft)).toEqual({ 'planning.storm.kinds': 'Mindestens eine Warnart wählen' });
+		draft.planning.storm.kinds = ['regen'];
+		draft.planning.storm.targetSocPct = '10';
+		expect('settings' in applyDraft(settings(), draft)).toBe(true);
+	});
+
+	it('ordnet Fehler des Servers der Gruppe den Feldern zu', () => {
+		const detail = [
+			{
+				type: 'too_short',
+				loc: ['body', 'settings', 'planning', 'storm', 'kinds'],
+				msg: 'List should have at least 1 item after validation, not 0'
+			}
+		];
+		expect(editorFieldErrors(detail, settings())).toHaveProperty('planning.storm.kinds');
+	});
 });
 
 it('maps server errors of the planning fields to the editor keys', () => {

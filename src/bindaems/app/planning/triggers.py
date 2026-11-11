@@ -52,11 +52,12 @@ class Fingerprint:
     load_issued: datetime | None
     vehicles: tuple[Any, ...] = ()
     support_pct: float | None = None
+    storm: tuple[Any, ...] = ()  # (warn_id, version, begin, end) der passenden Warnungen
 
 
 def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
     """Auslöser aus zwei Fingerabdrücken, in der Reihenfolge Preise, PV-, Lastprognose, Autos,
-    Einstellungen (geänderte Unterstützungsschwelle).
+    Unwetterwarnungen, Einstellungen (geänderte Unterstützungsschwelle).
 
     Autos lösen nur aus, wenn sich die Menge, Wallbox, Anstecken, Ziel oder Abfahrt ändern
     (``vehicles_core``); Ladelimit und Quelle des Ladestands drosselt der Dienst
@@ -78,6 +79,8 @@ def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
         result.append("load_forecast")
     if vehicles_core(new.vehicles) != vehicles_core(old.vehicles):
         result.append("vehicles")
+    if new.storm != old.storm:
+        result.append("storm")
     if new.support_pct != old.support_pct:
         result.append("settings")
     return result

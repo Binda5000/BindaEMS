@@ -52,6 +52,7 @@ export function slot(
 		thermal_w: 0,
 		thermal_steps: null,
 		thermal_grid_w: 0,
+		storm_reserve_pct: null,
 		...changes
 	};
 }

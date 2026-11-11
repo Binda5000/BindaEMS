@@ -503,6 +503,35 @@
       "note": "Tag nicht gespeichert"
     }
   ],
+  "pv_sources": [
+    {
+      "id": 1,
+      "name": "Huawei",
+      "parent_id": null,
+      "kwp": 9.8,
+      "kwh": 136.599,
+      "kwh_per_kwp": 13.94,
+      "note": null
+    },
+    {
+      "id": 2,
+      "name": "Süd",
+      "parent_id": 1,
+      "kwp": 4.1,
+      "kwh": 62.09,
+      "kwh_per_kwp": 15.14,
+      "note": null
+    },
+    {
+      "id": 3,
+      "name": "West",
+      "parent_id": 1,
+      "kwp": 5.7,
+      "kwh": 78.648,
+      "kwh_per_kwp": 13.8,
+      "note": null
+    }
+  ],
   "month_peaks": [
     {
       "month": "2026-10",
@@ -511,6 +540,21 @@
       "power_eur": 32.995
     }
   ],
+  "heating": {
+    "burner_h": 32.67,
+    "oil_heat_kwh": 882.09,
+    "oil_l": 94.743,
+    "oil_eur": 104.217,
+    "ac_heat_el_kwh": 10.5,
+    "ac_heat_kwh": 31.5,
+    "demand_kwh": 913.59,
+    "hdd_kd": 49.0,
+    "days": 7,
+    "complete_days": 7,
+    "first_day": "2026-10-02",
+    "settings_missing": false,
+    "ac_power_known": true
+  },
   "checks": {
     "days": 7,
     "flagged_days": [

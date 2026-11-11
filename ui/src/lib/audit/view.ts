@@ -56,6 +56,11 @@ const SOURCES: Record<AuditEntry['source'], string> = {
 
 const NUMBER = new Intl.NumberFormat('de-AT', { maximumFractionDigits: 3 });
 
+/** Woher eine Änderung kam: „UI“, „Home Assistant“, „Befehlszeile“, „System“ */
+export function sourceLabel(source: AuditEntry['source']): string {
+	return SOURCES[source];
+}
+
 export function actionLabel(action: string): string {
 	return ACTIONS[action] ?? action;
 }
@@ -134,7 +139,7 @@ export function auditRows(entries: AuditEntry[], group: AuditGroup): AuditRow[] 
 		.map((entry) => ({
 			id: entry.id,
 			when: formatDateTime(entry.ts),
-			who: `${entry.actor} (${SOURCES[entry.source]})`,
+			who: `${entry.actor} (${sourceLabel(entry.source)})`,
 			action: actionLabel(entry.action),
 			target: entry.target ?? DASH,
 			details: detailLines(entry)

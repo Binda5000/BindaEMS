@@ -33,16 +33,19 @@ from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.routes import charging_router
 from bindaems.app.charging.sessions import ChargingSession, SessionService
 from bindaems.app.charging.tracker import ChargingTracker
-from bindaems.app.consumers.days import FILL_DAYS, ConsumerDays
+from bindaems.app.consumers.days import FILL_DAYS, ConsumerDays, SourceDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
+from bindaems.app.consumers.source import PowerSource
 from bindaems.app.consumers.values import HaRef, HaValueCache
+from bindaems.app.control.boost_cost import boost_cost
 from bindaems.app.control.decisions import DecisionCollector, DecisionStore
 from bindaems.app.control.intent import CoreDown, IntentService
 from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
+from bindaems.app.db.schema import pv_source_day
 from bindaems.app.forecast.archive import ForecastArchive
 from bindaems.app.forecast.calibration import pv_threshold_w
 from bindaems.app.forecast.load import LoadForecastService
@@ -69,7 +72,9 @@ from bindaems.app.ha.notify import (
     websocket_service_call,
 )
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
-from bindaems.app.history.influx import InfluxQueryError, InfluxReader
+from bindaems.app.heating.days import HeatingDays
+from bindaems.app.heating.routes import heating_router
+from bindaems.app.history.influx import RP_LONG, InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
 from bindaems.app.learning.driving_auto import DrivingAutomation
@@ -85,6 +90,17 @@ from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.estimate import GapEstimator
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.monitoring.backup_range import BackupRange, BackupRangeService, backup_range
+from bindaems.app.monitoring.heartbeat import Heartbeat, Reading
+from bindaems.app.monitoring.outages import OutageTracker
+from bindaems.app.monitoring.routes import backup_router
+from bindaems.app.ops.routes import current_check, ops_router
+from bindaems.app.ops.service import (
+    FindingsService,
+    ReportSender,
+    actuator_labels,
+    day_summary,
+)
 from bindaems.app.planning.routes import planning_router
 from bindaems.app.planning.sender import PlanSender
 from bindaems.app.planning.service import PlanningService
@@ -95,18 +111,23 @@ from bindaems.app.prices.scheduler import PriceScheduler
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.sources import ReferenceSource, SmartEnergySource, make_reference
 from bindaems.app.prices.store import PriceStore
+from bindaems.app.pv.periods import pv_fill_days
+from bindaems.app.pv.routes import pv_router
+from bindaems.app.pv.service import PvSourceService
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.routes import settings_router
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.stats.routes import stats_router
 from bindaems.app.stats.service import StatsService, TodayStats
 from bindaems.app.status import ComponentStatus, StatusSource
+from bindaems.app.storm.service import StormService
+from bindaems.app.storm.windows import storm_floors, warning_at
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent
 from bindaems.shared.influx.lineprotocol import Point, PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock, local_day_slots
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock, local_day_slots, slot_start
 
 log = structlog.get_logger(__name__)
 
@@ -134,7 +155,11 @@ WEATHER_KEEP = timedelta(days=120)
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
+PV_DAYS_NIGHTLY = 3  # nachts: fehlende PV-Tage der letzten 3
+PV_FILL_DEBOUNCE_S = 5.0  # mehrere Änderungen kurz nacheinander lösen einen Nachtrag aus
+PV_HA_HOLD = timedelta(minutes=30)  # so lange gilt ein HA-Wert der PV höchstens (dann Lücke)
 CONSUMER_DAYS_NIGHTLY = 3  # nachts: fehlende Tage der letzten 3 (gestern, Fehler nachholen)
+HEATING_TODAY_PERIOD_S = 300.0  # so oft rechnet der Heizungstag von heute neu
 LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
 LEDGER_BACKFILL_WAIT_S = (
     600.0  # so lange wartet der Abgleich beim Start höchstens auf den ersten Nachtrag
@@ -208,6 +233,17 @@ class AppRuntime:
             self.engine, self._clock, self.audit, ha_enabled=ha_database is not None
         )
 
+        # ein neuer Eintrag (aus jedem Thread) weckt den Nachtrag der PV-Tage
+        self._pv_fill_wake = asyncio.Event()
+        self._pv_fill_loop_ref: asyncio.AbstractEventLoop | None = None
+        self.pv_sources = PvSourceService(
+            self.engine,
+            self._clock,
+            self.audit,
+            ha_enabled=ha_database is not None,
+            on_change=self._wake_pv_fill,
+        )
+
         self._http = httpx.AsyncClient()  # Preisquellen, Open-Meteo, InfluxDB
         self._core_http = httpx.AsyncClient(trust_env=False)  # core nie über einen Proxy
         self.live = LiveState()
@@ -215,6 +251,16 @@ class AppRuntime:
         self.influx_writer = InfluxWriter(cfg.influxdb, secrets.influx_password, self._http, spool)
         self._sink = LoopSink(self.influx_writer)
         self.reader = InfluxReader(cfg.influxdb, secrets.influx_password, self._http)
+
+        self.backup_range_service = BackupRangeService(self.reader, self._clock)
+        self.outages = OutageTracker(self.engine, self.live, self._clock)
+        self.heartbeat = Heartbeat(
+            secrets.ping_url,
+            self._http,
+            self._clock,
+            interval_s=cfg.app.ping_interval_s,
+            inputs=self._heartbeat_reading,
+        )
 
         self.price_store = PriceStore(self.engine, self._clock)
         self.prices = PriceService(self.price_store, self.settings)
@@ -239,6 +285,7 @@ class AppRuntime:
             self.forecast_archive,
             self.weather,
         )
+        self.storm = StormService(cfg, self.settings, self._http, self._clock)
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
         )
@@ -300,12 +347,32 @@ class AppRuntime:
                 clock=self._clock,
                 ready=self._weather_backfilled.wait,
             )
+        # Heizungstage (Plan Ölheizung): nur mit Klimagerät, dessen Empfangstabelle den
+        # Brennerstatus hat
+        self.heating_days: HeatingDays | None = None
+        self._ac_power_known = False
+        if device is not None:
+            receive = cfg.thermal.devices[device].receive
+            if receive.oil_burner is not None:
+                self._ac_power_known = receive.power_kw is not None
+                self.heating_days = HeatingDays(
+                    self.engine,
+                    self.reader,
+                    self.weather,
+                    device,
+                    self._clock,
+                    ac_power_known=self._ac_power_known,
+                )
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
         )
         self._forecast_calibrated = asyncio.Event()  # gesetzt nach der ersten Kalibrierung
         self._ledger_backfilled = asyncio.Event()  # gesetzt nach dem ersten Nachtrag (auch Fehler)
+        # Reihenfolge beim Start: Nachtrag → Nachrechnung und Abgleich (``_ledger_checked``) →
+        # Nachholen der Auffälligkeiten (``_findings_caught_up``) → Tagesbericht; auch nach Fehler
+        self._ledger_checked = asyncio.Event()
+        self._findings_caught_up = asyncio.Event()
         # Zeitraum, den der Nachtrag lückenlos gelesen hat; nur dort schätzt die Nachrechnung
         self._backfill_covered: tuple[datetime, datetime] | None = None
         core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
@@ -352,6 +419,7 @@ class AppRuntime:
             intent=self.intents.cached,
             driving_profiles=self.driving.profiles,
             thermal_model=self.thermal_model,
+            storm=self.storm.warnings,
         )
         if self.thermal_model is not None:
             # ein neues Wärmemodell plant mit „thermal“ neu (Plan 5c, höchstens alle 5 min)
@@ -378,20 +446,56 @@ class AppRuntime:
         )
         self._planned_wake = asyncio.Event()
         self.live_feed.health_handlers.append(self._planned_wake.set)
+        # Auffälligkeiten je Tag (Betrieb im Blick); Namen der Aktoren aus dem letzten Health
+        self.findings = FindingsService(
+            self.engine,
+            self._clock,
+            cfg,
+            self.settings,
+            self.ledger,
+            self.plan_store,
+            self.decisions,
+            self.planned_charges,
+            self.reader,
+            lambda: actuator_labels(self.live.health),
+        )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
+        # PV: eigene IDs, daher eigener Cache; core-Minutenmittel aus RP long (unbegrenzt)
+        self.pv_energy = EnergyCache(
+            self.reader,
+            self._clock,
+            ha_database,
+            retention=RP_LONG,
+            ha_hold=PV_HA_HOLD,
+            label="PV",
+        )
+        self.pv_days = SourceDays(
+            self.engine,
+            self.pv_energy,
+            self.pv_sources.list,
+            pv_source_day,
+            "source_id",
+            self._clock,
+            total_id=0,
+        )
         self.stats = StatsService(
             self.ledger,
             self.charging_sessions,
             self.consumers,
             self.consumer_days,
             self.energy,
+            self.pv_sources,
+            self.pv_days,
+            self.pv_energy,
             self.ledger_checks,
             self.settings,
             cfg,
             self._clock,
             self.planned_charges,
+            self.heating_days,
+            self._ac_power_known,
         )
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
@@ -445,6 +549,7 @@ class AppRuntime:
             self.live_feed.component_status,
             self.pipeline.component_status,
             self.forecast.component_status,
+            self.storm.component_status,
             self.load_forecast.component_status,
             self.load_model.component_status,
             self.driving.component_status,
@@ -455,12 +560,30 @@ class AppRuntime:
             self.planning.component_status,
             self.ledger.component_status,
             self._influx_status,
+            self.heartbeat.component_status,
         ]
         if self.ha_publisher is not None:
             sources.append(self.ha_publisher.component_status)
         if self._notify_status is not None:
             status = self._notify_status
             sources.append(lambda: status)
+        self._ops_sources = sources
+        # Tagesbericht: der Betriebscheck wie in der Route ``/api/ops/check``
+        self.report_sender = ReportSender(
+            self.engine,
+            self._clock,
+            self.settings,
+            self.findings,
+            lambda day: day_summary(
+                day,
+                stats=self.stats,
+                ledger=self.ledger,
+                plans=self.plan_store,
+                now=self._clock.now(),
+            ),
+            lambda: current_check(self.live, sources, self.decisions, self._clock),
+            self.ha_notifier,
+        )
         guard = Guard(self.auth, cookie_secure=cfg.app.cookie_secure)
         self.app: FastAPI = create_app(
             [
@@ -469,15 +592,48 @@ class AppRuntime:
                 audit_router(self.audit, guard),
                 settings_router(self.settings, cfg, guard),
                 live_router(self.live, guard, sources, self._warnings),
+                ops_router(
+                    live=self.live,
+                    guard=guard,
+                    sources=sources,
+                    decisions=self.decisions,
+                    clock=self._clock,
+                    findings=self.findings,
+                    report=self.report_sender,
+                    settings=self.settings,
+                    intents=self.intents,
+                    audit=self.audit,
+                    cfg=cfg,
+                ),
                 history_router(
                     self.reader, build_catalog(cfg), self._clock, guard, self._series_labels
                 ),
                 consumers_router(
                     self.consumers, self.live, self.ha_values, self.reader, cfg, guard, self.energy
                 ),
+                pv_router(
+                    self.pv_sources,
+                    self.live,
+                    self.ha_values,
+                    self.reader,
+                    cfg,
+                    guard,
+                    self.pv_energy,
+                    self.pv_days,
+                    self._clock,
+                ),
                 prices_router(self.prices, self.pipeline, self._clock, guard),
                 forecast_router(
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
+                ),
+                backup_router(
+                    range_now=self.backup_range,
+                    basis=self.backup_range_service.basis,
+                    outages=self.outages,
+                    heartbeat=self.heartbeat,
+                    floor_pct=cfg.battery.outage_floor_soc_pct,
+                    clock=self._clock,
+                    guard=guard,
                 ),
                 learning_router(
                     self.load_model,
@@ -492,6 +648,13 @@ class AppRuntime:
                 ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),
                 stats_router(self.stats, guard),
+                heating_router(
+                    self.heating_days,
+                    self.settings,
+                    self._clock,
+                    guard,
+                    ac_power_known=self._ac_power_known,
+                ),
                 planning_router(
                     self.planning,
                     self.settings,
@@ -535,6 +698,34 @@ class AppRuntime:
 
     def _warnings(self) -> list[str]:
         return self.settings.warnings() + self.auth.warnings()
+
+    def backup_range(self) -> BackupRange:
+        """USV-Reichweite: eine Stelle für API, HA und Lebenszeichen (ohne Datenbank)."""
+        soc = self.live.value("battery.soc_pct")
+        outage = self.outages.open_now()
+        battery = self._cfg.battery
+        return backup_range(
+            soc_pct=float(soc) if isinstance(soc, int | float) else None,
+            reserve_pct=battery.reserve_soc_pct,
+            floor_pct=battery.outage_floor_soc_pct,
+            usable_kwh=battery.usable_kwh,
+            roundtrip_pct=self.settings.current().settings.planning.roundtrip_pct,
+            basis=self.backup_range_service.basis(),
+            outage_load_w=outage.mean_w if outage is not None else None,
+        )
+
+    def _heartbeat_reading(self) -> Reading:
+        health = self.live.health or {}
+        soc = self.live.value("battery.soc_pct")
+        return Reading(
+            connected=self.live.connected,
+            mode=health.get("mode"),
+            reasons=health.get("mode_reasons", []),
+            outage=self.outages.open_now(),
+            soc_pct=float(soc) if isinstance(soc, int | float) else None,
+            range_now=self.backup_range().now_h,
+            down_since=self.live_feed.disconnected_since,
+        )
 
     def _influx_status(self) -> ComponentStatus:
         stats = self.influx_writer.stats()
@@ -586,7 +777,12 @@ class AppRuntime:
         now = self._clock.now()
         settings = self.settings.current().settings
         cached = self._stats_inputs  # Statistik: nur der Cache, keine Abfrage im 5-s-Takt
-        return build_inputs(
+        today = now.astimezone(LOCAL_TZ).date()
+        month_peak = self.ledger.month_peak(today)
+        costs = boost_cost(
+            self._cfg, settings.tariff, None if month_peak is None else month_peak.kw, today
+        )
+        inputs = build_inputs(
             self.live,
             self.prices,
             self.price_store,
@@ -594,7 +790,7 @@ class AppRuntime:
             now,
             intent,
             settings.wallbox_names,
-            self.ledger.month_peak(now.astimezone(LOCAL_TZ).date()),
+            month_peak,
             self.planning.current(),
             settings.planning.grid_charge_allowed,
             support_default_pct=self._cfg.control.support_soc_pct,
@@ -604,7 +800,50 @@ class AppRuntime:
             driving_profiles=self.driving.profiles(),
             auto_target=self._auto_targets(),
             thermal_plan_enabled=settings.learning.thermal.enabled,
+            **self._storm_ha(now),
+            backup=self.backup_range(),
+            outage_since=outage.start if (outage := self.outages.open_now()) else None,
+            # die Mehrkosten des Leistungspreises nur, wenn im Monat einer gilt
+            boost_cost_eur=(
+                {item["id"]: item["cost_eur"] for item in costs["vehicles"]}
+                if costs["applies"]
+                else {}
+            ),
         )
+        return self._with_ops_check(inputs)
+
+    def _with_ops_check(self, inputs: HaInputs) -> HaInputs:
+        """Ergänzt den Betriebscheck wie in der Route ``/api/ops/check`` (Zähler der letzten
+        Stunde, Worker-Thread); scheitert er, bleibt der Sensor „unbekannt“."""
+        try:
+            check = current_check(self.live, self._ops_sources, self.decisions, self._clock)
+        except Exception:
+            log.exception("Betriebscheck für Home Assistant nicht bestimmbar")
+            return inputs
+        texts = tuple(
+            f"{item.label}: {item.text}" for item in check.items if item.level in ("warn", "error")
+        )
+        return replace(inputs, ops_level=check.level, ops_text=texts)
+
+    def _storm_ha(self, now: datetime) -> dict[str, Any]:
+        """Untergrenze des aktuellen Slots, Ende und Text der Warnung für den HA-Sensor."""
+        current = slot_start(now)
+        warnings = self.storm.warnings()
+        floor = storm_floors(
+            [current],
+            warnings,
+            self.settings.current().settings.planning.storm,
+            reserve_pct=self._cfg.battery.reserve_soc_pct,
+            soc_max_pct=self._cfg.battery.soc_max_pct,
+        )[0]
+        warning = warning_at(current, warnings) if floor is not None else None
+        if floor is None or warning is None:
+            return {}
+        return {
+            "storm_floor_pct": floor,
+            "storm_until": warning.end,
+            "storm_text": warning.text,
+        }
 
     async def _ha_intent(self) -> Intent | None:
         """Die Absicht für HA: ohne gültige die Basis, bei Störung die zuletzt bekannte."""
@@ -629,6 +868,7 @@ class AppRuntime:
             ("decisions", self.collector.run),
             ("prices", self.price_scheduler.run),
             ("forecast", self._forecast_run),
+            ("storm", self.storm.run),
             ("load-forecast", self.load_forecast.run),
             ("load-model", self.load_model.run),
             ("driving", self.driving.run),
@@ -644,10 +884,18 @@ class AppRuntime:
             ("backup", self._backup_loop),
             ("forecast-nightly", self._forecast_nightly_loop),
             ("ledger-nightly", self._ledger_nightly_loop),
+            ("ops-nightly", self._ops_nightly_loop),
+            ("ops-report", self._ops_report_loop),
             ("consumer-energy", self._energy_loop),
+            ("pv-days-fill", self._pv_days_fill_loop),
+            ("backup-range", self.backup_range_service.run),
+            ("outages", self.outages.run),
+            ("heartbeat", self.heartbeat.run),
         ]
         if self.thermal_model is not None:
             jobs.append(("thermal-model", self.thermal_model.run))
+        if self.heating_days is not None:
+            jobs.append(("heating-today", self._heating_today_loop))
         if self.ha_values is not None:
             jobs.append(("ha-values", partial(self._ha_values_loop, self.ha_values)))
         if self.ha_publisher is not None:
@@ -807,10 +1055,13 @@ class AppRuntime:
         while True:
             try:
                 consumers = await asyncio.to_thread(self.consumers.list)
-                refs = [HaRef.from_consumer(c) for c in consumers if c.source_kind == "ha"]
+                pv = await asyncio.to_thread(self.pv_sources.list)
+                # eine Abfrage für beide: der Cache ersetzt seinen Inhalt als Ganzes
+                sources: list[PowerSource] = [*consumers, *pv]
+                refs = [HaRef.from_source(c) for c in sources if c.source_kind == "ha"]
                 await cache.refresh(refs)
             except Exception:
-                log.exception("HA-Werte der Verbraucher nicht lesbar")
+                log.exception("HA-Werte der Verbraucher und PV nicht lesbar")
             await asyncio.sleep(HA_VALUES_S)
 
     async def _energy_loop(self) -> None:
@@ -820,6 +1071,10 @@ class AppRuntime:
                 await self.energy.refresh(consumers)
             except Exception:
                 log.exception("Energie der Verbraucher nicht bestimmbar")
+            try:
+                await self.pv_energy.refresh(await asyncio.to_thread(self.pv_sources.list))
+            except Exception:
+                log.exception("Energie der PV nicht bestimmbar")
             await asyncio.sleep(ENERGY_S)
 
     async def _ha_inputs_loop(self) -> None:
@@ -921,6 +1176,12 @@ class AppRuntime:
                     log.info("Alte Pläne aufgeräumt", deleted=deleted, trimmed=trimmed)
             except Exception:
                 log.exception("Pflege der Pläne fehlgeschlagen")
+            try:
+                removed = await asyncio.to_thread(self.findings.cleanup)
+                if removed:
+                    log.info("Alte Auffälligkeiten gelöscht", findings=removed)
+            except Exception:
+                log.exception("Pflege der Auffälligkeiten fehlgeschlagen")
             await asyncio.sleep(HOUR_S)
 
     async def _backup_loop(self) -> None:
@@ -1015,21 +1276,59 @@ class AppRuntime:
 
         Der Lauf beim Start wartet auf den ersten Nachtrag der Abrechnung (``_ledger_loop``), sonst
         prüft er Tage, die der Nachtrag noch füllt, und ihre Zeilen blieben bis zum nächsten Start
-        veraltet. Länger als ``LEDGER_BACKFILL_WAIT_S`` wartet er nicht.
+        veraltet. Länger als ``LEDGER_BACKFILL_WAIT_S`` wartet er nicht. Nach ihm (auch nach einem
+        Fehler) dürfen die Auffälligkeiten nachgeholt werden (``_ledger_checked``).
         """
+        await self._wait_start(
+            self._ledger_backfilled,
+            "Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn",
+        )
         try:
-            await asyncio.wait_for(self._ledger_backfilled.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
-        except TimeoutError:
-            log.warning("Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn")
-        days = LEDGER_CHECK_START_DAYS
-        start = True
+            await self._ledger_nightly(LEDGER_CHECK_START_DAYS, start=True)
+        finally:
+            self._ledger_checked.set()
         while True:
-            await self._ledger_nightly(days, start=start)
-            start = False
-            days = LEDGER_CHECK_NIGHTLY_DAYS
             now = self._clock.now()
             due = next_local(now, lambda t: (t.hour, t.minute) == LEDGER_NIGHTLY_AT)
             await asyncio.sleep((due - now).total_seconds())
+            await self._ledger_nightly(LEDGER_CHECK_NIGHTLY_DAYS)
+
+    async def _ops_nightly_loop(self) -> None:
+        """Auffälligkeiten erst nach dem ersten Nachtrag der Abrechnung und dem ersten Lauf von
+        Nachrechnung und Zählerabgleich, je höchstens ``LEDGER_BACKFILL_WAIT_S`` lang: sonst
+        rechnete der Start die Tage, die der Nachtrag noch füllt, und ``ops_day`` hielte sie für
+        erledigt. Nach dem Nachholen (auch nach einem Fehler) darf der Tagesbericht beginnen."""
+        await self._wait_start(
+            self._ledger_backfilled,
+            "Nachtrag der Abrechnung dauert zu lange, Auffälligkeiten beginnen ohne ihn",
+        )
+        await self._wait_start(
+            self._ledger_checked,
+            "Abgleich der Abrechnung dauert zu lange, Auffälligkeiten beginnen ohne ihn",
+        )
+        try:
+            await self.findings.catch_up()
+        finally:
+            self._findings_caught_up.set()
+        await self.findings.nightly()
+
+    async def _ops_report_loop(self) -> None:
+        """Der Tagesbericht erst, wenn die Auffälligkeiten nachgeholt sind (die wiederum auf
+        Nachtrag und Abgleich warten): sonst rechnete er nach ``report_at`` gestern aus einer
+        unvollständigen Abrechnung und legte das Ergebnis ab. Jede Stufe wartet höchstens
+        ``LEDGER_BACKFILL_WAIT_S``."""
+        for event in (self._ledger_backfilled, self._ledger_checked, self._findings_caught_up):
+            await self._wait_start(
+                event, "Start des Tagesberichts wartet zu lange, er beginnt ohne Vorlauf"
+            )
+        await self.report_sender.run()
+
+    async def _wait_start(self, event: asyncio.Event, message: str) -> None:
+        """Wartet höchstens ``LEDGER_BACKFILL_WAIT_S`` auf einen Schritt der Startreihenfolge."""
+        try:
+            await asyncio.wait_for(event.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
+        except TimeoutError:
+            log.warning(message)
 
     async def _ledger_nightly(self, days: int, *, start: bool = False) -> None:
         """Rechnet die Lücken der letzten 7 Tage nach und gleicht dann die letzten ``days``
@@ -1066,6 +1365,68 @@ class AppRuntime:
                 log.info("Energie der Verbraucher je Tag gespeichert", days=stored)
         except Exception:
             log.exception("Energie der Verbraucher je Tag nicht gespeichert")
+        if self.heating_days is not None:
+            try:
+                stored = await self.heating_days.fill_missing(
+                    today, FILL_DAYS if start else CONSUMER_DAYS_NIGHTLY
+                )
+                if stored:
+                    log.info("Heizungstage gespeichert", days=stored)
+            except Exception:
+                log.exception("Heizungstage nicht gespeichert")
+        if not start:  # beim Start füllt ``pv-days-fill`` (mehr Tage, eigene Aufgabe)
+            try:
+                stored = await self.pv_days.fill_missing(today, PV_DAYS_NIGHTLY)
+                if stored:
+                    log.info("Energie der PV je Tag gespeichert", days=stored)
+            except Exception:
+                log.exception("Energie der PV je Tag nicht gespeichert")
+
+    def _wake_pv_fill(self) -> None:
+        """Nach einem neuen Eintrag oder einem geänderten Signal (aus jedem Thread): die fehlenden
+        PV-Tage nachholen."""
+        loop = self._pv_fill_loop_ref
+        if loop is None or loop.is_closed():
+            return  # der Lauf beim Start sieht den Eintrag ohnehin
+        with contextlib.suppress(RuntimeError):  # Schleife gerade geschlossen
+            loop.call_soon_threadsafe(self._pv_fill_wake.set)
+
+    async def _pv_days_fill_loop(self) -> None:
+        """Beim Start und nach jedem neuen Eintrag oder geänderten Signal: die fehlenden PV-Tage
+        bis Januar des Vorjahres nachholen (eigene Aufgabe, damit der Start und die Verbraucher
+        nicht warten). Endet nie von selbst, sonst startete ``_supervise`` sie alle 10 s neu.
+
+        Ein Tag, den InfluxDB gerade nicht liefert, kommt erst beim nächsten Weckruf, nachts
+        (``_ledger_nightly``) oder beim nächsten Start wieder dran, nicht in einer Schleife.
+        Mehrere Änderungen kurz nacheinander (``PV_FILL_DEBOUNCE_S``) lösen einen Lauf aus; eine
+        Änderung während eines Laufs löst gleich den nächsten aus."""
+        self._pv_fill_loop_ref = asyncio.get_running_loop()
+        while True:
+            self._pv_fill_wake.clear()
+            await self._pv_days_fill()
+            await self._pv_fill_wake.wait()
+            await asyncio.sleep(PV_FILL_DEBOUNCE_S)
+
+    async def _heating_today_loop(self) -> None:
+        """Rechnet heute für die Heizungstage alle 300 s neu (zuerst gleich beim Start). Endet nie
+        von selbst, sonst startete ``_supervise`` sie alle 10 s neu; jeder Fehler kommt ins Log."""
+        while True:
+            try:
+                if self.heating_days is not None:
+                    await self.heating_days.refresh_today()
+            except Exception:
+                log.exception("Heizungstag heute nicht berechnet")
+            await asyncio.sleep(HEATING_TODAY_PERIOD_S)
+
+    async def _pv_days_fill(self) -> None:
+        """Ein Lauf: die fehlenden PV-Tage bis Januar des Vorjahres; ein Fehler kommt ins Log."""
+        today = self._clock.now().astimezone(LOCAL_TZ).date()
+        try:
+            stored = await self.pv_days.fill_missing(today, pv_fill_days(today))
+            if stored:
+                log.info("Energie der PV je Tag gespeichert", days=stored)
+        except Exception:
+            log.exception("Energie der PV je Tag nicht gespeichert")
 
     async def _estimate_gaps(self, today: date) -> int:
         """Rechnet die Lücken der letzten 7 Tage bis gestern nach, aber nur in dem Teil, den der

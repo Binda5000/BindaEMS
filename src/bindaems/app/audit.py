@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import Connection, Engine, insert, select
+from sqlalchemy import Connection, Engine, Select, insert, select
 
 from bindaems.app.db.schema import audit_log
 from bindaems.shared.timeutil import Clock
@@ -59,6 +59,19 @@ class AuditLog:
     def recent(self, limit: int = 100) -> list[AuditEntry]:
         """Die jüngsten Einträge, neueste zuerst."""
         query = select(audit_log).order_by(audit_log.c.id.desc()).limit(limit)
+        return self._read(query)
+
+    def latest_of(self, actions: Collection[str], limit: int = 2000) -> list[AuditEntry]:
+        """Die jüngsten Einträge genau dieser Aktionen, neueste zuerst."""
+        query = (
+            select(audit_log)
+            .where(audit_log.c.action.in_(list(actions)))
+            .order_by(audit_log.c.id.desc())
+            .limit(limit)
+        )
+        return self._read(query)
+
+    def _read(self, query: Select[Any]) -> list[AuditEntry]:
         with self._engine.connect() as conn:
             rows = conn.execute(query).all()
         return [

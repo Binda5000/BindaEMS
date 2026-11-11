@@ -256,6 +256,48 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
     geschaltet.
 
+- **Update mit der Unwetter-Reserve:** Der Plan „Unwetter-Reserve“ ändert nur Code der app (der core
+  bekommt keinen geänderten Code), es gibt keine Migration, keine Zeile in der ACL des
+  Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Ausgerollt wird trotzdem wie
+  immer `ems-core` **und** `ems-app` zusammen, mit oder nach Stufe 2 (nicht vor dem 23.11.2026), mit
+  dem nächsten Sammel-Pull (`docker compose pull && docker compose up -d`). Der Schalter ist ab Werk
+  aus; was er tut, steht im Abschnitt „Planung“, „Unwetter-Reserve“.
+- **Rollback auf einen Stand vor der Unwetter-Reserve:** Core und app gehen wie immer gemeinsam auf
+  dasselbe Tag zurück; die Absicht des core (`intent.json`) trägt nichts Neues. Zwei Stellen der app
+  tragen neue Felder, und eine ältere app lehnt unbekannte Felder ab (`extra="forbid"`):
+  - **Die Einstellungen:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `planning.storm`, auch mit ausgeschaltetem Schalter. Eine ältere app lehnt eine solche Version ab
+    und rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“). Hast du seit dem Ausrollen nichts
+    gespeichert oder importiert, ist die letzte Version noch die alte, und hier ist nichts zu tun.
+  - **Pläne und Eingangsdaten seit dem Ausrollen** tragen `storm` und je Slot `storm_reserve_pct`
+    (auch mit `null`), die Eingangsdaten die Warnungen und die Untergrenze je Slot; Pläne mit dem
+    Anlass `storm` kennt eine ältere app auch nicht. Sie überspringt diese Pläne (im Log „Plan-Zeile
+    nicht lesbar“, `code=plan_row_unreadable`), bis sie nach 30 Tagen aus der Planablage fallen; bis
+    dahin fehlt der Zeitraum im Verlauf und im Vergleich Plan gegen Ist. Daran musst du nichts tun.
+
+  So gehst du zurück:
+
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
+     den Block `storm:` löschen, samt den eingerückten Zeilen darunter (`enabled`, `target_soc_pct`,
+     `min_level`, `kinds` und die Warnarten). Gehst du zugleich hinter Netzgrenze je Phase zurück,
+     löschst du auch `peak_soft_ct_per_kw:` (nächster Punkt).
+  2. **Regelbetrieb aus** (System → „Bedienung“), wie bei jedem Wechsel des core.
+  3. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  4. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“. Bis dahin rechnet die ältere app mit den
+     Standardwerten; speichere die Einstellungen in dieser Zeit nicht von Hand. Dann den
+     **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
+  5. **Die Home-Assistant-Entität entfernen:** `sensor.bindaems_unwetter_reserve` kennt die ältere
+     app nicht mehr und aktualisiert sie nicht; sie bleibt in Home Assistant ohne Werte stehen.
+     Unter **Einstellungen** → **Geräte & Dienste** → **Entitäten** entfernst du sie von Hand.
+
+  Hast du vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
+  gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
+  `key = "$.planning.storm"`. Die Datenbank hat keine Migration. Gehst du später wieder auf den Stand
+  mit der Unwetter-Reserve, gilt die Gruppe mit den Standardwerten (Schalter aus).
+
 - **Rollback auf einen Stand vor Netzgrenze je Phase:** Core und app gehen gemeinsam zurück, auf
   dasselbe Tag (der Plan ändert die Planprüfung im core, Task 6). Zwei Stellen tragen neue Felder, und
   ein älterer Stand lehnt unbekannte Felder ab (`extra="forbid"`):
@@ -277,7 +319,8 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 
   1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
      „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `planning:`
-     die Zeile `peak_soft_ct_per_kw:` löschen. Gehst du zugleich hinter Akku ins Auto oder den
+     die Zeile `peak_soft_ct_per_kw:` löschen. Ist die Unwetter-Reserve schon ausgerollt, löschst du
+     auch den Block `storm:` (Punkt oben). Gehst du zugleich hinter Akku ins Auto oder den
      Standard-Lademodus zurück, löschst du auch deren Schlüssel (Punkte unten).
   2. **Regelbetrieb aus** (System → „Bedienung“).
   3. **Feld aus `intent.json` entfernen;** ein Slot mit Nachladen auf die Reserve wird dabei zu
@@ -465,6 +508,54 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   ältere app Standardwerte.
   Gehst du zugleich hinter Akku ins Auto zurück (Rollback weiter oben, dann mit core und app), löschst
   du in Schritt 2 beide Schlüssel, `wallbox_default_modes` und `planning.car_battery_allowed`.
+- **Update mit Betrieb im Blick:** Der Plan ändert nur die app, der core bleibt. Du ziehst und startest
+  nur `ems-app` (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`); der
+  Regelbetrieb bleibt an. Die app bringt die Migration `0016` (Tabellen `ops_finding` und
+  `ops_day`; die app führt sie beim Start aus). Sichere vorher die Datenbank wie im Sammel-Pull
+  (`cp /data/bindaems.sqlite3 /backup/vor-betrieb-im-blick.sqlite3`). Der Tagesbericht ist ab Werk
+  täglich um 07:30 an; die Seite Betrieb und der Sensor „Betriebscheck“ brauchen nichts weiter.
+- **Rollback auf einen Stand vor Betrieb im Blick:** Die Einstellungen der app haben den neuen
+  Schlüssel `ops`, und eine ältere app kennt ihn nicht. Er steht in jeder Version der Einstellungen,
+  die die neue app speichert, also nach jedem Speichern, Import oder sonstigen Ändern seit dem Update.
+  Eine solche Version liest die ältere app nicht mehr und fällt auf die Standardwerte zurück: Dann
+  gilt auch ein leerer **Tarif**, bis du die Einstellungen wiederherstellst. Gehe so vor:
+  1. **Vor dem Rollback**, noch mit dem neuen Image: **Einstellungen** → „Export und Import“ →
+     „Exportieren (YAML)“ (oder `GET /api/settings/export`, Abschnitt 8, „Alternative für Skripte
+     (curl)“) und die Datei sichern.
+  2. In der Datei die Zeile `ops:` samt allen eingerückten Zeilen darunter löschen.
+  3. Die Datenbank zurücknehmen, noch mit dem neuen Image und bevor du das Tag änderst (eine ältere
+     app kennt die Migration `0016` nicht und startet mit dieser Datenbank nicht):
+
+     ```bash
+     cd /opt/bindaems
+     docker compose stop ems-app
+     docker compose run --rm --no-deps --entrypoint python ems-app -c '
+     from pathlib import Path
+     from alembic import command
+     from alembic.config import Config
+     from bindaems.app.db.engine import MIGRATIONS_DIR, open_database
+     engine = open_database(Path("/data/bindaems.sqlite3"))
+     config = Config()
+     config.set_main_option("script_location", str(MIGRATIONS_DIR))
+     with engine.begin() as connection:
+         config.attributes["connection"] = connection
+         command.downgrade(config, "0015")
+     engine.dispose()
+     print("Datenbank auf Stand 0015")'
+     ```
+
+     Der Befehl nimmt nur die beiden Tabellen weg; gehen kann stattdessen auch die Kopie vom
+     Ausrollen (Abschnitt 9), dann allerdings mit der ganzen Datenbank.
+  4. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d --no-deps ems-app`.
+  5. **Nach dem Rollback** die geänderte Datei importieren: **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“ (oder `POST /api/settings/import`). Das legt eine neue
+     Version ohne den Schlüssel an; Tarif und übrige Einstellungen sind danach wieder da.
+
+  Der core ist nicht betroffen. Die Auffälligkeiten und Berichttage gehen mit der Tabelle verloren;
+  rollst du später wieder vor, holt die app beim Start nur die fehlenden Tage der letzten 7 nach, ältere
+  Tage rechnet sie nicht neu. In Home Assistant bleibt der Sensor „Betriebscheck“ als nicht mehr
+  gepflegte Entität stehen, bis du ihn dort entfernst; eine stehende Meldung `bindaems_tagesbericht`
+  löschst du dort von Hand.
 - **Update mit dem Plan Vorklimatisieren:** Der Plan ändert core und app; beide rollen
   **gemeinsam** aus, mit dem nächsten gemeinsamen Pull (`docker compose pull && docker compose up -d`):
   der core sendet neue Grund-Codes („Vorklimatisieren“, „Geladen, bleibt an“), und die app kennt ihren
@@ -806,6 +897,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Fertig um, Ziel erreichbar (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug im Modus „Geplant“ (Unterabschnitt „Geplantes Laden“) |
 | Vorschlag Abfahrt, Vorschlag Ziel-SOC, Nächste Abfahrt (Gerät „BindaEMS <Fahrzeug>“) | –, %, – | je Fahrzeug der gelernte Vorschlag und die nächste Abfahrt (Abschnitt „Fahrverhalten (Phase 5b)“, „Home Assistant“); „Unbekannt“ ohne Vorschlag |
 | Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
+| Ladeschätzung (Gerät „BindaEMS <Fahrzeug>“) | EUR | je Fahrzeug, das steckt, die geschätzten Kosten bis zur nächsten Abfahrt, wenn es nach „Geplant“ lädt (Geräteklasse „Geld“, zwei Nachkommastellen). Attribute `soc_pct` (Ladestand jetzt), `target_soc_pct` (Ziel von „Geplant“: das der Absicht, ohne Abgleich des Ladelimits höchstens das Ladelimit des Autos, wie im core), `departure_at`, `until` (Ende des gerechneten Fensters, Ortszeit: die Abfahrt oder das frühere Ende des Plans), `need_kwh` (Bedarf bis zum Ziel von „Geplant“), `price_estimated` (ein Preis ist geschätzt) und je Modus `planned`, `now`, `pv`, `min_pv` ein Objekt mit `target_soc_pct` (wo das Laden in diesem Modus stoppt: bei „Geplant“ das Ziel, in den anderen Modi das Ladelimit des Autos, ohne bekanntes Limit 100 %), `energy_kwh`, `cost_eur`, `finish_at`, `soc_pct` (Ladestand bei `until`, nie unter dem jetzigen) und `reachable` (dieser Stopp wird bis `until` erreicht); bei `now` zusätzlich `power_cost_eur` (Mehrkosten des Leistungspreises bei voller Leistung, `null`, wenn keiner gilt). Zeiten sind auf die volle Minute aufgerundet. „Unbekannt“ (Attribute `null`) ohne gültigen Plan, ohne gemessenen oder geschätzten Ladestand, wenn das Auto nicht steckt oder an keiner Wallbox der Konfiguration. Alle Zahlen sind „ca.“: Die Rechnung nimmt den Hausakku nicht mit, Preise können geschätzt sein, und „Geplant“ kann vom Plan um einige Cent abweichen. Gehst du mit `ems-app` auf einen Stand ohne diesen Sensor zurück, bleiben seine gehaltenen Topics stehen; lösche sie je Fahrzeug mit `mosquitto_pub -r -n -t homeassistant/sensor/bindaems/<objekt-id>_charge_estimate/config`, ebenso `bindaems/state/<objekt-id>_charge_estimate` und `bindaems/state/<objekt-id>_charge_estimate/attributes` |
 | Klima Versatz (`thermal_<Schlüssel>_offset`) | K | je Klimaanlage (Abschnitt „Klimaanlage (Phase 6a)“) der Versatz, den die UVR anwendet (das Echo), ersatzweise der zuletzt gesendete; eine Nachkommastelle. „Klima“ steht für den Namen der Klimaanlage (`label`): bei einem eigenen Namen steht er ganz davor, etwa „Büro Versatz“ |
 | Klima Betriebsart (`thermal_<Schlüssel>_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
 | Klima Leistung (`thermal_<Schlüssel>_power`) | W | elektrische Leistung der Klimaanlage laut UVR; „unbekannt“ ohne Wert |
@@ -957,10 +1049,25 @@ homeassistant:
     bleibt aber stehen.
 - **Abgelehnte Befehle** aus Home Assistant erscheinen als persistente Meldung `bindaems_ha_command`
   (oben).
-- Höchstens **10 Meldungen je Minute** über alle Alarme, Warnungen und Ablehnungen zusammen, davon
-  höchstens **4 für Ablehnungen**: Den Alarmen und Warnungen bleiben so immer mindestens 6, auch wenn
-  eine Automation eine Flut ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht nur im Log
-  der app; eine Warnung über dem Budget folgt wie ein Alarm, sobald es frei ist.
+- Der **Tagesbericht** (Plan Betrieb im Blick) kommt jeden Morgen (ab Werk um 07:30 Uhr) als persistente
+  Meldung `bindaems_tagesbericht` mit dem Titel „BindaEMS Tagesbericht“ und über `notify_service`; der
+  Bericht von heute ersetzt den von gestern. Er nennt Netzbezug und Netzladen gegen den Plan, Kosten und
+  Ersparnis von gestern (wie in der Statistik), die wichtigsten Auffälligkeiten und den Betriebscheck;
+  an ruhigen Tagen steht „Keine Auffälligkeiten“. Einstellungen → „Tagesbericht“ stellt ihn auf „nur bei
+  Auffälligkeiten“ oder „aus“ und wählt die Uhrzeit. Er zählt zum Budget von 10 Meldungen je Minute
+  (unten); ist es voll oder scheitert das Senden, versucht die app es nach 15 Minuten wieder, längstens
+  bis der Tag wechselt. Nach einem Neustart wartet er, bis die Abrechnung nachgetragen und abgeglichen
+  ist und die Auffälligkeiten nachgeholt sind (höchstens je 10 Minuten), damit er gestern nicht aus
+  einer halben Abrechnung rechnet. Der Blueprint für die Handys (`bindaems_benachrichtigungen.yaml`)
+  zeigt ihn mit dem Titel „Tagesbericht“ statt als Warnung. Ohne Home Assistant steht der Bericht nur
+  auf der Seite Betrieb (Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“).
+- Der Sensor **Betriebscheck** (`sensor.bindaems_ops_check`, Zustand `ok`, `warnung`, `fehler` oder
+  `unbekannt`, Attribut `befunde` mit den Texten der gelben und roten Prüfungen) ist derselbe Check
+  wie auf der Seite Betrieb. Er löst keine Meldung aus; eine Automation darauf ist deine Sache.
+- Höchstens **10 Meldungen je Minute** über alle Alarme, Warnungen, Ablehnungen und den Tagesbericht
+  zusammen, davon höchstens **4 für Ablehnungen**: Den Alarmen und Warnungen bleiben so immer mindestens
+  6, auch wenn eine Automation eine Flut ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht
+  nur im Log der app; eine Warnung über dem Budget folgt wie ein Alarm, sobald es frei ist.
 - Ein fehlgeschlagener Aufruf stört nichts; er steht im Log (`Dienstaufruf an Home Assistant
   fehlgeschlagen`). Ein Alarm gilt erst als gemeldet, wenn die persistente Meldung angelegt ist: Über
   dem Budget oder während Home Assistant neu startet versucht es die app erneut, solange der Alarm
@@ -969,6 +1076,62 @@ homeassistant:
 - **Ohne `BINDAEMS_HA_TOKEN`** (oder ohne den Abschnitt `homeassistant`) sendet die app nichts. Die
   Komponente `ha-notify` unter **System** zeigt dann „Benachrichtigungen aus: BINDAEMS_HA_TOKEN
   fehlt.“.
+
+### Lebenszeichen einrichten
+
+Das Lebenszeichen meldet aufs Handy, wenn BindaEMS nicht mehr antwortet: VM, Proxmox-Cluster, Internet,
+core oder Netz. Die app pingt dazu alle 5 Minuten (`app.ping_interval_s`, ab Werk 300 s) einen Dienst im
+Stil von healthchecks.io außerhalb des Clusters. Bleibt der Ping aus, meldet der Dienst das selbst. Es
+ist keine Sicherheitsfunktion: Es schaltet nichts und fährt nichts herunter; fällt der Dienst oder das
+Internet aus, läuft alles andere unverändert weiter. Ohne `BINDAEMS_PING_URL` ist es aus.
+
+**Was gemeldet wird:** `<url>` heißt „in Ordnung“ (mit Betriebsart, SOC und Reichweite im Text),
+`<url>/fail` eine Störung: der core ist seit mindestens 120 s nicht erreichbar, ein Netzausfall läuft
+(hat Vorrang; Text z. B. „Netzausfall seit 14:03 · SOC 62 % · reicht ≈ 18 h ohne PV“) oder der core ist
+im Zustand SAFE. OBSERVE und DEGRADED gelten als in Ordnung. Kehrt das Netz zurück, kommt mit dem
+nächsten Ping „in Ordnung“. Ist der Router nicht an der USV, bleibt der Ping ganz aus, und der Dienst
+meldet das nach der Karenz ebenfalls.
+
+**Einrichten:**
+
+1. Konto bei healthchecks.io anlegen (gratis bis 20 Checks; selbst gehostet geht auch).
+2. Check „BindaEMS“ anlegen: Periode 5 Minuten, Karenz 10 Minuten.
+3. Benachrichtigung aufs Handy einrichten (z. B. Telegram, ntfy oder Pushover).
+4. Die Ping-URL (`https://…`, nur https) in die `.env` eintragen: `BINDAEMS_PING_URL=https://hc-ping.com/<uuid>`.
+   Die URL ist ein Secret: Sie steht nie in `config.yaml`, im Log, in der API, in Home Assistant oder im
+   UI (dort nur „eingerichtet: ja/nein“).
+5. Nach dem Sammel-Pull (core und app zusammen) `docker compose up -d --no-deps ems-app`.
+6. **Test:** Seite **System**, Baustein „Lebenszeichen“ steht auf „zuletzt gesendet …“. Dann
+   `docker compose stop ems-app`: Nach höchstens 15 Minuten (Periode plus Karenz) kommt die Meldung aufs
+   Handy. Danach `docker compose start ems-app`.
+
+Beginnt die URL nicht mit `https://`, sendet die app nichts und meldet beim Baustein „Ping-URL ungültig (nur https)“; core und app starten trotzdem.
+
+Scheitert ein Ping (Internet weg), meldet die app „nicht gesendet seit …“ beim Baustein und versucht es
+im Takt weiter; im Log steht eine Zeile je Wechsel, nicht je Versuch.
+
+**USV-Reichweite und Netzausfälle:**
+
+- Die Reichweite (Akku-Kachel, Seite System, Karte „USV und Netzausfälle“, `GET /api/backup`, in Home
+  Assistant `usv_reichweite` und `usv_reichweite_reserve`) gilt **nur für die Lasten an AC-Out der Multis**;
+  nur sie sind USV-versorgt (Hinweis vom 4.11.2026). Quelle ist `consumption_output.l1..l3.power_w`
+  (`Ac/ConsumptionOnOutput`), gerechnet immer **ohne PV**. Lastannahme ist das Mittel der letzten 7 vollen
+  Tage aus InfluxDB (Retention `long`); die Nacht von 00:00 bis 05:00 steht als zweite Zahl daneben.
+  Dazu braucht es mindestens 192 vollständige Viertelstunden (2 Tage, alle drei Phasen), sonst steht
+  „zu wenig Daten“. Während eines offenen Netzausfalls rechnet die Reichweite mit der mittleren Last
+  an AC-Out seit Beginn des Ausfalls (nach 15 Minuten) statt mit dem 7-Tage-Mittel.
+- **Vor dem Ausrollen** auf der Seite **System** in der Signaltabelle nachsehen, dass
+  `consumption_output.l1..l3.power_w` Werte haben; sonst bleibt die Reichweite „zu wenig Daten“.
+- **Untergrenze:** `battery.outage_floor_soc_pct` (ab Werk 5 %, höchstens `reserve_soc_pct`) ist der SOC,
+  bei dem das BMS im Inselbetrieb abschaltet. Trag den Wert deines Akkus ein. Neue Felder dürfen erst in
+  die `config.yaml` der Anlage, wenn core und app aus diesem Stand laufen (der core liest dieselbe Datei).
+- **Protokoll der Netzausfälle:** Ein Netzausfall ist Inselbetrieb (`system.active_in_source` = 240). Die
+  app erfasst jeden Ausfall, auch kurze, ab dem Ausrollen (kein Nachtragen), mit Beginn, Ende, Dauer,
+  SOC (Beginn, Ende, Minimum), mittlerer Last und Energie an AC-Out in der Tabelle `grid_outage`
+  (Migration `0017`). Nach einem Neustart der app mitten im Ausfall wird die offene Zeile fortgesetzt; ist
+  das Netz beim Start schon zurück, schließt sie mit „Ende geschätzt“.
+- **Ausrollen und zurück:** nur mit dem Sammel-Pull, nie `ems-app` allein; der core bleibt unverändert.
+  Zurück: die neuen Felder aus der `config.yaml` nehmen, die Datenbank auf `0016` zurücknehmen.
 
 ## 8. Tarif und Abrechnung
 
@@ -1235,8 +1398,8 @@ curl -b jar "$APP/api/ledger/checks?from=2026-10-01&to=2026-10-07"
 Zeitraums, der `date` (Wiener Zeit, Standard: heute) enthält; ein anderes `period` gibt 422. Die Woche
 läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `last`, `complete`,
 `coverage`, `estimated_slots`, `energy`, `money`, `ratios`, `buckets`, `vehicles`,
-`battery_to_vehicles_kwh`, `vehicle_buckets`, `planned`, `consumers`, `month_peaks` und `checks`; Zahlen
-sind auf 3 Stellen gerundet.
+`battery_to_vehicles_kwh`, `vehicle_buckets`, `planned`, `consumers`, `pv_sources`, `month_peaks` und `checks`;
+Zahlen sind auf 3 Stellen gerundet.
 
 - **Kennzahlen:** Sie entstehen aus den Summen der Tage, nicht als Mittel der Tageskennzahlen:
   `autarky` ist `1 − Bezug ÷ Verbrauch`, `self_consumption` ist `(PV − Einspeisung) ÷ PV`, die
@@ -1296,6 +1459,9 @@ sind auf 3 Stellen gerundet.
 - **Verbraucher:** `consumers` summiert die gespeicherten Tage bis gestern und für heute den
   laufenden Wert; fehlt ein Tag (älter als 31 Tage oder noch nicht gespeichert), ist `kwh` `null`
   und `note` nennt den Grund.
+- **PV je Anlage:** `pv_sources` rechnet ebenso für Anlagen und Strings (`parent_id` einer Anlage
+  bei Strings, `kwp`) und nennt dazu `kwh_per_kwp` (2 Stellen; `null` ohne kWp oder Energie). „PV
+  gesamt“ (ID 0) steht nicht in der Liste.
 
 ```bash
 curl -b jar "$APP/api/stats?period=month&date=2026-10-09"
@@ -1376,8 +1542,8 @@ Die WAL-Dateien müssen weg, sonst spielt SQLite alte Änderungen in die zurück
 Daten seit der Sicherung (z. B. Preise, Abrechnung) holt die app beim Start zum Teil wieder:
 Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB. Die Statistik holt
 die app ebenfalls nach, soweit sie sich rechnen lässt: Einstandspreis, Abgleich (35 Tage) und
-Energie je Verbraucher (31 Tage). Ladesessions und Belegung seit der Sicherung gehen verloren, denn
-sie kommen nur aus dem Betrieb der app. Die Modelle des Lastmodells liegen als Dateien unter
+Energie je Verbraucher (31 Tage) und je PV-Eintrag (seit Januar des Vorjahres, Abschnitt „PV-Anlagen“). Ladesessions und Belegung seit der Sicherung gehen verloren, denn
+sie kommen nur aus dem Betrieb der app. Die PV-Anlagen und Strings (`pv_source`) und ihre Tage (`pv_source_day`) liegen in der Datenbank und sind in der Sicherung enthalten. Die Modelle des Lastmodells liegen als Dateien unter
 `/data/models/load/` und brauchen keine Sicherung, weil die app jede Nacht neu trainiert
 (Abschnitt „Lastmodell (Phase 5a)“).
 
@@ -1682,9 +1848,11 @@ gilt für diesen Browser.
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz, seit Plan 5c mit Klimaanlage die Karte „Vorheizen und Vorkühlen“; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (ein Satz, ob Modell oder Profil näher lag, und der Vergleich nach Vorlauf) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Was das Modell nutzt“ (Abschnitt „Lastmodell (Phase 5a)“), seit Plan 5c mit Klimaanlage die Karte „Wärmemodell“ (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
-| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Erlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
+| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Erlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „PV je Anlage“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
+| PV-Anlagen | Anlagen und ihre Strings mit Leistung jetzt, Ertrag und kWh je kWp je Tag, Woche, Monat und Jahr, Tageskurve, „Nicht zugeordnet“ (unten, „PV-Anlagen“); Admins legen Einträge an, ändern und löschen sie |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten (deutsche Namen, gestörte zuerst, dazu „{x} von {n} in Ordnung“), Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
+| Betrieb | der Betriebscheck („Alles in Ordnung?“), die Auffälligkeiten der letzten Tage mit dem Tagesbericht und alle Schalter mit Stand (unten, „Betrieb: Check, Auffälligkeiten, Schalter“); für alle Rollen sichtbar |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
 | Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Lastmodell (Schalter und Sensoren aus Home Assistant), Vorheizen und Vorkühlen (seit Plan 5c), Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
@@ -1874,6 +2042,9 @@ und dem Abgleich (Abschnitt 8).
   Anlage, ohne Grundgebühren und Leistungspreis, denn die fielen auch ohne Anlage an) und „Erlös“
   (der Einspeiseerlös). Die Fußnote darunter erklärt beides: „* gegenüber Fixtarif ohne Anlage.
   „Erlös“ ist der Einspeiseerlös.“ Was nicht feststeht, weil etwa ein Preis fehlt, steht als „–“.
+  Autarkie (`1 − Bezug ÷ Verbrauch`) und Eigenverbrauch liegen immer zwischen 0 und 100 %: Lädt der
+  Akku an einem Tag mehr aus dem Netz, als er abgibt, kann der Bezug über dem Verbrauch liegen; der
+  Tag zeigt dann 0 % Autarkie (auch in der Tagesbilanz und in „Autarkie heute“).
 - **Diagramm „Energie“:** PV, Bezug und Einspeisung als Balken, Verbrauch als Linie; je Stunde (Tag, mit
   23 oder 25 Stunden an der Zeitumstellung), je Tag (Woche, Monat) oder je Monat (Jahr).
 - **„Kosten“:** die Zeilen „Bezug“, „Einspeiseerlös“, „Netto“, „Grundgebühren“, „Leistungspreis“ (nur
@@ -1955,11 +2126,64 @@ nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“).
 
 Die Karte **Komponenten** nennt jede Komponente mit deutschem Namen („Preise“, „PV-Prognose“,
 „Lastprognose“, „Lastmodell“, „Fahrverhalten“, „Wärmemodell“, „Planer“, „Abrechnung“, „InfluxDB“,
-„Home Assistant“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
+„Home Assistant“, „Unwetterwarnungen“, …) statt mit der Kennung wie `load-model`. Gestörte Komponenten stehen zuerst
 (rot), die übrigen in der Reihenfolge der app. In der Kopfzeile der Karte steht „{x} von {n} in
 Ordnung“. Beginnt die Meldung mit dem Namen der Komponente („Fahrverhalten aktuell“), steht der Name nur
 einmal, die Meldung ohne ihn rechts („aktuell“); jede andere Meldung bleibt unverändert. Die Texte
 der Meldungen in diesem Handbuch („Lastmodell aktiv“, …) sind die ganzen Meldungen der app.
+
+### Betrieb: Check, Auffälligkeiten, Schalter
+
+Die Seite **Betrieb** (Navigation nach „System“, für alle Rollen sichtbar) ersetzt die `core … | jq`-Befehle
+aus den Listen B2 und B6 der Anlage. Sie liest nur; gestellt wird weiter dort, wo der Schalter steht.
+Der core ist dafür unverändert. Auf der Seite **System** steht ganz oben eine Zeile „Betriebscheck: …“
+mit Link hierher.
+
+- **Betriebscheck („Alles in Ordnung?“):** Grün, gelb oder rot für die ganze Anlage, darunter jede
+  Prüfung mit einem Satz und, wo es passt, einem Link (zu den Entscheidungen der letzten Stunde, zur
+  Seite „Laden“). Die Prüfungen: core verbunden, Betriebszustand, je Aktor (angefordert gegen
+  wirksam, Sperren), Watchdog am Cerbo, Alarme, Zuordnung Auto und Wallbox, Tessie-Befehle je Stunde
+  (gelb über 16, dann greift die Reserve), Entscheidungen der letzten Stunde für die Wallbox EVCS
+  (gelb über 20, „Hysterese prüfen“) und den Victron (gelb über 60, „Totband prüfen“), Plan, Akku,
+  Eingangsdaten, Adapter, Selbstprüfung und die Bausteine der app. Ein Aktor, den du bewusst im
+  Dry-Run lässt (heute die Klimaanlage), ist grün mit „Dry-Run (so gewünscht)“; gelb oder rot wird nur,
+  was anders läuft als gewünscht. Ist der core nicht erreichbar, steht er allein rot und alle
+  weiteren Prüfungen „unbekannt“. Fehlt dem Health eines älteren core ein Feld, ist die Prüfung
+  „unbekannt“ („vom core nicht gemeldet“). Ist keine Prüfung gelb oder rot, steht „Alles in Ordnung“,
+  auch wenn einzelne „unbekannt“ sind. Die Schwellen sind feste Werte, keine Einstellungen.
+  Abruf: `GET /api/ops/check`.
+- **Auffälligkeiten:** Was die app selbst über die Tage findet, die letzten 14 Tage, neueste zuerst; je
+  Treffer Zeit, ein Satz und ein Link zu den Entscheidungen dieses Tages. Sieben Regeln: Akku lädt aus
+  dem Netz ohne Plan (mit dem Zusatz „Vermutlich lud Victron selbst nach“, wenn der SOC dabei unter der
+  Reserve lag), Akku unter der Reserve, neue Monatsspitze, Netzbezug weicht vom Plan ab, Auto hat das
+  Ziel verfehlt, gescheiterte Befehle, vom Zählerabgleich markiert. Dazu kommt ein Hinweis „nicht
+  geprüft“, wenn der Akku-SOC fehlt (InfluxDB nicht erreichbar oder ohne Werte des Tages) oder der
+  Abrechnung mehr als 10 % der Viertelstunden fehlen („Abrechnung unvollständig (82 von 96
+  Viertelstunden), Auffälligkeiten nur teilweise geprüft.“): Ein Tag ohne Daten ist kein ruhiger Tag.
+  Zählervergleiche und Wallboxen heißen wie in der Statistik („Netzbezug“, „Wallbox Garage“). Die app
+  rechnet nachts um 03:05 Uhr den Vortag und holt beim Start die fehlenden Tage der letzten 7 nach;
+  ältere Tage rechnet sie nicht nach. Ein Tag ohne Lauf steht als „noch nicht gerechnet“ da. Auffälligkeiten und Tage bleiben 400 Tage. Einen Live-Alarm gibt es
+  dafür nicht: Was sofort zählt, melden die Alarme des core. Abruf: `GET /api/ops/findings?days=14`.
+- **Tagesbericht:** Oben auf der Karte steht der Bericht von gestern: Netzbezug und Netzladen gegen den
+  Plan, Kosten und Ersparnis, Monatsspitze, die wichtigsten Auffälligkeiten und der Betriebscheck von
+  jetzt. Kosten und Ersparnis stehen wie in der Statistik (gegen „ohne PV und Akku“); eine gemessene
+  Ersparnis gegen „Victron allein“ gibt es hier nicht, sie folgt später als eigener Plan. In Home
+  Assistant kommt derselbe Text jeden Morgen um **07:30 Uhr** (Abschnitt 7, „Benachrichtigungen“).
+- **Schalter:** Jeder Schalter mit Stand, Wert ab Werk („ab Werk“ ist der Wert ohne dein Zutun, eine
+  Abweichung ist markiert), seit wann und von wem (Benutzer, Home Assistant oder System) und einem Link
+  zur Seite, auf der du ihn stellst. Das sind der Regelbetrieb, je Aktor die Freigabe zum Live-Schalten,
+  „Netzladen des Akkus“, „Akku ins Auto“, „Akku-Unterstützung fürs Auto“, „Lernen der Hauslast“,
+  „Vorheizen und Vorkühlen“, je Fahrzeug die Automatik für Ziel und Abfahrt, je Ladestation der
+  Lademodus nach dem Abstecken und der Tagesbericht. „Seit wann und wer“ ist der jüngste passende
+  Eintrag im Änderungsprotokoll (Seite „Protokoll“); ohne Eintrag steht „seit Einrichtung“. Lademodus,
+  Ziel und Abfahrt je Auto sind Bedienungen und keine Schalter, sie fehlen hier. Abruf:
+  `GET /api/ops/switches`.
+- **Einstellungen:** Einstellungen → „Tagesbericht“ (nur Admin) wählt „täglich“ (ab Werk), „nur bei
+  Auffälligkeiten“ oder „aus“ und die Uhrzeit (ab Werk 07:30). Die Werte stehen unter dem Schlüssel
+  `ops` in den Einstellungen (`ops.report`, `ops.report_at`) und wandern mit Export und Import.
+- **Ausrollen und zurück:** nur `ems-app`, mit Stufe 2 des Sammel-Pulls; der core läuft weiter. Die app
+  bringt die Migration `0016` (Tabellen für Auffälligkeiten und Berichttage). Der Rückweg steht in
+  Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“.
 
 ### Namen der Ladestationen
 
@@ -2043,6 +2267,102 @@ SHOW SERIES ON "homeassistant" WHERE "entity_id" = 'serverschrank_power'
 (`W,…`) oder mit der Entität (`sensor.serverschrank_power,…`); beides liest die app. Beginnt
 sie mit etwas anderem, etwa `state,…` bei `override_measurement`, findet die app den Sensor
 nicht. Dann nimm den Weg über das core-Signal.
+
+### PV-Anlagen
+
+Die Seite „PV-Anlagen“ (in der Navigation direkt vor „Verbraucher“) zeigt die Erzeugung je Anlage und
+je String. Alle sehen sie, nur Admins legen Einträge an, ändern und löschen sie. Die Pflege geschieht
+in der UI, nicht in `config.yaml`; jede Änderung steht im Änderungsprotokoll.
+
+- **Zwei Ebenen:** Eine Anlage (oberste Ebene) kann Strings als Kinder haben; ein String hat keine
+  Kinder. Eine Anlage ohne Strings ist erlaubt, etwa ein Balkonkraftwerk. Eine Anlage mit Strings
+  lässt sich erst löschen, wenn ihre Strings gelöscht sind (409); ein gelöschter Eintrag verliert
+  auch seine gespeicherten Tage.
+- **Quelle der Leistung:** ein core-Signal (`pv.<id>.power_w`, Victron-Zähler am Wechselstrom, oder
+  `pv_dc.power_w`, MPPT am Gleichstrom; die Seite nennt sie „Victron-Zähler (AC)“ und „Victron-MPPT (DC)“) oder ein
+  HA-Leistungssensor in W oder kW („Home Assistant“, Voraussetzungen wie bei „Verbraucher aus Home
+  Assistant“). Ohne `influxdb.ha_database` lehnt die app das Anlegen einer HA-Quelle mit 422 ab; vorhandene
+  HA-Einträge zeigen dann „HA-Datenbank nicht eingerichtet“, core-Einträge laufen normal.
+- **kWp** je Eintrag ist optional (0,1 bis 1000). Mit kWp zeigt die Seite kWh je kWp (zwei
+  Nachkommastellen); das macht Strings verschiedener Größe vergleichbar, ein schwacher String fällt auf.
+- **Zeiträume:** Tag, Woche (Montag bis Sonntag), Monat und Jahr mit Blättern und „Heute“, dieselben
+  Grenzen wie die Statistik (Wiener Zeit); Zeitraum und Tag stehen in der Adresse
+  (`/pv?zeitraum=monat&tag=2026-11-08`). Der Tag zeigt die Leistungskurve in 5-min-Schritten, Woche und
+  Monat Balken je Tag, das Jahr Balken je Monat. Am Diagramm wählst du „Anlagen“ oder „Strings“ und
+  „kWh“ oder „kWh/kWp“. Die Karte je Anlage zeigt den Ertrag im gewählten Zeitraum (beim laufenden bis jetzt).
+  Die Statistik hat zusätzlich die Karte „PV je Anlage“.
+- **Strings messen DC, Anlagen AC.** Die Summe der Strings („Strings zusammen“, mit dem Hinweis „DC, vor
+  dem Wechselrichter“) liegt deshalb etwas über der Anlage; die Differenz sind die Verluste des
+  Wechselrichters. Unter einer Anlage gibt es darum keine Restzeile.
+- **„Nicht zugeordnet“** steht nur oben und nur, wenn mindestens eine Anlage angelegt ist: PV gesamt
+  (die Summe aller PV-Quellen im core) minus die Summe der obersten Anlagen, als Leistung und als Energie.
+  In Woche, Monat und Jahr rechnet die app sie je Tag, nur an Tagen, an denen PV gesamt und jede Anlage
+  einen Wert haben, und summiert dann: beginnt eine Anlage mitten im Monat, zählt der Monat erst ab ihrem
+  ersten Tag. Sie erscheint erst ab 0,1 kWh, im laufenden Zeitraum auch ab 50 W jetzt.
+- **Kurve und Tage:** core-Signale liest die app aus der Aufbewahrung `long` (1-min-Mittel, jeder Tag
+  abrufbar), HA-Sensoren aus der HA-Datenbank. An der Zeitumstellung hat der Tag 23 oder 25 Stunden.
+  0 W ist ein gültiger Wert (nachts also nicht „–“, kWh je kWp bei 0 kWh ist 0,00). HA schreibt
+  einen Sensor nur, wenn er sich ändert, und für `unavailable` gar keinen Wert. Für die Energie der PV
+  gilt ein HA-Wert deshalb bis zum nächsten, **höchstens 30 Minuten**; danach zählt nichts (Lücke, der
+  Tag bleibt bekannt). Meldet ein Template-Sensor nachts `unavailable`, zählt der letzte Wert vom
+  Abend also höchstens 30 Minuten, nicht die ganze Nacht. Tagsüber ändern sich die Werte laufend, und
+  ein Sensor, der nachts 0 W schreibt, gibt so oder so 0 kWh. In der Tageskurve fehlen Schritte ohne
+  Wert. Verbraucher halten ihre HA-Werte weiter bis zum nächsten.
+- **Vor den ersten Daten:** Monate vor der Inbetriebnahme oder vor den Template-Sensoren zeigen „–“
+  (keine Balken), nicht 0 kWh. Die Summe des Zeitraums zählt nur bekannte Tage und nennt den ersten Tag
+  mit Wert („ab …“). Auch ein Tag ohne Wert mitten im Zeitraum fehlt in der Summe, ohne Hinweis. Die
+  Karte „PV je Anlage“ der Statistik rechnet dagegen streng wie die Verbraucher: Fehlt ein Tag des
+  Zeitraums, zeigt sie „–“ mit dem Grund. Für denselben Zeitraum kann die PV-Seite also eine Summe
+  zeigen, wo die Statistik „–“ zeigt.
+
+Fehlt ein Wert, steht der Grund unter dem Namen:
+
+| Grund | Bedeutung und Abhilfe |
+|---|---|
+| HA-Datenbank nicht eingerichtet (influxdb.ha_database) | `influxdb.ha_database` fehlt in `config.yaml` (Abschnitt „Verbraucher aus Home Assistant“). Betrifft nur HA-Einträge. |
+| kein Wert in den letzten 24 h | Die HA-Entität hat in den letzten 24 h nichts nach InfluxDB geschrieben, oder HA schreibt sie gar nicht (`include`/`exclude` der InfluxDB-Integration von HA). Bei Template-Sensoren der Strings: prüfen, dass sie in `include` stehen. |
+| Signal wird nicht aufgezeichnet | Der core schreibt dieses Signal nicht nach InfluxDB (nur `pv.<id>.power_w` und `pv_dc.power_w`), oder die HA-Datenbank ist nicht eingerichtet. |
+| kein Verlauf seit Mitternacht | InfluxDB hat für heute keine Werte dieses Eintrags. |
+| Verlauf nicht lesbar | InfluxDB lehnt die Abfrage ab oder ist nicht erreichbar (Log der app). |
+| Noch nicht berechnet | Die app hat den Stand von heute seit dem Start noch nicht gerechnet (etwa eine Minute nach dem Start), oder der Eintrag ist eben angelegt. |
+| Tag nicht gespeichert | Für den Tag liegt keine Zeile in der Datenbank (siehe unten, älter als der Nachholbereich, oder der Nachtrag für einen neuen Eintrag läuft noch). |
+
+**Ertrag je Tag gespeichert:** Die app speichert die Energie jedes Eintrags je Tag in `pv_source_day`,
+dazu je Tag „PV gesamt“ unter der reservierten `source_id` 0 (für „Nicht zugeordnet“ in Woche, Monat
+und Jahr). Anders als bei den Verbrauchern rechnet sie aus `long` statt aus `raw` (90 Tage), deshalb
+reicht der Nachholbereich weit zurück:
+
+- **Beim Start** (Hintergrundaufgabe `pv-days-fill`, sie hält den Start nicht auf) holt die app alle
+  fehlenden Tage bis zum **1. Januar des Vorjahres** nach, höchstens 800 Tage. Ein Tag ohne jeden
+  Verlauf bekommt eine Zeile mit Grund und wird nicht erneut gerechnet. Die Aufgabe läuft bei jedem
+  Start, rechnet aber nur, was fehlt.
+- **Nach einem neuen Eintrag** rechnet dieselbe Aufgabe noch einmal, ohne Neustart (einige Sekunden
+  nach der letzten Änderung; mehrere Änderungen kurz nacheinander geben einen Lauf). Der neue Eintrag
+  bekommt so seine Tage bis zum 1. Januar des Vorjahres. Das kann einige Minuten dauern; bis dahin
+  stehen ältere Tage als „Tag nicht gespeichert“ da.
+- **Nach einem geänderten Signal** (Art, Signal oder Einheit) verwirft die app die gespeicherten Tage
+  des Eintrags und rechnet sie mit dem neuen Signal neu, wie nach einem neuen Eintrag. So korrigierst
+  du eine falsche HA-Entität oder W statt kW auch rückwirkend. Name, Farbe, kWp und Anlage zu ändern
+  behält die Tage.
+- **Nachts um 02:45 Uhr** holt sie die fehlenden Tage der letzten 3 nach.
+- Ist der Verlauf eines Eintrags gerade nicht lesbar, behält er seine alte Zeile. Einen Tag, der so
+  fehlt, versucht die app erst beim nächsten neuen Eintrag oder geänderten Signal, nachts (die letzten
+  3 Tage) oder beim nächsten Start wieder, nicht in einer Schleife.
+
+**Weiteres System dazunehmen:**
+
+- *Victron-`pvinverter`* (ein Wechselrichter am Cerbo): Trage seine Instanz in `config.yaml` unter
+  `victron.instances.pv` ein, dann `docker compose restart ems-core ems-app`. Danach legst du in der UI
+  eine Anlage mit dem core-Signal `pv.<id>.power_w` an.
+- *Anderes Gerät* (zum Beispiel Huawei): Lege einen Leistungssensor in Home Assistant an, lass ihn von der
+  InfluxDB-Integration schreiben und lege dann in der UI eine Anlage mit der HA-Entität an. Strings des
+  Huawei nimmst du über die vorhandenen Template-Sensoren (U × I) als HA-Einträge unter der Anlage. Der
+  Verlauf reicht so weit zurück, wie HA diese Sensoren nach InfluxDB schreibt.
+- *DC-gekoppelte PV:* `pv_dc.power_w` ist eine einzige Anlage („MPPT gesamt“); einzelne MPPT folgen in
+  einem eigenen Plan.
+
+Sicherung: Die Tabellen `pv_source` und `pv_source_day` gehören zur Sicherung der app (Abschnitt 9).
+Nichts an der Anlage wird geschaltet.
 
 ### Live-Anzeige
 
@@ -3604,6 +3924,22 @@ den ersten Tagen:
   `control.tesla_against_retry_s` (600 s). Der Befehl zählt im Start/Stopp-Budget, außer im Modus
   „Aus“ (dort ist er dringend). Startet das Auto also selbst, etwa aus der Tesla-App, stoppt die
   Regelung es binnen rund 3,5 min wieder (Szenario `tesla-selbststart`).
+  **An der EVCS** gilt dasselbe für jedes Fahrzeug, auch einen Gast und einen Tesla an der EVCS;
+  das Signal kommt dort nicht von Tessie, sondern aus dem Rücklesen „Laden an“ der EVCS
+  (`start_stop`). Zeigt es
+  `control.evcs_against_s` (60 s) ohne Unterbrechung „Laden an“, obwohl der Modus „nicht laden“
+  ergibt, sendet die Regelung „Laden aus“ erneut (Grund `self_start`), je Fahrzeug höchstens alle
+  `control.evcs_against_retry_s` (300 s). Sie tut das nur, wenn das Fahrzeug angesteckt und die
+  Zuordnung klar ist, nicht unter den Regeln „Vorklimatisieren“ und „Geladen, bleibt an“, und nur,
+  wenn ihr letztes „Laden an/aus“ an dieser EVCS wirklich gesendet wurde (nicht im Dry-Run). Anlass
+  war der 05.11.2026: Der e-Golf wurde kurz abgesteckt, und nach dem Wiederanstecken schaltete der
+  „Autostart“ der EVCS sie selbst ein; sie lud gut drei Stunden mit rund 3,2 kW aus dem Netz
+  (Szenario `egolf-autostart`). Dringend ist der Stopp nur im Modus „Aus“. Ein Stundenlimit für
+  Start/Stopp hat die EVCS nicht (Stundenlimits gelten nur für Tesla-Aktoren, an der EVCS gilt nur
+  der Mindestabstand zwischen Befehlen); der Neuversuch alle 300 s verbraucht also kein Budget.
+  **Rückweg:** Wer `control.evcs_against_s` oder `control.evcs_against_retry_s` in `config.yaml`
+  einträgt, entfernt sie vor einem Rollback des core, denn ein älterer Stand kennt die Schlüssel
+  nicht und startet mit ihnen nicht (`extra="forbid"`).
 - **Vorklimatisieren** (Plan Vorklimatisieren, Grund `climate`): Startet die Klimatisierung am
   Kabel, beginnt der Tesla oft selbst zu laden. Meldet Tessie `climate_state.is_climate_on` oder
   `is_preconditioning` (Signal `vehicle.<Schlüssel>.climate_on`), ist das Auto erreichbar, angesteckt
@@ -3725,7 +4061,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `assignment_unclear` | Zuordnung unklar | Die Zuordnung Auto–Wallbox ist unklar (oben). |
 | `assignment_detected` | Zuordnung erkannt | Der Befehl folgt aus einer neuen Erkennung: Der core hat ein Auto an seiner Wallbox erkannt, etwa den Höchststrom an den Tesla an der EVCS (oben). |
 | `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
-| `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
+| `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus, oder eine EVCS zeigt `control.evcs_against_s` lang „Laden an“ gegen den Modus des Fahrzeugs; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
 | `plan_power` | Plan: Laden | Im Modus „Geplant“ folgt der Strom der Ladeleistung, die der Plan für das Auto im laufenden Slot nennt. |
 | `latest_start` | Späteste Startzeit | Im Modus „Geplant“ gibt es keinen gültigen Plan-Slot und die späteste Startzeit ist erreicht: Das Auto lädt mit voller Leistung bis zum Ziel. |
 | `target_reached` | Ziel-SOC erreicht | Im Modus „Geplant“ hat das Auto den Ziel-SOC erreicht; die Regelung stoppt das Laden. |
@@ -3824,6 +4160,11 @@ Zurück zu evcc: beide Aktoren im UI mit „Auf Dry-Run…“ auf Dry-Run stelle
 - **„Complete“ ohne Ladelimit (EVCS, Tesla):** Meldet die EVCS „geladen“, ohne dass das Ladelimit
   bekannt ist, behält der core das Limit, das Tessie im selben Ansteckvorgang schon gemeldet hat. Ein
   später höheres Limit für „Geplant“ hebt „geladen“ also weiterhin auf.
+- **Autostart der EVCS bleibt aus:** In VictronConnect steht bei der EVCS der Modus auf manuell und
+  **„Autostart“ aus** (an der Anlage seit 05.11.2026 20:55). Mit Autostart lädt die EVCS nach dem
+  Anstecken von selbst, bis der Selbststart-Stopp nach 60 s plus Lesetakt greift (Abschnitt
+  „Tesla“, „Selbststart“); der Stopp ist nur das Sicherheitsnetz. Nach einem Firmware-Update oder
+  Zurücksetzen der EVCS den Schalter prüfen.
 
 **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen; die
 Punkte 1 bis 3 hat Plan 2d umgesetzt, 5 und 8 mit einer Entscheidung abgeschlossen (je mit Befund und
@@ -3974,6 +4315,8 @@ Die Einstellungen stehen in `config.yaml` unter `control` und haben Standardwert
 | `control.tesla_reserve_commands` | 4 | So viele Befehle je Stunde hält die Regelung für den Tesla frei; ist das Stundenbudget bis auf diese Reserve verbraucht, ändert sie seinen Strom nur noch, wenn der Phasenwächter es verlangt (Abschnitt „Laderegelung“, „Tesla“). Ganze Zahl, kleiner als `commands.per_hour` jedes Fahrzeugs mit Tessie. |
 | `control.tesla_against_s` | 120 | So lange in s lädt ein Fahrzeug mit Tessie ohne Unterbrechung gegen seinen Modus, bevor die Regelung „Laden aus“ erneut sendet (Selbststart). |
 | `control.tesla_against_retry_s` | 600 | Frühestens so viele s später folgt je Fahrzeug der nächste Versuch, solange es gegen den Modus lädt. |
+| `control.evcs_against_s` | 60 | So lange in s zeigt das Rücklesen der EVCS ohne Unterbrechung Laden an, obwohl der Modus des Fahrzeugs nicht laden will, bevor die Regelung „Laden aus“ erneut sendet (Selbststart an der EVCS). |
+| `control.evcs_against_retry_s` | 300 | Frühestens so viele s später folgt je Fahrzeug der nächste Versuch, solange die EVCS gegen den Modus lädt. |
 
 Negative, unendliche und ungültige Werte lehnt der core beim Start ab; `support_soc_pct` liegt
 zwischen 0 und 100, `setpoint_deadband_w` und `peak_target_kw` über 0 (ohne Totband entstünde auch
@@ -5573,6 +5916,131 @@ bleiben beim Vorheizen höchstens 0,5 K über dem eingestellten Band (Sichtprüf
 Unangenehmes gemerkt. Mit Schalter aus steht für „lohnt nicht“ und „ließ sich nicht berechnen“
 gleichermaßen `off`; ob eine Rechnung scheiterte, zeigt in Teil A darum das Log der app.
 
+## Ölheizung: Wärmebedarf
+
+Die Ölheizung ist im Winter die Hauptheizung (das Warmwasser macht im Sommer die Solarthermie). Seit dem
+Plan „Ölheizung: Wärmebedarf messen“ (`docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`)
+misst BindaEMS, **wie viel Wärme das Haus braucht**: aus den Brennerstunden, den Heizgradtagen und dem
+Strom der Klimaanlage beim Heizen. Die Zahlen sind die Grundlage für den Plan zur Wärmepumpe (6b) und für
+den Investitionsrechner. BindaEMS **liest** den Brenner nur; es schaltet nichts.
+
+### Quelle und `config.yaml`
+
+Die Quelle ist der Ausgang 5 „Anf.Brenner“ des CAN-Knotens 1. Das ist die **Anforderung** an den Brenner,
+nicht die Flammenmeldung. Schaltet der Kesselthermostat bei anstehender Anforderung kurz ab, zählt diese
+Zeit trotzdem: **Die gerechneten Werte sind eine obere Grenze** (die Gegenprobe am Tank unten zeigt, wie
+nah sie liegen). Der Brenner ist einstufig; läuft er, dann mit 27 kW und 2,9 l/h.
+
+Das C.M.I. sendet den Wert als **Digital 6** im selben Paket wie die übrigen Werte der Klimaanlage
+(CAN-Knoten 56, siehe „Klimaanlage (Phase 6a)“, „config.yaml“). In der `config.yaml` kommt eine Zeile
+unter `receive` des Klimageräts dazu:
+
+```yaml
+thermal:
+  devices:
+    klima:
+      receive:
+        # … die übrigen Werte wie in 6a …
+        oil_burner: {node: 56, digital: 6}   # Anf.Brenner, CAN-Knoten 1, Ausgang 5
+```
+
+Der core speichert den Wert als Signal `thermal.klima.oil_burner` (Zustand) und schreibt ihn wie die
+anderen Betriebsbits **nur bei Änderung** in InfluxDB `status`. **Ohne die Zeile `oil_burner` ist alles
+hier aus:** keine Heizungstage, keine Karten, `heating: null` in der Statistik, `/api/heating/demand`
+antwortet mit 404. Ein core ohne dieses Feld lehnt eine `config.yaml` mit `oil_burner` ab; ziehe darum
+core und app gemeinsam.
+
+### Einstellungen
+
+Unter **Einstellungen** → „Ölheizung“ (versioniert, mit Änderungsprotokoll wie die anderen Karten):
+
+| Feld | Bedeutung |
+|---|---|
+| Nennleistung (kW) | Wärme je Brennerstunde; bei dir 27 kW. Ab Werk leer |
+| Öl je Brennerstunde (l/h) | bei dir 2,9 l/h. Ab Werk leer |
+| Ölpreis (€/l) | optional, für die Kosten in der Karte „Heizung“ |
+| Leistungszahl der Klimaanlage beim Heizen | Standard 3,0, als **Schätzung** gekennzeichnet |
+
+Solange Nennleistung oder Öl je Stunde fehlen, zeigen die Karten die Brennerstunden und „Nennleistung
+fehlt“. Wärme und Öl werden **beim Lesen** gerechnet (Brennerstunden × Nennleistung bzw. × Öl je Stunde);
+ein geänderter Wert gilt darum sofort für alle Tage.
+
+### Was die app speichert
+
+Je lokalem Tag eine Zeile in `heating_day` (Migration `0019`): Brennerstunden, bekannte Stunden,
+Tageslänge, Endzustand des Brenners, Heizgradtage, Tagesmittel der Außentemperatur und der Strom der
+Klimaanlage beim Heizen.
+
+- **Brennerstunden:** Stufenfunktion aus `status`. Anfangswert ist der letzte Wert vor dem Tag, sonst der
+  gespeicherte Endzustand des Vortags, sonst unbekannt. Gezählt wird nur in Viertelstunden, in denen die
+  Quelle lebt (mindestens ein Messwert `actual_c` der Klimaanlage in `thermal`); fällt das C.M.I. bei
+  laufendem Brenner aus, ist diese Zeit **unbekannt**, nicht Brennerzeit.
+- **Vollständiger Tag:** die bekannte Zeit erreicht mindestens **95 %** der Tageslänge (23, 24 oder
+  25 h). Eine Stunde Ausfall in 24 h zählt also noch als vollständig.
+- **Heizgradtage:** Heizgrenze 15 °C (wie im Investitionsrechner), je Tag `Σ max(0, 15 − T) · ¼ h ÷ 24 h`
+  über die Viertelstunden des Wetterarchivs, in K·d. Fehlen mehr als 10 % der Viertelstunden, hat der Tag
+  keine Heizgradtage.
+- **Klimaanlage:** Strom in den Viertelstunden mit Betriebsart „Heizen“. Viertelstunden ohne klare
+  Betriebsart zählen nicht; ihre Energie steht als Hinweis am Tag, wenn sie 0,1 kWh übersteigt. Ohne
+  Leistungskanal (`power_kw`) ist der Klima-Teil unbekannt, und der Bedarf ist nur die Öl-Wärme.
+- **Heute und vergangene Tage:** Vergangene Tage kommen aus SQLite. **Heute** rechnet die app alle 5 min
+  bis jetzt neu und hält das Ergebnis nur im Speicher; heute wird nie gespeichert.
+- **Nachholen:** nachts um 02:45 Uhr die fehlenden Tage der letzten 3, beim Start die fehlenden der
+  letzten 31, immer aufsteigend (der Endzustand des Vortags ist der Anfangswert des nächsten). Ein Tag
+  ohne jeden Brennerwert bekommt eine Zeile mit Grund und wird nicht erneut gerechnet; ein Lesefehler
+  schreibt nichts, der Tag kommt beim nächsten Lauf wieder dran.
+
+### Was die Karten zeigen
+
+Beide Karten stehen auf **Statistik** und nur bei eingerichtetem Brenner.
+
+- **„Heizung“** für den gewählten Zeitraum: Brennerstunden, Wärme aus Öl, Öl in Litern und Euro, die
+  Klimaanlage beim Heizen als Strom und geschätzte Wärme (Strom × Leistungszahl), Heizgradtage und die
+  Zahl der vollständigen Tage. „Heute“ zählt bis jetzt, wie die anderen Karten.
+- **„Wärmebedarf“** für die Heizsaison (1. Juli bis 30. Juni, „Heizsaison 2026/27“), in der der gewählte
+  Tag liegt: Punktwolke der Tage über den Heizgradtagen mit Ausgleichsgerade, **Grundbedarf** (im
+  Wesentlichen Warmwasser plus Bereitschaftsverluste des Kessels), **Wärme je Heizgradtag**, R², Zahl der
+  Tage, Summen der Saison, Strom der Klimaanlage je Monat und ein CSV-Download.
+  - Wärmebedarf je Tag `Q = Öl-Wärme + Klima-Strom × Leistungszahl`; Regression
+    `Q = Grundbedarf + Wärme je K·d × Heizgradtage` über die Tage, die vollständig sind, Heizgradtage haben
+    und mindestens 1,0 K·d kalt waren.
+  - Ab **14** solchen Tagen gibt es ein Ergebnis; davor steht „Noch {n} von 14 Tagen.“ Wird der Grundbedarf
+    negativ, rechnet die Anpassung ohne Grundbedarf (durch den Ursprung) und sagt das.
+  - Im Winter enthält der Bedarf Heizung und Warmwasser; einen getrennten Messwert dafür gibt es nicht.
+
+Dieselben Zahlen liefert `GET /api/heating/demand` (optional `?tag=JJJJ-MM-TT`, ab Rolle Betrachter): Saison,
+Punkte, Anpassung oder Grund, Summen, Klima-Strom je Monat, Heizgrenze und Leistungszahl.
+
+### Gegenprobe am Tank
+
+Die Brennerstunden sind eine obere Grenze (siehe oben). Vergleiche über den Winter die **gerechneten Liter**
+mit dem Tank (Lieferschein oder Messstab). Liegt der Tank deutlich darunter, unterbricht der
+Kesselthermostat die Anforderung spürbar. Ändere dann **nicht** die Nennleistung und „Öl je
+Brennerstunde“, sondern notiere das Verhältnis; ein eigener kleiner Folgeplan „Korrekturfaktor“ würde es
+einrechnen.
+
+### Ölheizung ausrollen
+
+Core **und** app gemeinsam, mit Stufe 2 des Sammel-Pulls (ab 23.11.2026), mit fester Version; nie
+`ems-app` allein. Die app legt beim Start die Tabelle `heating_day` an (Migration `0019`; oder die nächste
+freie Nummer, wenn vorher ein anderer Plan auf `main` eine belegt). Es wird nichts geschaltet.
+
+1. Regelbetrieb aus (System → „Bedienung“), Datenbank sichern, dann core und app gemeinsam ziehen
+   (`docker compose pull && docker compose up -d`).
+2. Im C.M.I. unter CoE-Ausgänge „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) als **Digital 6** an BindaEMS
+   (192.168.82.20, Knoten wie die anderen Werte) hinzufügen, Sendebedingung „bei Änderung“ mit kurzer
+   Blockierzeit (etwa 10 s), Intervall wie die anderen Werte.
+3. In `config.yaml` unter `thermal.devices.klima.receive` die Zeile `oil_burner: {node: 56, digital: 6}`
+   eintragen; core und app neu starten (`docker compose restart ems-core ems-app`), die app liest die `config.yaml` nur beim Start.
+4. Mit `coe_probe listen` (core gestoppt; die Knotennummer beim ersten Empfang bestätigen) oder in Grafana
+   prüfen, dass der Wert ankommt und beim Brennerstart auf 1 springt.
+5. Unter Einstellungen → „Ölheizung“ 27 kW und 2,9 l/h eintragen, optional den Ölpreis der letzten Lieferung.
+6. Regelbetrieb an. Prüfen: auf **Statistik** erscheinen die Karten „Heizung“ und „Wärmebedarf“; die Tage
+   füllen sich über Nacht.
+
+Rückweg: die Zeile `oil_burner` aus der `config.yaml` nehmen, `docker compose restart ems-core ems-app` (die Karten verschwinden) und die
+Datenbank auf `0018` zurücknehmen.
+
 ## Planung
 
 Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der
@@ -5593,8 +6061,10 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
   „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
   „Grund: …“), „gültig bis HH:MM Uhr“ oder „Plan abgelaufen“, „Anlass“ (der Auslöser, unten), die
   „Erwarteten Kosten“ des Plans und, daneben, was „Victron allein“ im selben Zeitraum kostet. Mit
-  einem Leistungspreis kommt das „Budget“ dazu (unten). Unter „Auffälligkeiten“ stehen die Befunde
-  der Prüfung eines unplausiblen Plans. Ohne Plan steht „Noch kein Plan.“ und der Status.
+  einem Leistungspreis kommt das „Budget“ dazu (unten). Kennt der Plan Unwetterwarnungen, steht je
+  Warnung eine Zeile „Unwetterwarnung: Gewitter (orange) 14:00–16:00“ darunter (unten,
+  „Unwetter-Reserve“). Unter „Auffälligkeiten“ stehen die Befunde der Prüfung eines unplausiblen
+  Plans. Ohne Plan steht „Noch kein Plan.“ und der Status.
 - **Bedienung:** Ab „Bedienen“ gibt es den Schalter „Netzladen erlaubt“ und die Taste „Neu planen“;
   „Lesen“ sieht den Stand des Schalters als „ja“ oder „nein“. Während eines Laufs steht „Plant …“.
   Nach dem Schalten wartet die Seite auf den Plan, den die geänderte Einstellung auslöst (alle 2 s
@@ -5602,8 +6072,9 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
 - **Gültigkeit:** Ob ein Plan noch gilt, sagt allein die app (`valid` in der Antwort). Die Uhr des
   Browsers zählt nicht: Eine falsche Uhr am Handy zeigt so nie dauerhaft „Plan abgelaufen“.
 - **Diagramme:** „Preise und Prognosen“ mit den Reihen „Bezugspreis“, „Bezugspreis geschätzt“,
-  „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ und den Fenstern
-  „Netzladen“ und „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
+  „PV-Prognose“ und „Lastprognose“; „Akku“ mit dem „Geplanten SOC“, der „Reserve“ (im Fenster einer
+  Unwetterwarnung auf der Untergrenze der Unwetter-Reserve) und den Fenstern „Netzladen“ und
+  „Halten“. Die Fenster tragen keine Beschriftung (kurze Fenster überlagerten sich
   auf dem Handy): Die Legende nennt „Netzladen“ und „Halten“, aber nur, was der Plan hat, und der
   Tooltip eines Punktes nennt die Absicht des Slots, dessen Ergebnis der Punkt ist („Akku
   14:15–14:30: Netzladen 6,7 kW“; der SOC gilt am Ende des Slots). Alle Diagramme haben die Legende
@@ -5896,6 +6367,118 @@ bleiben, wie sie sind.
     Haus, Akku-Unterstützung und Boost frei bleibt (`battery.max_discharge_w`), zuerst Geplant,
     dann Sofort. Den Rest holt der Override aus dem Netz, und der 15-min-Wächter kann ihn drosseln.
 
+### Unwetter-Reserve
+
+Seit dem Plan „Unwetter-Reserve“ (4.11.2026, `docs/superpowers/plans/2026-11-04-unwetter-reserve.md`)
+hält der Planer den Akku während einer amtlichen Unwetterwarnung von **GeoSphere Austria** über einer
+höheren Untergrenze, damit die USV bei einem Stromausfall länger trägt, und lädt vorher dafür auf. Der
+Schalter ist **ab Werk aus**; Binda schaltet ihn vor der Gewittersaison ein (bis April).
+
+- **Quelle:** `GET https://warnungen.zamg.at/wsapp/api/getWarningsForCoords` mit `site.location` aus
+  `config.yaml` und `lang=de`, ohne Schlüssel, **alle 15 min und nur mit eingeschaltetem Schalter**
+  (beim Einschalten sofort). Beginn und Ende kommen aus den Unix-Sekunden in `rawinfo`; eine Warnung
+  ohne gültige Zeit oder mit Ende vor dem Beginn überspringt die app (im Log
+  `code=storm_warning_skipped`), die übrigen gelten. Bekannte Warnungen gelten bis zu ihrem Ende
+  weiter, auch wenn Abrufe scheitern (eine höhere Reserve ist die sichere Richtung); nur eine
+  erfolgreiche Antwort ersetzt die Liste, eine fehlende Warnung ist dann zurückgenommen. Ein- und
+  Ausschalten verwirft den alten Stand. Die Kurzfrist-Gewitterwarnung `getGewitterAuto` nutzt die app
+  nicht (ohne Beginn und Ende, zu kurz zum Laden).
+- **Welche Warnungen:** die eingestellten Warnarten ab der eingestellten Stufe (Standard Sturm und
+  Gewitter ab Orange, unten).
+- **Wann und wie hoch:** Die Untergrenze gilt am Ende jedes Slots, der die Zeit von **einer Stunde vor
+  Beginn bis zum Ende** einer passenden Warnung berührt (Warnungen beginnen unscharf); mehrere
+  Warnungen vereinigen sich, alle haben dasselbe Ziel. Wirksam ist das Ziel, höchstens `soc_max_pct`;
+  liegt es nicht über der USV-Reserve (`battery.reserve_soc_pct`), tut die Funktion nichts. Was hinter
+  dem Horizont (36 h) liegt, plant die app erst, wenn es hereinrückt.
+- **Weich, die Reserve bleibt hart:** Liegt der Akku im Fenster unter dem Ziel, kostet das im Modell
+  200 ct je kWh und Slot (1 kWh über 10 Slots so viel wie 1 kWh Fehlmenge eines Autos). So entsteht
+  auch dann ein Plan, wenn das Ziel nicht mehr zu erreichen ist (Warnung schon im Gange, Akku leer);
+  der Akku entlädt im Fenster dann nicht weiter (`Halten`). Die USV-Reserve aus `config.yaml` bleibt
+  die harte Untergrenze, und an Victron geht kein neuer Wert.
+- **Aufladen:** Liegt der SOC zu Beginn unter der höchsten Untergrenze im Horizont, darf der Plan bis
+  zum Ende des letzten Fensters aus dem Netz in den Akku laden, **auch bei ausgeschaltetem
+  „Netzladen erlaubt“**: zusammen mit dem Nachladen auf die Reserve höchstens 3 kW je Slot (oben,
+  „Wie ein Plan entsteht“), zum Bezugspreis ohne Marge, über den Horizont höchstens bis zur höchsten
+  Untergrenze. Die PV hat Vorrang, weil sie nichts kostet; sonst nimmt der Plan die billigsten Slots.
+  Von 20 auf 40 % sind das bei 96 kWh 19,2 kWh, mit 3 kW rund 7 h; was bis zum Beginn fehlt, fehlt.
+  Das Aufgeladene **bleibt bis zum Ende des letzten Fensters im Akku** (sonst wäre es Netzladen am
+  Schalter vorbei, etwa billig laden und vor der Warnung teuer entladen); danach darf das Haus es
+  verbrauchen. **Die Grenze:** Netzenergie kommt höchstens bis zur Untergrenze in den Akku und mit
+  höchstens 3 kW, auch wenn der Akku vorher eigene Energie abgegeben hat: Liegt der SOC zu Beginn
+  zwischen Reserve und Untergrenze, darf er vor dem Fenster Energie über der Reserve ans Haus
+  geben, nur das Aufgeladene bleibt. Die PV oder das Netz füllen ihn bis zum Fenster wieder auf,
+  und was bis zum Beginn fehlt, fehlt (weich, 200 ct je kWh und Slot). Das Aufgeladene trägt keinen
+  Restwert und ist im Ablauf ein „Nachladen 3 kW“ mit dem Satz von `NACHLADEN_RESERVE`; der core
+  nimmt es wie jedes Nachladen bis 3000 W auch ohne Schalter an. **Regel R:** Wie nach einem
+  Netzladen kann danach Netzenergie im Akku sein; solange sie nicht verbraucht ist (Akku an der
+  Reserve), kostet die Einspeisung in Folgeläufen 200 ct je kWh, und der Akku gibt keinem Auto
+  etwas (unten, „Autos“).
+- **Autos:** Die Plan-Schwelle der Akku-Unterstützung rechnet mit der Untergrenze je Slot statt mit
+  der Reserve, „Sofort aus dem Akku“ ist in Slots mit Untergrenze aus, und solange der Plan für die
+  Warnung aufladen darf, gibt der Akku keinem Auto in „Geplant“ etwas (kein Akku ins Auto im ganzen
+  Horizont; sonst flösse Netzstrom aus dem Aufladen über den Akku ins Auto, an Regel R2 vorbei).
+  Auch in den Folgeläufen bleibt die Sperre, bis die Netzenergie verbraucht ist: Der Plan nimmt sie
+  wie nach einem Netzladen an (`grid_in_battery_at_start`, Akku ins Auto gesperrt, Einspeisung kostet
+  200 ct je kWh), genau wie beim Nachladen auf die Reserve.
+- **Prüfung und Ersatzplan:** Entlädt die Nachrechnung in einem Slot mit Untergrenze (mindestens
+  100 W) und liegt am Slotende mehr als 0,5 Prozentpunkte darunter, meldet die Prüfung „Akku entlädt
+  um HH:MM unter die Unwetter-Reserve“, und es gilt der Ersatzplan; ein Ziel, das ohne Entladen nicht
+  erreicht wird, ist kein Befund. Der Ersatzplan lädt vor jedem Fenster auf und hält den Akku (unten,
+  „Ersatzplan“).
+- **Neu planen:** Ändern sich die passenden Warnungen (neu, neue Version, andere Zeit, zurückgenommen)
+  oder endet eine, plant die app mit dem Anlass „Unwetterwarnung“ (`storm`) neu; eine Änderung der
+  Einstellung löst „Einstellungen geändert“ aus.
+
+**Einstellungen** (Admins, **Einstellungen** → „Bearbeiten“ → „Planung“ → „Unwetter-Reserve“, gespeichert
+als `planning.storm`). Der Editor erklärt: „Während einer Unwetterwarnung von GeoSphere Austria hält
+der Planer den Akku mindestens auf dem Ziel und lädt ihn vorher dafür auf, zuerst mit PV, sonst mit
+höchstens 3 kW aus dem Netz, auch bei ausgeschaltetem „Netzladen erlaubt“; die USV-Reserve aus
+config.yaml bleibt die harte Untergrenze.“
+
+| Feld | Einstellung | Standard | Werte |
+|---|---|---|---|
+| Unwetter-Reserve | `enabled` | aus | aus: kein Abruf, keine Untergrenze, Status „aus“ |
+| Ziel-SOC (%) | `target_soc_pct` | 40 | ganze Zahl von 10 bis 100 („Ganze Zahl von 10 bis 100“) |
+| Warnstufe | `min_level` | ab orange (2) | „ab gelb“ (1), „ab orange“ (2), „nur rot“ (3) |
+| Warnarten | `kinds` | Sturm, Gewitter | Sturm, Regen, Schnee, Glatteis, Gewitter, Hitze, Kälte; mindestens eine („Mindestens eine Warnart wählen“) |
+
+Die Leseansicht zeigt unter „Planung“ die Zeilen „Eingeschaltet“, „Ziel-SOC“, „Warnstufe“ und
+„Warnarten“.
+
+**Im Zeitplan:** Hat der Plan Warnungen, nennt der Kopf jede in einer Zeile, „Unwetterwarnung: Gewitter
+(orange) 14:00–16:00“, auch eine, die erst hinter dem Horizont beginnt; liegt Beginn oder Ende nicht
+heute, mit „morgen“ oder Wochentag und Datum („Unwetterwarnung: Sturm (rot) morgen 06:00–10:30“). Die
+Slots im Fenster tragen den Satz von `UNWETTER_RESERVE` (unten, „Erklärungen“), und im Diagramm „Akku“
+steigt die Linie „Reserve“ im Fenster auf die Untergrenze.
+
+**Status** der Komponente „Unwetterwarnungen“ (`storm`) auf der Seite **System**:
+
+| Status | Bedeutung |
+|---|---|
+| „aus“ | der Schalter ist aus (in Ordnung) |
+| „keine Warnung“ | der letzte Abruf fand keine passende Warnung (in Ordnung) |
+| „Gewitter (orange) bis 18:00“ | passende Warnungen mit Art, Stufe und Ende, mehrere durch „; “ getrennt; endet eine nicht heute, steht das Datum dabei („bis 10.10. 06:00“) (in Ordnung) |
+| „Warnungen seit HH:MM nicht abrufbar“ | die Abrufe scheitern, und der letzte Erfolg (sonst der erste Versuch) liegt mehr als 1 h zurück (gestört); bekannte Warnungen gelten weiter |
+
+**Home Assistant:** Der Sensor „Unwetter-Reserve“ (`sensor.bindaems_unwetter_reserve`, unten, „Home
+Assistant“) zeigt die Untergrenze des laufenden Slots in %, ohne Warnung `0`, mit den Attributen `bis`
+(Ende der Warnung) und `warnung` (ihr Text). Er rechnet aus den Warnungen und den
+Einstellungen, nicht aus dem Plan, und zeigt die Untergrenze darum auch, wenn gerade kein Plan gilt.
+
+**Was die Unwetter-Reserve nicht tut:**
+
+- **Kein Victron-Min-SOC:** Der Min-SOC bleibt auf der USV-Reserve, der Selbsttest `min_soc` bleibt
+  gleich. Die Untergrenze hält allein der Plan (`Halten` und Netzladen über den core). Wirken kann sie
+  also nur, wenn Victron live ist und der Regelbetrieb an ist; im Dry-Run rechnet der core sie nur mit.
+- **Kein Schutz, wenn die app steht:** Ohne app gibt es keinen neuen Plan; der core führt den letzten
+  höchstens bis zu seinem Ende aus (`valid_until`, höchstens 45 min), danach wirkt kein Plan, und
+  Victron entlädt wieder bis zum Min-SOC. Den Min-SOC während einer
+  Warnung anzuheben, ist bewusst nicht Teil des Plans (Selbsttest, Nachladen von Victron unter
+  Min-SOC − 5 % mit voller Leistung, Watchdog); erst prüfen, wenn sich die Funktion im Sommer bewährt
+  hat.
+- **Nicht schneller als 3 kW:** Was bis zum Beginn der Warnung nicht geladen ist, fehlt.
+- **Kein Akku ins Auto**, solange der Plan für die Warnung aufladen darf (oben, „Autos“).
+
 ### Übergabe an den core
 
 Die app schickt den Plan als Teil der Absicht (Abschnitt 13, „Absicht und Regelbetrieb“), mit einer
@@ -5973,6 +6556,7 @@ Die Gruppe **Planung** in den Einstellungen (Admins bearbeiten) enthält:
 | `planning.end_value_factor` | Vorsichtsfaktor Restwert | 0,9 | bewertet die Energie im Akku am Horizontende (oben) |
 | `planning.inertia_ct` | Planträgheit (ct/kWh) | 0,5 | Kosten je kWh Abweichung der Akkuleistung vom vorigen Plan, in den ersten vier Slots |
 | `planning.peak_soft_ct_per_kw` | Spitze vermeiden ohne Leistungspreis (ct je kW und Monat) | 100 | gedachter Satz für Monate ohne Leistungspreis mit Satz (unten); 0 = aus. Die Ansicht zeigt „100 ct je kW und Monat“, bei 0 „aus“ |
+| `planning.storm` | Unwetter-Reserve | aus | Gruppe mit `enabled` (aus), `target_soc_pct` (40), `min_level` (2 = orange) und `kinds` (`sturm`, `gewitter`): Bei amtlichen Warnungen hebt die Planung die Untergrenze des Akkus von einer Stunde vor Beginn bis zum Ende der Warnung auf das Ziel. Editor und Ansicht: Abschnitt „Unwetter-Reserve“ (oben, „Unwetter-Reserve“) |
 
 Das Feld prüft: „Zahl ab 0, z. B. 2,0“ (Marge, Verschleiß, Planträgheit), „Zahl ab 0, z. B. 100“
 (Spitze vermeiden), „Zahl von 50 bis 100“ (Roundtrip) und „Zahl von 0 bis 1, z. B. 0,9“
@@ -6014,6 +6598,7 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `settings` | Einstellungen geändert | Planung, Tarif, Einspeisung oder Vorheizen und Vorkühlen wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
 | `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus (ändern sich nur das Ladelimit oder die Quelle des Ladestands, plant die app höchstens alle 5 min neu; Ziel, Abfahrt und die Menge der geplanten Autos lösen sofort aus); außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
+| `storm` | Unwetterwarnung | die passenden Unwetterwarnungen ändern sich (neue, geänderte, zurückgenommene) oder eine endet (seit Plan Unwetter-Reserve) |
 | `thermal` | Klimaanlage geändert | die Betriebsart der Klimaanlage aus Health wechselt zwischen Heizen, Kühlen und dem Rest (Lüften, aus, unbekannt), oder ein neues Wärmemodell liegt vor (seit Plan 5c); je Wechsel einmal, höchstens alle 5 min, auch wenn der Lauf keinen Plan ergibt |
 
 Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core ab seinem nächsten
@@ -6059,7 +6644,9 @@ Phase (seit dem Plan „Netzgrenze je Phase“) „Netzbezug über dem Importlim
 (oben, „Autos im Plan“, „Grenze je Phase“), mit Autos (seit Plan 4b)
 dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
 Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
-(die Uhrzeit ist die erwartete Ankunft). Gibt der Akku einem Auto mehr als 1 W (Akku ins Auto), kommen
+(die Uhrzeit ist die erwartete Ankunft), mit Unwetter-Reserve (seit dem Plan „Unwetter-Reserve“)
+„Akku entlädt um HH:MM unter die Unwetter-Reserve“ (oben, „Unwetter-Reserve“). Gibt der Akku einem
+Auto mehr als 1 W (Akku ins Auto), kommen
 „Akku ins Auto um HH:MM, obwohl ausgeschaltet“, „Akku ins Auto um HH:MM bei Halten oder
 Netzladen“, „Akku ins Auto um HH:MM, solange Netzstrom im Akku ist“ und „Akku ins Auto um HH:MM,
 während eingespeist wird“ dazu; die Leistung je Auto und die Entladegrenze zählen den Akkuanteil mit.
@@ -6090,6 +6677,13 @@ Den Akku rechnet der Ersatzplan mit diesen Autos so:
   Grenze je Phase (auf volle 100 W abgerundet), der letzte nur den Rest, bis die Nachrechnung die
   Reserve erreicht. Danach hält er den Akku (`Halten`), wo `Eigenverbrauch` ihn unter die Reserve
   entlüde.
+- **Unwetter-Reserve** (seit dem Plan „Unwetter-Reserve“, oben, „Unwetter-Reserve“): Bis zum letzten
+  Slot mit Untergrenze entlädt der Akku nie unter die Untergrenze des Fensters, in dem oder vor dem
+  der Slot liegt, schon ab dem ersten Slot des Plans (`Halten`, wo `Eigenverbrauch` darunter führte;
+  sonst deckte das Aufladen auch den Hausverbrauch davor). Liegt die Nachrechnung zu Beginn eines
+  Fensters trotzdem unter der Untergrenze, lädt der Plan nach dem Nachladen auf die Reserve, auch ohne
+  Schalter, in den billigsten Slots vor dem Beginn (bei gleichem Preis der frühere) `Netzladen` als
+  Nachladen mit höchstens 3 kW, bis die Nachrechnung die Untergrenze erreicht oder die Slots aus sind.
 - **Teuer** sind die Slots des heutigen Tages ab dem aktuellen Slot, deren Bezugspreis das 80. Perzentil
   dieser Slots erreicht. Bei einem einheitlichen Preis gibt es keinen. Der SOC **reicht nur knapp**,
   wenn die Nachrechnung in einem teuren Slot mehr als 100 W aus dem Netz bezieht, weil der Akku leer
@@ -6121,6 +6715,7 @@ Zahlen:
 | Code | Beispiel | Wann |
 |---|---|---|
 | `NACHLADEN_RESERVE` | Nachladen auf die Reserve, bevor der Victron selbst mit voller Leistung nachlädt. | Absicht `Netzladen` als Nachladen auf die Reserve (seit dem Plan „Netzgrenze je Phase“, oben, „Wie ein Plan entsteht“) |
+| `UNWETTER_RESERVE` | Unwetter-Reserve: Gewitter (orange) bis 18:00 Uhr, der Akku hält mindestens 40 %. | der Slot liegt im Fenster einer Unwetterwarnung (seit dem Plan „Unwetter-Reserve“): eine Stunde vor ihrem Beginn bis zu ihrem Ende; „bis“ ist das Ende der Warnung, die Zahl die Untergrenze. Das Aufladen dafür heißt `NACHLADEN_RESERVE` |
 | `NETZLADEN_GUENSTIG` | Akku lädt 4,0 kW aus dem Netz: jetzt 12,3 ct, um 18:00 Uhr 31,5 ct. | Absicht `Netzladen`; „um“ ist der erste spätere Slot mit Entladung ab 100 W, für den sich das Laden auszahlt (gibt es keinen, der teuerste spätere Slot) |
 | `HALTEN_FUER_SPITZE` | Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden. | Absicht `Halten`; später folgt ein Block teurerer Slots mit Entladung |
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |
@@ -6213,6 +6808,7 @@ steht `execution` auf `null`.
 | `battery_plan_next` | Akku-Plan nächster Slot | sensor | wie oben für den Slot danach; am Ende des Plans „unbekannt“ |
 | `planned_soc` | Geplanter SOC | sensor | SOC am Ende des laufenden Slots in %; Attribut `hourly` mit `[{start, soc_pct}]` je volle Stunde des Plans |
 | `budget` | Budget | sensor | das Budget des laufenden Slots in kW mit einer Nachkommastelle; ohne Leistungspreis „unbekannt“ |
+| `storm_reserve` | Unwetter-Reserve | sensor | die Untergrenze des Akkus im laufenden Slot in % (Unwetterwarnung), sonst `0`; Attribute `bis` (Ende der Warnung) und `warnung` (ihr Text) |
 | `grid_charge` | Netzladen erlaubt | switch | die Einstellung (nicht die des Plans); schreibend |
 | `replan` | Neu planen | button | löst eine Neuplanung aus (Anlass „Neu planen“) |
 
@@ -6600,7 +7196,7 @@ thermal:
 | `max_offset_k`, `step_k`, `step_interval_s` | harte Grenzen der Safety-Schicht (Spec 8.2): höchstens 3 K, ein Vielfaches von `step_k`; `step_k` ist fest 0,5 K; frühestens `step_interval_s` (mindestens 60 s) zwischen zwei Erhöhungen |
 | `send_interval_s` | Takt des Sendens, auch unverändert (5 bis 60 s); die UVR fällt nach 5 min ohne Paket auf 0 |
 | `stale_after_s` | So lange ohne gültiges Paket ist die Quelle „nicht verbunden“ (60 bis 290 s, Standard 180 s) |
-| `receive` | Empfangstabelle: welcher Wert des C.M.I. (Knoten, Analog- oder Digitalausgang, Einheit) welche Größe ist. Pflicht sind `actual_c`, `setpoint_c`, `offset_active_k`, `cooling`, `venting`, `heating` und `running`; `power_kw` und `cmd_on` sind optional |
+| `receive` | Empfangstabelle: welcher Wert des C.M.I. (Knoten, Analog- oder Digitalausgang, Einheit) welche Größe ist. Pflicht sind `actual_c`, `setpoint_c`, `offset_active_k`, `cooling`, `venting`, `heating` und `running`; `power_kw`, `cmd_on` und `oil_burner` (Brennerstatus der Ölheizung, nur ein Digitalwert, nur gelesen) sind optional |
 | `strategy` | Schwellen der Strategie (alle optional): `more_above_w`, `import_above_w`, `battery_soc_pct`, `less_max_steps` |
 | `live_allowed` | Freigabe für den Live-Betrieb, erst nach dem Prüfprotokoll Teil 2, Punkt `thermal` |
 
@@ -6916,7 +7512,7 @@ Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Rou
 Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
 der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der siebenundvierzig Szenarien bei jedem Push
+In der CI läuft jedes der achtundvierzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“), und
 zwei von `klima-auto-vorrang` (unten, nach der Tabelle).
@@ -6944,7 +7540,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der siebenundvierzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der achtundvierzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -6960,7 +7556,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 18 s Rechenzeit; alle
-  siebenundvierzig zusammen rund 5 min.
+  achtundvierzig zusammen rund 5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -7049,6 +7645,8 @@ Szenarien für „Geplant“ kommen Ziel und Abfahrt zu Beginn als Version 2 der
 für die Klimaanlage, ab `klima-pv-kuehlen`, entscheidet Victron im Dry-Run mit; dort steckt zu
 Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Auto, ab
 `akku-uebrig-sofort`, ist er wieder live, und nur ein Auto steckt an.
+Im Szenario für den Selbststart der EVCS, `egolf-autostart`, entscheidet er im Dry-Run mit; nur der
+e-Golf steckt an.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -7099,6 +7697,7 @@ Beginn kein Auto an, und die Klimaanlage ist live. In den zwei für Akku ins Aut
 | `egolf-voll-bleibt-an` | e-Golf geladen, die EVCS bleibt an, 30 min | 21.6.2026 ab 09:00, sonniger Morgen, Akku 60 %, e-Golf an der EVCS mit 98 % SOC, in PV-Überschuss; Tesla abgesteckt | Der e-Golf wird „geladen“ (Status 3); ab da bekommt die EVCS kein „Laden aus“ (Regel „Geladen, bleibt an“), und ihr letzter Strombefehl fordert 6 A (`min_a` des e-Golf). |
 | `akku-uebrig-sofort` | Sofort am Abend mit übrigem Akku, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 72 %, nur der Tesla, in Sofort mit höchstens 10 A (`now_max_a`); zu Beginn ein Plan mit `EIGENVERBRAUCH` über 2 Slots, übrigem Akku für Sofort (`now_battery`) und der Plan-Schwelle 70 % (`support_soc_pct`), gültig 30 min | Solange der SOC über 70 % liegt, ab 2 min kein Override: Netzbezug höchstens Haus und Autos über der Entladegrenze des Modells (12000 W) plus 300 W; ab 2 min, nachdem der SOC 70 % erreicht hat, Netzbezug mindestens die Leistung der Autos minus 300 W (der Akku gibt dem Auto nichts mehr); vor der ersten Entscheidung mit „battery_comp“ zeigt die Gesundheit `battery.spare` „on“ mit einem Anteil über 0 W. |
 | `akku-uebrig-geplant` | Geplant in der Nacht aus dem Akku, 45 min | 13.10.2026 ab 02:00, keine PV, Akku 60 %, nur der e-Golf, in Geplant, Ziel 80 %, Abfahrt 07:00; zu Beginn ein Plan mit `EIGENVERBRAUCH` über 3 Slots, der den e-Golf mit 2800 W nennt, alle aus dem Akku (`ev_battery_w`), geplanter SOC am Ende 55, 52 und 51 %, gültig 45 min | Ab 2 min, bis der SOC das geplante Ende seines Slots erreicht (im dritten Slot), höchstens 300 W Netzbezug; ab 2 min danach Netzbezug mindestens die Leistung der Autos minus 300 W; der SOC fällt nie unter 50 % (kleinstes SOC am Ende minus 1 Punkt). |
+| `egolf-autostart` | e-Golf neu angesteckt, EVCS startet selbst, 30 min | 12.10.2026 ab 18:00, Akku 30 %, e-Golf an der EVCS mit 50 % SOC, in PV-Überschuss; Tesla abgesteckt; bei 5 min wird der e-Golf abgesteckt, nach 10 s wieder angesteckt, und 3 s später schaltet die EVCS „Laden an“ selbst (Autostart; der core sendet nichts dazu) | Die EVCS bekommt binnen 90 s (60 s plus Lesetakt und Verzug) nach dem Selbststart „Laden aus“ (Grund `self_start`); ab 2 min danach lädt der e-Golf nicht mehr. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

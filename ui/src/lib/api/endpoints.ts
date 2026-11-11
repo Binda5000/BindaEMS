@@ -125,6 +125,21 @@ export const api = {
 		request('PATCH', `/api/consumers/${id}`, { body: input, schema: s.ConsumerSchema }),
 	deleteConsumer: (id: number): Promise<void> => request('DELETE', `/api/consumers/${id}`),
 
+	pv: (o?: Load): Promise<s.PvResponse> => get('/api/pv', s.PvResponseSchema, o),
+	pvCandidates: (o?: Load): Promise<s.PvCandidates> =>
+		get('/api/pv/candidates', s.PvCandidatesSchema, o),
+	/** Tageskurve je Eintrag am Tag `day` (YYYY-MM-DD) */
+	pvDay: (day: string, o?: Load): Promise<s.PvDay> =>
+		get(withQuery('/api/pv/day', { date: day }), s.PvDaySchema, o),
+	/** Ertrag je Eintrag im Zeitraum, der `day` (YYYY-MM-DD) enthält */
+	pvPeriod: (period: s.StatsPeriod, day: string, o?: Load): Promise<s.PvPeriod> =>
+		get(withQuery('/api/pv/period', { period, day }), s.PvPeriodSchema, o),
+	createPv: (input: s.PvSourceInput): Promise<s.PvSource> =>
+		request('POST', '/api/pv', { body: input, schema: s.PvSourceSchema }),
+	updatePv: (id: number, input: s.PvSourceInput): Promise<s.PvSource> =>
+		request('PATCH', `/api/pv/${id}`, { body: input, schema: s.PvSourceSchema }),
+	deletePv: (id: number): Promise<void> => request('DELETE', `/api/pv/${id}`),
+
 	historyCatalog: (o?: Load): Promise<s.CatalogEntry[]> =>
 		get('/api/history/catalog', v.array(s.CatalogEntrySchema), o),
 	history: (series: string[], range: Range, o?: Load): Promise<s.HistoryResponse> =>
@@ -142,6 +157,7 @@ export const api = {
 	forecast: (o?: Load): Promise<s.Forecast> => get('/api/forecast/pv', s.ForecastSchema, o),
 	loadForecast: (o?: Load): Promise<s.LoadForecast> =>
 		get('/api/forecast/load', s.LoadForecastSchema, o),
+	backup: (o?: Load): Promise<s.Backup> => get('/api/backup', s.BackupSchema, o),
 	forecastQuality: (days = 14, o?: Load): Promise<s.Quality> =>
 		get(withQuery('/api/forecast/quality', { days: String(days) }), s.QualitySchema, o),
 	forecastQualityDaily: (days = 28, o?: Load): Promise<s.QualityDaily> =>
@@ -155,6 +171,9 @@ export const api = {
 			s.StatsSchema,
 			o
 		),
+	/** Wärmebedarf der Heizsaison, in der `day` liegt; 404 ohne Brennerstatus */
+	heatDemand: (day: string, o?: Load): Promise<s.HeatDemand> =>
+		get(withQuery('/api/heating/demand', { tag: day }), s.HeatDemandSchema, o),
 	/** Ladesessions der Tage `first` bis `last`, neueste zuerst; `vehicle` ist ein Schlüssel */
 	chargingSessions: (
 		first: string,
@@ -279,5 +298,13 @@ export const api = {
 		await request('POST', '/api/plan/replan'); // 202 {queued: true}
 	},
 	setGridCharge: (on: boolean): Promise<s.GridChargeReply> =>
-		request('PUT', '/api/plan/grid-charge', { body: { on }, schema: s.GridChargeReplySchema })
+		request('PUT', '/api/plan/grid-charge', { body: { on }, schema: s.GridChargeReplySchema }),
+
+	// Betrieb im Blick (ab „Lesen“)
+	opsCheck: (o?: Load): Promise<s.OpsCheck> => get('/api/ops/check', s.OpsCheckSchema, o),
+	/** Auffälligkeiten der letzten `days` Tage bis gestern (1–60) mit dem Bericht über gestern */
+	opsFindings: (days = 14, o?: Load): Promise<s.OpsFindings> =>
+		get(withQuery('/api/ops/findings', { days: String(days) }), s.OpsFindingsSchema, o),
+	opsSwitches: (o?: Load): Promise<s.OpsSwitches> =>
+		get('/api/ops/switches', s.OpsSwitchesSchema, o)
 };

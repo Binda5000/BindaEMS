@@ -11,7 +11,8 @@ from tests.unit.core.adapters.conftest import CoeEnv
 from bindaems.core.adapters import coe
 from bindaems.core.adapters.coe import udp_port
 from bindaems.shared.coe import CoeValue, decode, encode, offset_packet
-from bindaems.shared.domain import Quality
+from bindaems.shared.config import CoeChannel, CoeOffsetConfig, Config
+from bindaems.shared.domain import Quality, SignalKind
 
 CMI = ("192.168.81.92", 5442)
 FIXTURE = (Path(__file__).resolve().parents[3] / "fixtures" / "coe_cmi.bin").read_bytes()
@@ -607,3 +608,21 @@ async def test_lapse_loop_is_armed_after_a_new_session(coe_env: CmiEnv) -> None:
     assert sent_raw(env) == 10
     await env.run_for(71)  # bis 1 s nach dem Ablauf; der nächste Takt käme erst bei 90 s
     assert sent_raw(env) == 0 and env.adapter.held_k == 0.0
+
+
+async def test_oil_burner_is_written_as_state(cfg: Config) -> None:
+    klima = cfg.thermal.devices["klima"]
+    assert isinstance(klima, CoeOffsetConfig)
+    receive = klima.receive.model_copy(update={"oil_burner": CoeChannel(node=56, digital=6)})
+    env = CoeEnv(klima.model_copy(update={"receive": receive}))
+    try:
+        values = [
+            *decode(FIXTURE),
+            CoeValue(56, 6, False, 43, 1),  # Digitalausgang 6 des Knotens 56 = 1
+        ]
+        await env.receive(encode(values), CMI)
+        reading = env.store.snapshot().get("thermal.klima.oil_burner")
+        assert reading is not None
+        assert reading.value is True and reading.kind is SignalKind.STATE
+    finally:
+        await env.stop()

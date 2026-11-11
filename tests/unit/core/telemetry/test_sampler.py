@@ -230,3 +230,10 @@ def test_unchanged_values_get_the_sample_time() -> None:
         smp.on_cycle(snap, EMPTY_DERIVED)
         clock.advance(2)
     assert [p.ts for p in sink.points] == [T0 + timedelta(seconds=s) for s in (0, 2, 4)]
+
+
+def test_oil_burner_goes_to_status() -> None:
+    point = signal_to_point(
+        "thermal.klima.oil_burner", Reading(True, T0, Quality.OK, "thermal.klima", S)
+    )
+    assert point == Point("status", {"id": "thermal.klima.oil_burner"}, {"value_bool": True}, T0)

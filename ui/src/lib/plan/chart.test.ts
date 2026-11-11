@@ -78,6 +78,26 @@ it('plots the planned SOC at the end of each slot with the reserve line', () => 
 	expect(reserve.every(([, value]) => value === PLAN.reserve_pct)).toBe(true);
 });
 
+it('hebt die Reserve-Linie im Fenster der Unwetter-Reserve auf die Untergrenze', () => {
+	// Slots 4 bis 7 liegen im Fenster: Untergrenze 40 %, sonst die Reserve des Plans
+	const slots = PLAN.slots.map((s, index) =>
+		index >= 4 && index < 8 ? { ...s, storm_reserve_pct: 40 } : s
+	);
+	const plan = { ...PLAN, slots };
+	const series = (planSocOption(plan, NOW, palette) as { series: LineSeriesOption[] }).series;
+	expect(series[1].name).toBe('Reserve');
+	expect(series[1].step).toBe('end');
+	const reserve = series[1].data as Data;
+	// ein Punkt je Slot und einer am Ende des letzten
+	expect(reserve).toHaveLength(slots.length + 1);
+	expect(reserve.map(([, value]) => value)).toEqual([
+		...slots.map((_, index) => (index >= 4 && index < 8 ? 40 : PLAN.reserve_pct)),
+		PLAN.reserve_pct
+	]);
+	expect(reserve[4]![0]).toBe(Date.parse(slots[4]!.start));
+	expect(reserve.at(-1)![0]).toBe(Date.parse(slots.at(-1)!.start) + 900_000);
+});
+
 it('shows no windows when the plan only covers own consumption', () => {
 	const soc = planSocOption(PLAN, NOW, palette) as {
 		series: { markArea?: { data: unknown[] } }[];

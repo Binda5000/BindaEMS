@@ -750,6 +750,8 @@ BATTERY_SETTINGS = {
     "tesla_reserve_commands",
     "tesla_against_s",
     "tesla_against_retry_s",
+    "evcs_against_s",
+    "evcs_against_retry_s",
 }
 
 
@@ -863,8 +865,8 @@ def test_simulator_section_matches_the_tool(capsys: pytest.CaptureFixture[str]) 
     assert documented == known - {"--help"}
     scenarios = re.findall(r"^\| `([a-z0-9-]+)` \|", section, re.MULTILINE)
     assert scenarios == list(SCENARIOS)
-    assert len(SCENARIOS) == 47 and "fünfundvierzig" not in section  # die Zahl im Text zieht mit
-    assert section.count("siebenundvierzig") == 3
+    assert len(SCENARIOS) == 48 and "siebenundvierzig" not in section  # die Zahl im Text zieht mit
+    assert section.count("achtundvierzig") == 3
 
 
 def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:
@@ -990,6 +992,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
     codes = set(get_args(ReasonCode))
     examples: dict[str, dict[str, float | str]] = {
         "NACHLADEN_RESERVE": {"kw": 3.0},
+        "UNWETTER_RESERVE": {"art": "Gewitter", "stufe": "orange", "bis": "18:00", "soc": 40.0},
         "NETZLADEN_GUENSTIG": {"kw": 4.0, "ct": 12.3, "um": "18:00", "ct_spaeter": 31.5},
         "HALTEN_FUER_SPITZE": {"soc": 64.0, "von": "18:00", "bis": "20:00", "ct": 38.0},
         "BUDGET_SPITZE": {"soc": 55.0, "kw": 6.5},
@@ -1024,6 +1027,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
     # Hauptcodes in der Reihenfolge der Prüfung von ``explain._main_reason``, dann die Zusätze
     assert list(rows) == [
         "NACHLADEN_RESERVE",
+        "UNWETTER_RESERVE",
         "NETZLADEN_GUENSTIG",
         "HALTEN_FUER_SPITZE",
         "BUDGET_SPITZE",
@@ -1058,6 +1062,18 @@ def _ts_labels(source: str, name: str) -> dict[str, str]:
     found = re.search(rf"export const {name}\b[^=]*=\s*\{{(.*?)\}}", source, re.S)
     assert found, name
     return dict(re.findall(r"(\w+): '([^']*)'", found[1]))
+
+
+def test_storm_labels_in_the_ui_match_the_app() -> None:
+    # Arten und Stufen der Unwetterwarnungen heißen im Zeitplan wie im Satz der Erklärung und im
+    # Status der Komponente (Plan Unwetter-Reserve, Entscheidung 12).
+
+    from bindaems.shared.plan import STORM_KIND_LABELS, STORM_LEVEL_LABELS
+
+    model = Path("ui/src/lib/plan/model.ts").read_text(encoding="utf-8")
+    assert _ts_labels(model, "STORM_KIND_LABELS") == STORM_KIND_LABELS
+    levels = {int(key): label for key, label in _ts_labels(model, "STORM_LEVEL_LABELS").items()}
+    assert levels == STORM_LEVEL_LABELS
 
 
 def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
@@ -1119,6 +1135,7 @@ def test_planning_entities_in_the_guide_exist() -> None:
             "battery_plan_next",
             "planned_soc",
             "budget",
+            "storm_reserve",
             "grid_charge",
             "replan",
         },
@@ -1212,6 +1229,8 @@ def test_support_entities_in_the_guide_exist() -> None:
 
 def test_planning_settings_in_the_guide_match_the_configuration() -> None:
     # Die Tabelle der Einstellungen „Planung“ nennt jedes Feld mit dem Standardwert.
+    from pydantic import BaseModel
+
     from bindaems.shared.settings import PlanningSettings
 
     defaults = PlanningSettings()
@@ -1224,6 +1243,8 @@ def test_planning_settings_in_the_guide_match_the_configuration() -> None:
     assert set(documented) == set(PlanningSettings.model_fields)
     for key, shown in documented.items():
         value = getattr(defaults, key)
+        if isinstance(value, BaseModel):  # Untergruppe (storm): Felder stehen in der Beschreibung
+            continue
         if isinstance(value, bool):
             assert shown == ("ein" if value else "aus"), key
         else:
@@ -1286,6 +1307,7 @@ def test_stats_endpoint_in_the_guide() -> None:
         "battery_to_vehicles_kwh",
         "planned",
         "consumers",
+        "pv_sources",
         "month_peaks",
         "checks",
         "fees_eur",
@@ -1879,3 +1901,35 @@ def test_app_only_commands_in_the_guide_keep_the_core_running() -> None:
     for doc in ("docs/betrieb.md", "docs/uebergabe.md"):
         text = Path(doc).read_text(encoding="utf-8")
         assert not re.search(r"up -d(?: --build)? ems-app", text), doc
+
+
+def test_betrieb_doc_names_ops_page() -> None:
+    # Plan „Betrieb im Blick“: Seite, Tagesbericht, Sensor und der Rückweg stehen im Handbuch.
+    text = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    for topic in (
+        "### Betrieb: Check, Auffälligkeiten, Schalter",
+        "Tagesbericht",
+        "Betriebscheck",
+        "Schalter",
+        "sensor.bindaems_ops_check",
+        "Rollback auf einen Stand vor Betrieb im Blick",
+        "`ops:`",
+        "0016",
+    ):
+        assert topic in text, topic
+
+
+def test_oil_heating_rollout_restarts_core_and_app() -> None:
+    # Die app liest config.yaml nur beim Start: Ohne Neustart von ems-app bleiben die Karten aus
+    # (Rollout) oder stehen (Rückweg).
+    restart = "docker compose restart ems-core ems-app"
+    betrieb = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    section = betrieb.split("## Ölheizung: Wärmebedarf", 1)[1].split("\n## ", 1)[0]
+    assert section.count(restart) >= 2, "Rollout und Rückweg"
+    plan = Path("docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md").read_text("utf-8")
+    assert restart in plan.split("Was du an der Anlage tust", 1)[1]
+    uebergabe = " ".join(Path("docs/uebergabe.md").read_text("utf-8").split())
+    item = uebergabe.split("26. **Ölheizung: Wärmebedarf ausrollen:**", 1)[1]
+    item = item.split(" - Teil 2", 1)[0]
+    assert item.count(restart) >= 2
+    assert "ems-core neu starten" not in section + item

@@ -158,11 +158,13 @@ def accept(
     controller: ChargeController,
     commands: Sequence[ChargeCommand],
     outcome: Outcome = Outcome.ACCEPTED,
+    *,
+    dry_run: bool = True,
 ) -> None:
-    """Gibt jedem Befehl ein Dry-Run-Urteil ``outcome`` mit seinem Wert."""
+    """Gibt jedem Befehl ein Urteil ``outcome`` mit seinem Wert, ohne Angabe im Dry-Run."""
     for found in commands:
         command = found.command
-        controller.note_verdict(command, Verdict(command, outcome, command.value, (), True))
+        controller.note_verdict(command, Verdict(command, outcome, command.value, (), dry_run))
 
 
 def run(
@@ -173,6 +175,8 @@ def run(
     make: Callable[..., ChargeInputs] = inputs,
     peak: PeakLimits | Callable[[int], PeakLimits] = NO_LIMITS,
     active: ActiveSlot | Callable[[int], ActiveSlot | None] | None = None,
+    dry_run: bool = True,
+    outcome: Outcome | Callable[[int], Outcome] = Outcome.ACCEPTED,
     **kw: Any,
 ) -> list[tuple[int, ChargeCommand]]:
     """Ein Schritt je Sekunde ``0 … seconds − 1``; zurück kommen ``(Sekunde, Befehl)``.
@@ -180,7 +184,8 @@ def run(
     Jedes ``kw`` ist eine feste Eingabe oder eine Funktion der Sekunde; ``make(cfg, s=s, …)`` baut
     daraus die Eingaben. ``peak`` sind die Grenzen des 15-min-Wächters, fest oder als Funktion der
     Sekunde; ``active`` ebenso der gültige Slot des Plans (ohne Angabe keiner). Alle Befehle
-    werden angenommen (``accept``).
+    werden mit dem Urteil ``outcome`` (fest oder als Funktion der Sekunde, ohne Angabe angenommen)
+    bestätigt (``accept``), ohne Angabe im Dry-Run (``dry_run``).
     """
     found: list[tuple[int, ChargeCommand]] = []
     for s in range(seconds):
@@ -188,6 +193,6 @@ def run(
         limits = peak(s) if callable(peak) else peak
         slot = active(s) if callable(active) else active
         commands = controller.step(make(cfg, s=s, **resolved), limits, slot)
-        accept(controller, commands)
+        accept(controller, commands, outcome(s) if callable(outcome) else outcome, dry_run=dry_run)
         found.extend((s, command) for command in commands)
     return found

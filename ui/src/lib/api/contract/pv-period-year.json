@@ -1,0 +1,154 @@
+{
+  "period": "year",
+  "first": "2026-01-01",
+  "last": "2026-12-31",
+  "buckets": [
+    {
+      "start": "2026-01-01",
+      "end": "2026-01-31"
+    },
+    {
+      "start": "2026-02-01",
+      "end": "2026-02-28"
+    },
+    {
+      "start": "2026-03-01",
+      "end": "2026-03-31"
+    },
+    {
+      "start": "2026-04-01",
+      "end": "2026-04-30"
+    },
+    {
+      "start": "2026-05-01",
+      "end": "2026-05-31"
+    },
+    {
+      "start": "2026-06-01",
+      "end": "2026-06-30"
+    },
+    {
+      "start": "2026-07-01",
+      "end": "2026-07-31"
+    },
+    {
+      "start": "2026-08-01",
+      "end": "2026-08-31"
+    },
+    {
+      "start": "2026-09-01",
+      "end": "2026-09-30"
+    },
+    {
+      "start": "2026-10-01",
+      "end": "2026-10-31"
+    },
+    {
+      "start": "2026-11-01",
+      "end": "2026-11-30"
+    },
+    {
+      "start": "2026-12-01",
+      "end": "2026-12-31"
+    }
+  ],
+  "total": {
+    "kwh": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      34.519,
+      546.181,
+      140.739,
+      null,
+      null
+    ],
+    "sum_kwh": 721.439
+  },
+  "unassigned": {
+    "kwh": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      1.014,
+      16.063,
+      4.14,
+      null,
+      null
+    ],
+    "sum_kwh": 21.217
+  },
+  "sources": [
+    {
+      "id": 1,
+      "kwh": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        33.505,
+        530.118,
+        136.599,
+        null,
+        null
+      ],
+      "sum_kwh": 700.222,
+      "kwh_per_kwp": 71.451,
+      "first_known": "2026-08-30",
+      "note": null
+    },
+    {
+      "id": 2,
+      "kwh": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        83.055,
+        62.09,
+        null,
+        null
+      ],
+      "sum_kwh": 145.145,
+      "kwh_per_kwp": 35.401,
+      "first_known": "2026-09-21",
+      "note": null
+    },
+    {
+      "id": 3,
+      "kwh": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        105.204,
+        78.648,
+        null,
+        null
+      ],
+      "sum_kwh": 183.852,
+      "kwh_per_kwp": 32.255,
+      "first_known": "2026-09-21",
+      "note": null
+    }
+  ]
+}

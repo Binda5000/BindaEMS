@@ -61,7 +61,9 @@ def test_stats_route_shape(client_as, ledger, price_all) -> None:
         "vehicle_buckets",
         "planned",
         "consumers",
+        "pv_sources",
         "month_peaks",
+        "heating",
         "checks",
     ]
     assert (body["period"], body["first"], body["last"]) == ("month", "2026-10-01", "2026-10-31")
