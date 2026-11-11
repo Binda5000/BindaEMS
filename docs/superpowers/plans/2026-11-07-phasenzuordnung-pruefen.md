@@ -25,6 +25,7 @@ Vorgeschlagen sind 1 bis 5. Der Betreiber gibt sie mit dem Plan frei.
    - Eine Zuordnung **passt**, wenn `min_p c_σ(p) ≥ −TOL_W`, und ist **widerlegt**, wenn `min_p c_σ(p) < −NEG_W`.
    - Ein Zyklus ist **entscheidend**, wenn mindestens eine der sechs Zuordnungen widerlegt ist. Er stimmt „falsch“, wenn die Zuordnung 1:1 widerlegt ist.
    - Für eine Wallbox gilt dasselbe mit `h_π(p) = c_1:1(p) − U · I_π(p)`. `π` vertauscht dabei die Ströme je Phase der Wallbox (`Derived.wallbox_phase_a`), `U` ist `grid.voltage_nominal_v`.
+   - Bei der Wallbox ist ein Zyklus nur entscheidend, wenn es mindestens zwei verschiedene Verteilungen der Ströme gibt und mindestens eine davon widerlegt ist. Lädt das Auto auf allen drei Phasen gleich, gibt es nichts zu unterscheiden.
    - Ein Zyklus mit einem fehlenden Wert zählt nicht.
 4. **Schwellen.** `NEG_W = 500`, `TOL_W = 200`, `DECISIVE_SAMPLES = 300` entscheidende Zyklen (bei 1 s rund 5 min), `ON_SHARE = 0.8`, `OFF_SHARE = 0.2`. Der Alarm kommt erst bei voller Liste, wenn mindestens 80 % „falsch“ stimmen. Er geht, wenn höchstens 20 % „falsch“ stimmen, dazwischen bleibt er. Ohne entscheidende Zyklen bleibt der Zustand, wie er ist. So endet der Alarm nicht, nur weil das Auto fertig ist.
 5. **Ausrollen** mit Stufe 2, gemeinsam mit core und app wie Netzgrenze je Phase (Übergabe, Punkt 21). Nur `ems-core` ändert sich.
