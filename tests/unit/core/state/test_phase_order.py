@@ -1,6 +1,9 @@
-from tests.helpers import snap
+from datetime import timedelta
+
+from tests.helpers import T0, snap
 from tests.unit.core.state.conftest import BASE
 
+from bindaems.core.state.derived import derive
 from bindaems.core.state.phase_order import (
     DECISIVE_SAMPLES,
     IDENTITY,
@@ -10,11 +13,14 @@ from bindaems.core.state.phase_order import (
     PERMUTATIONS,
     TOL_W,
     MultiPhaseCheck,
+    PhaseOrderMonitor,
     PhaseSample,
     Votes,
+    WallboxPhaseCheck,
     consumption_w,
     phase_sample,
 )
+from bindaems.shared.domain import Severity
 
 
 def sample(grid, ac_in, ac_out, pv=(0, 0, 0)) -> PhaseSample:
@@ -148,3 +154,117 @@ def test_phase_sample_sums_pv_and_reads_signals(cfg):
 def test_phase_sample_none_on_missing_signal(cfg):
     base_without_l2_out = {k: v for k, v in BASE.items() if k != "vebus.l2.ac_out_power_w"}
     assert phase_sample(snap(base_without_l2_out), cfg) is None
+
+
+# Multi stimmt, das Auto lädt auf Netz-L2 und L3, Haus 200 W je Phase
+EGOLF_OK = sample(grid=(200, 1810, 1810), ac_in=(0, 0, 0), ac_out=(0, 0, 0))
+
+
+def test_evcs_on_other_phases_alarm_names_phase_map():
+    check = WallboxPhaseCheck("evcs", evcs=True, voltage_v=230.0)
+    for _ in range(DECISIVE_SAMPLES):
+        text = check.update(EGOLF_OK, {"L1": 7.0, "L2": 7.0, "L3": 0.0})
+    assert text == (
+        "Phasen der Wallbox „evcs“ passen nicht zum Netzzähler: Das Auto lädt rechnerisch auf "
+        "L2 und L3, die Zuordnung nennt L1 und L2. Abhilfe: phase_map in config.yaml mit L2 und "
+        "L3 beginnen lassen."
+    )
+
+
+def test_twc_alarm_asks_for_wiring_check():
+    check = WallboxPhaseCheck("twc", evcs=False, voltage_v=230.0)
+    one_phase = sample(grid=(200, 200, 3420), ac_in=(0, 0, 0), ac_out=(0, 0, 0))
+    for _ in range(DECISIVE_SAMPLES):
+        text = check.update(one_phase, {"L1": 14.0, "L2": 0.0, "L3": 0.0})
+    assert text.endswith(
+        "Der Wall Connector meldet seine Phasen selbst; lass den Anschluss prüfen."
+    )
+    assert "lädt rechnerisch auf L3, die Zuordnung nennt L1." in text
+
+
+def test_three_phase_charging_is_never_decisive():
+    check = WallboxPhaseCheck("evcs", evcs=True, voltage_v=230.0)
+    # das Haus hängt mit 3 kW an L1, die Last ist auf allen Phasen gleich: nichts zu unterscheiden
+    house = sample(grid=(3000 + 1610, 1610, 1610), ac_in=(0, 0, 0), ac_out=(0, 0, 0))
+    for _ in range(2 * DECISIVE_SAMPLES):
+        assert check.update(house, {"L1": 7.0, "L2": 7.0, "L3": 7.0}) is None
+
+
+def test_wallbox_check_ignores_cycles_without_basis():
+    check = WallboxPhaseCheck("evcs", evcs=True, voltage_v=230.0)
+    currents = {"L1": 7.0, "L2": 7.0, "L3": 0.0}
+    for _ in range(DECISIVE_SAMPLES - 1):
+        check.update(EGOLF_OK, currents)
+    assert check.update(None, currents) is None  # Messwert fehlt
+    assert check.update(EGOLF_OK, None) is None  # Ströme unbekannt
+    assert check.update(EGOLF_OK, dict.fromkeys(IDENTITY, 0.0)) is None  # lädt nicht
+    assert check.update(MIDDAY, currents) is None  # 1:1 passt für den Multi nicht
+    assert check.update(EGOLF_OK, currents) is not None
+
+
+def test_wallbox_without_fitting_distribution_has_no_suggestion():
+    check = WallboxPhaseCheck("evcs", evcs=True, voltage_v=230.0)
+    # nur eine Phase hat Last für ein Auto: keine Verteilung auf zwei Phasen passt
+    unmetered = sample(grid=(0, 1610, 0), ac_in=(0, 0, 0), ac_out=(0, 0, 0))
+    for _ in range(DECISIVE_SAMPLES):
+        text = check.update(unmetered, {"L1": 7.0, "L2": 7.0, "L3": 0.0})
+    assert text == (
+        "Phasen der Wallbox „evcs“ passen nicht zum Netzzähler: Das Auto lädt rechnerisch nicht "
+        "auf L1 und L2."
+    )
+
+
+def _cycle(cfg, grid, ac_in, pv_l1, evcs_w, now):
+    values = (
+        {f"grid.l{n}.power_w": float(g) for n, g in zip((1, 2, 3), grid, strict=True)}
+        | {f"vebus.l{n}.ac_in_power_w": float(a) for n, a in zip((1, 2, 3), ac_in, strict=True)}
+        | {f"vebus.l{n}.ac_out_power_w": 0.0 for n in (1, 2, 3)}
+        | {"pv.huawei.l1.power_w": float(pv_l1), "pv.huawei.l2.power_w": 0.0}
+        | {"pv.huawei.l3.power_w": 0.0, "grid.l1.voltage_v": 230.0}
+        | {"wallbox.evcs.power_w": float(evcs_w), "wallbox.evcs.current_a": 16.0}
+    )
+    snapshot = snap(values)
+    return snapshot, derive(snapshot, cfg), now
+
+
+def test_monitor_skips_wallbox_while_multi_wrong(cfg):  # Review Focus 5
+    monitor = PhaseOrderMonitor(cfg)
+    # MIDDAY-Werte mit laufender EVCS (2 Phasen, 16 A): der Multi ist falsch angeschlossen
+    for i in range(DECISIVE_SAMPLES):
+        alarms = monitor.evaluate(
+            *_cycle(cfg, (0, 6000, -2000), (3400, -3500, 0), 300, 7360, T0 + timedelta(seconds=i))
+        )
+    assert [a.id for a in alarms] == ["wiring.multi_phases"]
+    # auch mit aktivem Alarm kommt kein Wallbox-Alarm
+    alarms = monitor.evaluate(
+        *_cycle(cfg, (0, 6000, -2000), (3400, -3500, 0), 300, 7360, T0 + timedelta(hours=1))
+    )
+    assert [a.id for a in alarms] == ["wiring.multi_phases"]
+
+
+def test_monitor_alarm_ids_severity_and_since(cfg):
+    monitor = PhaseOrderMonitor(cfg)
+    times = [T0 + timedelta(seconds=i) for i in range(DECISIVE_SAMPLES + 1)]
+    for now in times[: DECISIVE_SAMPLES - 1]:
+        assert monitor.evaluate(*_cycle(cfg, (0, 6000, -2000), (3400, -3500, 0), 300, 0, now)) == []
+    (alarm,) = monitor.evaluate(
+        *_cycle(cfg, (0, 6000, -2000), (3400, -3500, 0), 300, 0, times[DECISIVE_SAMPLES - 1])
+    )
+    assert alarm.id == "wiring.multi_phases"
+    assert alarm.severity is Severity.WARNING
+    assert alarm.since == times[DECISIVE_SAMPLES - 1]
+    (again,) = monitor.evaluate(
+        *_cycle(cfg, (0, 6000, -2000), (3400, -3500, 0), 300, 0, times[DECISIVE_SAMPLES])
+    )
+    assert again.since == times[DECISIVE_SAMPLES - 1]
+
+
+def test_monitor_wallbox_alarm_id(cfg):
+    monitor = PhaseOrderMonitor(cfg)
+    # Multi unauffällig, EVCS (Zuordnung L1, L2; 16 A auf 2 Phasen) lädt rechnerisch auf L2 und L3
+    for i in range(DECISIVE_SAMPLES):
+        alarms = monitor.evaluate(
+            *_cycle(cfg, (200, 3700, 3700), (0, 0, 0), 0, 7360, T0 + timedelta(seconds=i))
+        )
+    assert [a.id for a in alarms] == ["wiring.wallbox_phases.evcs"]
+    assert alarms[0].severity is Severity.WARNING
