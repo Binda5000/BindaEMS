@@ -394,7 +394,7 @@ Nicht dabei: Live-Alarm für Auffälligkeiten, Schwellen in den Einstellungen, E
 Branch `claude/project-thread-ambh18`, **nicht auf `main`, nicht ausgerollt** (Punkt 27 unter „Offen an der Anlage“). Der core prüft, ob die Phasen des Multi
 und der Wallboxen zu denen des Netzzählers passen (`core/state/phase_order.py`, in `runtime.py` neben der Plausibilität), und meldet nur: Warnungen
 `wiring.multi_phases` und `wiring.wallbox_phases.<name>`, die nichts sperren. Anlass war der 4.11.2026 (Multi und EVCS um eine Phase gedreht, Netz-L2 rund 3 h über 20 A).
-Spec: 7.3, Regel 7, „Stand Plan Phasenzuordnung“. Betrieb: `docs/betrieb.md`, Abschnitt 14, „Meldungen des core“, und „Laderegelung“, „Hinweise für die Anlage“.
+Spec: 8.3, Regel 7, „Stand Plan Phasenzuordnung“. Betrieb: `docs/betrieb.md`, Abschnitt 14, „Meldungen des core“, und „Laderegelung“, „Hinweise für die Anlage“.
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
@@ -2275,9 +2275,12 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       kommt mit Stufe 2 (ab 23.11.2026), **nur `ems-core` ändert sich**, mit dem nächsten Sammel-Pull;
       **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**; wann, entscheidet der Betreiber. Nichts wird geschaltet, die Warnungen sperren nichts.
       Danach beobachten, ob „Phasen von Multi und Netzzähler passen nicht zusammen: …“ erscheint, solange der e-Golf lädt und die Verdrehung noch nicht
-      behoben ist (nach 5 min mit entscheidenden Zyklen; unter „System“ → „core“ → „Alarme“, Id `wiring.multi_phases`). Ebenso
-      `wiring.wallbox_phases.evcs` mit dem Vorschlag für `phase_map` (erwartet `[L2, L3, L1]`). Die Verdrehung selbst behebt der Elektriker
-      (Befund vom 4.11.2026, `docs/betrieb.md`, „Laderegelung“, „Hinweise für die Anlage“). Erscheint ein Alarm bei richtig angeschlossener Anlage, ist das ein Befund an der Prüfung.
+      behoben ist (nach 300 entscheidenden Zyklen innerhalb einer Stunde, am Stück rund 5 min; unter „System“ → „core“ → „Alarme“, Id `wiring.multi_phases`).
+      `wiring.wallbox_phases.evcs` mit dem Vorschlag für `phase_map` (erwartet `[L2, L3, L1]`) erscheint nur, wenn ihre 300 entscheidenden Zyklen vor dem Alarm
+      des Multi zusammenkommen (etwa beim Laden in der Nacht mit ruhendem Akku): Solange `wiring.multi_phases` steht, beginnt kein neuer Alarm der Wallbox; in der
+      Praxis zeigt er sich daher oft erst, wenn der Multi behoben ist. Die Verdrehung selbst behebt der Elektriker
+      (Befund vom 4.11.2026, `docs/betrieb.md`, „Laderegelung“, „Hinweise für die Anlage“). Auf einen `wiring.*`-Alarm bei richtig angeschlossener Anlage achten
+      (etwa nach dem Besuch des Elektrikers): Das wäre ein Befund an der Prüfung, nicht an der Anlage.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

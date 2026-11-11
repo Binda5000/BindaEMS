@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, pytest. Keine neue Abhängigkeit, keine Migration, keine Änderung an `config.yaml`, nur `ems-core`.
 
-**Spec:** `docs/superpowers/specs/2026-10-08-bindaems-design.md`, Abschnitt 7.3, Regel 7 („Eingangsdaten werden auf Frische und Plausibilität geprüft“). Anlass ist der Befund vom 4.11.2026 (Thread „Phasenverdrehung automatisch erkennen“):
+**Spec:** `docs/superpowers/specs/2026-10-08-bindaems-design.md`, Abschnitt 8.3, Regel 7 („Eingangsdaten werden auf Frische und Plausibilität geprüft“). Anlass ist der Befund vom 4.11.2026 (Thread „Phasenverdrehung automatisch erkennen“):
 - **Multi:** Multi-L1 liegt am Netz auf L2, Multi-L2 auf L3, Multi-L3 auf L1. Bestätigt mit dem Wasserkocher-Test um 19:40 und mit dem Zähler von Netz NÖ.
 - **EVCS:** Ihre L1 und L2 liegen auf Netz-L2 und L3.
 - **Folgen:** Victron glich die Phasen in die falsche Richtung aus. L2 lag rund 3 h bei 24–27 A. Der Phasenwächter sah „Grenze −2 A“ und drosselte den e-Golf auf 6 A.
@@ -261,7 +261,7 @@ git commit -am "feat(core): Phasen der Wallboxen gegen den Netzzähler prüfen"
 - Modify: `src/bindaems/core/runtime.py`: `PhaseOrderMonitor(cfg)` neben `self._plausibility` anlegen, `evaluate(snap, derived, now)` neben `self._plausibility.evaluate` aufrufen und die Alarme in die Liste von `_update_alarms` hängen, nach `*plausibility`. **Nicht** an `_update_operation` geben.
 - Test: `tests/integration/test_runtime.py` (Muster der bestehenden Alarm-Tests dort und in `tests/integration/plant.py`)
 - Modify: `docs/betrieb.md`, Abschnitt 14, „Meldungen des core“: zwei neue Zeilen. Dazu ein Hinweis in „Laderegelung“, „Hinweise für die Anlage“ auf den Befund vom 4.11. und den Wasserkocher-Test.
-- Modify: Spec 7.3, Regel 7: Absatz „Stand Plan Phasenzuordnung (7.11.2026)“ mit den Entscheidungen 1 bis 4
+- Modify: Spec 8.3, Regel 7: Absatz „Stand Plan Phasenzuordnung (7.11.2026)“ mit den Entscheidungen 1 bis 4
 - Modify: `docs/uebergabe.md`: neuer Punkt unter „Offen an der Anlage“, mit Stufe 2, nur `ems-core`, keine Migration und keine Änderung an `config.yaml`. Danach beobachten, ob „Phasen von Multi und Netzzähler …“ erscheint, solange der e-Golf lädt und die Verdrehung noch nicht behoben ist.
 
 - [ ] **Step 1: Failing Integrationstest**
