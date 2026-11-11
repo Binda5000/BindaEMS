@@ -16,7 +16,10 @@ bleibt unverändert.
 der core bleibt unverändert.
 **Plan Ölheizung: Wärmebedarf messen** (`docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`) ist umgesetzt und seit
 10.11.2026 auf `main`, **nicht ausgerollt** (Punkt 26 unter „Offen an der Anlage“). **Core und app**, Migration `0019`;
-Quelle ist der Brenner „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) über Digital 6 des C.M.I. Offen an der Anlage, in dieser Reihenfolge:
+Quelle ist der Brenner „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) über Digital 6 des C.M.I.
+**Plan Schnee auf den Modulen** (`docs/superpowers/plans/2026-11-04-schnee-auf-den-modulen.md`) ist umgesetzt auf Branch
+`claude/project-thread-a3ghby`, **nicht auf `main`, nicht ausgerollt** (Punkt 27 unter „Offen an der Anlage“). Nur app, UI und HA,
+keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
    nachts wie geplant).
@@ -2265,6 +2268,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       27 kW und 2,9 l/h eintragen, optional den Ölpreis; (5) Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen; liegt er deutlich darunter,
       Werte nicht ändern, sondern das Verhältnis notieren (Folgeplan „Korrekturfaktor“). Prüfen: Statistik zeigt „Heizung“ und „Wärmebedarf“, ab 14 kalten Tagen ein
       Ergebnis. Rückweg: Zeile `oil_burner` aus der `config.yaml`, `docker compose restart ems-core ems-app`, Datenbank auf `0018` zurücknehmen. Betrieb: `docs/betrieb.md`, „Ölheizung: Wärmebedarf“.
+  27. **Schnee auf den Modulen ausrollen:** umgesetzt auf Branch `claude/project-thread-a3ghby`, **nicht auf `main`, nicht ausgerollt**;
+      kommt mit dem nächsten Sammel-Pull (Stufe 2 ab 23.11.2026, sonst der danach), `ems-core` **und** `ems-app` gemeinsam mit fester Version,
+      **nie `ems-app` allein** (der core bekommt keinen geänderten Code). **Keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**;
+      nichts wird geschaltet. Der Schalter „Schnee erkennen“ (Einstellungen → „PV-Modell“) ist ab Werk an. Am **ersten Schneetag** den
+      **Zeitplan** (Grund „PV gekürzt auf … % der Prognose: vermutlich Schnee auf den Modulen.“, Netzladen in der Nacht statt Warten auf PV) und die
+      Seite **Prognosen** (Karte „Schnee auf den Modulen“: Zustand, Anteil, „seit“; nach dem Abtauen „frei“) ansehen; liegt die Erkennung daneben,
+      mit „Schnee auf den Modulen“ oder „Module sind frei“ übersteuern und notieren, wann und warum. Rückweg ohne Rollback: „Schnee erkennen“ aus.
+      Ein älteres Image liest Einstellungsversionen mit `pv_model.snow_detection` nicht (`extra="forbid"`); vor einem Rollback die Einstellungen
+      exportieren, den Schlüssel löschen und danach importieren. Betrieb: `docs/betrieb.md`, „Prognosen“, „Schnee auf den Modulen“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

@@ -874,6 +874,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Bezugspreis | ct/kWh | Preis der laufenden Viertelstunde, brutto; Attribut `prices` mit den nächsten 36 h |
 | Einspeisepreis | ct/kWh | OeMAG-Wert des Monats |
 | PV-Prognose heute / morgen | kWh | P50 aus Open-Meteo und PV-Modell |
+| PV Schnee | – | `frei`, `vermutet` oder `gemessen` (Abschnitt „Prognosen“, „Schnee auf den Modulen“); Attribut `faktor_pct` mit dem Anteil der Prognose, der jetzt gilt |
 | Netzleistung, PV-Leistung, Akkuleistung, Hausverbrauch | W | Werte des core |
 | Monatsspitze | kW | höchster Netzbezug einer Viertelstunde im laufenden Monat (Abschnitt 8); Attribut `slot` mit dem Beginn dieser Viertelstunde (ISO-Zeit). „Unbekannt“, solange der Monat keine Abrechnung hat |
 | Akku-Plan jetzt | – | Absicht des Plans für die laufende Viertelstunde (Eigenverbrauch, Halten, Netzladen); Attribute `reason` (der Satz der Erklärung), `codes`, `planned_soc_pct`, `grid_charge_w`, `start`, `source`. „Unbekannt“ ohne gültigen Plan (Abschnitt „Planung“) |
@@ -5028,6 +5029,69 @@ gibt es keine Klasse.
 - **Start:** Die erste PV-Prognose nach dem Start wartet bis zu 60 s auf die erste Kalibrierung.
   Sonst läge die erste Ausgabe mit dem neutralen Faktor 1,0 im Archiv und verfälschte später die
   Kalibrierung. Dauert die Kalibrierung länger, beginnt der Abruf ohne sie (Warnung im Log).
+- **Ausreißertage zählen nicht:** Ein lokaler Tag, an dem mindestens 4 Viertelstunden weniger als
+  15 % der Roh-Prognose geliefert haben (nur Viertelstunden mit Roh-Prognose ab der Schwelle oben),
+  fällt aus Faktoren und Band heraus. Das sind Schneetage, auch solche vor der Schneeerkennung, und
+  Ausfälle der Anlage. Gespeichert wird dafür nichts; das gilt auch bei ausgeschaltetem „Schnee
+  erkennen“.
+
+#### Schnee auf den Modulen
+
+Seit dem Plan Schnee auf den Modulen (4.11.2026) erkennt die app, wenn vermutlich Schnee auf den
+Modulen liegt, und kürzt dann die PV-Prognose. Sonst rechnete der Planer nach einer Schneenacht mit
+einem sonnigen Tag, ließe den Akku leer laufen und lüde nachts nicht billig nach. Die Kürzung gilt
+für die ganze Anlage (Süd und West bekommen denselben Anteil), denn die app kennt die Ist-PV nur als
+Summe.
+
+- **Wetter:** Mit der ersten Fläche fragt die app bei Open-Meteo zusätzlich den Schneefall (cm je
+  Stunde) und die Schneehöhe am Boden (m) ab, im selben Abruf. Fehlen die Werte, gibt es keine
+  Erkennung, und die Prognose läuft unverändert (Log `info`).
+- **Messbar** ist eine vergangene Viertelstunde, für die die ungekürzte Prognose mindestens
+  `max(300 W, 5 % der Summe der kWp)` erwartet (an der Anlage mit 9,8 kWp 490 W). Ihr Verhältnis ist
+  Ist durch ungekürzte Prognose.
+- **Schneefall** ist eine Stunde mit mindestens 0,2 cm, in der zusammen mit den 11 Stunden davor
+  mindestens 1 cm gefallen ist. Bei gleichmäßigem Schneefall beginnt die Kürzung also erst, wenn
+  1 cm erreicht ist.
+- **Frei:** Zwei aufeinanderfolgende messbare Viertelstunden mit mindestens 60 % der Prognose
+  melden die Module frei, ab dem Ende der zweiten („frei seit“).
+- **Bedeckt** gilt jetzt, wenn seit dem letzten „frei seit“ Schnee gefallen ist. Ohne Schneefall
+  seitdem auch, wenn drei aufeinanderfolgende messbare Viertelstunden weniger als 15 % liefern, die
+  Luft dabei höchstens 3 °C hat und noch mindestens 1 cm Schnee am Boden liegt (etwa nach einem
+  Neustart zwei Tage nach dem Schneefall). Ohne Schnee am Boden ist ein Ausfall kein Schnee; den
+  finden Betriebscheck und Auffälligkeiten.
+- **Wie stark:** Solange noch keine zwei messbaren Viertelstunden seit Beginn der Bedeckung da sind
+  (nachts, früh am Morgen), rechnet die app mit 10 % der Prognose (Zustand „vermutet“). Danach mit
+  dem Median (bei vier Werten dem oberen) der letzten bis zu vier gemessenen Verhältnisse, mindestens
+  10 %, höchstens 100 % (Zustand „gemessen“). So folgt die Kürzung dem Abtauen.
+- **Wie weit voraus:** Gilt die Anlage jetzt als bedeckt, gilt der Anteil ab der laufenden
+  Viertelstunde bis zum Ende des **nächsten** Tages. Für Schneefall, der laut Wetter noch kommt,
+  gelten 10 % ab dieser Stunde bis zum Ende des Tages danach, für jede solche Stunde; treffen zwei
+  Fenster zusammen, gilt der kleinere Anteil. Vergangene Viertelstunden bleiben, wie sie waren.
+- **Was gekürzt wird:** P50, P25 und P75; die Roh-Prognose und die ungekürzte P50 bleiben. Ins
+  Archiv und nach InfluxDB geht die gekürzte Prognose (die Güte zeigt, womit der Planer gerechnet
+  hat).
+- **Wann:** beim Abruf jede Stunde, gleich nach dem Start der app und dann jede Viertelstunde (zur
+  Minute 4, 19, 34 und 49) mit den Ist-Werten der letzten 36 h. Ändert sich der Zustand oder der
+  Anteil einer Viertelstunde um mehr als 5 Prozentpunkte, plant der Planer binnen 15 min neu. Die
+  app speichert dafür nichts (außer dem Handschalter unten); nach einem Neustart kommt dasselbe
+  heraus.
+- **Handschalter:** Die Knöpfe „Schnee auf den Modulen“ und „Module sind frei“ (Seite „Prognosen“,
+  ab der Rolle „Bedienen“, und in Home Assistant) übersteuern die Erkennung: „Schnee auf den
+  Modulen“ gilt als bedeckt ab jetzt, bis die Messung frei meldet; „Module sind frei“ gilt als frei
+  gemessen ab jetzt, neuer Schneefall danach zählt wieder. Ein Knopf wirkt höchstens 48 h, der eine
+  ersetzt den anderen, „Automatik“ hebt ihn auf. Abgelegt ist er in `/data/pv_snow_override.json`;
+  fehlt die Datei oder ist sie unlesbar, gilt die Automatik. Jeder Druck steht im
+  Änderungsprotokoll (`forecast.snow_override`, im UI „PV: Schneeerkennung (Handschalter)“).
+- **Schalter „Schnee erkennen“** (Einstellungen, „PV-Modell“, ab Werk an): Aus heißt keine Kürzung,
+  die Knöpfe wirken nicht. Die Ausreißertage bleiben trotzdem aus der Kalibrierung. Das ist auch der
+  **Rückweg**, wenn die Kürzung stört: Schalter aus, die nächste Prüfung (höchstens 15 min) nimmt
+  die Kürzung zurück, und der Planer plant neu.
+- **Wo man es sieht:** Seite „Prognosen“, Karte „Schnee auf den Modulen“ (unten); auf der Übersicht
+  der Hinweis „PV-Prognose gekürzt: vermutlich Schnee auf den Modulen (seit 07:15)“, solange die
+  Anlage jetzt als bedeckt gilt (nicht für Schneefall, der erst kommt); im Zeitplan der Grund
+  `PV_SCHNEE` „PV gekürzt auf 10 % der Prognose: vermutlich Schnee auf den Modulen.“; auf der Seite
+  „System“ bleibt „forecast“ grün und meldet „PV-Prognose von HH:MM Uhr, gekürzt auf 10 %: vermutlich
+  Schnee auf den Modulen“; in Home Assistant der Sensor „PV Schnee“ (`sensor.bindaems_pv_schnee`).
 
 ### Lastprognose
 
@@ -5326,8 +5390,9 @@ Unter **Einstellungen** → „Lastmodell“ (Admins bearbeiten, alle anderen se
 
 ### Die Seite „Prognosen“
 
-Sie steht in der Navigation nach „Zeitplan“ und ist für alle Rollen sichtbar; nur die Taste ist für
-Admins. Zeitraum der Güte und des Verlaufs: „7 Tage“, „14 Tage“, „28 Tage“ oder „60 Tage“ (Segmentleiste in der Karte „Prognosegüte“).
+Sie steht in der Navigation nach „Zeitplan“ und ist für alle Rollen sichtbar; nur die Taste „Jetzt
+neu trainieren“ ist für Admins, die Knöpfe der Karte „Schnee auf den Modulen“ gibt es ab der Rolle
+„Bedienen“. Zeitraum der Güte und des Verlaufs: „7 Tage“, „14 Tage“, „28 Tage“ oder „60 Tage“ (Segmentleiste in der Karte „Prognosegüte“).
 
 | Karte | Inhalt |
 |---|---|
@@ -5336,6 +5401,12 @@ Admins. Zeitraum der Güte und des Verlaufs: „7 Tage“, „14 Tage“, „28 
 | Fehler je Tag | MAE je Tag als Linien „Profil“ und „Modell“, Achse „MAE (W)“ |
 | Backtest | Spalten „Woche ab“, „Vorlauf“, „Slots“, „Modell“, „Profil“ und „besser“, dazu die Zeile „Gesamt“. Leer: „Noch kein Backtest (braucht mindestens 28 Tage Daten).“ |
 | Was das Modell nutzt | der Anteil jedes Merkmals am Gewinn des Modells als Balken und Prozent, absteigend, mit lesbaren Namen (Vorlauf, Uhrzeit, Temperatur, … bzw. ein Sensor als „Wohnzimmer temperatur (Sensor)“); zunächst die ersten 5, „alle {n} Merkmale zeigen“ klappt den Rest auf |
+| Schnee auf den Modulen | der Zustand als Satz („frei“ oder etwa „vermutet, 10 % der Prognose, seit 07:15“, vor heute mit dem Tag), ein gedrückter Knopf als „Von Hand gemeldet: Schnee auf den Modulen.“ bzw. „Von Hand gemeldet: Module sind frei.“, ab der Rolle „Bedienen“ die Knöpfe „Schnee auf den Modulen“, „Module sind frei“ und, solange einer wirkt, „Automatik“, darunter das Diagramm „PV-Prognose heute und morgen“ mit der Reihe „PV-Prognose“ und gestrichelt „ohne Kürzung“. Mit „Schnee erkennen“ aus: „Schnee erkennen ist aus (Einstellungen, „PV-Modell“): keine Kürzung, die Knöpfe wirken nicht.“ Ohne Prognose: „Noch keine PV-Prognose.“ (die Knöpfe fehlen; die app antwortet dann 409) |
+
+Die Regeln hinter der Karte „Schnee auf den Modulen“ stehen oben unter „PV-Prognose mit
+Kalibrierung“, „Schnee auf den Modulen“. Nach einem Knopf rechnet die app die Kürzung sofort neu,
+und der Planer plant binnen 15 min neu. Wer die Kürzung gar nicht will, schaltet in den
+Einstellungen unter „PV-Modell“ „Schnee erkennen“ aus (Rückweg); die Knöpfe wirken dann nicht.
 
 Die Karte „Prognosegüte“ auf der Seite „System“ bleibt und verweist mit „Mehr unter Prognosen“ auf
 die Seite. Die Aufrufe dahinter stehen im Abschnitt „Prognosen“, „API für Lastmodell und
@@ -6891,6 +6962,27 @@ dessen Abfahrt in den Daten liegt, bei zwei Tagen also der erste Abend.
 Der größte Teil des Vorteils mit Auto ist das Verschieben des Ladens vom teuren Abend in die Nacht,
 bei `winter-leistung` dazu die niedrigere Spitze im Leistungspreis eines ganzen Monats.
 
+**Schnee auf den Modulen (`winter-schnee`).** Zwei Tage mit Preisen, Last und Auto wie
+`winter-spread`; die PV-Prognose ist ein klarer Wintertag mit 3000 W Spitze. Am ersten Tag fallen
+von 0 bis 4 Uhr 3 cm Schnee (Schneehöhe 0,05 m), die Module liefern bis 13:00 nur 5 %, danach voll;
+der zweite Tag ist normal. `--schnee` lässt `scenario_days` die Prognose vor jedem Plan wie der
+Prognosedienst kürzen (Abschnitt „Prognosen“, „Schnee auf den Modulen“), mit 9,8 kWp, dem Wetter
+der Datei und den Ist-Werten als Messung, ohne Lufttemperatur und ohne Handschalter:
+
+```bash
+python -m bindaems.tools.scenario_days --synthetisch winter-schnee --anzahl 2 --takt 60 \
+  --schnee --out bericht.md
+```
+
+Mit `--schnee` hält der Plan ab der Schneenacht den Akku für den Abend, statt ihn im Vertrauen auf
+die PV des Tages zu leeren; ab 13:30 sind zwei Viertelstunden frei gemessen, und die Kürzung endet.
+Gemessen am 11.11.2026 (stündlich neu geplant): mit Schneeerkennung bereinigt 7,30 €, ohne 7,42 €;
+„Victron allein“ 13,84 €. **Der Vorteil in Geld ist bei dieser Anlage klein:** Der Akku (30 kWh,
+Start 50 %) deckt den Abend auch ohne PV, ab 13:00 laden die Module nach, und der Planer plant jede
+Stunde mit dem gemessenen SOC neu. Der Nutzen der Erkennung ist, dass der Planer den Akku nicht
+leert, weil er auf PV wartet, die unter dem Schnee nicht kommt. Eine Datei ohne Schneefall und Schneehöhe (so schreibt
+sie `export_days`) rechnet mit `--schnee` genau wie ohne.
+
 Im Sommer ist der Optimierer gleich „Victron allein“: Die PV füllt den Akku, und „Victron allein“
 bezieht nie. Die Wintertage haben nur 800 W PV-Spitze, `wechselhaft` nur 1500 W; mit mehr PV (2000 W
 im Winter, bis 1600 W bei `wechselhaft`) bezöge „Victron allein“ zur Spitze nie oder kaum, und es gäbe
@@ -6938,6 +7030,8 @@ docker compose run --rm -T --entrypoint cat ems-app /data/bericht.md
     so schnell. Für die Abnahme zählt `--takt 15`; 30 Tage brauchen einige Minuten.
   - `--netzladen an|aus|einstellung` ersetzt den Schalter „Netzladen erlaubt“ der Datei;
     `einstellung` (Standard) lässt ihn, wie er beim Export stand.
+  - `--schnee` kürzt die PV-Prognose mit der Schneeerkennung (oben, `winter-schnee`); ohne Schneefall
+    und Schneehöhe in der Datei ändert es nichts.
   - **Rückgabewert:** 0 bei „Bestanden“, 1 bei „Nicht bestanden“, 2 bei ungültiger Eingabe und bei
     einem Fehler der Rechnung („Rechnung gescheitert: …“ auf stderr, kein Bericht).
 
