@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from tests.app_helpers import ingest, login_as
-from tests.unit.app.forecast.conftest import NOW
+from tests.unit.app.forecast.conftest import NOW, snowy
 
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.shared.timeutil import LOCAL_TZ
@@ -13,7 +13,7 @@ from bindaems.shared.timeutil import LOCAL_TZ
 def test_pv_route_has_quantiles(client, auth, filled_forecast):
     login_as(client, auth, "viewer")
     slots = client.get("/api/forecast/pv").json()["slots"]
-    assert slots and set(slots[0]) == {"start", "p50_w", "p25_w", "p75_w"}
+    assert slots and set(slots[0]) == {"start", "p50_w", "p25_w", "p75_w", "uncut_p50_w"}
     assert all(s["p25_w"] <= s["p50_w"] <= s["p75_w"] for s in slots)
     assert any(s["p25_w"] < s["p50_w"] < s["p75_w"] for s in slots)
 
@@ -216,3 +216,92 @@ def test_quality_daily_rejects_days_out_of_range(client, auth) -> None:
 
 def test_quality_daily_needs_login(client) -> None:
     assert client.get("/api/forecast/quality/daily").status_code == 401
+
+
+SNOW_AT = datetime(2026, 10, 9, 0, 0, tzinfo=UTC)  # heute 02:00 Ortszeit (die Uhr: 10:00)
+
+
+@pytest.fixture
+def snowy_forecast(forecast_service, respx_mock):
+    """Prognose nach 2 cm Schneefall in der Nacht: vermutet bedeckt, gekürzt auf 10 %."""
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    asyncio.run(forecast_service.refresh())
+    return forecast_service
+
+
+def test_pv_route_shows_the_snow_cut(client, auth, snowy_forecast) -> None:
+    login_as(client, auth, "viewer")
+    body = client.get("/api/forecast/pv").json()
+    assert body["snow"] == {
+        "state": "vermutet",
+        "factor_pct": 10,
+        "since": "2026-10-09T00:00:00+00:00",
+        "override": None,
+    }
+    cut = [s for s in body["slots"] if s["uncut_p50_w"] > s["p50_w"]]
+    assert cut and all(s["p50_w"] == pytest.approx(0.1 * s["uncut_p50_w"]) for s in cut)
+
+
+def test_pv_route_without_forecast_has_no_snow(client, auth) -> None:
+    login_as(client, auth, "viewer")
+    body = client.get("/api/forecast/pv").json()
+    assert body["snow"] is None and body["slots"] == []
+
+
+def test_pv_route_without_cut_is_free(client, auth, filled_forecast) -> None:
+    login_as(client, auth, "viewer")
+    body = client.get("/api/forecast/pv").json()
+    assert body["snow"] == {"state": "frei", "factor_pct": 100, "since": None, "override": None}
+    assert all(s["uncut_p50_w"] == s["p50_w"] for s in body["slots"])
+
+
+def test_snow_buttons_need_operator_and_csrf(client, auth, snowy_forecast) -> None:
+    csrf = login_as(client, auth, "viewer")
+    assert (
+        client.post("/api/forecast/pv/snow", json={"mode": "free"}, headers=csrf).status_code == 403
+    )
+    login_as(client, auth, "operator")
+    assert client.post("/api/forecast/pv/snow", json={"mode": "free"}).status_code == 403  # CSRF
+    assert snowy_forecast.latest().snow.state == "vermutet"
+
+
+def test_snow_button_free_and_back_to_auto(client, auth, snowy_forecast, audit) -> None:
+    csrf = login_as(client, auth, "operator")
+    response = client.post("/api/forecast/pv/snow", json={"mode": "free"}, headers=csrf)
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "state": "frei",
+        "factor_pct": 100,
+        "since": None,
+        "override": "free",
+    }
+    assert client.get("/api/forecast/pv").json()["snow"]["override"] == "free"
+    entry = audit.recent(1)[0]
+    assert (entry.actor, entry.source, entry.action, entry.details) == (
+        "operator-test",
+        "ui",
+        "forecast.snow_override",
+        {"mode": "free"},
+    )
+    back = client.post("/api/forecast/pv/snow", json={"mode": None}, headers=csrf)
+    assert back.status_code == 200
+    assert (back.json()["state"], back.json()["override"]) == ("vermutet", None)
+
+
+def test_snow_button_covered(client, auth, filled_forecast) -> None:
+    csrf = login_as(client, auth, "operator")
+    body = client.post("/api/forecast/pv/snow", json={"mode": "covered"}, headers=csrf).json()
+    assert (body["state"], body["factor_pct"], body["override"]) == ("vermutet", 10, "covered")
+
+
+@pytest.mark.parametrize("body", [{"mode": "x"}, {}, {"mode": "free", "extra": 1}, {"mode": 1}])
+def test_snow_button_rejects_other_bodies(client, auth, snowy_forecast, body) -> None:
+    csrf = login_as(client, auth, "operator")
+    assert client.post("/api/forecast/pv/snow", json=body, headers=csrf).status_code == 422
+
+
+def test_snow_button_without_forecast_is_a_conflict(client, auth) -> None:
+    csrf = login_as(client, auth, "operator")
+    response = client.post("/api/forecast/pv/snow", json={"mode": "free"}, headers=csrf)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Noch keine PV-Prognose"

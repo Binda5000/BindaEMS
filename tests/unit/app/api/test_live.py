@@ -24,7 +24,7 @@ def client(make_client, live, guard):
     def ok_source() -> ComponentStatus:
         return ComponentStatus("prices", True, "Preise bis 10.10. 23:45")
 
-    return make_client(live_router(live, guard, [ok_source], lambda: ["W1"]))
+    return make_client(live_router(live, guard, [ok_source], lambda: ["W1"], lambda: ["I1"]))
 
 
 def test_state_requires_login_and_returns_cache(client, auth, live) -> None:
@@ -45,6 +45,7 @@ def test_system_lists_components_and_warnings(client, auth) -> None:
         "details": {},
     }
     assert body["warnings"] == ["W1"] and body["core"]["connected"] is True
+    assert body["info"] == ["I1"]  # Hinweise der Stufe „info“, z. B. die PV-Kürzung bei Schnee
 
 
 def test_live_websocket_sends_hello_then_relays(client, auth, live) -> None:

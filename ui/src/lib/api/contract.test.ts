@@ -27,6 +27,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	prices: s.PricesResponseSchema,
 	'prices-now': s.PricesNowSchema,
 	forecast: s.ForecastSchema,
+	'forecast-snow': s.ForecastSnowSchema,
 	'forecast-load': s.LoadForecastSchema,
 	'forecast-quality': s.QualitySchema,
 	'forecast-quality-daily': s.QualityDailySchema,

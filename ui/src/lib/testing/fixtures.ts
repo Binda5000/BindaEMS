@@ -5,6 +5,7 @@ import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
 import drivingJson from '$lib/api/contract/learning-driving.json';
 import thermalJson from '$lib/api/contract/learning-thermal.json';
+import forecastJson from '$lib/api/contract/forecast.json';
 import historyJson from '$lib/api/contract/history.json';
 import learningStatusJson from '$lib/api/contract/learning-load.json';
 import learningCandidatesJson from '$lib/api/contract/learning-candidates.json';
@@ -22,6 +23,7 @@ import {
 	DaySummarySchema,
 	DecisionsResponseSchema,
 	DrivingStatusSchema,
+	ForecastSchema,
 	HistoryResponseSchema,
 	LatestDecisionsResponseSchema,
 	LearningStatusSchema,
@@ -42,6 +44,7 @@ import {
 	type DecisionsResponse,
 	type DrivingStatus,
 	type DrivingVehicle,
+	type Forecast,
 	type HistoryResponse,
 	type LatestDecisionsResponse,
 	type LearningStatus,
@@ -75,6 +78,11 @@ export function reading(
 
 export function limits(): Limits {
 	return v.parse(LimitsSchema, limitsJson);
+}
+
+/** PV-Prognose der Demo-Welt: verschneiter Morgen, ab 06:00 vermutet bedeckt, gekürzt auf 10 % */
+export function forecast(overrides: Partial<Forecast> = {}): Forecast {
+	return { ...v.parse(ForecastSchema, forecastJson), ...overrides };
 }
 
 export function system(): SystemResponse {

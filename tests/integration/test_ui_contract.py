@@ -95,6 +95,7 @@ OTHER = {
     "plan-grid-charge",
     "control-support",
     "control-automation",
+    "forecast-snow",
 }
 
 
@@ -167,6 +168,9 @@ def collect_responses(world: World) -> dict[str, object]:
     )
     assert automation.status_code == 200, automation.text
     actual["control-automation"] = automation.json()
+    snow = client.post("/api/forecast/pv/snow", json={"mode": "free"}, headers=csrf)
+    assert snow.status_code == 200, snow.text
+    actual["forecast-snow"] = snow.json()
     return actual
 
 
@@ -407,6 +411,27 @@ async def test_demo_world_has_a_thermal_model(cfg, tmp_path) -> None:
     steps = [slot["thermal_steps"] for slot in plan["slots"]]
     assert max(steps) > 0 > min(steps)  # vorheizen und absenken
     assert all("KLIMA_MEHR" not in slot["codes"] for slot in plan["slots"])  # nur Vorschau
+
+
+async def test_demo_world_has_a_snowy_morning(cfg, tmp_path) -> None:
+    # Grundlage der Karte „Schnee auf den Modulen“ und des Hinweises der Übersicht: Schneefall am
+    # Morgen, die Prognose ab jetzt gekürzt; der Plan blieb mit der ungekürzten gerechnet
+    world = await build_world(cfg, tmp_path)
+    try:
+        app = world.app
+        forecast = app.forecast.latest()
+        plan = app.planning.current()
+        assert forecast is not None and plan is not None
+        assert (forecast.snow.state, forecast.snow.factor) == ("vermutet", 0.1)
+        assert forecast.snow.since is not None
+        assert forecast.snow.since.astimezone(LOCAL_TZ).strftime("%H:%M") == "06:00"
+        assert forecast.p50_w != forecast.uncut_p50_w
+        assert all(reason.code != "PV_SCHNEE" for slot in plan.slots for reason in slot.reasons)
+        assert app._info() == [
+            "PV-Prognose gekürzt: vermutlich Schnee auf den Modulen (seit 06:00)"
+        ]
+    finally:
+        world.close()
 
 
 async def test_demo_world_has_operations_data(cfg, tmp_path) -> None:

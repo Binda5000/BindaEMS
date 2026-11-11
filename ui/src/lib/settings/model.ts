@@ -166,6 +166,8 @@ export interface SettingsDraft {
 	tariff: TariffDraft;
 	feedIn: { month: string; ct: string }[];
 	prices: PriceSettings;
+	/** PV-Modell: nur der Schalter „Schnee erkennen“; die Modellwerte bleiben, wie sie sind */
+	pvModel: { snowDetection: boolean };
 	planning: PlanningDraft;
 	learning: LearningDraft;
 	/** eigene Namen der Ladestationen nach Schlüssel; leer = Typname */
@@ -458,6 +460,7 @@ export function draftFrom(
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 			.map(([month, ct]) => ({ month, ct: decimalText(ct) })),
 		prices: { ...settings.prices },
+		pvModel: { snowDetection: settings.pv_model.snow_detection },
 		planning: planningDraft(settings.planning),
 		learning: learningDraft(settings.learning, vehicles),
 		wallboxNames: {
@@ -987,6 +990,7 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		settings: {
 			...settings,
 			prices: { ...settings.prices, ...draft.prices },
+			pv_model: { ...settings.pv_model, snow_detection: draft.pvModel.snowDetection },
 			tariff,
 			feed_in: { ...settings.feed_in, monthly_ct: monthly },
 			planning: { ...settings.planning, ...planning },

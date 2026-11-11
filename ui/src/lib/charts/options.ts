@@ -21,6 +21,7 @@ import {
 	formatSoc,
 	formatTime
 } from '$lib/format';
+import { isCut } from '$lib/forecast/snow';
 import type { DailyPoint } from '$lib/forecast/view';
 import { bucketLabels, vehicleLabel } from '$lib/stats/view';
 import { parseIso, todayVienna } from '$lib/time';
@@ -307,6 +308,55 @@ export function priceForecastOption(
 			// SOC ohne eigene Beschriftung; die Achse bleibt unsichtbar, nur die Linien zählen
 			...(hasSoc ? [{ ...valueAxis('%', palette, false), min: 0, max: 100 }] : [])
 		],
+		series
+	};
+}
+
+/**
+ * PV-Prognose (P50) mit der Linie „jetzt“; ist ein Slot bei Schnee gekürzt, zusätzlich die
+ * ungekürzte P50 gestrichelt („ohne Kürzung“).
+ */
+export function pvSnowOption(
+	forecast: ForecastSlot[],
+	nowIso: string,
+	palette: Palette
+): EChartsCoreOption {
+	const now = parseIso(nowIso);
+	const series: LineSeriesOption[] = [
+		{
+			id: 'pv',
+			name: 'PV-Prognose',
+			type: 'line',
+			smooth: true,
+			showSymbol: false,
+			data: forecast.map((slot): Point => [epoch(slot.start), slot.p50_w / 1000]),
+			lineStyle: { color: palette.pv },
+			itemStyle: { color: palette.pv },
+			markLine: nowMarkLine(now, palette)
+		}
+	];
+	if (isCut(forecast)) {
+		series.push({
+			id: 'pv_uncut',
+			name: 'ohne Kürzung',
+			type: 'line',
+			smooth: true,
+			showSymbol: false,
+			data: forecast.map((slot): Point => [epoch(slot.start), slot.uncut_p50_w / 1000]),
+			lineStyle: { color: palette.pv, type: 'dashed' },
+			itemStyle: { color: palette.pv }
+		});
+	}
+	const base = baseOption(palette) as { legend: object; tooltip: object };
+	return {
+		...base,
+		legend: { ...base.legend, data: series.map((s) => s.name) },
+		tooltip: {
+			...base.tooltip,
+			trigger: 'axis',
+			formatter: axisTooltip({ 'PV-Prognose': kw, 'ohne Kürzung': kw })
+		},
+		yAxis: valueAxis('kW', palette),
 		series
 	};
 }

@@ -155,6 +155,9 @@ export const api = {
 	refreshPrices: (): Promise<s.PriceStatus> =>
 		request('POST', '/api/prices/refresh', { schema: s.PriceStatusSchema }),
 	forecast: (o?: Load): Promise<s.Forecast> => get('/api/forecast/pv', s.ForecastSchema, o),
+	/** Handschalter bei Schnee; `null` wieder Automatik. 409 ohne Prognose */
+	setSnowOverride: (mode: s.SnowOverride | null): Promise<s.ForecastSnow> =>
+		request('POST', '/api/forecast/pv/snow', { body: { mode }, schema: s.ForecastSnowSchema }),
 	loadForecast: (o?: Load): Promise<s.LoadForecast> =>
 		get('/api/forecast/load', s.LoadForecastSchema, o),
 	backup: (o?: Load): Promise<s.Backup> => get('/api/backup', s.BackupSchema, o),

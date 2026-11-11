@@ -11,6 +11,7 @@ import {
 	nowMarkLine,
 	presenceOption,
 	priceForecastOption,
+	pvSnowOption,
 	qualityDailyOption,
 	statsEnergyOption,
 	vehicleTrendOption
@@ -62,7 +63,15 @@ describe('Preise und Prognose', () => {
 	it('lässt die Höhe des PV-Bandes nie unter 0 fallen, auch wenn P75 unter P25 liegt', () => {
 		const option = priceForecastOption(
 			[slot('2026-10-09T08:00:00+00:00', 13.44, null)],
-			[{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 3000, p75_w: 2400 }],
+			[
+				{
+					start: '2026-10-09T08:00:00+00:00',
+					p50_w: 2500,
+					p25_w: 3000,
+					p75_w: 2400,
+					uncut_p50_w: 2500
+				}
+			],
 			null,
 			'2026-10-09T08:05:00+00:00',
 			palette
@@ -74,7 +83,15 @@ describe('Preise und Prognose', () => {
 	it('zeigt die PV-Prognose in kW auf der zweiten Achse und markiert jetzt', () => {
 		const option = priceForecastOption(
 			[slot('2026-10-09T08:00:00+00:00', 13.44, null)],
-			[{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000 }],
+			[
+				{
+					start: '2026-10-09T08:00:00+00:00',
+					p50_w: 2500,
+					p25_w: 1750,
+					p75_w: 3000,
+					uncut_p50_w: 2500
+				}
+			],
 			null,
 			'2026-10-09T08:05:00+00:00',
 			palette
@@ -91,8 +108,14 @@ describe('Preise und Prognose', () => {
 	});
 
 	const FORECAST = [
-		{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000 },
-		{ start: '2026-10-09T08:15:00+00:00', p50_w: 2600, p25_w: 1800, p75_w: 3200 }
+		{
+			start: '2026-10-09T08:00:00+00:00',
+			p50_w: 2500,
+			p25_w: 1750,
+			p75_w: 3000,
+			uncut_p50_w: 2500
+		},
+		{ start: '2026-10-09T08:15:00+00:00', p50_w: 2600, p25_w: 1800, p75_w: 3200, uncut_p50_w: 2600 }
 	];
 	const LOAD: LoadForecast = {
 		issued_at: '2026-10-09T08:00:00+00:00',
@@ -651,5 +674,47 @@ describe('Legende, „jetzt“ und Tooltip', () => {
 			expect(option.tooltip.confine, name).toBe(true);
 			expect(option.legend.show, name).toBe(false);
 		}
+	});
+});
+
+describe('PV-Prognose mit Kürzung bei Schnee', () => {
+	const pvSlot = (minute: number, p50: number, uncut = p50) => ({
+		start: new Date(at(minute)).toISOString(),
+		p50_w: p50,
+		p25_w: p50,
+		p75_w: p50,
+		uncut_p50_w: uncut
+	});
+
+	it('zeigt die ungekürzte Prognose gestrichelt, wenn ein Slot gekürzt ist', () => {
+		const option = pvSnowOption(
+			[pvSlot(0, 400, 4000), pvSlot(15, 500, 5000)],
+			'2026-10-09T08:05:00+00:00',
+			palette
+		);
+		const series = option.series as LineSeriesOption[];
+		expect(series.map((s) => [s.name, s.lineStyle?.type ?? 'solid'])).toEqual([
+			['PV-Prognose', 'solid'],
+			['ohne Kürzung', 'dashed']
+		]);
+		expect(series[0].data).toEqual([
+			[at(0), 0.4],
+			[at(15), 0.5]
+		]);
+		expect(series[1].data).toEqual([
+			[at(0), 4],
+			[at(15), 5]
+		]);
+		expect((option.legend as { data: string[] }).data).toEqual(['PV-Prognose', 'ohne Kürzung']);
+		expect(series[0].markLine?.data).toEqual([{ xAxis: at(5) }]);
+	});
+
+	it('ohne gekürzten Slot nur die Prognose', () => {
+		const option = pvSnowOption(
+			[pvSlot(0, 400), pvSlot(15, 500)],
+			'2026-10-09T08:05:00+00:00',
+			palette
+		);
+		expect((option.series as LineSeriesOption[]).map((s) => s.name)).toEqual(['PV-Prognose']);
 	});
 });

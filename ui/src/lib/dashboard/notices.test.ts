@@ -40,6 +40,20 @@ it('ordnet Fehler vor Warnungen und entfernt Doppeltes', () => {
 	]);
 });
 
+it('macht aus `info` Hinweise der Stufe „info“, nach Warnungen', () => {
+	const text = 'PV-Prognose gekürzt: vermutlich Schnee auf den Modulen (seit 07:15)';
+	const base = system();
+	const data = { ...base, core: { ...base.core, health: null }, components: [] };
+	expect(noticesFrom({ ...data, warnings: ['W'], info: [text] })).toEqual([
+		{ level: 'warning', text: 'W' },
+		{ level: 'info', text }
+	]);
+	// ältere Stände ohne `info`
+	const older: Record<string, unknown> = { ...base };
+	delete older.info;
+	expect(v.parse(SystemResponseSchema, older).info).toEqual([]);
+});
+
 it('ohne Systemdaten gibt es keine Hinweise', () => {
 	expect(noticesFrom(undefined)).toEqual([]);
 });

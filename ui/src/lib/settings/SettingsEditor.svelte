@@ -250,6 +250,18 @@
 		</div>
 	</fieldset>
 
+	<fieldset>
+		<legend>PV-Modell</legend>
+		<label class="check">
+			<input type="checkbox" bind:checked={draft.pvModel.snowDetection} />
+			Schnee erkennen
+		</label>
+		<p class="hint">
+			Liegt vermutlich Schnee auf den Modulen, kürzt die app die PV-Prognose (Seite „Prognosen“).
+			Aus: keine Kürzung, die Knöpfe „Schnee auf den Modulen“ und „Module sind frei“ wirken nicht.
+		</p>
+	</fieldset>
+
 	<PlanningEditor bind:draft={draft.planning} {errors} />
 
 	<LearningEditor bind:draft={draft.learning} {errors} {loadCandidates} {vehicles} />
@@ -379,6 +391,13 @@
 
 	label {
 		font-size: 0.9375rem;
+	}
+
+	.check {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-height: 2.75rem;
 	}
 
 	.month-row {

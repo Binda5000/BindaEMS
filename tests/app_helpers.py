@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +93,24 @@ def core_input(
 
 def raw_response(source: str, body: str, status: int = 200) -> RawResponse:
     return RawResponse(source, f"https://{source}.example/", T_APP, status, body)
+
+
+def with_snow(
+    body: str, snowfall_cm: Mapping[datetime, float] | None = None, *, depth_m: float = 0.0
+) -> str:
+    """Open-Meteo-Antwort ``body`` mit stündlichem Schneeblock über dieselbe Zeit wie
+    ``minutely_15``; ``snowfall_cm`` je Beginn der Stunde (UTC), sonst 0 cm."""
+    data = json.loads(body)
+    times = data["minutely_15"]["time"]
+    stamps = list(range(times[0] + 3600, times[-1] + 1, 3600))  # Ende der Stunde wie Open-Meteo
+    falls = snowfall_cm or {}
+    data["hourly_units"] = {"time": "unixtime", "snowfall": "cm", "snow_depth": "m"}
+    data["hourly"] = {
+        "time": stamps,
+        "snowfall": [falls.get(datetime.fromtimestamp(t - 3600, UTC), 0.0) for t in stamps],
+        "snow_depth": [depth_m] * len(stamps),
+    }
+    return json.dumps(data)
 
 
 def price_row(

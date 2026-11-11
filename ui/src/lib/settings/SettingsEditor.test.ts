@@ -512,6 +512,22 @@ it('stellt den Tagesbericht ein: Auswahl und Uhrzeit', async () => {
 	expect(save.mock.calls[0][1].ops).toEqual({ report: 'findings', report_at: '06:45' });
 });
 
+it('schaltet „Schnee erkennen“ im PV-Modell; die übrigen Werte bleiben', async () => {
+	const current = settingsCurrent();
+	const save = vi.fn().mockResolvedValueOnce(current);
+	render(SettingsEditor, { current, save, onSaved: vi.fn(), onReload: vi.fn() });
+	const group = screen.getByRole('group', { name: 'PV-Modell' });
+	const box = within(group).getByRole('checkbox', { name: 'Schnee erkennen' });
+	expect(box).toBeChecked();
+	await fireEvent.click(box);
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	await vi.waitFor(() => expect(save).toHaveBeenCalled());
+	expect(save.mock.calls[0][1].pv_model).toEqual({
+		...current.settings.pv_model,
+		snow_detection: false
+	});
+});
+
 it('zeigt Serverfehler zur Uhrzeit des Tagesberichts am Feld', async () => {
 	const save = reject422({ loc: ['ops', 'report_at'], msg: 'Uhrzeit ungültig' });
 	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });

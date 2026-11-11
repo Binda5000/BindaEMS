@@ -27,7 +27,10 @@ def live_router(
     guard: Guard,
     sources: Sequence[StatusSource],
     warnings: Callable[[], list[str]],
+    info: Callable[[], list[str]],
 ) -> APIRouter:
+    """``warnings`` und ``info`` sind Hinweise der Übersicht in den Stufen „Warnung“ und „Info“
+    (z. B. die PV-Kürzung bei Schnee)."""
     router = APIRouter()
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
 
@@ -49,6 +52,7 @@ def live_router(
             "core": {"connected": live.connected, "health": live.health},
             "components": [status_json(source()) for source in sources],
             "warnings": warnings(),
+            "info": info(),
         }
 
     @router.websocket("/api/live")

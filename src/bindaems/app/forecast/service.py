@@ -63,7 +63,14 @@ from bindaems.app.forecast.openmeteo import (
     parse_snow,
 )
 from bindaems.app.forecast.pv_model import combine, plane_power_w
-from bindaems.app.forecast.snow import NO_CUT, Observation, Override, SnowCut, snow_cut
+from bindaems.app.forecast.snow import (
+    NO_CUT,
+    OVERRIDE_MAX,
+    Observation,
+    Override,
+    SnowCut,
+    snow_cut,
+)
 from bindaems.app.history.influx import RP_LONG
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.schedule import next_local
@@ -85,6 +92,8 @@ CALIBRATION_WINDOW = timedelta(days=30)
 SNOW_WINDOW = timedelta(hours=36)  # so weit zurück liest die Prüfung auf Schnee die Abrechnung
 CHANGE_MIN = 0.05  # ab dieser Änderung eines Faktors gibt es eine neue ``revision``
 OVERRIDE_ACTION = "forecast.snow_override"
+NO_FORECAST = "Noch keine PV-Prognose"
+SNOW_INFO = "PV-Prognose gekürzt: vermutlich Schnee auf den Modulen"  # Entscheidung 11
 
 
 @dataclass(frozen=True)
@@ -119,6 +128,22 @@ class _Issued:
     uncut_p75_w: Mapping[datetime, float]
     weather: Sequence[SnowHour]  # Schneestunden der Antwort für die erste Fläche
     temperatures: Mapping[datetime, float]
+
+
+def snow_info(forecast: PvForecast | None, now: datetime) -> list[str]:
+    """Hinweis der Übersicht (Stufe ``info``), solange die Anlage jetzt als bedeckt gilt
+    (``vermutet`` oder ``gemessen``); „seit“ in Ortszeit, vor heute mit dem Tag. Die Kürzung für
+    künftigen Schneefall zeigen Zeitplan und Prognosen, nicht die Übersicht."""
+    if forecast is None or forecast.snow.state == "frei":
+        return []
+    since = forecast.snow.since
+    if since is None:
+        return [SNOW_INFO]
+    local = since.astimezone(LOCAL_TZ)
+    shown = f"{local:%H:%M}"
+    if local.date() < now.astimezone(LOCAL_TZ).date():
+        shown = f"{local:%d.%m.} {shown}"
+    return [f"{SNOW_INFO} (seit {shown})"]
 
 
 def _cut(series: Mapping[datetime, float], cut: SnowCut) -> dict[datetime, float]:
@@ -365,6 +390,14 @@ class ForecastService:
         log.info("Handschalter Schnee gesetzt", mode=mode, actor=actor)
         return True
 
+    def snow_override(self) -> Literal["covered", "free"] | None:
+        """Der gedrückte Knopf, solange er wirkt (höchstens ``OVERRIDE_MAX``); sonst ``None``
+        (Automatik)."""
+        override = self._override
+        if override is None or self._clock.now() - ensure_utc(override.at) > OVERRIDE_MAX:
+            return None
+        return override.mode
+
     def _snow_cut(
         self,
         now: datetime,
@@ -571,7 +604,7 @@ class ForecastService:
             return ComponentStatus("forecast", False, self._error)
         forecast = self.latest()
         if forecast is None:
-            return ComponentStatus("forecast", False, "Noch keine PV-Prognose")
+            return ComponentStatus("forecast", False, NO_FORECAST)
         issued = forecast.issued_at.astimezone(LOCAL_TZ)
         message = f"PV-Prognose von {issued:%H:%M} Uhr"
         snow = forecast.snow

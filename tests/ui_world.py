@@ -34,6 +34,7 @@ from tests.app_helpers import (
     set_tariff,
     set_wallbox_names,
     with_grid_usage,
+    with_snow,
 )
 from tests.helpers import FakeSink
 from tests.ui_history import (
@@ -109,6 +110,15 @@ DEMO_PASSWORD = "demo-passwort-1"
 DEMO_TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 TOKEN = "demo-token-" + "x" * 21
 OPEN_METEO_FIXTURE = Path("tests/fixtures/openmeteo_sued_2026-10-09.json")
+# Verschneiter Morgen (Plan „Schnee auf den Modulen“): 1,6 cm Schnee von 05:00 bis 08:00 Ortszeit,
+# 2 cm am Boden; ab 06:00 gelten die Module als bedeckt (vermutet), die Prognose ist bis morgen
+# Abend auf 10 % gekürzt
+DEMO_SNOWFALL_CM = {
+    datetime(2026, 10, 9, 3, 0, tzinfo=UTC): 0.4,
+    datetime(2026, 10, 9, 4, 0, tzinfo=UTC): 0.6,
+    datetime(2026, 10, 9, 5, 0, tzinfo=UTC): 0.6,
+}
+DEMO_SNOW_DEPTH_M = 0.02
 
 # Mittagssituation: PV 3,2 kW, Netzbezug 0,4 kW, Akku lädt 1 kW, Wall Connector 1,38 kW
 PV_W = 3200.0
@@ -605,7 +615,7 @@ def _influx(request: httpx.Request) -> httpx.Response:
 def _router(cfg: Config) -> respx.MockRouter:
     router = respx.mock(assert_all_mocked=True, assert_all_called=False)
     mock_all_sources(router)
-    router.get(OPEN_METEO_URL).respond(200, text=OPEN_METEO_FIXTURE.read_text())
+    router.get(OPEN_METEO_URL, name="open_meteo").respond(200, text=OPEN_METEO_FIXTURE.read_text())
     router.post(cfg.influxdb.url.rstrip("/") + "/query").mock(side_effect=_influx)
     return router
 
@@ -1494,6 +1504,17 @@ def _heating_days(app: AppRuntime) -> None:
             )
 
 
+async def _snowy_morning(app: AppRuntime, router: respx.MockRouter) -> None:
+    """Die PV-Prognose nach dem Schneefall des Morgens; erst nach dem Plan, der so mit der
+    ungekürzten Prognose gerechnet bleibt (wie Plan und übrige Vertragsdateien vor dem Plan
+    „Schnee auf den Modulen“). Der Planungsdienst des Demo-Backends plant beim Start damit neu."""
+    recording = await asyncio.to_thread(OPEN_METEO_FIXTURE.read_text)
+    body = with_snow(recording, DEMO_SNOWFALL_CM, depth_m=DEMO_SNOW_DEPTH_M)
+    router.routes["open_meteo"].respond(200, text=body)
+    forecast = await app.forecast.refresh()
+    assert forecast is not None and forecast.snow.state == "vermutet", forecast
+
+
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
@@ -1562,6 +1583,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         await _driving(app)
         # erst nach dem Plan: er bleibt mit dem Profil gerechnet, die Ausgabe nennt das Modell
         await app.load_forecast.refresh()
+        await _snowy_morning(app, router)
     except BaseException:
         router.stop(quiet=True)
         raise

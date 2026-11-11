@@ -5,6 +5,7 @@ import type { LearningStatus, Role } from '$lib/api/schemas';
 import {
 	driving,
 	drivingVehicle,
+	forecast,
 	learningStatus,
 	quality,
 	qualityDaily,
@@ -23,7 +24,9 @@ const { api, user } = vi.hoisted(() => ({
 		recomputeDriving: vi.fn(),
 		thermalStatus: vi.fn(),
 		recomputeThermal: vi.fn(),
-		settings: vi.fn()
+		settings: vi.fn(),
+		forecast: vi.fn(),
+		setSnowOverride: vi.fn()
 	},
 	user: { role: 'admin' as Role }
 }));
@@ -66,16 +69,18 @@ beforeEach(() => {
 	api.drivingStatus.mockResolvedValue(driving());
 	api.thermalStatus.mockResolvedValue(thermal());
 	api.settings.mockResolvedValue(settingsCurrent());
+	api.forecast.mockResolvedValue(forecast());
 });
 
 afterEach(() => {
 	vi.useRealTimers();
 });
 
-it('zeigt alle acht Karten', async () => {
+it('zeigt alle neun Karten', async () => {
 	render(Page);
 	await screen.findByRole('heading', { name: 'Wärmemodell' });
 	for (const name of [
+		'Schnee auf den Modulen',
 		'Lastprognose',
 		'Prognosegüte',
 		'Fehler je Tag',
@@ -554,5 +559,114 @@ describe('Wärmemodell', () => {
 			within(card('Wärmemodell')).getByRole('button', { name: 'Jetzt neu berechnen' })
 		);
 		expect(await within(card('Wärmemodell')).findByText('Start fehlgeschlagen')).toBeVisible();
+	});
+});
+
+describe('Schnee auf den Modulen', () => {
+	const SNOW = {
+		state: 'vermutet' as const,
+		factor_pct: 10,
+		since: '2026-10-09T05:15:00+00:00',
+		override: null
+	};
+	const FREE = { state: 'frei' as const, factor_pct: 100, since: null, override: 'free' as const };
+	const snowCard = () => card('Schnee auf den Modulen');
+	/** die Slots ohne Kürzung: ungekürzt = gekürzt */
+	const uncut = () => forecast().slots.map((slot) => ({ ...slot, p50_w: slot.uncut_p50_w }));
+
+	it('zeigt Zustand, Anteil der Prognose und „seit“', async () => {
+		api.forecast.mockResolvedValue(forecast({ snow: SNOW }));
+		render(Page);
+		expect(
+			await within(snowCard()).findByText('vermutet, 10 % der Prognose, seit 07:15')
+		).toBeVisible();
+	});
+
+	it('Knöpfe nur mit der Rolle Bedienen; „Automatik“ erst, wenn ein Knopf wirkt', async () => {
+		user.role = 'operator';
+		render(Page);
+		const section = within(snowCard());
+		expect(await section.findByRole('button', { name: 'Schnee auf den Modulen' })).toBeVisible();
+		expect(section.getByRole('button', { name: 'Module sind frei' })).toBeVisible();
+		expect(section.queryByRole('button', { name: 'Automatik' })).toBeNull();
+	});
+
+	it('ohne die Rolle Bedienen keine Knöpfe', async () => {
+		user.role = 'viewer';
+		render(Page);
+		await within(snowCard()).findByText(/^vermutet, 10 % der Prognose/);
+		expect(within(snowCard()).queryByRole('button', { name: 'Module sind frei' })).toBeNull();
+		expect(within(snowCard()).queryByRole('button', { name: 'Schnee auf den Modulen' })).toBeNull();
+	});
+
+	it('gestrichelte Reihe „ohne Kürzung“ nur, wenn ein Slot gekürzt ist', async () => {
+		render(Page);
+		expect(
+			await within(snowCard()).findByRole('button', { name: 'ohne Kürzung' })
+		).toBeInTheDocument();
+		expect(within(snowCard()).getByRole('button', { name: 'PV-Prognose' })).toBeInTheDocument();
+	});
+
+	it('ohne gekürzten Slot keine Reihe „ohne Kürzung“', async () => {
+		api.forecast.mockResolvedValue(forecast({ snow: FREE, slots: uncut() }));
+		render(Page);
+		expect(
+			await within(snowCard()).findByRole('button', { name: 'PV-Prognose' })
+		).toBeInTheDocument();
+		expect(within(snowCard()).queryByRole('button', { name: 'ohne Kürzung' })).toBeNull();
+	});
+
+	it('„Module sind frei“ meldet frei, danach gibt es „Automatik“', async () => {
+		api.setSnowOverride.mockResolvedValue(FREE);
+		render(Page);
+		const section = within(snowCard());
+		api.forecast.mockResolvedValue(forecast({ snow: FREE, slots: uncut() }));
+		await fireEvent.click(await section.findByRole('button', { name: 'Module sind frei' }));
+		expect(api.setSnowOverride).toHaveBeenCalledWith('free');
+		expect(await section.findByText('frei')).toBeVisible();
+		expect(section.getByText('Von Hand gemeldet: Module sind frei.')).toBeVisible();
+		api.setSnowOverride.mockResolvedValue({ ...SNOW, override: null });
+		await fireEvent.click(section.getByRole('button', { name: 'Automatik' }));
+		expect(api.setSnowOverride).toHaveBeenLastCalledWith(null);
+	});
+
+	it('„Schnee auf den Modulen“ meldet bedeckt', async () => {
+		api.setSnowOverride.mockResolvedValue({ ...SNOW, override: 'covered' });
+		render(Page);
+		await fireEvent.click(
+			await within(snowCard()).findByRole('button', { name: 'Schnee auf den Modulen' })
+		);
+		expect(api.setSnowOverride).toHaveBeenCalledWith('covered');
+	});
+
+	it('zeigt die Ablehnung ohne Prognose an der Karte', async () => {
+		api.setSnowOverride.mockRejectedValue(new ApiError(409, 'Noch keine PV-Prognose'));
+		render(Page);
+		await fireEvent.click(
+			await within(snowCard()).findByRole('button', { name: 'Module sind frei' })
+		);
+		expect(await within(snowCard()).findByText('Noch keine PV-Prognose')).toBeVisible();
+	});
+
+	it('ohne Prognose ein Satz statt Zustand und Diagramm', async () => {
+		api.forecast.mockResolvedValue(forecast({ issued_at: null, slots: [], snow: null }));
+		render(Page);
+		expect(await within(snowCard()).findByText('Noch keine PV-Prognose.')).toBeVisible();
+		expect(within(snowCard()).queryByRole('button', { name: 'PV-Prognose' })).toBeNull();
+	});
+
+	it('nennt die abgeschaltete Erkennung', async () => {
+		const current = settingsCurrent();
+		const pvModel = { ...current.settings.pv_model, snow_detection: false };
+		api.settings.mockResolvedValue({
+			...current,
+			settings: { ...current.settings, pv_model: pvModel }
+		});
+		render(Page);
+		expect(
+			await within(snowCard()).findByText(
+				'Schnee erkennen ist aus (Einstellungen, „PV-Modell“): keine Kürzung, die Knöpfe wirken nicht.'
+			)
+		).toBeVisible();
 	});
 });

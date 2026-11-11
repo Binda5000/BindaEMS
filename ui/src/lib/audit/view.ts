@@ -44,7 +44,15 @@ const ACTIONS: Record<string, string> = {
 	'intent.actuators': 'Betriebsart der Aktoren geändert',
 	'control.support': 'Akku-Unterstützung geändert',
 	'control.automation': 'Automatik geändert',
-	'lock.acknowledge': 'Sperre quittiert'
+	'lock.acknowledge': 'Sperre quittiert',
+	'forecast.snow_override': 'PV: Schneeerkennung (Handschalter)'
+};
+
+/** Handschalter bei Schnee: der Satz je Knopf (`details.mode`) */
+const SNOW_MODES: Partial<Record<string, string>> = {
+	covered: 'PV: Schnee auf den Modulen gemeldet',
+	free: 'PV: Module als frei gemeldet',
+	auto: 'PV: Schneeerkennung wieder automatisch'
 };
 
 const SOURCES: Record<AuditEntry['source'], string> = {
@@ -118,9 +126,13 @@ export function detailLines(entry: AuditEntry): string[] {
 			return [
 				`${dateText(details.from)}–${dateText(details.to)}, ${String(details.slots)} Viertelstunden`
 			];
-		default:
-			return Object.entries(details).map(([key, value]) => `${key}: ${valueText(value)}`);
+		case 'forecast.snow_override': {
+			const text = typeof details.mode === 'string' ? SNOW_MODES[details.mode] : undefined;
+			if (text !== undefined) return [text];
+			break; // unbekannter Knopf: wie die übrigen Details
+		}
 	}
+	return Object.entries(details).map(([key, value]) => `${key}: ${valueText(value)}`);
 }
 
 export interface AuditRow {

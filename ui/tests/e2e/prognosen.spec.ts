@@ -1,8 +1,9 @@
 // Prognosen: Die Demo-Welt hat ein geladenes Lastmodell, 12 Schattentage, einen Backtest und
-// ein aktives Modell (tests/ui_world.py).
+// ein aktives Modell, dazu einen verschneiten Morgen: die PV-Prognose ist ab 06:00 gekürzt
+// (tests/ui_world.py).
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { login, watchPage } from './helpers';
+import { login, T_DEMO, watchPage } from './helpers';
 
 const card = (page: Page, name: string) =>
 	page.locator('section', { has: page.getByRole('heading', { name, exact: true }) });
@@ -183,4 +184,48 @@ test('Admin startet die Berechnung: „Berechnung läuft …“', async ({ page 
 	const running = driving.getByRole('button', { name: 'Berechnung läuft …' });
 	await expect(running).toBeVisible();
 	await expect(running).toBeDisabled();
+});
+
+test('Gast sieht die Karte „Schnee auf den Modulen“ ohne Knöpfe, die Übersicht den Hinweis', async ({
+	page
+}) => {
+	const watch = watchPage(page);
+	await page.clock.setFixedTime(T_DEMO); // „heute“ ist der 09.10.2026, wie in der Demo-Welt
+	await login(page, 'gast');
+	await page.goto('/prognosen');
+	const snow = card(page, 'Schnee auf den Modulen');
+	await expect(snow.getByText('vermutet, 10\u00a0% der Prognose, seit 06:00')).toBeVisible();
+	await expect(snow.locator('canvas')).toBeVisible();
+	await expect(snow.getByRole('button', { name: 'ohne Kürzung' })).toBeVisible();
+	await expect(snow.getByRole('button', { name: 'Module sind frei' })).toHaveCount(0);
+
+	await page.goto('/');
+	const bar = page.getByRole('region', { name: 'Hinweise' });
+	await bar.getByRole('button', { name: 'Anzeigen' }).click();
+	await expect(
+		bar.getByRole('listitem').filter({
+			hasText: 'PV-Prognose gekürzt: vermutlich Schnee auf den Modulen (seit 06:00)'
+		})
+	).toBeVisible();
+	expect(watch.cspViolations).toEqual([]);
+	expect(watch.errors).toEqual([]);
+});
+
+test('Bedienen meldet die Module als frei und schaltet zurück auf Automatik', async ({ page }) => {
+	await page.clock.setFixedTime(T_DEMO);
+	await login(page, 'bedienen');
+	await page.goto('/prognosen');
+	const snow = card(page, 'Schnee auf den Modulen');
+	await expect(snow.getByText(/^vermutet, 10\u00a0% der Prognose/)).toBeVisible();
+	await expect(snow.getByRole('button', { name: 'Automatik' })).toHaveCount(0);
+
+	await snow.getByRole('button', { name: 'Module sind frei' }).click();
+	await expect(snow.getByText('frei', { exact: true })).toBeVisible();
+	await expect(snow.getByText('Von Hand gemeldet: Module sind frei.')).toBeVisible();
+	await expect(snow.getByRole('button', { name: 'ohne Kürzung' })).toHaveCount(0);
+
+	// zurück auf Automatik: die Demo-Welt ist ein geteilter Zustand und bleibt verschneit
+	await snow.getByRole('button', { name: 'Automatik' }).click();
+	await expect(snow.getByText(/^vermutet, 10\u00a0% der Prognose/)).toBeVisible();
+	await expect(snow.getByRole('button', { name: 'Automatik' })).toHaveCount(0);
 });

@@ -1,3 +1,6 @@
+import threading
+from datetime import timedelta
+
 import pytest
 from structlog.testing import capture_logs
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
@@ -95,6 +98,25 @@ class FakeAutomation:
         self.calls.append((key, on, actor, source))
 
 
+class FakeSnow:
+    """Zeichnet ``set_snow_override`` auf; ``ok`` ist die Antwort (``False``: keine Prognose)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, str, str]] = []
+        self.ok = True
+        self.thread: int | None = None
+
+    def set_snow_override(self, mode, *, actor, source) -> bool:
+        self.thread = threading.get_ident()
+        self.calls.append((mode, actor, source))
+        return self.ok
+
+
+@pytest.fixture
+def snow() -> FakeSnow:
+    return FakeSnow()
+
+
 @pytest.fixture
 def automation() -> FakeAutomation:
     return FakeAutomation()
@@ -116,7 +138,7 @@ def rejections() -> FakeRejections:
 
 
 @pytest.fixture
-def handler(cfg, intents, rejections, clock, planning, automation) -> HaCommandHandler:
+def handler(cfg, intents, rejections, clock, planning, automation, snow) -> HaCommandHandler:
     return HaCommandHandler(
         cfg,
         intents,  # type: ignore[arg-type]
@@ -124,6 +146,7 @@ def handler(cfg, intents, rejections, clock, planning, automation) -> HaCommandH
         clock,
         planning,
         automation,  # type: ignore[arg-type]
+        snow=snow,
     )
 
 
@@ -789,3 +812,30 @@ async def test_unexpected_auto_target_errors_do_not_escape(handler, automation, 
 async def test_without_automation_the_switch_is_unknown(bare_handler, rejections) -> None:
     await bare_handler("tesla_auto_target", "ON")
     assert rejections.texts == []  # unbekannte Entität: nur im Log
+
+
+async def test_snow_buttons_set_the_override_as_home_assistant(handler, snow, clock) -> None:
+    await handler("pv_module_frei", "PRESS")
+    clock.advance(timedelta(seconds=1))
+    await handler("pv_schnee_melden", "PRESS")
+    assert snow.calls == [("free", "home-assistant", "ha"), ("covered", "home-assistant", "ha")]
+    assert snow.thread != threading.get_ident()  # Datei und Rechnen nicht in der Ereignisschleife
+
+
+async def test_snow_button_without_forecast_is_rejected(handler, snow, rejections) -> None:
+    snow.ok = False
+    await handler("pv_module_frei", "PRESS")
+    assert rejections.texts == [PREFIX + "Noch keine PV-Prognose"]
+
+
+async def test_unknown_snow_payload_is_rejected(handler, snow, rejections) -> None:
+    await handler("pv_schnee_melden", "ON")
+    assert snow.calls == []
+    assert rejections.texts == [PREFIX + "Unbekannter Befehl „ON“ für „Schnee auf den Modulen“."]
+
+
+async def test_without_forecast_service_the_snow_buttons_are_unknown(
+    bare_handler, rejections
+) -> None:
+    await bare_handler("pv_module_frei", "PRESS")
+    assert rejections.texts == []

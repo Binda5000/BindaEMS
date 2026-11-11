@@ -170,6 +170,8 @@
 				<dd>{formatNumber(current.settings.pv_model.temp_coeff_pct_per_k, 2)}{NBSP}%/K</dd>
 				<dt>NOCT</dt>
 				<dd>{formatNumber(current.settings.pv_model.noct_c, 0)}{NBSP}°C</dd>
+				<dt>Schnee erkennen</dt>
+				<dd>{current.settings.pv_model.snow_detection ? 'an' : 'aus'}</dd>
 			</dl>
 		</Card>
 

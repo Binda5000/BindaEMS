@@ -118,6 +118,16 @@ def _cases(cfg: Config) -> dict[str, Case]:
             shown="70.0",
         ),
         "replan": Case("PRESS", lambda w: w.app.planning._pending == "manual"),
+        # die Demo-Welt hat einen verschneiten Morgen: erst bedeckt gemeldet, dann frei
+        "pv_schnee_melden": Case("PRESS", lambda w: w.app.forecast.snow_override() == "covered"),
+        "pv_module_frei": Case(
+            "PRESS",
+            lambda w: (
+                w.app.forecast.snow_override() == "free"
+                and (latest := w.app.forecast.latest()) is not None
+                and latest.snow.state == "frei"
+            ),
+        ),
     }
     for key in cfg.vehicles:
         oid, path = ha_object_id(key), f"/api/control/vehicles/{key}"
@@ -203,7 +213,7 @@ async def test_every_command_entity_round_trips(world) -> None:
     assert sorted(cases) == sorted(spec.object_id for spec in entities if spec.command)
     rejections = Rejections()
     commands = HaCommandHandler(
-        cfg, app.intents, rejections, world.clock, app.planning, app.automation
+        cfg, app.intents, rejections, world.clock, app.planning, app.automation, snow=app.forecast
     )
     transport = FakeTransport([], False, mqtt.publish_interval_s)
     await app.intents.current()  # die gültige Absicht des core im Cache

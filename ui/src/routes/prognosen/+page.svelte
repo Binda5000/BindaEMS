@@ -10,11 +10,15 @@
 	import ModelCard from '$lib/forecast/ModelCard.svelte';
 	import PresenceChart from '$lib/forecast/PresenceChart.svelte';
 	import QualityTable from '$lib/forecast/QualityTable.svelte';
+	import SnowCard from '$lib/forecast/SnowCard.svelte';
 	import ThermalModelCard from '$lib/learning/ThermalModelCard.svelte';
+	import type { SnowOverride } from '$lib/api/schemas';
 	import { Resource } from '$lib/resource.svelte';
 	import { hasRole } from '$lib/roles';
 
 	const RETRY_MS = 30_000;
+	/** Die PV-Prognose ändert sich mit der Prüfung auf Schnee höchstens alle 15 min */
+	const FORECAST_MS = 300_000;
 	/** Solange ein Training läuft, wird der Stand in diesem Takt abgefragt. */
 	const TRAINING_POLL_MS = 5000;
 
@@ -39,17 +43,46 @@
 		giveUp: (error) => error.status === 404
 	});
 	// Die Entität der Anwesenheit nennt nur die Quelle im Kopf eines Autos: eine Zugabe, ohne sie
-	// steht dort „Home Assistant“.
+	// steht dort „Home Assistant“. Ebenso „Schnee erkennen“ an der Karte zum Schnee.
 	const settings = new Resource((o) => api.settings(o), { retryMs: RETRY_MS });
+	// PV-Prognose mit der Kürzung bei Schnee (Plan „Schnee auf den Modulen“)
+	const forecast = new Resource((o) => api.forecast(o), {
+		intervalMs: FORECAST_MS,
+		retryMs: RETRY_MS
+	});
 
 	onMount(() => {
-		const stops = [learning, quality, daily, driving, thermal, settings].map((resource) =>
+		const stops = [forecast, learning, quality, daily, driving, thermal, settings].map((resource) =>
 			resource.start()
 		);
 		return () => stops.forEach((stop) => stop());
 	});
 
 	const admin = $derived(hasRole(page.data.user, 'admin'));
+	const operator = $derived(hasRole(page.data.user, 'operator'));
+
+	// Knöpfe bei Schnee: die Antwort nennt den neuen Zustand, die Prognose danach die neuen Slots
+	let snowBusy = $state(false);
+	let snowMessage = $state<string | null>(null);
+	// „heute“ des Diagramms und des „seit“: mit jeder neuen Antwort neu
+	const now = $derived.by(() => {
+		void forecast.data;
+		return new Date();
+	});
+
+	async function setSnow(mode: SnowOverride | null) {
+		snowBusy = true;
+		snowMessage = null;
+		try {
+			const snow = await api.setSnowOverride(mode);
+			if (forecast.data) forecast.data = { ...forecast.data, snow };
+			await forecast.refresh();
+		} catch (error) {
+			snowMessage = error instanceof ApiError ? error.detail : 'Unbekannter Fehler';
+		} finally {
+			snowBusy = false;
+		}
+	}
 
 	function select(next: number) {
 		if (next === days) return;
@@ -157,6 +190,16 @@
 </script>
 
 <div class="forecast">
+	<SnowCard
+		data={forecast.data}
+		error={forecast.error}
+		{operator}
+		detection={settings.data?.settings.pv_model.snow_detection}
+		busy={snowBusy}
+		message={snowMessage}
+		onSet={setSnow}
+		{now}
+	/>
 	<ModelCard
 		status={learning.data}
 		error={learning.error}

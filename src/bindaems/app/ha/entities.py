@@ -107,6 +107,7 @@ UNCLEAR: Final = "unclear"  # ``assignment`` in Health
 # Betriebsarten der Klimaanlage wie ``core.control.thermal.ThermalMode`` (Health ``thermal``)
 THERMAL_MODES: Final = ("heizen", "kuehlen", "lueften", "aus", "unbekannt")
 THERMAL_SHORT_NAME: Final = "Klima"  # so beginnen die Sensoren des Standardnamens
+SNOW_STATES: Final = ("frei", "vermutet", "gemessen")  # Zustände von „PV Schnee“ (``SnowState``)
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,9 @@ class HaInputs:
     # USV-Reichweite des Akkus bei Netzausfall; None = unbekannt
     backup: BackupRange | None = None
     outage_since: datetime | None = None  # Beginn des laufenden Netzausfalls; None = keiner
+    # Schnee auf den Modulen: Zustand und Anteil der Prognose jetzt in %; None = keine Prognose
+    pv_snow_state: str | None = None
+    pv_snow_factor_pct: int | None = None
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -1078,6 +1082,10 @@ def _storm_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     }
 
 
+def _snow_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    return {"faktor_pct": inputs.pv_snow_factor_pct}
+
+
 def _budget_kw(inputs: HaInputs) -> str:
     return fmt(None if inputs.plan_now is None else inputs.plan_now.budget_kw, 1)
 
@@ -1155,6 +1163,16 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             lambda i: fmt(i.pv_tomorrow_kwh, 1),
             unit="kWh",
             device_class="energy",
+        ),
+        EntitySpec(
+            "pv_schnee",
+            "sensor",
+            "PV Schnee",
+            main,
+            lambda i: i.pv_snow_state or UNKNOWN,
+            device_class="enum",
+            options=SNOW_STATES,
+            attributes=_snow_attributes,
         ),
         EntitySpec(
             "month_peak",
@@ -1385,6 +1403,9 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             step=1.0,
         ),
         _control("replan", "button", "Neu planen", main, lambda _: ""),
+        # Handschalter bei Schnee wie auf der Seite „Prognosen“ (Plan „Schnee auf den Modulen“)
+        _control("pv_schnee_melden", "button", "Schnee auf den Modulen", main, lambda _: ""),
+        _control("pv_module_frei", "button", "Module sind frei", main, lambda _: ""),
         EntitySpec(
             "problem_assignment_unclear",
             "binary_sensor",
@@ -1796,6 +1817,8 @@ def build_inputs(
         boost_cost_eur=dict(boost_cost_eur or {}),
         backup=backup,
         outage_since=outage_since,
+        pv_snow_state=latest.snow.state if latest is not None else None,
+        pv_snow_factor_pct=round(latest.snow.factor * 100) if latest is not None else None,
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

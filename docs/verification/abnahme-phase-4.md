@@ -254,8 +254,8 @@ Prüfschritte, je Zeile der Tabelle:
    `ha`.
 2. **Im UI ändern und in Home Assistant sehen:** Den Wert im UI ändern (ab „Bedienen“), dann in Home
    Assistant prüfen, dass die Entität ihn zeigt. Eine **Taste ohne Zustand** (Boost, Boost beenden,
-   Neu planen) hat keine Richtung UI → Home Assistant; dort prüfst du nur die Wirkung aus Home
-   Assistant.
+   Neu planen, Schnee auf den Modulen, Module sind frei) hat keine Richtung UI → Home Assistant;
+   dort prüfst du nur die Wirkung aus Home Assistant.
 3. Den alten Wert danach wiederherstellen. „Regelbetrieb“ und „Lademodus“ änderst du nur in einem
    Moment, in dem das niemanden stört (etwa kein Auto lädt); ein Wechsel des Regelbetriebs löst die
    Übergabe aus (Betriebshandbuch, Abschnitt 13).
@@ -278,6 +278,8 @@ Prüfschritte, je Zeile der Tabelle:
 | Unterstützungsschwelle | „BindaEMS“ | Laden, „Akku-Unterstützung“ | ☐ | ☐ |
 | Vorheizen und Vorkühlen (nur mit Klimaanlage) | „BindaEMS“ | Einstellungen (nur Admin), Abschnitt „Vorheizen und Vorkühlen“ | ☐ | ☐ |
 | Neu planen | „BindaEMS“ | Zeitplan, Anlass „Neu planen“ | ☐ | – (Taste ohne Zustand) |
+| Schnee auf den Modulen | „BindaEMS“ | Prognosen, Karte „Schnee auf den Modulen“ (Handschalter) | ☐ | – (Taste ohne Zustand) |
+| Module sind frei | „BindaEMS“ | Prognosen, Karte „Schnee auf den Modulen“ („frei“) | ☐ | – (Taste ohne Zustand) |
 
 Ein ungültiger Wert aus Home Assistant (etwa Ziel-SOC 10) ändert nichts und erscheint als
 persistente Meldung „Befehl aus Home Assistant abgelehnt: …“ (Betriebshandbuch, Abschnitt 7). Eine

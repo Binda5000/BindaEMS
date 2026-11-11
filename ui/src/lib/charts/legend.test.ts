@@ -27,7 +27,9 @@ const price: PriceSlot = {
 	origin: 'primary',
 	missing: []
 };
-const forecast = [{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000 }];
+const forecast = [
+	{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000, uncut_p50_w: 2500 }
+];
 const load: LoadForecast = {
 	issued_at: '2026-10-09T08:00:00+00:00',
 	slots: [{ start: '2026-10-09T08:00:00+00:00', p50_w: 900 }],

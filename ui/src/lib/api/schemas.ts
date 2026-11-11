@@ -485,7 +485,9 @@ export type StateResponse = v.InferOutput<typeof StateResponseSchema>;
 export const SystemResponseSchema = v.object({
 	core: v.object({ connected: v.boolean(), health: v.nullable(CoreHealthSchema) }),
 	components: v.array(ComponentStatusSchema),
-	warnings: v.array(v.string())
+	warnings: v.array(v.string()),
+	/** Hinweise der Stufe „info“, z. B. die PV-Kürzung bei Schnee; ältere Stände haben sie nicht */
+	info: v.optional(v.array(v.string()), [])
 });
 export type SystemResponse = v.InferOutput<typeof SystemResponseSchema>;
 
@@ -703,7 +705,9 @@ export const RuntimeSettingsSchema = v.looseObject({
 	pv_model: v.looseObject({
 		performance_ratio: v.number(),
 		temp_coeff_pct_per_k: v.number(),
-		noct_c: v.number()
+		noct_c: v.number(),
+		/** Schnee auf den Modulen erkennen und die Prognose kürzen; ältere Stände haben es nicht */
+		snow_detection: v.optional(v.boolean(), true)
 	}),
 	planning: PlanningSettingsSchema,
 	learning: LearningSettingsSchema,
@@ -1031,15 +1035,38 @@ export const ForecastSlotSchema = v.object({
 	start: Iso,
 	p50_w: v.number(),
 	p25_w: v.number(),
-	p75_w: v.number()
+	p75_w: v.number(),
+	/** P50 ohne Kürzung bei Schnee; gleich `p50_w`, wenn der Slot nicht gekürzt ist */
+	uncut_p50_w: v.number()
 });
 export type ForecastSlot = v.InferOutput<typeof ForecastSlotSchema>;
+
+/** Schnee auf den Modulen: `vermutet` (bedeckt, noch nicht gemessen) oder `gemessen` (bedeckt) */
+export const SnowStateSchema = v.picklist(['frei', 'vermutet', 'gemessen']);
+export type SnowState = v.InferOutput<typeof SnowStateSchema>;
+
+/** Handschalter: „Schnee auf den Modulen“ (`covered`), „Module sind frei“ (`free`) */
+export const SnowOverrideSchema = v.picklist(['covered', 'free']);
+export type SnowOverride = v.InferOutput<typeof SnowOverrideSchema>;
+
+/** Kürzung der PV-Prognose bei Schnee (`GET /api/forecast/pv`, `POST /api/forecast/pv/snow`) */
+export const ForecastSnowSchema = v.object({
+	state: SnowStateSchema,
+	/** Anteil der Prognose jetzt in %; 100 bei frei */
+	factor_pct: v.number(),
+	since: v.nullable(Iso),
+	/** der wirkende Knopf; `null`: Automatik */
+	override: v.nullable(SnowOverrideSchema)
+});
+export type ForecastSnow = v.InferOutput<typeof ForecastSnowSchema>;
 
 export const ForecastSchema = v.object({
 	issued_at: v.nullable(Iso),
 	source: v.nullable(v.picklist(['open_meteo'])),
 	slots: v.array(ForecastSlotSchema),
 	days: v.array(v.object({ date: DateText, kwh: NullableNumber })),
+	/** `null` ohne Prognose */
+	snow: v.nullable(ForecastSnowSchema),
 	status: ComponentStatusSchema
 });
 export type Forecast = v.InferOutput<typeof ForecastSchema>;

@@ -944,9 +944,11 @@ steht die Quelle „ha“.
 | Unterstützungsschwelle | Zahl | die Schwelle in %, von der USV-Reserve bis 100 (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Vorheizen und Vorkühlen | Schalter | die Einstellung `learning.thermal.enabled` (Abschnitt „Vorheizen und Vorkühlen (Phase 5c)“); nur mit einer Klimaanlage in der `config.yaml`; ab Werk aus. Eine Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
 | Neu planen | Taste | löst eine Neuplanung aus |
+| Schnee auf den Modulen | Taste | die PV-Module gelten ab jetzt als verschneit, die PV-Prognose wird gekürzt, bis die Messung frei meldet (höchstens 48 h); wie der Knopf auf der Seite „Prognosen“ |
+| Module sind frei | Taste | die PV-Module gelten ab jetzt als frei, die Kürzung endet; neuer Schneefall danach zählt wieder |
 
 Die Bedienelemente stehen am Gerät des Fahrzeugs bzw. der Wallbox, Regelbetrieb, Gast-Lademodus,
-Gast-Sofort-Höchststrom, Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle, Vorheizen und Vorkühlen und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
+Gast-Sofort-Höchststrom, Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle, Vorheizen und Vorkühlen, Neu planen, Schnee auf den Modulen und Module sind frei am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
 
 - **Befehle** kommen über `bindaems/cmd/<Objekt>`. Eine gehaltene (retained) Nachricht auf diesen
   Topics ignoriert die app: Sie käme sonst bei jeder Verbindung wieder.

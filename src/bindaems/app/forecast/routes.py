@@ -3,22 +3,45 @@
 Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
 
+import asyncio
 from datetime import timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.quality import ForecastQuality
-from bindaems.app.forecast.service import ForecastService
+from bindaems.app.forecast.service import NO_FORECAST, ForecastService, PvForecast
 from bindaems.app.status import status_json
 from bindaems.shared.timeutil import LOCAL_TZ, Clock
 
 DAYS = 3  # heute, morgen, übermorgen
 QUALITY_DAYS = 14
 DAILY_DAYS = 28
+
+
+class SnowBody(BaseModel):
+    """Knopf der Seite „Prognosen“: ``covered`` „Schnee auf den Modulen“, ``free`` „Module sind
+    frei“, ``null`` wieder Automatik."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    mode: Literal["covered", "free"] | None
+
+
+def snow_json(forecast: PvForecast, override: Literal["covered", "free"] | None) -> dict[str, Any]:
+    """Zustand der Kürzung bei Schnee: ``factor_pct`` ist der Anteil der Prognose jetzt (100 bei
+    frei), ``override`` der wirkende Knopf (``None``: Automatik)."""
+    snow = forecast.snow
+    return {
+        "state": snow.state,
+        "factor_pct": round(snow.factor * 100),
+        "since": snow.since.isoformat() if snow.since is not None else None,
+        "override": override,
+    }
 
 
 def forecast_router(
@@ -30,6 +53,7 @@ def forecast_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/forecast")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
+    Operator = Annotated[SessionInfo, Depends(guard.require("operator"))]
 
     @router.get("/pv")
     def pv(session: Viewer) -> dict[str, Any]:
@@ -46,6 +70,7 @@ def forecast_router(
                         "p50_w": power_w,
                         "p25_w": forecast.p25_w[slot],
                         "p75_w": forecast.p75_w[slot],
+                        "uncut_p50_w": forecast.uncut_p50_w[slot],
                     }
                     for slot, power_w in sorted(forecast.p50_w.items())
                 ]
@@ -59,8 +84,22 @@ def forecast_router(
                 }
                 for day in days
             ],
+            "snow": (
+                snow_json(forecast, service.snow_override()) if forecast is not None else None
+            ),
             "status": status_json(service.component_status()),
         }
+
+    @router.post("/pv/snow")
+    async def pv_snow(body: SnowBody, session: Operator) -> dict[str, Any]:
+        """Handschalter bei Schnee (Entscheidung 9); ohne Prognose 409."""
+        done = await asyncio.to_thread(
+            service.set_snow_override, body.mode, actor=session.user.username, source="ui"
+        )
+        forecast = service.latest()
+        if not done or forecast is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, NO_FORECAST)
+        return snow_json(forecast, service.snow_override())
 
     @router.get("/load")
     def load_forecast(session: Viewer) -> dict[str, Any]:

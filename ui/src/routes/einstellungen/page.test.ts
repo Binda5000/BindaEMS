@@ -96,3 +96,16 @@ it('zeigt den Abschnitt Vorheizen und Vorkühlen lesbar', async () => {
 	expect(value('Mindestvorteil bei Netzbezug (ct/kWh)')).toBe('2,00 ct/kWh');
 	user.role = 'admin';
 });
+
+it('zeigt im PV-Modell, ob Schnee erkannt wird', async () => {
+	user.role = 'viewer';
+	const current = settingsCurrent();
+	api.settings.mockResolvedValue(current);
+	api.limits.mockResolvedValue(limits());
+	render(Page);
+	const heading = await screen.findByRole('heading', { name: 'PV-Modell' });
+	const card = within(heading.closest('section')!);
+	const value = () => card.getByText('Schnee erkennen', { selector: 'dt' }).nextElementSibling;
+	expect(value()?.textContent).toBe('an');
+	user.role = 'admin';
+});

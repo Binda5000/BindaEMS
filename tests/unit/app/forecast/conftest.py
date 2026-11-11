@@ -6,11 +6,13 @@
 """
 
 import asyncio
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
+from tests.app_helpers import with_snow
 from tests.helpers import FakeSink
 
 from bindaems.app.forecast.archive import ForecastArchive
@@ -29,6 +31,11 @@ from bindaems.shared.timeutil import ManualClock
 NOW = datetime(2026, 10, 16, 6, 0, tzinfo=UTC)  # 08:00 Ortszeit, ein Freitag
 
 FIXTURE = Path("tests/fixtures/openmeteo_sued_2026-10-09.json")
+
+
+def snowy(snowfall_cm: Mapping[datetime, float] | None = None, *, depth_m: float = 0.0) -> str:
+    """Die Aufnahme mit stündlichem Schneeblock; ``snowfall_cm`` je Beginn der Stunde (UTC)."""
+    return with_snow(FIXTURE.read_text(), snowfall_cm, depth_m=depth_m)
 
 
 @pytest.fixture

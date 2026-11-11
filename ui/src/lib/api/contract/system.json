@@ -323,9 +323,13 @@
     {
       "name": "forecast",
       "ok": true,
-      "message": "PV-Prognose von 10:00 Uhr",
+      "message": "PV-Prognose von 10:00 Uhr, gekürzt auf 10 %: vermutlich Schnee auf den Modulen",
       "since": null,
-      "details": {}
+      "details": {
+        "snow_state": "vermutet",
+        "snow_factor_pct": 10,
+        "snow_since": "2026-10-09T04:00:00+00:00"
+      }
     },
     {
       "name": "storm",
@@ -401,5 +405,8 @@
   "warnings": [
     "3 Tarifbestandteile haben noch keinen Wert: „Netzverlustentgelt“, „Elektrizitätsabgabe“, „Erneuerbaren-Förderbeitrag“.",
     "Admin „admin“ hat keine Zwei-Faktor-Anmeldung (TOTP)."
+  ],
+  "info": [
+    "PV-Prognose gekürzt: vermutlich Schnee auf den Modulen (seit 06:00)"
   ]
 }

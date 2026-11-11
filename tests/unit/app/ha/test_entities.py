@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from tests.plan_helpers import (
 
 from bindaems.app.charging.estimate import ESTIMATED_MODES, estimate_charge
 from bindaems.app.charging.sessions import ChargingSession, FlowSplit
+from bindaems.app.forecast.snow import SnowCut
 from bindaems.app.ha.entities import (
     UNKNOWN,
     EntitySpec,
@@ -61,6 +63,7 @@ def test_entities_from_config(cfg) -> None:
         "feed_in_price",
         "pv_forecast_today",
         "pv_forecast_tomorrow",
+        "pv_schnee",
         "month_peak",
         "savings_today",
         "savings_month",
@@ -92,6 +95,8 @@ def test_entities_from_config(cfg) -> None:
         "battery_support",
         "support_soc",
         "replan",
+        "pv_schnee_melden",
+        "pv_module_frei",
         "problem_assignment_unclear",
         "problem_target_unreachable",
         "tesla_soc",
@@ -278,6 +283,48 @@ def test_build_inputs_from_live_prices_and_forecast(
         ["competitor.dess"],
         ["twc"],
     )
+
+
+def test_build_inputs_reads_the_snow_cut(live, price_service, store, forecast_service) -> None:
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert (inputs.pv_snow_state, inputs.pv_snow_factor_pct) == ("frei", 100)
+    latest = forecast_service.latest()
+    since = datetime(2026, 10, 9, 5, 15, tzinfo=UTC)
+    forecast_service._forecast = replace(
+        latest, snow=SnowCut("gemessen", 0.35, since, {T_APP: 0.35})
+    )
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert (inputs.pv_snow_state, inputs.pv_snow_factor_pct) == ("gemessen", 35)
+    forecast_service._forecast = None
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert (inputs.pv_snow_state, inputs.pv_snow_factor_pct) == (None, None)
+
+
+def test_snow_sensor_and_buttons(cfg) -> None:
+    sensor = config_of(cfg, "pv_schnee")
+    assert (sensor["name"], sensor["device_class"]) == ("PV Schnee", "enum")
+    assert sensor["options"] == ["frei", "vermutet", "gemessen"]
+    assert sensor["state_topic"] == "bindaems/state/pv_schnee"
+    assert sensor["json_attributes_topic"] == "bindaems/state/pv_schnee/attributes"
+    assert "command_topic" not in sensor
+    topic, _ = discovery(entity(cfg, "pv_schnee"), cfg.homeassistant.mqtt)
+    assert topic == "homeassistant/sensor/bindaems/pv_schnee/config"  # sensor.bindaems_pv_schnee
+    melden, frei = config_of(cfg, "pv_schnee_melden"), config_of(cfg, "pv_module_frei")
+    assert (melden["name"], frei["name"]) == ("Schnee auf den Modulen", "Module sind frei")
+    assert melden["payload_press"] == frei["payload_press"] == "PRESS"
+    assert melden["command_topic"] == "bindaems/cmd/pv_schnee_melden"
+    assert frei["command_topic"] == "bindaems/cmd/pv_module_frei"
+    assert "state_topic" not in melden and "state_topic" not in frei
+    assert entity(cfg, "pv_module_frei").device.identifier == "bindaems"
+
+    spec = entity(cfg, "pv_schnee")
+    inputs = sample_inputs(pv_snow_state="gemessen", pv_snow_factor_pct=35)
+    assert spec.value(inputs) == "gemessen"
+    assert spec.attributes is not None and spec.attributes(inputs) == {"faktor_pct": 35}
+    free = sample_inputs(pv_snow_state="frei", pv_snow_factor_pct=100)
+    assert (spec.value(free), spec.attributes(free)) == ("frei", {"faktor_pct": 100})
+    unknown = sample_inputs()  # ohne Prognose
+    assert (spec.value(unknown), spec.attributes(unknown)) == (UNKNOWN, {"faktor_pct": None})
 
 
 def test_build_inputs_without_core_and_prices(

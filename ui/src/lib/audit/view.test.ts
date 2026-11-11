@@ -78,3 +78,12 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 	]);
 	expect(actionLabel('unbekannt.aktion')).toBe('unbekannt.aktion');
 });
+
+it('beschreibt den Handschalter bei Schnee mit dem Satz je Knopf', () => {
+	expect(actionLabel('forecast.snow_override')).toBe('PV: Schneeerkennung (Handschalter)');
+	const lines = (mode: string) => detailLines(entry('forecast.snow_override', 'pv', { mode }));
+	expect(lines('covered')).toEqual(['PV: Schnee auf den Modulen gemeldet']);
+	expect(lines('free')).toEqual(['PV: Module als frei gemeldet']);
+	expect(lines('auto')).toEqual(['PV: Schneeerkennung wieder automatisch']);
+	expect(lines('x')).toEqual(['mode: x']); // unbekannt: wie die übrigen Details
+});

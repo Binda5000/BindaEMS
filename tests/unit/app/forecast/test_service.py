@@ -10,12 +10,12 @@ import pytest
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP, StopScheduler, login_as, record_then_stop
 from tests.helpers import FakeSink
-from tests.unit.app.forecast.conftest import FIXTURE
+from tests.unit.app.forecast.conftest import FIXTURE, snowy
 
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.pv_model import plane_power_w
-from bindaems.app.forecast.service import PvForecast
-from bindaems.app.forecast.snow import NO_CUT
+from bindaems.app.forecast.service import PvForecast, snow_info
+from bindaems.app.forecast.snow import NO_CUT, SnowCut
 from bindaems.app.ledger.service import LedgerSlot
 from bindaems.app.runtime import LoopSink
 from bindaems.shared.settings import PvModelSettings
@@ -473,21 +473,6 @@ MORNING = datetime(2026, 10, 9, 8, 15, tzinfo=UTC)  # 10:15 Ortszeit, Prognose u
 NO_SNOW_DATA = "Keine Schneedaten von Open-Meteo, Schneeerkennung entfällt"
 
 
-def snowy(snowfall_cm: Mapping[datetime, float] | None = None, *, depth_m: float = 0.0) -> str:
-    """Die Aufnahme mit stündlichem Schneeblock; ``snowfall_cm`` je Beginn der Stunde (UTC)."""
-    data = json.loads(FIXTURE.read_text())
-    times = data["minutely_15"]["time"]
-    stamps = list(range(times[0] + 3600, times[-1] + 1, 3600))
-    falls = snowfall_cm or {}
-    data["hourly_units"] = {"time": "unixtime", "snowfall": "cm", "snow_depth": "m"}
-    data["hourly"] = {
-        "time": stamps,
-        "snowfall": [falls.get(datetime.fromtimestamp(t - 3600, UTC), 0.0) for t in stamps],
-        "snow_depth": [depth_m] * len(stamps),
-    }
-    return json.dumps(data)
-
-
 def ratio_ledger(forecast: PvForecast, ratios: Mapping[datetime, float]) -> FakeLedger:
     """Abrechnung mit Ist = Verhältnis · ungekürzte P50 je Slot."""
     return FakeLedger({slot: r * forecast.uncut_p50_w[slot] for slot, r in ratios.items()})
@@ -833,3 +818,52 @@ async def test_new_since_alone_replaces_the_forecast_without_revision(
     assert (forecast.snow.state, forecast.snow.since) == ("vermutet", again)
     assert forecast.snow.factors == first.snow.factors and forecast.p50_w == first.p50_w
     assert forecast.revision == first.revision and sink.points == []
+
+
+def _with_snow(state, since: datetime | None) -> PvForecast:
+    slot = datetime(2026, 10, 9, 10, 0, tzinfo=UTC)
+    power = {slot: 1000.0}
+    return PvForecast(
+        T_APP,
+        "open_meteo",
+        power,
+        power,
+        power,
+        power,
+        {},
+        power,
+        T_APP,
+        SnowCut(
+            state, 0.1 if state != "frei" else 1.0, since, {} if state == "frei" else {slot: 0.1}
+        ),
+    )
+
+
+def test_snow_info_names_the_cut_since_local_time() -> None:
+    now = T_APP  # 09.10., 10:00 Ortszeit
+    text = "PV-Prognose gekürzt: vermutlich Schnee auf den Modulen"
+    assert snow_info(_with_snow("vermutet", SNOW_AT), now) == [f"{text} (seit 02:00)"]
+    assert snow_info(_with_snow("gemessen", SNOW_AT), now) == [f"{text} (seit 02:00)"]
+    yesterday = datetime(2026, 10, 8, 21, 30, tzinfo=UTC)  # 08.10., 23:30 Ortszeit
+    assert snow_info(_with_snow("vermutet", yesterday), now) == [f"{text} (seit 08.10. 23:30)"]
+    assert snow_info(_with_snow("vermutet", None), now) == [text]
+
+
+def test_snow_info_is_empty_without_cut_now() -> None:
+    # künftiger Schneefall kürzt erst später: kein Hinweis (Ruling zum Status)
+    assert snow_info(_with_snow("frei", None), T_APP) == []
+    assert snow_info(None, T_APP) == []
+
+
+async def test_snow_override_is_shown_while_it_applies(forecast_env, clock, tmp_path) -> None:
+    service, _ = forecast_env(override_path=tmp_path / "pv_snow_override.json")
+    assert service.snow_override() is None
+    await service.refresh()
+    assert service.set_snow_override("covered", actor="admin") is True
+    assert service.snow_override() == "covered"
+    clock.advance(timedelta(hours=48))
+    assert service.snow_override() == "covered"  # höchstens 48 h, wie in ``snow_cut``
+    clock.advance(timedelta(seconds=1))
+    assert service.snow_override() is None
+    assert service.set_snow_override(None, actor="admin") is True
+    assert service.snow_override() is None

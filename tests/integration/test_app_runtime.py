@@ -123,6 +123,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "Benachrichtigungen aus: BINDAEMS_HA_TOKEN fehlt.",
     )
     assert "Admin „chris“ hat keine Zwei-Faktor-Anmeldung (TOTP)." in body["warnings"]
+    assert body["info"] == []  # ohne Prognose keine Kürzung
     for path in (
         "/api/settings",
         "/api/consumers",

@@ -56,7 +56,7 @@ from bindaems.app.forecast.openmeteo import (
 )
 from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.routes import forecast_router
-from bindaems.app.forecast.service import ForecastService
+from bindaems.app.forecast.service import ForecastService, snow_info
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
 from bindaems.app.ha.entities import (
     HaInputs,
@@ -543,6 +543,7 @@ class AppRuntime:
                     self._clock,
                     self.planning,
                     self.automation,
+                    snow=self.forecast,
                 ),
                 retired=retired_discovery(cfg, mqtt),
             )
@@ -595,7 +596,7 @@ class AppRuntime:
                 users_router(self.auth, guard),
                 audit_router(self.audit, guard),
                 settings_router(self.settings, cfg, guard),
-                live_router(self.live, guard, sources, self._warnings),
+                live_router(self.live, guard, sources, self._warnings, self._info),
                 ops_router(
                     live=self.live,
                     guard=guard,
@@ -702,6 +703,9 @@ class AppRuntime:
 
     def _warnings(self) -> list[str]:
         return self.settings.warnings() + self.auth.warnings()
+
+    def _info(self) -> list[str]:
+        return snow_info(self.forecast.latest(), self._clock.now())
 
     def backup_range(self) -> BackupRange:
         """USV-Reichweite: eine Stelle für API, HA und Lebenszeichen (ohne Datenbank)."""

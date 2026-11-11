@@ -2,7 +2,8 @@
 
 Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Ziel-SOC und Abfahrt,
 Sofort-Höchststrom (je Fahrzeug und für Gäste), Boost, Zuordnung, Gast-Modus, Akku-Unterstützung,
-die Automatik für Ziel und Abfahrt und Vorheizen und Vorkühlen.
+die Automatik für Ziel und Abfahrt, Vorheizen und Vorkühlen und die Knöpfe bei Schnee auf den
+PV-Modulen.
 Live-Schaltung (``SetActuators``) und Vorrang (``SetPriority``) gibt es hier nicht.
 Jeder Befehl wird eine ``Change`` an den ``IntentService``; was Home Assistant sendet, kann nichts
 außer diesen Änderungen auslösen. Ein ungültiger oder abgelehnter Befehl ändert nichts und wird
@@ -19,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 import structlog
 
@@ -45,6 +46,7 @@ from bindaems.app.control.intent import (
 )
 from bindaems.app.control.routes import CONFLICT, CORE_DOWN
 from bindaems.app.core_link import CoreUnavailableError
+from bindaems.app.forecast.service import NO_FORECAST
 from bindaems.app.ha.entities import AUTOMATIC, GUEST_MODE_LABELS, MODE_LABELS, object_id
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import HA_THERMAL_PLAN_ID, Config
@@ -82,6 +84,14 @@ class AutomationCommands(Protocol):
     """Was die Automatik für Home Assistant tut: den Schalter eines Autos setzen."""
 
     async def set_enabled(self, key: str, on: bool, *, actor: str, source: Source) -> None: ...
+
+
+class SnowCommands(Protocol):
+    """Was die PV-Prognose für Home Assistant tut: den Handschalter bei Schnee setzen."""
+
+    def set_snow_override(
+        self, mode: Literal["covered", "free"] | None, *, actor: str, source: Source
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,13 @@ class SetAutoTarget:
     on: bool
 
 
+@dataclass(frozen=True)
+class SetSnow:
+    """Tasten „Schnee auf den Modulen“ (``covered``) und „Module sind frei“ (``free``)."""
+
+    mode: Literal["covered", "free"]
+
+
 # was ein Befehl aus Home Assistant bewirken kann
 Command = (
     Change
@@ -134,6 +151,7 @@ Command = (
     | SupportSwitch
     | SupportThreshold
     | SetAutoTarget
+    | SetSnow
 )
 
 
@@ -186,7 +204,7 @@ def _whole_number(payload: str) -> float | None:
     return number if math.isfinite(number) and number.is_integer() else None
 
 
-def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]:
+def _table(cfg: Config, planning: bool, automation: bool, snow: bool) -> dict[str, _Command]:
     by_label = {label: mode for mode, label in MODE_LABELS.items()}
     guest_by_label = {label: mode for mode, label in GUEST_MODE_LABELS.items()}
 
@@ -301,6 +319,17 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         table["replan"] = _Command(
             "Neu planen", lambda payload: Replan() if payload == PRESS else None, option=False
         )
+    if snow:
+        table["pv_schnee_melden"] = _Command(
+            "Schnee auf den Modulen",
+            lambda payload: SetSnow("covered") if payload == PRESS else None,
+            option=False,
+        )
+        table["pv_module_frei"] = _Command(
+            "Module sind frei",
+            lambda payload: SetSnow("free") if payload == PRESS else None,
+            option=False,
+        )
     for key in cfg.vehicles:
         oid = object_id(key)
         table[f"{oid}_mode"] = _Command("Lademodus", mode(key), option=True)
@@ -336,13 +365,17 @@ class HaCommandHandler:
         clock: Clock,
         planning: PlanningCommands | None = None,
         automation: AutomationCommands | None = None,
+        *,
+        snow: SnowCommands | None = None,
     ) -> None:
         # ohne Planung kennt der Handler „Netzladen erlaubt“ und „Neu planen“ nicht, ohne
-        # Automatik den Schalter „Automatik Ziel und Abfahrt“ nicht
-        self._commands = _table(cfg, planning is not None, automation is not None)
+        # Automatik den Schalter „Automatik Ziel und Abfahrt“ nicht, ohne PV-Prognose die Knöpfe
+        # bei Schnee nicht
+        self._commands = _table(cfg, planning is not None, automation is not None, snow is not None)
         self._intents = intents
         self._planning = planning
         self._automation = automation
+        self._snow = snow
         self._rejections = rejections
         self._clock = clock
         self._last: dict[str, datetime] = {}
@@ -370,6 +403,8 @@ class HaCommandHandler:
             return
         try:
             await self._execute(change)
+        except Refused as exc:
+            await self._reject(exc.text)
         except VersionConflictError as exc:
             await self._reject(str(exc))
         except Rejected as exc:
@@ -400,6 +435,12 @@ class HaCommandHandler:
             )
         elif isinstance(change, Replan) and planning is not None:
             planning.request("manual")
+        elif isinstance(change, SetSnow):
+            # Datei und Rechnen der Kürzung blockieren: nicht in der Ereignisschleife
+            if self._snow is not None and not await asyncio.to_thread(
+                self._snow.set_snow_override, change.mode, actor=ACTOR, source=SOURCE
+            ):
+                raise Refused(NO_FORECAST)
         elif not isinstance(change, SetGridCharge | SetThermalPlan | Replan):
             await self._intents.apply(change, actor=ACTOR, source=SOURCE)
 

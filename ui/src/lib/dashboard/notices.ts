@@ -1,4 +1,5 @@
-// Hinweise der Übersicht: Alarme des core, gestörte Komponenten und Warnungen der Einstellungen
+// Hinweise der Übersicht: Alarme des core, gestörte Komponenten, Warnungen der Einstellungen und
+// Hinweise der Stufe „info“ (z. B. die PV-Kürzung bei Schnee)
 import type { SystemResponse } from '$lib/api/schemas';
 
 export interface Notice {
@@ -23,7 +24,8 @@ export function noticesFrom(system: SystemResponse | undefined): Notice[] {
 		...system.components
 			.filter((component) => !component.ok)
 			.map((component) => ({ level: 'warning' as const, text: component.message })),
-		...system.warnings.map((text) => ({ level: 'warning' as const, text }))
+		...system.warnings.map((text) => ({ level: 'warning' as const, text })),
+		...system.info.map((text) => ({ level: 'info' as const, text }))
 	];
 	const seen = new Set<string>();
 	return all
