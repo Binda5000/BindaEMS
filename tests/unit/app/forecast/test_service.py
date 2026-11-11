@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import threading
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 
@@ -7,6 +9,7 @@ import httpx
 import pytest
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP, StopScheduler, login_as, record_then_stop
+from tests.helpers import FakeSink
 from tests.unit.app.forecast.conftest import FIXTURE
 
 from bindaems.app.forecast.archive import RecordValue
@@ -14,6 +17,7 @@ from bindaems.app.forecast.pv_model import plane_power_w
 from bindaems.app.forecast.service import PvForecast
 from bindaems.app.forecast.snow import NO_CUT
 from bindaems.app.ledger.service import LedgerSlot
+from bindaems.app.runtime import LoopSink
 from bindaems.shared.settings import PvModelSettings
 from bindaems.shared.timeutil import SLOT, local_day_slots
 
@@ -548,6 +552,8 @@ async def test_restart_after_snowfall_keeps_cut(forecast_env, respx_mock, clock)
     first = await service.refresh()
     assert first is not None and first.snow.state == "vermutet"
     ledger = ratio_ledger(first, morning(0.3, 3))
+    # die Laufzeit prüft gleich nach der ersten Prognose, nicht erst zur Minute 4 (Test
+    # test_snow_check_waits_for_the_first_forecast_then_runs_at_once in test_app_runtime.py)
     assert await asyncio.to_thread(service.check_snow, ledger) is True
     await service.refresh()  # der nächste Abruf rechnet mit den gemerkten Beobachtungen
     before = service.latest()
@@ -556,7 +562,7 @@ async def test_restart_after_snowfall_keeps_cut(forecast_env, respx_mock, clock)
     restarted, _ = forecast_env()
     respx_mock.routes["open_meteo"].respond(200, text=body)
     await restarted.refresh()
-    restarted.check_snow(ledger)
+    restarted.check_snow(ledger)  # wie die Laufzeit gleich nach der ersten Prognose
     after = restarted.latest()
     assert after is not None and after.snow == before.snow
     assert after.p50_w == pytest.approx(before.p50_w)
@@ -610,7 +616,7 @@ async def test_snow_check_without_forecast_does_nothing(forecast_env, tmp_path, 
     path = tmp_path / "pv_snow_override.json"
     service, sink = forecast_env(override_path=path)
     assert service.check_snow(FakeLedger({})) is False
-    service.set_snow_override("covered", actor="admin")
+    assert service.set_snow_override("covered", actor="admin") is False
     assert service.latest() is None and not path.exists() and not sink.points
     assert audit.recent() == []
 
@@ -639,7 +645,7 @@ async def test_override_file_roundtrip(forecast_env, clock, tmp_path, audit) -> 
     service, _ = forecast_env(override_path=path)
     await service.refresh()  # 10:00 Ortszeit, Open-Meteo ohne Schneeblock
     clock.advance(60)
-    await asyncio.to_thread(service.set_snow_override, "covered", actor="admin")
+    assert await asyncio.to_thread(service.set_snow_override, "covered", actor="admin") is True
     assert json.loads(path.read_text()) == {"mode": "covered", "at": clock.now().isoformat()}
     forecast = service.latest()
     assert forecast.snow.state == "vermutet" and forecast.revision == clock.now()
@@ -647,14 +653,14 @@ async def test_override_file_roundtrip(forecast_env, clock, tmp_path, audit) -> 
     reloaded, _ = forecast_env(override_path=path)  # der Knopf übersteht einen Neustart
     assert (await reloaded.refresh()).snow == forecast.snow
     clock.advance(60)
-    service.set_snow_override(None, actor="admin")
+    assert service.set_snow_override(None, actor="admin") is True
     assert not path.exists() and service.latest().snow == NO_CUT
-    service.set_snow_override(None, actor="admin")  # ohne Datei: nichts zu löschen
+    assert service.set_snow_override(None, actor="admin") is True  # ohne Datei: nichts zu löschen
     entries = audit.recent()
-    assert [(e.actor, e.source, e.action) for e in entries] == [
-        ("admin", "ui", "PV: Schneeerkennung wieder automatisch"),
-        ("admin", "ui", "PV: Schneeerkennung wieder automatisch"),
-        ("admin", "ui", "PV: Schnee auf den Modulen gemeldet"),
+    assert [(e.actor, e.source, e.action, e.target, e.details) for e in entries] == [
+        ("admin", "ui", "forecast.snow_override", "pv", {"mode": "auto"}),
+        ("admin", "ui", "forecast.snow_override", "pv", {"mode": "auto"}),
+        ("admin", "ui", "forecast.snow_override", "pv", {"mode": "covered"}),
     ]
 
 
@@ -693,10 +699,11 @@ async def test_override_free_lifts_the_cut(
     forecast = service.latest()
     assert forecast.snow == NO_CUT and forecast.p50_w == forecast.uncut_p50_w
     entry = audit.recent()[0]
-    assert (entry.actor, entry.source, entry.action) == (
+    assert (entry.actor, entry.source, entry.action, entry.details) == (
         "anna",
         "ha",
-        "PV: Module als frei gemeldet",
+        "forecast.snow_override",
+        {"mode": "free"},
     )
 
 
@@ -715,3 +722,89 @@ async def test_status_names_the_cut(forecast_env, respx_mock, clock) -> None:
         "snow_factor_pct": 10,
         "snow_since": "2026-10-09T00:00:00+00:00",
     }
+
+
+async def test_snow_check_keeps_influx_in_order_with_the_loop(
+    forecast_env, respx_mock, clock, tmp_path
+) -> None:
+    # wie in der Laufzeit: Punkte aus Worker-Threads gehen über die Event-Loop (LoopSink)
+    recorder = FakeSink()
+    sink = LoopSink(recorder)
+    sink.bind(asyncio.get_running_loop())
+    clock.advance(3600)  # 11:00 Ortszeit
+    service, _ = forecast_env(override_path=tmp_path / "pv_snow_override.json", sink=sink)
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    first = await service.refresh()
+    worker = threading.Thread(
+        target=service.check_snow, args=(ratio_ledger(first, morning(0.3, 3)),)
+    )
+    worker.start()
+    worker.join()  # die Loop läuft währenddessen nicht: was der Worker schreibt, wartet
+    assert service.latest().snow.state == "gemessen"
+    clock.advance(60)
+    service.set_snow_override("free", actor="admin")  # neuere Prognose, aus der Loop
+    await asyncio.sleep(0)
+    kw = [p.fields["kw"] for p in recorder.points if p.ts == NOON and p.tags["quantile"] == "p50"]
+    assert kw[-1] == pytest.approx(first.uncut_p50_w[NOON] / 1000.0)
+
+
+async def test_override_file_is_written_outside_the_snow_lock(
+    forecast_env, tmp_path, monkeypatch
+) -> None:
+    service, _ = forecast_env(override_path=tmp_path / "pv_snow_override.json")
+    await service.refresh()
+    held: list[bool] = []
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        held.append(service._snow_lock.locked())  # refresh in der Loop wartete auf die Platte
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    assert service.set_snow_override("covered", actor="admin") is True
+    assert held == [False]
+
+
+class SteppingClock:
+    """Jede Abfrage eine Minute später; merkt sich, ob dabei die Sperre gehalten wird."""
+
+    def __init__(self, start: datetime, lock) -> None:
+        self.at = start
+        self.lock = lock
+        self.calls: list[tuple[datetime, bool]] = []
+
+    def now(self) -> datetime:
+        self.at += timedelta(minutes=1)
+        self.calls.append((self.at, self.lock.locked()))
+        return self.at
+
+
+async def test_snow_check_takes_the_time_inside_the_lock(forecast_env, respx_mock, clock) -> None:
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    first = await service.refresh()
+    stepping = SteppingClock(clock.now() + timedelta(hours=6), service._snow_lock)  # 11:00
+    service._clock = stepping
+    assert service.check_snow(ratio_ledger(first, morning(0.8, 2, first=MORNING + SLOT))) is True
+    inside = [at for at, locked in stepping.calls if locked]
+    assert inside and service.latest().revision == inside[-1]
+
+
+async def test_new_since_alone_replaces_the_forecast_without_revision(
+    forecast_env, respx_mock, clock
+) -> None:
+    clock.advance(timedelta(hours=2, minutes=30))  # 12:30 Ortszeit
+    again = datetime(2026, 10, 9, 10, 0, tzinfo=UTC)  # noch einmal Schnee um 12:00 Ortszeit
+    service, sink = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0, again: 0.5}))
+    first = await service.refresh()
+    assert (first.snow.state, first.snow.since) == ("vermutet", SNOW_AT)
+    sink.points.clear()
+    # 10:30 und 10:45 frei, danach der zweite Schneefall: wieder vermutet, gleiche Faktoren
+    ledger = ratio_ledger(first, morning(0.8, 2, first=MORNING + SLOT))
+    assert service.check_snow(ledger) is False
+    forecast = service.latest()
+    assert (forecast.snow.state, forecast.snow.since) == ("vermutet", again)
+    assert forecast.snow.factors == first.snow.factors and forecast.p50_w == first.p50_w
+    assert forecast.revision == first.revision and sink.points == []

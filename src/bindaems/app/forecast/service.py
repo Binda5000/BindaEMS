@@ -82,11 +82,7 @@ SLOT_HOURS = 0.25
 CALIBRATION_WINDOW = timedelta(days=30)
 SNOW_WINDOW = timedelta(hours=36)  # so weit zurück liest die Prüfung auf Schnee die Abrechnung
 CHANGE_MIN = 0.05  # ab dieser Änderung eines Faktors gibt es eine neue ``revision``
-OVERRIDE_TEXT: Mapping[Literal["covered", "free"] | None, str] = {
-    "covered": "PV: Schnee auf den Modulen gemeldet",
-    "free": "PV: Module als frei gemeldet",
-    None: "PV: Schneeerkennung wieder automatisch",
-}
+OVERRIDE_ACTION = "forecast.snow_override"
 
 
 @dataclass(frozen=True)
@@ -169,10 +165,18 @@ class ForecastService:
         # beide Modelle gehören zusammen und werden nur gemeinsam ersetzt
         self._models: tuple[Calibration, Bands] = (NEUTRAL, NEUTRAL_BANDS)
         # Kürzung rechnen und Prognose ersetzen: ``check_snow`` und ``set_snow_override`` laufen in
-        # Worker-Threads, ``refresh`` in der Event-Loop; die Sperre gilt nur für Rechnen und Tausch
+        # Worker-Threads, ``refresh`` in der Event-Loop; die Sperre gilt nur für Speicher und
+        # Rechnen, nie für Datei oder Datenbank (sonst wartete die Loop darauf)
         self._snow_lock = threading.Lock()
+        self._override_lock = threading.Lock()  # Datei und Speicher des Knopfs in einer Reihenfolge
         self._actuals: dict[datetime, float] = {}  # Ist-PV (W) der letzten Prüfung, 36 h
         self._override = self._read_override()
+        self._first = asyncio.Event()  # gesetzt mit der ersten Prognose
+        # InfluxDB schreibt die Loop des Abrufs; ``_published`` zählt die ausgegebenen Prognosen,
+        # ein Auftrag aus einem Worker-Thread schreibt nur, wenn keine neuere dazwischenkam
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: int | None = None
+        self._published = 0
 
     def latest(self) -> PvForecast | None:
         issued = self._issued
@@ -182,6 +186,10 @@ class ForecastService:
         """Lufttemperatur je Slot aus der letzten erfolgreichen Antwort (leer vor der ersten)."""
         issued = self._issued
         return issued.temperatures if issued is not None else {}
+
+    async def first_forecast(self) -> None:
+        """Wartet, bis die erste Prognose vorliegt (ohne Abfrage in einer Schleife)."""
+        await self._first.wait()
 
     async def refresh(self) -> PvForecast | None:
         """Neue Prognose; scheitert eine Fläche, bleibt die bisherige. Schon geholte Flächen
@@ -248,6 +256,7 @@ class ForecastService:
             issued_at, SOURCE, p50_w, raw_w, p25_w, p75_w, slot_clearness, p50_w, issued_at
         )
         temperatures = {slot.slot_start: slot.temp_c for slot in first_plane}
+        self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
         with self._snow_lock:
             cut = self._snow_cut(issued_at, uncut, first_snow, temperatures)
             forecast = replace(
@@ -258,7 +267,8 @@ class ForecastService:
                 snow=cut,
             )
             self._issued = _Issued(forecast, p25_w, p75_w, tuple(first_snow), temperatures)
-            self._publish(forecast)  # mit der Sperre: InfluxDB bekommt die Ausgaben in Reihenfolge
+            self._publish_newest(forecast)
+        self._first.set()
         self._error = None
         self._kept = {}  # der nächste Abruf holt wieder alle Flächen
         await self._archive_forecast(forecast)
@@ -310,14 +320,14 @@ class ForecastService:
         """
         if self._issued is None:
             return False
-        now = self._clock.now()
+        read_at = self._clock.now()
         found = {
             ensure_utc(slot): actual.pv_w
-            for slot, actual in actuals(ledger, now - SNOW_WINDOW, now).items()
+            for slot, actual in actuals(ledger, read_at - SNOW_WINDOW, read_at).items()
         }
         with self._snow_lock:
             self._actuals = found
-            forecast = self._recut(now)
+            forecast = self._recut(self._clock.now())
         if forecast is None:
             return False
         log.info(
@@ -333,23 +343,25 @@ class ForecastService:
         *,
         actor: str,
         source: Source = "ui",
-    ) -> None:
+    ) -> bool:
         """Handschalter setzen (``None``: wieder Automatik) und die Kürzung sofort mit den
-        gemerkten Ist-Werten neu rechnen; Eintrag im Änderungsprotokoll. Ohne Prognose nichts.
+        gemerkten Ist-Werten neu rechnen; Eintrag im Änderungsprotokoll. Ohne Prognose ``False``
+        (keine Datei, kein Eintrag), sonst ``True``.
 
         Synchron (Datei und Datenbank; der Aufrufer nimmt ``asyncio.to_thread``).
         """
         if self._issued is None:
-            return
-        now = self._clock.now()
-        override = Override(mode, now) if mode is not None else None
-        with self._snow_lock:
-            self._write_override(override)
-            self._override = override
-            self._recut(now)
+            return False
+        override = Override(mode, self._clock.now()) if mode is not None else None
+        with self._override_lock:
+            self._write_override(override)  # ohne ``_snow_lock``: ``fsync`` hält die Loop nicht an
+            with self._snow_lock:
+                self._override = override
+                self._recut(self._clock.now())
         if self._audit is not None:
-            self._audit.record(actor, source, OVERRIDE_TEXT[mode])
+            self._audit.record(actor, source, OVERRIDE_ACTION, "pv", {"mode": mode or "auto"})
         log.info("Handschalter Schnee gesetzt", mode=mode, actor=actor)
+        return True
 
     def _snow_cut(
         self,
@@ -378,13 +390,18 @@ class ForecastService:
 
     def _recut(self, now: datetime) -> PvForecast | None:
         """Neue Kürzung der aktuellen Prognose; bei einer Änderung die neue Prognose (schon
-        ersetzt und nach InfluxDB geschrieben), sonst ``None``. Nur mit der Sperre."""
+        ersetzt und für InfluxDB beauftragt), sonst ``None``. Ändert sich nur ``since``, ersetzt
+        sie die Prognose mit dem neuen „seit“, ohne neue ``revision`` und ohne InfluxDB (die Werte
+        bleiben). Nur mit der Sperre."""
         issued = self._issued
         if issued is None:
             return None
         current = issued.forecast
         cut = self._snow_cut(now, current, issued.weather, issued.temperatures)
         if not _snow_changed(current.snow, cut, now):
+            if cut.since != current.snow.since:
+                snow = replace(current.snow, since=cut.since)
+                self._issued = replace(issued, forecast=replace(current, snow=snow))
             return None
         forecast = replace(
             current,
@@ -395,8 +412,23 @@ class ForecastService:
             revision=now,
         )
         self._issued = replace(issued, forecast=forecast)
-        self._publish(forecast)
+        self._publish_newest(forecast)
         return forecast
+
+    def _publish_newest(self, forecast: PvForecast) -> None:
+        """Mit der Sperre: InfluxDB schreibt immer die Loop. Aus der Loop sofort, aus einem
+        Worker-Thread als Auftrag an die Loop, der nur schreibt, wenn bis dahin keine neuere
+        Prognose ausgegeben wurde; so kommt die neueste immer zuletzt an."""
+        self._published += 1
+        loop = self._loop
+        if loop is None or loop.is_closed() or threading.get_ident() == self._loop_thread:
+            self._publish(forecast)
+        else:
+            loop.call_soon_threadsafe(self._publish_if_newest, forecast, self._published)
+
+    def _publish_if_newest(self, forecast: PvForecast, number: int) -> None:
+        if number == self._published:
+            self._publish(forecast)
 
     def _read_override(self) -> Override | None:
         """Handschalter aus der Datei; ohne Datei oder bei unlesbarer Datei Automatik."""

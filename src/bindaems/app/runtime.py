@@ -1216,15 +1216,19 @@ class AppRuntime:
 
     async def _snow_loop(self) -> None:
         """Jede Viertelstunde zur Minute 4, 19, 34, 49: Kürzung der PV-Prognose bei Schnee auf den
-        Modulen mit der Abrechnung neu prüfen; eine neue ``revision`` löst den Planer aus."""
+        Modulen mit der Abrechnung neu prüfen; eine neue ``revision`` löst den Planer aus.
+
+        Die erste Prüfung kommt gleich nach der ersten Prognose: Nach einem Neustart rechnet die
+        Kürzung so binnen Sekunden wieder mit den Beobachtungen (Entscheidung 3)."""
+        await self.forecast.first_forecast()
         while True:
-            now = self._clock.now()
-            due = next_local(now, lambda t: t.minute % 15 == SNOW_CHECK_MINUTE)
-            await asyncio.sleep((due - now).total_seconds())
             try:
                 await asyncio.to_thread(self.forecast.check_snow, self.ledger)
             except Exception:  # die Schleife darf nie stehen bleiben
                 log.exception("Prüfung auf Schnee auf den Modulen fehlgeschlagen")
+            now = self._clock.now()
+            due = next_local(now, lambda t: t.minute % 15 == SNOW_CHECK_MINUTE)
+            await asyncio.sleep((due - now).total_seconds())
 
     async def _fetch_temperature_history(self) -> dict[datetime, float]:
         raw = await fetch_temperature_history(self._http, self._clock, self._cfg.site.location)

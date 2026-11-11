@@ -49,9 +49,9 @@ async def no_sleep(seconds: float) -> None:
 def forecast_env(cfg, settings_service, clock, respx_mock, archive, weather, audit):
     """Dienst mit dem Beispiel-cfg (eine Fläche Süd, 10 kWp); Route ``open_meteo`` = Aufnahme."""
 
-    def build(sleep=no_sleep, *, override_path=None) -> tuple[ForecastService, FakeSink]:
+    def build(sleep=no_sleep, *, override_path=None, sink=None) -> tuple[ForecastService, FakeSink]:
         respx_mock.get(OPEN_METEO_URL, name="open_meteo").respond(200, text=FIXTURE.read_text())
-        sink = FakeSink()
+        sink = sink if sink is not None else FakeSink()
         service = ForecastService(
             httpx.AsyncClient(),
             cfg,

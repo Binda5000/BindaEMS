@@ -1187,7 +1187,38 @@ async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch)
     assert names.index("forecast") > names.index("recalibrate")  # erst die Kalibrierung
 
 
-async def test_snow_check_runs_at_minute_4_and_survives_errors(runtime, monkeypatch) -> None:
+async def _first_pv_forecast(runtime, respx_mock) -> None:
+    fixture = Path("tests/fixtures/openmeteo_sued_2026-10-09.json")
+    body = await asyncio.to_thread(fixture.read_text)
+    respx_mock.get(OPEN_METEO_URL).respond(200, text=body)
+    assert await runtime.forecast.refresh() is not None
+
+
+async def test_snow_check_waits_for_the_first_forecast_then_runs_at_once(
+    runtime, monkeypatch, respx_mock
+) -> None:
+    real_sleep = asyncio.sleep
+    seen: list[object] = []
+    monkeypatch.setattr(
+        runtime.forecast, "check_snow", lambda ledger: seen.append(runtime.forecast.latest())
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=1))
+    task = asyncio.create_task(runtime._snow_loop())
+    await real_sleep(0.05)
+    assert seen == [] and sleeps == [] and not task.done()  # ohne Prognose: warten, ohne Takt
+    await _first_pv_forecast(runtime, respx_mock)
+    with pytest.raises(StopScheduler):
+        await asyncio.wait_for(task, timeout=2)
+    # gleich nach dem Start (Entscheidung 3), nicht erst zur Minute 4; danach der Takt
+    assert len(seen) == 1 and seen[0] is not None
+    assert sleeps == [4 * 60.0]  # 10:00 Ortszeit → 10:04
+
+
+async def test_snow_check_runs_at_minute_4_and_survives_errors(
+    runtime, monkeypatch, respx_mock
+) -> None:
+    await _first_pv_forecast(runtime, respx_mock)
     calls: list[object] = []
 
     def check_snow(ledger) -> bool:
@@ -1200,20 +1231,22 @@ async def test_snow_check_runs_at_minute_4_and_survives_errors(runtime, monkeypa
     with capture_logs() as logs, pytest.raises(StopScheduler):
         await runtime._snow_loop()
     assert sleeps == [4 * 60.0, 4 * 60.0]  # 10:00 Ortszeit → 10:04; die Uhr steht im Test
-    assert calls == [runtime.ledger]
+    assert calls == [runtime.ledger, runtime.ledger]
     assert "Prüfung auf Schnee auf den Modulen fehlgeschlagen" in [e["event"] for e in logs]
 
 
 async def test_runtime_keeps_the_snow_override_in_the_data_dir(
     runtime, respx_mock, tmp_path
 ) -> None:
-    fixture = Path("tests/fixtures/openmeteo_sued_2026-10-09.json")
-    body = await asyncio.to_thread(fixture.read_text)
-    respx_mock.get(OPEN_METEO_URL).respond(200, text=body)
-    assert await runtime.forecast.refresh() is not None
-    await asyncio.to_thread(runtime.forecast.set_snow_override, "covered", actor="anna")
+    await _first_pv_forecast(runtime, respx_mock)
+    assert await asyncio.to_thread(runtime.forecast.set_snow_override, "covered", actor="anna")
     assert json.loads((tmp_path / "pv_snow_override.json").read_text())["mode"] == "covered"
-    assert runtime.audit.recent()[0].action == "PV: Schnee auf den Modulen gemeldet"
+    entry = runtime.audit.recent()[0]
+    assert (entry.action, entry.target, entry.details) == (
+        "forecast.snow_override",
+        "pv",
+        {"mode": "covered"},
+    )
 
 
 async def test_first_pv_forecast_does_not_wait_forever(runtime, monkeypatch) -> None:
