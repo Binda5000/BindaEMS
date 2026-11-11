@@ -89,6 +89,16 @@ def test_votes_age_out(clock):
     assert votes.bad_payloads() == ["neu"]
 
 
+def test_votes_cleared_when_clock_goes_back(clock):
+    votes: Votes[None] = Votes(size=10)
+    for _ in range(9):
+        votes.add(clock(), True, None)
+    clock(-timedelta(days=1))  # Uhr springt zurück
+    votes.add(clock(), True, None)
+    assert not votes.active  # alte Stimmen verworfen, Liste nicht voll
+    assert len(votes.bad_payloads()) == 1
+
+
 def test_consumption_identity_matches_derive_formula():
     assert consumption_w(MIDDAY, IDENTITY) == {"L1": -3100.0, "L2": 9500.0, "L3": -2000.0}
 

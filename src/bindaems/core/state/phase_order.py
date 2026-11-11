@@ -85,9 +85,9 @@ class Votes[T]:
     """Liste der letzten entscheidenden Zyklen mit Schalter und Hysterese.
 
     Jede Stimme trägt die Zeit ihres Zyklus und eine Beilage (``payload``); Stimmen älter als
-    ``VOTE_MAX_AGE`` fallen vor jeder Auswertung heraus. Ein: Liste voll und mindestens
-    ``ON_SHARE`` „falsch“. Aus: Liste voll und höchstens ``OFF_SHARE`` „falsch“. Sonst bleibt
-    der Zustand.
+    ``VOTE_MAX_AGE`` fallen vor jeder Auswertung heraus, nach einem Rücksprung der Uhr alle.
+    Ein: Liste voll und mindestens ``ON_SHARE`` „falsch“. Aus: Liste voll und höchstens
+    ``OFF_SHARE`` „falsch“. Sonst bleibt der Zustand.
     """
 
     def __init__(self, size: int = DECISIVE_SAMPLES) -> None:
@@ -96,6 +96,8 @@ class Votes[T]:
         self.active = False
 
     def add(self, now: datetime, bad: bool, payload: T) -> None:
+        if self._votes and now < self._votes[-1][0]:
+            self._votes.clear()  # Uhr zurückgesprungen: Alter der Stimmen unbekannt
         while self._votes and now - self._votes[0][0] > VOTE_MAX_AGE:
             self._votes.popleft()
         self._votes.append((now, bad, payload))
@@ -247,14 +249,10 @@ class WallboxPhaseCheck:
         else:
             text += (
                 f"Das Auto lädt rechnerisch auf {_phase_list(suggestion)}, "
-                f"die Zuordnung nennt {_phase_list(named)}."
+                f"die Zuordnung nennt {_phase_list(named)}. "
+                f"Abhilfe: phase_map in config.yaml mit {_phase_list(suggestion)} beginnen lassen."
             )
-        if suggestion is None:
-            return text
-        return (
-            text
-            + f" Abhilfe: phase_map in config.yaml mit {_phase_list(suggestion)} beginnen lassen."
-        )
+        return text
 
     def _suggestion(self) -> tuple[Phase, ...] | None:
         """Die Phasen, die in mindestens ``ON_SHARE`` der „falsch“-Zyklen passen."""
