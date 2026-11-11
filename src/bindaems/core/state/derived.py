@@ -54,7 +54,7 @@ def _n(phase: Phase) -> str:
     return phase[1]
 
 
-def _pv_ids(snap: Snapshot, cfg: Config) -> list[str]:
+def pv_ids(snap: Snapshot, cfg: Config) -> list[str]:
     """Konfigurierte und gesehene PV-Wechselrichter – alle sind Pflicht-Eingänge."""
     seen = {m["id"] for name in snap.readings if (m := _PV_TOTAL.fullmatch(name))}
     return sorted(seen | set(cfg.victron.instances.pv.values()))
@@ -96,11 +96,9 @@ def derive(snap: Snapshot, cfg: Config) -> Derived:
         else:
             phase_import_a[p] = None
 
-    pv_ids = _pv_ids(snap, cfg)
-    pv_ac_w = _total(number(snap, f"pv.{pv}.power_w") for pv in pv_ids)
-    pv_ac_l = {
-        p: _total(number(snap, f"pv.{pv}.l{_n(p)}.power_w") for pv in pv_ids) for p in PHASES
-    }
+    pvs = pv_ids(snap, cfg)
+    pv_ac_w = _total(number(snap, f"pv.{pv}.power_w") for pv in pvs)
+    pv_ac_l = {p: _total(number(snap, f"pv.{pv}.l{_n(p)}.power_w") for pv in pvs) for p in PHASES}
     pv_dc_w = number(snap, "pv_dc.power_w") or 0.0
     pv_total_w = pv_ac_w + pv_dc_w if pv_ac_w is not None else None
 
