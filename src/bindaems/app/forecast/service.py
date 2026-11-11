@@ -31,6 +31,7 @@ from bindaems.app.forecast.archive import (
     Actual,
     Clearness,
     ForecastArchive,
+    ForecastRecord,
     RecordValue,
     SlotSource,
     actuals,
@@ -47,6 +48,7 @@ from bindaems.app.forecast.calibration import (
     calibrate,
     clearness_class,
     fit_bands,
+    outlier_days,
     pv_threshold_w,
 )
 from bindaems.app.forecast.openmeteo import (
@@ -480,17 +482,29 @@ class ForecastService:
             ensure_utc(slot): value for slot, value in actuals(ledger, start, end).items()
         }
         threshold = pv_threshold_w(self._cfg)
+        matched: list[tuple[ForecastRecord, float]] = []
+        for record in self._archive.records("pv", start, end):
+            known = actual.get(ensure_utc(record.slot_start))
+            if known is not None:
+                matched.append((record, known.pv_w))
+        excluded = outlier_days(
+            [
+                (ensure_utc(r.slot_start), r.raw_w, pv_w)
+                for r, pv_w in matched
+                if r.horizon == "h0_6"
+            ],
+            threshold,
+        )
         cal_pairs: list[CalPair] = []
         err_pairs: list[ErrPair] = []
-        for record in self._archive.records("pv", start, end):
+        for record, pv_w in matched:
             slot = ensure_utc(record.slot_start)
-            known = actual.get(slot)
-            if known is None:
+            local = slot.astimezone(LOCAL_TZ)
+            if local.date() in excluded:
                 continue
             if record.horizon == "h0_6":
-                hour = slot.astimezone(LOCAL_TZ).hour
-                cal_pairs.append(CalPair(hour, record.clearness, record.raw_w, known.pv_w))
-            err_pairs.append(ErrPair(record.horizon, record.clearness, record.p50_w, known.pv_w))
+                cal_pairs.append(CalPair(local.hour, record.clearness, record.raw_w, pv_w))
+            err_pairs.append(ErrPair(record.horizon, record.clearness, record.p50_w, pv_w))
         models = (calibrate(cal_pairs, threshold), fit_bands(err_pairs, threshold))
         self._models = models
         log.info(
@@ -498,6 +512,7 @@ class ForecastService:
             samples=models[0].samples,
             factors=len(models[0].factors),
             bands=len(models[1].by_class),
+            excluded_days=len(excluded),
         )
 
     async def _archive_forecast(self, forecast: PvForecast) -> None:

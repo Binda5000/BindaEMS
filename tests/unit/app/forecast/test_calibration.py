@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from bindaems.app.forecast.calibration import (
@@ -9,6 +11,7 @@ from bindaems.app.forecast.calibration import (
     calibrate,
     clearness_class,
     fit_bands,
+    outlier_days,
     pv_threshold_w,
 )
 
@@ -121,3 +124,34 @@ def test_threshold_is_two_percent_of_kwp_but_at_least_100_w(cfg):
         }
     )
     assert pv_threshold_w(small) == 100.0
+
+
+def day_pairs(day: datetime, count: int, ratio: float, raw_w: float = 5000.0):
+    return [(day + timedelta(minutes=15 * i), raw_w, ratio * raw_w) for i in range(count)]
+
+
+def test_outlier_days_finds_snow_day() -> None:
+    snow = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+    almost = datetime(2026, 11, 3, 9, 0, tzinfo=UTC)
+    pairs = (
+        day_pairs(snow, 6, 0.05)
+        + day_pairs(almost, 3, 0.05)
+        + day_pairs(almost + timedelta(hours=2), 5, 0.9)
+    )
+    assert outlier_days(pairs, 100.0) == {snow.date()}
+
+
+def test_outlier_days_ignores_slots_below_threshold_and_at_the_ratio() -> None:
+    day = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+    dim = day_pairs(day, 6, 0.0, raw_w=50.0)  # Dämmerung: unter der Schwelle
+    boundary = day_pairs(day, 6, 0.15)  # genau 15 %: nicht bedeckt
+    assert outlier_days(dim + boundary, 100.0) == set()
+    assert outlier_days(dim, 50.0) == {day.date()}  # ab der Schwelle zählt es
+
+
+def test_outlier_days_uses_the_local_day() -> None:
+    # 22:30 UTC am 1.11. (MEZ) ist 23:30 Ortszeit, 23:15 UTC schon der 2.11. um 00:15
+    start = datetime(2026, 11, 1, 22, 45, tzinfo=UTC)
+    pairs = day_pairs(start, 4, 0.0)  # 23:45, 00:00, 00:15, 00:30 Ortszeit
+    assert outlier_days(pairs, 100.0) == set()  # 1 + 3 auf zwei lokale Tage verteilt
+    assert outlier_days(day_pairs(start + timedelta(hours=1), 4, 0.0), 100.0) != set()

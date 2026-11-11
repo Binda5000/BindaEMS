@@ -190,6 +190,31 @@ async def test_recalibrate_scales_p50_and_sets_band(forecast_env, archive) -> No
     assert forecast.p50_w[tomorrow] == pytest.approx(0.8 * forecast.raw_w[tomorrow])
 
 
+async def test_recalibrate_ignores_snow_days(forecast_env, archive) -> None:
+    days = [datetime(2026, 9, 12, 10, 0, tzinfo=UTC) + timedelta(days=i) for i in range(20)]
+    clear, snow = days[:8], days[8:]  # 8 klare Tage, 12 Schneetage
+    pv_w: dict[datetime, float] = {}
+    for day in days:
+        ratio = 0.9 if day in clear else 0.02
+        for i in range(6):  # 12:00 bis 13:15 Ortszeit
+            slot = day + timedelta(minutes=15 * i)
+            archive.record(
+                "pv", day - timedelta(hours=3), {slot: RecordValue(4000.0, 5000.0, "clear")}
+            )
+            pv_w[slot] = ratio * 5000.0
+    service, _ = forecast_env()
+    with capture_logs() as logs:
+        await asyncio.to_thread(service.recalibrate, FakeLedger(pv_w))
+    models = service._models
+    assert models[0].factor(12, "clear") == pytest.approx(0.9)  # sonst läge er bei 0,5
+    assert models[0].samples == 8 * 6  # alle sechs Viertelstunden der klaren Tage
+    low, high = models[1].band("h0_6", "clear")  # nur klare Tage: 0,9 · 5000 / 4000
+    assert low == pytest.approx(1.125) and high == pytest.approx(1.125)
+    assert next(e for e in logs if e["event"] == "PV-Prognose kalibriert")["excluded_days"] == len(
+        snow
+    )
+
+
 async def test_refresh_archives_calibrated_p50_with_raw(forecast_env, archive) -> None:
     seed(archive, SEED_DAYS)
     service, _ = forecast_env()

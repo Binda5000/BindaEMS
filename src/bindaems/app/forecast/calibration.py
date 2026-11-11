@@ -9,9 +9,12 @@ import statistics
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 
 from bindaems.app.forecast.archive import Clearness, HorizonClass
+from bindaems.app.forecast.snow import COVERED_RATIO
 from bindaems.shared.config import Config
+from bindaems.shared.timeutil import LOCAL_TZ
 
 MIN_GHI_W_M2 = 50.0  # darunter (Nacht, Dämmerung) gibt es keine Klasse
 CLEAR_FROM = 0.6
@@ -36,6 +39,7 @@ MIN_PAIRS_BAND = 20
 DEFAULT_BAND = (0.7, 1.2)
 MIN_THRESHOLD_W = 100.0
 THRESHOLD_SHARE = 0.02
+OUTLIER_SLOTS = 4  # so viele bedeckte Slots machen einen lokalen Tag zum Ausreißertag
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,19 @@ def pv_threshold_w(cfg: Config) -> float:
     """Schwelle für Paare: ``max(100 W, 2 % der Summe der kWp)``."""
     kwp = sum(plane.kwp for plane in cfg.pv.planes)
     return max(MIN_THRESHOLD_W, THRESHOLD_SHARE * kwp * 1000.0)
+
+
+def outlier_days(pairs: Sequence[tuple[datetime, float, float]], threshold_w: float) -> set[date]:
+    """Lokale Tage, an denen die Module bedeckt waren oder die Anlage ausfiel.
+
+    Paare ``(slot_start, raw_w, actual_w)``; ein Tag zählt, wenn mindestens ``OUTLIER_SLOTS``
+    Paare mit ``raw_w`` ab der Schwelle weniger als ``COVERED_RATIO`` der Roh-Prognose liefern.
+    """
+    covered: dict[date, int] = defaultdict(int)
+    for slot_start, raw_w, actual_w in pairs:
+        if raw_w >= threshold_w and raw_w > 0 and actual_w < COVERED_RATIO * raw_w:
+            covered[slot_start.astimezone(LOCAL_TZ).date()] += 1
+    return {day for day, count in covered.items() if count >= OUTLIER_SLOTS}
 
 
 def apply_band(p50_w: float, band: tuple[float, float], max_w: float) -> tuple[float, float, float]:
