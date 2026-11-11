@@ -8,6 +8,10 @@ und die Prognosen je Horizontklasse aus dem Archiv. Leistungen in W, Preise in c
 Version 2 (Plan 4b, Task 13) bringt geplante Autos (``cars``) und je Slot die PV-Prognose P25
 (``pv_p25_w``, für Regel R2). Eine Datei der Version 1 lädt unverändert, ohne Autos und ohne P25;
 ``export_days`` schreibt weiter Version 1.
+
+Plan Schnee auf den Modulen (Task 7): je Slot optional der Schneefall im Slot (``snowfall_cm``,
+cm) und die Schneehöhe am Boden (``snow_depth_m``, m). Die Version bleibt 2; eine Datei ohne die
+Felder lädt unverändert, und der Lauf mit Schneeerkennung findet in ihr keinen Schnee.
 """
 
 from __future__ import annotations
@@ -41,6 +45,9 @@ class ScenarioSlot(_Model):
     load_forecast_w: dict[HorizonClass, NonNegativeFinite]
     # PV-Prognose P25 je Horizontklasse (Version 2); ohne Wert rechnet der Planer mit P50
     pv_p25_w: dict[HorizonClass, NonNegativeFinite] = Field(default_factory=dict)
+    # Wetter für die Schneeerkennung (Plan Schnee auf den Modulen); ohne Wert kein Wetter
+    snowfall_cm: NonNegativeFinite | None = None  # Schneefall in diesem Slot
+    snow_depth_m: NonNegativeFinite | None = None  # Schneehöhe am Boden
 
 
 class ScenarioCar(_Model):

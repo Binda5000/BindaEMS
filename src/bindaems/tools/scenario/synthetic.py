@@ -1,6 +1,6 @@
 """Erzeugte Tage für die Szenarien der CI (Plan 3b, Task 15).
 
-Vier Arten, je in lokaler Zeit (Europe/Vienna) und mit ``random.Random(seed)`` reproduzierbar:
+Fünf Arten, je in lokaler Zeit (Europe/Vienna) und mit ``random.Random(seed)`` reproduzierbar:
 
 - ``sommer-sonnig``: PV 9000 W von 05:30 bis 20:30; Börsenpreis 9 ct, 10–16 Uhr 2 ct (am zweiten
   Tag 13–14 Uhr −1 ct), 18–21 Uhr 18 ct.
@@ -18,6 +18,16 @@ Vier Arten, je in lokaler Zeit (Europe/Vienna) und mit ``random.Random(seed)`` r
   bezieht nie zum Spitzenpreis, und der Tag zeigte nur, dass der Plan nicht schadet. 1500 W ist die
   höchste Spitze, bei der „Victron allein“ für jede dieser Saaten mehr als 1 kWh zum Spitzenpreis
   bezieht.
+- ``winter-schnee`` (Plan Schnee auf den Modulen, Task 7; für den Lauf mit Schneeerkennung, zwei
+  Tage): Sonnenzeiten, Preise und Last wie ``winter-spread``, die PV-Prognose ein klarer Wintertag
+  mit 3000 W Spitze. Am ersten Tag fallen von 00:00 bis 04:00 3 cm Schnee (0,75 cm je Stunde, je
+  Slot ein Viertel), die Schneehöhe ist in jedem Slot 0,05 m. Die Module liefern am ersten Tag bis
+  13:00 5 % des klaren Tags (der Prognose ohne Fehler), danach voll; der zweite Tag ist normal.
+  Die übrigen Arten haben kein Wetter (``snowfall_cm`` und ``snow_depth_m`` leer).
+
+Die Anlage der erzeugten Tage hat ``PV_KWP`` = 9,8 kWp (wie an der Anlage: Süd 4,1 + West 5,7);
+die Datei nennt keine Anlage, der Lauf mit Schneeerkennung nimmt diesen Wert. Die Messschwelle der
+Schneeerkennung ist damit 490 W, weit unter der Spitze von ``winter-schnee``.
 
 PV hat die Form ``Spitze · sin(π · Anteil des Tagbogens)^1,5`` (in der Mitte des Slots); die
 Last ist 350 W, 06:30–08:00 800 W mehr und 17:30–21:30 1500 W mehr, je Slot ±15 %. Prognosen
@@ -60,7 +70,14 @@ from bindaems.shared.settings import (
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, local_day_slots
 from bindaems.tools.scenario.data import ScenarioBattery, ScenarioCar, ScenarioFile, ScenarioSlot
 
-DAY_TYPES: Final = ("sommer-sonnig", "winter-spread", "winter-leistung", "wechselhaft")
+DAY_TYPES: Final = (
+    "sommer-sonnig",
+    "winter-spread",
+    "winter-leistung",
+    "wechselhaft",
+    "winter-schnee",
+)
+PV_KWP: Final = 9.8  # Süd 4,1 + West 5,7 wie an der Anlage, für die Schneeerkennung des Laufs
 
 # Beispieltarif (erfunden): Börsenpreis + 10 ct netto, USt. 20 %, OeMAG 6 ct
 MARKUP_NET_CT: Final = 10.0
@@ -95,6 +112,12 @@ PV_P25_SPREAD: Final = 0.1  # P25 = P50 · (1 − 0,1 · k), unteres Quartil von
 CLOUD_RANGE: Final = (0.2, 1.0)
 CLOUD_START: Final = 0.6
 CLOUD_STEP: Final = 0.15  # größter Schritt des Wolkenfaktors je Slot
+# ``winter-schnee``: am ersten Tag Schneefall [von, bis) in cm je Stunde, Schneehöhe in jedem Slot,
+# Anteil der PV unter dem Schnee bis zum Abtauen
+SNOWFALL: Final = (time(0), time(4), 0.75)
+SNOW_DEPTH_M: Final = 0.05
+SNOW_SHARE: Final = 0.05
+SNOW_CLEAR_AT: Final = time(13)
 
 
 # Das Auto jeder Art (erfundene Werte): abends angesteckt, morgens Abfahrt
@@ -120,6 +143,7 @@ class _Kind:
     other_ct: float  # Börsenpreis außerhalb der Fenster
     clouds: bool = False
     power_price: bool = False
+    snow: bool = False  # Schnee auf den Modulen am ersten Tag (``winter-schnee``)
 
 
 # 800 W statt 2000 W aus dem Plan (siehe oben): Der PV-Überschuss deckt den Abend nicht mehr.
@@ -149,6 +173,7 @@ KINDS: Mapping[str, _Kind] = MappingProxyType(
             other_ct=6.0,
             clouds=True,
         ),
+        "winter-schnee": replace(_WINTER, peak_w=3000.0, snow=True),
     }
 )
 NEGATIVE_SPOT: Final = ("sommer-sonnig", 1, time(13), time(14), -1.0)  # Art, Tag, von, bis, ct
@@ -199,6 +224,20 @@ def _pv_shape_w(kind: _Kind, local_mid: datetime) -> float:
     return kind.peak_w * float(math.sin(math.pi * share) ** PV_EXPONENT)
 
 
+def _snow(kind: _Kind, day_index: int, clock: time) -> tuple[float, float | None, float | None]:
+    """Anteil der PV unter dem Schnee, Schneefall im Slot (cm) und Schneehöhe (m) für
+    ``winter-schnee``; sonst voll und ohne Wetter."""
+    if not kind.snow:
+        return 1.0, None, None
+    first = day_index == 0
+    share = SNOW_SHARE if first and clock < SNOW_CLEAR_AT else 1.0
+    start, end, cm_per_hour = SNOWFALL
+    snowfall = (
+        cm_per_hour * (SLOT / timedelta(hours=1)) if first and _within(clock, start, end) else 0.0
+    )
+    return share, snowfall, SNOW_DEPTH_M
+
+
 def _base_load_w(clock: time) -> float:
     return BASE_LOAD_W + sum(
         extra for start, end, extra in LOAD_EXTRA if _within(clock, start, end)
@@ -228,7 +267,8 @@ def synthetic(
             if spec.clouds:
                 low, high = CLOUD_RANGE
                 cloud = min(high, max(low, cloud + rng.uniform(-CLOUD_STEP, CLOUD_STEP)))
-            pv_w = _pv_shape_w(spec, local + SLOT / 2) * (cloud if spec.clouds else 1.0)
+            clear_w = _pv_shape_w(spec, local + SLOT / 2) * (cloud if spec.clouds else 1.0)
+            share, snowfall_cm, snow_depth_m = _snow(spec, day_index, clock)
             load_w = _base_load_w(clock) * (1 + rng.uniform(-LOAD_NOISE, LOAD_NOISE))
             hour = start.replace(minute=0)
             if hour not in errors:
@@ -241,20 +281,22 @@ def synthetic(
             slots.append(
                 ScenarioSlot(
                     start=start,
-                    pv_w=pv_w,
+                    pv_w=clear_w * share,
                     load_w=load_w,
                     import_ct=import_price(start, spot, tariff).gross_ct,
                     feed_in_ct=feed_in_price(start, feed_in, tariff),
                     pv_forecast_w={
-                        cls: pv_w * (1 + pv_error * k) for cls, k in LEAD_FACTOR.items()
+                        cls: clear_w * (1 + pv_error * k) for cls, k in LEAD_FACTOR.items()
                     },
                     pv_p25_w={
-                        cls: pv_w * (1 + pv_error * k) * (1 - PV_P25_SPREAD * k)
+                        cls: clear_w * (1 + pv_error * k) * (1 - PV_P25_SPREAD * k)
                         for cls, k in LEAD_FACTOR.items()
                     },
                     load_forecast_w={
                         cls: load_w * (1 + load_error * k) for cls, k in LEAD_FACTOR.items()
                     },
+                    snowfall_cm=snowfall_cm,
+                    snow_depth_m=snow_depth_m,
                 )
             )
     return ScenarioFile(

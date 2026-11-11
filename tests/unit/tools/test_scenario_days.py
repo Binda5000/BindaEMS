@@ -63,6 +63,28 @@ def test_scenario_days_report_and_exit_code(
     assert len(lines) == 1 and lines[0].startswith("2027-01-11: Victron allein ")
 
 
+def test_scenario_days_winter_snow_with_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Art ``winter-schnee`` mit ``--schnee``: die Datei trägt Schneefall, der Lauf erkennt Schnee
+    seen: list[tuple[ScenarioFile, bool]] = []
+
+    def fake(
+        file: ScenarioFile, *, step_slots: int, grid_charge: bool | None, snow: bool
+    ) -> ScenarioResult:
+        seen.append((file, snow))
+        return result_of()
+
+    monkeypatch.setattr(scenario_days, "run_scenario", fake)
+    out = str(tmp_path / "b.md")
+    args = ["--synthetisch", "winter-schnee", "--anzahl", "2", "--takt", "60", "--out", out]
+    assert main([*args, "--schnee"]) == 0
+    data, snow = seen[-1]
+    assert snow is True and data.name.startswith("winter-schnee ab 2027-01-11")
+    assert any(s.snowfall_cm for s in data.slots)
+    assert main(args) == 0 and seen[-1][1] is False
+
+
 def test_scenario_days_rejects_bad_file(tmp_path: Path) -> None:
     bad = tmp_path / "tage.json"
     bad.write_text("{}", encoding="utf-8")
@@ -104,19 +126,23 @@ def test_scenario_days_reads_file_and_passes_options(
     data = synthetic("winter-spread", date(2027, 1, 11), 1)
     source = tmp_path / "tage.json"
     source.write_text(data.model_dump_json(), encoding="utf-8")
-    seen: list[tuple[str, int, bool | None]] = []
+    seen: list[tuple[str, int, bool | None, bool]] = []
 
-    def fake(file: object, *, step_slots: int, grid_charge: bool | None) -> ScenarioResult:
-        seen.append((file.name, step_slots, grid_charge))
+    def fake(
+        file: object, *, step_slots: int, grid_charge: bool | None, snow: bool
+    ) -> ScenarioResult:
+        seen.append((file.name, step_slots, grid_charge, snow))
         return result_of()
 
     monkeypatch.setattr(scenario_days, "run_scenario", fake)
     out = str(tmp_path / "b.md")
     for option, expected in (("an", True), ("aus", False), ("einstellung", None)):
         assert main(["--tage", str(source), "--out", out, "--netzladen", option]) == 0
-        assert seen[-1] == (data.name, 1, expected)
+        assert seen[-1] == (data.name, 1, expected, False)
     assert main(["--tage", str(source), "--out", out, "--takt", "60"]) == 0
     assert seen[-1][1] == 4
+    assert main(["--tage", str(source), "--out", out, "--schnee"]) == 0
+    assert seen[-1][3] is True
 
 
 def test_scenario_days_exit_code_is_one_when_not_passed(
@@ -133,7 +159,9 @@ def test_scenario_days_default_is_every_quarter_hour(
 ) -> None:
     steps: list[int] = []
 
-    def fake(file: object, *, step_slots: int, grid_charge: bool | None) -> ScenarioResult:
+    def fake(
+        file: object, *, step_slots: int, grid_charge: bool | None, snow: bool
+    ) -> ScenarioResult:
         steps.append(step_slots)
         return result_of(step_slots=step_slots)
 

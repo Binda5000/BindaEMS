@@ -12,6 +12,7 @@ from bindaems.app.forecast.snow import (
     SnowCut,
     measure_min_w,
     snow_cut,
+    snow_pct,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 
@@ -67,6 +68,14 @@ def cut(now, weather, observations=(), override=None, slots=ALL_SLOTS):
 def test_measure_min_w() -> None:
     assert measure_min_w(9.8) == 490.0
     assert measure_min_w(2.0) == 300.0
+
+
+def test_snow_pct_only_where_the_uncut_forecast_is_measurable() -> None:
+    # Anteil in Prozent je gekürztem Slot; unter der Messschwelle (490 W) sagt die Kürzung nichts
+    day, edge, low, missing = (local(3, 12, 15 * i) for i in range(4))
+    uncut = {day: 2000.0, edge: 490.0, low: 489.0}
+    factors = {day: 0.1, edge: 0.36, low: 0.1, missing: 0.1}
+    assert snow_pct(factors, uncut, total_kwp=KWP) == {day: 10, edge: 36}
 
 
 def test_night_snowfall_cuts_today_and_tomorrow() -> None:

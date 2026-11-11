@@ -10,7 +10,8 @@ Die Tage kommen aus einer Datei von ``export_days`` (``--tage``) oder aus erzeug
 (``--synthetisch``, Arten siehe ``scenario.synthetic``). ``--takt 15`` (Standard) plant jede
 Viertelstunde neu wie der Dienst, ``--takt 60`` stündlich (viermal schneller, wie die CI).
 ``--netzladen`` ersetzt den Schalter „Netzladen erlaubt“ der Datei; ``einstellung`` (Standard)
-lässt ihn.
+lässt ihn. ``--schnee`` kürzt die PV-Prognose mit der Schneeerkennung (Plan Schnee auf den
+Modulen; Wetter aus der Datei, etwa ``--synthetisch winter-schnee``).
 
 Auf der Standardausgabe steht je Tag eine Zeile, der Bericht geht als Markdown nach ``--out``
 (das Verzeichnis muss existieren und beschreibbar sein; geprüft wird vor dem Lauf). Exitcode 0
@@ -54,6 +55,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True, help="Bericht (Markdown)")
     parser.add_argument("--takt", type=int, choices=STEP_MINUTES, default=SLOT_MINUTES)
     parser.add_argument("--netzladen", choices=tuple(GRID_CHARGE), default="einstellung")
+    parser.add_argument(
+        "--schnee", action="store_true", help="PV-Prognose mit der Schneeerkennung kürzen"
+    )
     return parser
 
 
@@ -101,7 +105,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         result = run_scenario(
-            data, step_slots=args.takt // SLOT_MINUTES, grid_charge=GRID_CHARGE[args.netzladen]
+            data,
+            step_slots=args.takt // SLOT_MINUTES,
+            grid_charge=GRID_CHARGE[args.netzladen],
+            snow=args.schnee,
         )
         report = render_report(result, data)
     except Exception as exc:  # ein Fehler der Rechnung ist ein Fehler des Aufrufs, kein Absturz

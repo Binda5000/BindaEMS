@@ -49,6 +49,17 @@ den Akkuanteil mit, Regel R2 zählt ihn nicht. Die Grenze des core „nur solang
 geplanten SOC am Ende des Slots liegt“ (``soc_end_pct``, Entscheidung 4) bildet der Runner nicht
 nach; er gibt den geplanten Anteil, begrenzt nur durch Reserve und Entladegrenze. Je nachdem, wie
 Last und PV vom Plan abweichen, rechnet er damit optimistischer oder vorsichtiger als die Anlage.
+
+**Schnee auf den Modulen** (Plan Schnee auf den Modulen, Task 7; ``run_scenario(..., snow=True)``):
+Vor jedem Plan kürzt ``snow_cut`` die PV-Prognose wie der Prognosedienst. Das Wetter sind die
+Stunden der ganzen Datei (``snow_weather``: Schneefall als Summe der Slots der Stunde, Schneehöhe
+der letzte Wert); die Beobachtungen sind die Slots der letzten ``SNOW_WINDOW`` vor dem Plan mit
+``expected_w`` = Prognose ``h0_6`` (sonst Ist), ``actual_w`` = Ist und ohne Lufttemperatur (die
+Erkennung nur aus der Messung, Fall b, greift also nie). Die Anlage hat ``PV_KWP``
+(``synthetic``). Gekürzt werden P50 und P25 mit dem Faktor des Slots; den Schneeanteil
+(``pv_snow_pct``) bekommen die Slots wie im Planungsdienst (``snow_pct``). Ohne Schneefall und
+Schneehöhe in der Datei ändert sich nichts. Handschalter und der Schalter „Schnee erkennen“ gibt
+es im Lauf nicht.
 """
 
 from __future__ import annotations
@@ -61,6 +72,9 @@ from types import MappingProxyType
 from typing import Final
 
 from bindaems.app.forecast.archive import HorizonClass, horizon_class
+from bindaems.app.forecast.openmeteo import SnowHour
+from bindaems.app.forecast.service import SNOW_WINDOW
+from bindaems.app.forecast.snow import Observation, snow_cut, snow_pct
 from bindaems.app.planning.battery_model import (
     SLOT_H,
     BatteryParams,
@@ -103,6 +117,7 @@ from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan, PlanSlo
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start, slots_between
 from bindaems.tools.scenario.data import ScenarioCar, ScenarioFile, ScenarioSlot
+from bindaems.tools.scenario.synthetic import PV_KWP
 
 DAY_AHEAD_AT: Final = time(14)  # ab dann sind die Preise von morgen bekannt
 ESTIMATE_DAYS: Final = 7  # Vortage für den Schätzpreis
@@ -212,6 +227,35 @@ def forecast_at(slot: ScenarioSlot, *, lead: timedelta) -> Forecast:
         load=_pick(slot.load_forecast_w, cls, slot.load_w),
         pv_p25=_class_value(slot.pv_p25_w, cls),
     )
+
+
+def snow_weather(data: ScenarioFile) -> list[SnowHour]:
+    """Die Schneestunden der Datei für ``snow_cut``: je Stunde (UTC) mit mindestens einem Slot
+    mit Wetter der Schneefall als Summe ihrer Slots und die Schneehöhe des letzten Slots mit Wert;
+    Slots ohne die Felder zählen nicht. Ohne Wetter in der Datei leer."""
+    hours: dict[datetime, tuple[float, float | None]] = {}
+    for item in data.slots:
+        if item.snowfall_cm is None and item.snow_depth_m is None:
+            continue
+        hour = ensure_utc(item.start).replace(minute=0, second=0, microsecond=0)
+        snowfall, depth = hours.get(hour, (0.0, None))
+        hours[hour] = (
+            snowfall + (item.snowfall_cm or 0.0),
+            item.snow_depth_m if item.snow_depth_m is not None else depth,
+        )
+    return [SnowHour(hour, snowfall, depth) for hour, (snowfall, depth) in sorted(hours.items())]
+
+
+def _snow_observations(data: ScenarioFile, index: int, now: datetime) -> list[Observation]:
+    """Die vollständigen Slots vor dem Slot ``index`` in den letzten ``SNOW_WINDOW`` vor ``now``:
+    erwartet die Prognose ``h0_6`` (sonst Ist), gemessen der Ist-Wert, ohne Lufttemperatur."""
+    return [
+        Observation(
+            ensure_utc(item.start), item.pv_forecast_w.get("h0_6", item.pv_w), item.pv_w, None
+        )
+        for item in data.slots[:index]
+        if ensure_utc(item.start) >= now - SNOW_WINDOW
+    ]
 
 
 def _local(moment: datetime) -> datetime:
@@ -417,11 +461,13 @@ def _plan_at(
     trigger: PlanTrigger,
     cars: Sequence[tuple[CarSession, float]] = (),
     carried: bool = False,
+    weather: Sequence[SnowHour] | None = None,
 ) -> _Planned | None:
     """Plan zum Slot ``index`` (Minute 1 nach Slotbeginn) mit den steckenden Autos ``cars`` und
     ihrem Ladestand; ``None`` ohne Eingangsdaten. ``carried`` ist ``grid_in_battery_at_start`` des
     vorigen Plans; daraus und aus ``previous`` folgt es für diesen wie im Planungsdienst
-    (``grid_in_battery_at_start``)."""
+    (``grid_in_battery_at_start``). Mit ``weather`` (Schneestunden) kürzt die Schneeerkennung die
+    PV-Prognose; ``None`` ohne Schneeerkennung."""
     now = ensure_utc(data.slots[index].start) + PLAN_DELAY
     horizon = data.slots[index : index + MAX_SLOTS]
     pv_w: dict[datetime, float] = {}
@@ -434,6 +480,14 @@ def _plan_at(
         load_w[moment] = forecast.load
         if forecast.pv_p25 is not None:
             pv_p25_w[moment] = forecast.pv_p25
+    snow: dict[datetime, float] = {}
+    if weather is not None:
+        cut = snow_cut(
+            now, sorted(pv_w), weather, _snow_observations(data, index, now), total_kwp=PV_KWP
+        )
+        snow = snow_pct(cut.factors, pv_w, total_kwp=PV_KWP)
+        pv_w = {moment: w * cut.factors.get(moment, 1.0) for moment, w in pv_w.items()}
+        pv_p25_w = {moment: w * cut.factors.get(moment, 1.0) for moment, w in pv_p25_w.items()}
     try:
         inputs = assemble_inputs(
             now=now,
@@ -449,6 +503,7 @@ def _plan_at(
             settings_version=1,
             pv_p25_w=pv_p25_w,
             vehicles=lambda slots: _vehicle_inputs(cars, slots),
+            pv_snow_pct=snow,
         )
     except PlanningUnavailable:
         return None
@@ -565,12 +620,17 @@ def _month_peak_kw(data: ScenarioFile, now: datetime, peaks: Mapping[str, float]
 
 
 def run_scenario(
-    data: ScenarioFile, *, step_slots: int = 1, grid_charge: bool | None = None
+    data: ScenarioFile,
+    *,
+    step_slots: int = 1,
+    grid_charge: bool | None = None,
+    snow: bool = False,
 ) -> ScenarioResult:
     """Lässt das Szenario laufen; ``grid_charge`` ersetzt, wenn angegeben, den Schalter
-    „Netzladen erlaubt“ der Datei."""
+    „Netzladen erlaubt“ der Datei, ``snow`` schaltet die Schneeerkennung ein."""
     if step_slots < 1:
         raise ValueError("step_slots muss mindestens 1 sein")
+    weather = snow_weather(data) if snow else None
     planning = data.planning
     if grid_charge is not None:
         planning = planning.model_copy(update={"grid_charge_allowed": grid_charge})
@@ -631,6 +691,7 @@ def run_scenario(
                 trigger=trigger,
                 cars=[(sessions[i], car_soc[i]) for i in plugged],
                 carried=current is not None and current.grid_in_battery_at_start,
+                weather=weather,
             )
             if planned is not None:
                 current = planned

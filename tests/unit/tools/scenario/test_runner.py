@@ -18,11 +18,12 @@ from bindaems.app.planning.battery_model import BatteryParams, SimSlot, SimStep,
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult
 from bindaems.shared.config import load_config
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan, PlanSlot
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 from bindaems.tools.scenario import runner
 from bindaems.tools.scenario.data import ScenarioCar, ScenarioFile, ScenarioSlot
 from bindaems.tools.scenario.runner import (
+    ScenarioResult,
     car_sessions,
     end_soc_value_ct,
     forecast_at,
@@ -868,3 +869,166 @@ def test_runner_passes_phase_limit_and_car_phases_on(monkeypatch: pytest.MonkeyP
     assert all(item.battery.grid_phase_import_w == 4370.0 for item in inputs)
     cars = [car for item in inputs for car in item.vehicles]
     assert cars and all(car.grid_phases == ["L2", "L3"] for car in cars)
+
+
+# --- Schnee auf den Modulen (Plan Schnee auf den Modulen, Task 7) --------------------------
+
+
+SNOW_DAY = date(2027, 1, 11)
+
+
+def _snow_plan(data: ScenarioFile, clock: str, *, snow: bool) -> Plan:
+    """Der Plan zum Slot ``clock`` (lokal, Minute 1 danach) ab dem Start-SOC, ohne vorigen Plan;
+    mit ``snow`` mit der Schneeerkennung auf den Wetterstunden der Datei."""
+    index = next(i for i, s in enumerate(data.slots) if s.start == local_dt(clock))
+    planned = runner._plan_at(
+        data,
+        data.planning,
+        index,
+        data.battery.start_soc_pct / 100 * data.battery.usable_kwh,
+        None,
+        None,
+        trigger="slot",
+        weather=runner.snow_weather(data) if snow else None,
+    )
+    assert planned is not None
+    return planned.plan
+
+
+@pytest.fixture(scope="module")
+def snow_runs() -> dict[bool, ScenarioResult]:
+    """``winter-schnee`` stündlich neu geplant (wie die CI), mit und ohne Schneeerkennung."""
+    data = synthetic("winter-schnee", SNOW_DAY, 2)
+    return {snow: run_scenario(data, step_slots=4, snow=snow) for snow in (True, False)}
+
+
+def test_winter_snow_detection_is_not_more_expensive(
+    snow_runs: dict[bool, ScenarioResult],
+) -> None:
+    # Der Akku (30 kWh) deckt den Abend auch ohne PV, und ab 13:00 laden die Module nach: Der
+    # Vorteil in Geld ist hier klein, die Erkennung darf aber nicht teurer rechnen.
+    on, off = snow_runs[True], snow_runs[False]
+    for result in (on, off):
+        assert result.r1_violations == result.r2_violations == 0
+        assert result.targets == 1 and result.targets_missed == 0
+    assert on.adjusted_optimizer_ct <= off.adjusted_optimizer_ct
+
+
+def test_winter_snow_plan_holds_battery_at_night() -> None:
+    # Nach dem Schneefall (ab 01:00) erwartet der Plan mit Erkennung kaum PV und hält den Akku
+    # nachts für den Abend; ohne Erkennung entlädt er im Vertrauen auf die PV des Tages.
+    data = synthetic("winter-schnee", SNOW_DAY, 2)
+    night_end = local_dt("2027-01-11 05:00")
+    evening = local_dt("2027-01-11 17:00")
+
+    def night(plan: Plan) -> list[PlanSlot]:
+        return [s for s in plan.slots if s.start < night_end]
+
+    def codes(slots: Sequence[PlanSlot]) -> set[str]:
+        return {r.code for s in slots for r in s.reasons}
+
+    held = _snow_plan(data, "2027-01-11 01:15", snow=True)
+    assert night(held) and all(s.intent.kind is BatteryIntentKind.HALTEN for s in night(held))
+    assert all(s.soc_end_pct == pytest.approx(held.slots[0].soc_end_pct) for s in night(held))
+    assert "PV_SCHNEE" in codes(held.slots)
+    # der gehaltene Akku entlädt am Abend
+    later = [s for s in held.slots if s.start >= evening]
+    assert any(s.intent.kind is BatteryIntentKind.EIGENVERBRAUCH for s in later)
+    assert later[-1].soc_end_pct < later[0].soc_end_pct
+
+    drained = _snow_plan(data, "2027-01-11 01:15", snow=False)
+    assert not any(s.intent.kind is BatteryIntentKind.HALTEN for s in night(drained))
+    assert "PV_UEBERSCHUSS_ERWARTET" in codes(night(drained))
+    assert "PV_SCHNEE" not in codes(drained.slots)
+    assert night(drained)[-1].soc_end_pct < night(drained)[0].soc_end_pct
+
+
+def test_winter_snow_cut_lifts_after_noon() -> None:
+    # Bis 13:00 liefern die Module 5 %, danach voll: Um 13:46 sind zwei Slots frei gemessen.
+    data = synthetic("winter-schnee", SNOW_DAY, 2)
+    before = _snow_plan(data, "2027-01-11 12:45", snow=True)
+    assert any(r.code == "PV_SCHNEE" for s in before.slots for r in s.reasons)
+    plan = _snow_plan(data, "2027-01-11 13:45", snow=True)
+    assert plan.slots[0].start == local_dt("2027-01-11 13:45")
+    assert not any(r.code == "PV_SCHNEE" for s in plan.slots for r in s.reasons)
+
+
+def _without_snow_fields(data: ScenarioFile) -> ScenarioFile:
+    """Eine Datei Version 2 wie vor der Schneeerkennung: die neuen Felder fehlen im JSON."""
+    raw = json.loads(data.model_dump_json())
+    for item in raw["slots"]:
+        del item["snowfall_cm"], item["snow_depth_m"]
+    return ScenarioFile.model_validate(raw)
+
+
+def test_scenario_v2_without_snow_fields_loads() -> None:
+    old = _without_snow_fields(synthetic("winter-spread", SNOW_DAY, 1))
+    assert old.version == 2
+    assert all(s.snowfall_cm is None and s.snow_depth_m is None for s in old.slots)
+    assert runner.snow_weather(old) == []
+    assert run_scenario(old, step_slots=16, snow=True) == run_scenario(old, step_slots=16)
+
+
+def _local_clock(slot: ScenarioSlot) -> str:
+    return slot.start.astimezone(LOCAL_TZ).strftime("%H:%M")
+
+
+def test_winter_snow_day_shape() -> None:
+    # Prognose ein klarer Wintertag mit 3000 W Spitze; Ist am ersten Tag bis 13:00 5 %
+    data = synthetic("winter-schnee", SNOW_DAY, 2)
+    assert len(data.slots) == 192 and data.cars
+    first, second = data.slots[:96], data.slots[96:]  # zweiter Tag: Ist wie der klare Tag
+    assert 2900 < max(s.pv_w for s in second) <= 3000
+    for snowy, clear in zip(first, second, strict=True):
+        assert snowy.pv_forecast_w["h0_6"] == pytest.approx(clear.pv_w, rel=0.1)
+        share = 0.05 if _local_clock(snowy) < "13:00" else 1.0
+        assert snowy.pv_w == pytest.approx(share * clear.pv_w)
+    assert _slot_at(data, "2027-01-11 03:45").snowfall_cm == pytest.approx(0.75 / 4)
+    assert _slot_at(data, "2027-01-11 04:00").snowfall_cm == 0.0
+    assert sum(s.snowfall_cm or 0.0 for s in data.slots) == pytest.approx(3.0)
+    assert all(s.snow_depth_m == 0.05 for s in data.slots)
+    spread = synthetic("winter-spread", SNOW_DAY, 2)
+    assert [s.import_ct for s in data.slots] == [s.import_ct for s in spread.slots]
+    assert all(s.snowfall_cm is None and s.snow_depth_m is None for s in spread.slots)
+
+
+def test_winter_snow_peak_lies_above_the_measuring_threshold() -> None:
+    from bindaems.app.forecast.snow import measure_min_w
+    from bindaems.tools.scenario.synthetic import PV_KWP
+
+    assert PV_KWP == 9.8 and measure_min_w(PV_KWP) == 490.0 < 3000.0
+
+
+def test_snow_weather_sums_the_slots_of_each_hour() -> None:
+    data = synthetic("winter-schnee", SNOW_DAY, 1)
+    weather = runner.snow_weather(data)
+    assert len(weather) == 24
+    first = weather[0]
+    assert first.hour_start == local_dt("2027-01-11 00:00")
+    assert (first.snowfall_cm, first.snow_depth_m) == (pytest.approx(0.75), 0.05)
+    assert [h.snowfall_cm for h in weather[4:]] == [0.0] * 20
+    # Schneehöhe: der letzte Wert der Stunde; ein Slot ohne Felder zählt nicht
+    slots = list(data.slots)
+    slots[3] = slots[3].model_copy(update={"snow_depth_m": 0.07})
+    slots[7] = slots[7].model_copy(update={"snowfall_cm": None, "snow_depth_m": None})
+    changed = runner.snow_weather(data.model_copy(update={"slots": slots}))
+    assert changed[0].snow_depth_m == 0.07
+    assert changed[1].snowfall_cm == pytest.approx(0.75 * 3 / 4)
+    assert changed[1].snow_depth_m == 0.05
+
+
+def test_snow_cut_reaches_the_planner_with_its_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Gekürzt werden P50 und P25 mit dem Faktor des Slots; den Anteil bekommt nur ein Slot mit
+    # ungekürzter P50 ab der Messschwelle (490 W), wie im Planungsdienst.
+    inputs = _record_inputs(monkeypatch)
+    data = synthetic("winter-schnee", SNOW_DAY, 2)
+    _snow_plan(data, "2027-01-11 01:15", snow=True)
+    (seen,) = inputs
+    now = local_dt("2027-01-11 01:16")
+    by_start = {s.start: s for s in data.slots}
+    noon = seen.slots[[s.start for s in seen.slots].index(local_dt("2027-01-11 12:00"))]
+    uncut = forecast_at(by_start[noon.start], lead=noon.start - now)
+    assert noon.pv_w == pytest.approx(0.1 * uncut.pv)
+    assert noon.pv_p25_w == pytest.approx(0.1 * (uncut.pv_p25 or 0.0))
+    assert noon.pv_snow_pct == 10
+    assert all(s.pv_snow_pct is None for s in seen.slots if s.start < local_dt("2027-01-11 08:30"))

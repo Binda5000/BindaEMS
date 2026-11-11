@@ -35,7 +35,7 @@ from bindaems.app.control.intent import trusted
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.service import ForecastService, PvForecast
-from bindaems.app.forecast.snow import measure_min_w
+from bindaems.app.forecast.snow import snow_pct
 from bindaems.app.learning.driving_profile import VehicleProfile
 from bindaems.app.learning.thermal_service import thermal_device
 from bindaems.app.ledger.service import LedgerService
@@ -695,12 +695,7 @@ class PlanningService:
         if pv is None:
             return {}
         kwp = sum(plane.kwp for plane in self._cfg.pv.planes)
-        floor_w = measure_min_w(kwp)
-        return {
-            slot: round(100 * factor)
-            for slot, factor in pv.snow.factors.items()
-            if pv.uncut_p50_w.get(slot, 0.0) >= floor_w
-        }
+        return snow_pct(pv.snow.factors, pv.uncut_p50_w, total_kwp=kwp)
 
     def _carried(self, previous: Plan | None) -> bool:
         """``grid_in_battery_at_start`` der Eingangsdaten des vorigen Plans (blockiert: Datenbank).

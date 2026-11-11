@@ -90,6 +90,20 @@ def measure_min_w(total_kwp: float) -> float:
     return max(MEASURE_MIN_FLOOR_W, round(MEASURE_MIN_SHARE * total_kwp * 1000.0, 6))
 
 
+def snow_pct(
+    factors: Mapping[datetime, float], uncut_p50_w: Mapping[datetime, float], *, total_kwp: float
+) -> dict[datetime, float]:
+    """Schneeanteil der PV-Prognose in Prozent je gekürztem Slot (``SlotInput.pv_snow_pct``,
+    Entscheidung 8); nur, wo die ungekürzte P50 die Messschwelle erreicht, sonst sagt die Kürzung
+    nichts. Für den Planungsdienst und den Szenario-Lauf."""
+    floor_w = measure_min_w(total_kwp)
+    return {
+        slot: round(100 * factor)
+        for slot, factor in factors.items()
+        if uncut_p50_w.get(slot, 0.0) >= floor_w
+    }
+
+
 def _snow_events(weather: Sequence[SnowHour]) -> list[datetime]:
     """Beginne der Stunden mit Schneefall im Sinn von Entscheidung 4."""
     by_start = {ensure_utc(h.hour_start): h.snowfall_cm for h in weather}
