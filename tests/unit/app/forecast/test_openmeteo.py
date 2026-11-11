@@ -11,10 +11,12 @@ from bindaems.app.forecast.openmeteo import (
     OPEN_METEO_URL,
     ForecastParseError,
     OpenMeteoUnavailable,
+    SnowHour,
     fetch_plane,
     fetch_temperature_history,
     http_error,
     parse_plane,
+    parse_snow,
     parse_temperatures,
 )
 from bindaems.shared.config import PvPlane
@@ -200,3 +202,67 @@ def test_http_error_shortens_a_long_reason() -> None:
     error = http_error(raw_response(400, json.dumps({"reason": "x" * 500})))
     assert str(error) == "Open-Meteo HTTP 400: " + "x" * 200
     assert isinstance(error, ForecastParseError) and not isinstance(error, OpenMeteoUnavailable)
+
+
+async def test_fetch_plane_asks_for_snow_only_when_wanted(respx_mock, cfg) -> None:
+    route = respx_mock.get(OPEN_METEO_URL).respond(200, text="{}")
+    plane = PvPlane(name="Süd", kwp=5, tilt_deg=30, azimuth_deg=0)
+    async with httpx.AsyncClient() as http:
+        await fetch_plane(http, ManualClock(T_APP), cfg.site.location, plane, snow=True)
+        with_snow = route.calls.last.request.url.params
+        await fetch_plane(http, ManualClock(T_APP), cfg.site.location, plane)
+        without = route.calls.last.request.url.params
+    assert with_snow["hourly"] == "snowfall,snow_depth"
+    assert "hourly" not in without
+    assert with_snow["minutely_15"] == without["minutely_15"]
+
+
+T_SNOW = 1794272400  # 2026-11-10 01:00 UTC
+
+
+def _snow_body(**hourly) -> str:
+    block = {
+        "time": [T_SNOW, T_SNOW + 3600],
+        "snowfall": [0.4, 1.2],
+        "snow_depth": [0.02, None],
+    }
+    block.update(hourly)
+    return json.dumps({"hourly_units": {"snowfall": "cm", "snow_depth": "m"}, "hourly": block})
+
+
+def test_parse_snow_reads_hourly_block() -> None:
+    start = datetime.fromtimestamp(T_SNOW, UTC) - timedelta(hours=1)
+    assert parse_snow(_snow_body()) == [
+        SnowHour(start, 0.4, 0.02),
+        SnowHour(start + timedelta(hours=1), 1.2, None),
+    ]
+
+
+def test_parse_snow_drops_entries_without_snowfall() -> None:
+    hours = parse_snow(_snow_body(snowfall=[None, 1.2]))
+    assert [h.snowfall_cm for h in hours] == [1.2]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{}",
+        "kein json",
+        "[]",
+        '{"hourly": 5, "hourly_units": {}}',
+        json.dumps({"hourly_units": {"snowfall": "cm", "snow_depth": "m"}, "hourly": 5}),
+        json.dumps({"hourly_units": {"snowfall": "cm", "snow_depth": "m"}, "hourly": {}}),
+        json.dumps({"hourly_units": {"snowfall": "mm", "snow_depth": "m"}, "hourly": {}}),
+        _snow_body(snowfall=[0.4]),
+        _snow_body(snow_depth=None),
+        _snow_body(time=["x", "y"]),
+        _snow_body(
+            time=[-62135596800, T_SNOW]
+        ),  # 0001-01-01 00:00: eine Stunde davor gibt es nicht
+        _snow_body(snowfall=["a", 1.0]),
+        _snow_body().replace('"snowfall": "cm"', '"snowfall": "mm"'),
+        _snow_body().replace('"snow_depth": "m"', '"snow_depth": "cm"'),
+    ],
+)
+def test_parse_snow_missing_block_is_empty(body: str) -> None:
+    assert parse_snow(body) == []

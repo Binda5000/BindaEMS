@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -30,6 +30,9 @@ VARIABLES = (
 GTI_UNIT = "W/m²"
 RADIATION_UNIT = "W/m²"
 TEMPERATURE_UNIT = "°C"
+SNOW_VARIABLES = "snowfall,snow_depth"
+SNOWFALL_UNIT = "cm"
+SNOW_DEPTH_UNIT = "m"
 HISTORY_DAYS = 92  # so weit zurück reicht die Vorhersage-Schnittstelle von Open-Meteo
 REASON_MAX = 200
 
@@ -41,6 +44,17 @@ class WeatherSlot:
     temp_c: float
     ghi_w_m2: float | None = None
     diffuse_w_m2: float | None = None
+
+
+@dataclass(frozen=True)
+class SnowHour:
+    """Schneefall und Schneehöhe einer Stunde; ``hour_start`` (UTC) ist der Beginn der Stunde,
+    auf die sich der Schneefall bezieht (der Wert zu T gehört zur Stunde ab T − 1 h). Die
+    Schneehöhe ist bei Open-Meteo ein Momentanwert zu T, gilt also am Ende dieser Stunde."""
+
+    hour_start: datetime
+    snowfall_cm: float
+    snow_depth_m: float | None
 
 
 class ForecastParseError(Exception):
@@ -66,8 +80,14 @@ def http_error(raw: RawResponse) -> ForecastParseError:
 
 
 async def fetch_plane(
-    http: httpx.AsyncClient, clock: Clock, location: LatLon, plane: PvPlane
+    http: httpx.AsyncClient,
+    clock: Clock,
+    location: LatLon,
+    plane: PvPlane,
+    *,
+    snow: bool = False,
 ) -> RawResponse:
+    """Prognose einer Fläche; mit ``snow`` zusätzlich Schneefall und Schneehöhe (stündlich)."""
     params: dict[str, str | int | float] = {
         "latitude": location.lat,
         "longitude": location.lon,
@@ -79,6 +99,8 @@ async def fetch_plane(
         "timezone": "GMT",
         "timeformat": "unixtime",
     }
+    if snow:
+        params["hourly"] = SNOW_VARIABLES
     return await get_raw(http, clock, SOURCE, OPEN_METEO_URL, params)
 
 
@@ -197,3 +219,38 @@ def parse_temperatures(body: str) -> dict[datetime, float]:
             raise ForecastParseError(f"ungültiger Eintrag: {stamp!r}, {air!r}")
         found[_slot_start(stamp, seconds)] = air_c
     return found
+
+
+def parse_snow(body: str) -> list[SnowHour]:
+    """Schneefall und Schneehöhe je Stunde aus ``hourly``. Fehlt der Block, eine Variable oder
+    stimmt eine Einheit nicht (cm, m), ist das Ergebnis leer: dann gibt es keine Schneeerkennung,
+    die Prognose läuft unverändert weiter. Wirft nie."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    units, block = data.get("hourly_units"), data.get("hourly")
+    if not isinstance(units, dict) or not isinstance(block, dict):
+        return []
+    if units.get("snowfall") != SNOWFALL_UNIT or units.get("snow_depth") != SNOW_DEPTH_UNIT:
+        return []
+    times, snowfall, depth = (block.get(key) for key in ("time", "snowfall", "snow_depth"))
+    if not isinstance(times, list) or not isinstance(snowfall, list) or not isinstance(depth, list):
+        return []
+    if not len(times) == len(snowfall) == len(depth):
+        return []
+    hours: list[SnowHour] = []
+    for stamp, fall, deep in zip(times, snowfall, depth, strict=True):
+        if fall is None:
+            continue
+        seconds, fall_cm = _number(stamp), _number(fall)
+        if seconds is None or fall_cm is None:
+            return []
+        try:
+            start = datetime.fromtimestamp(seconds, UTC) - timedelta(hours=1)
+        except (OverflowError, OSError, ValueError):
+            return []
+        hours.append(SnowHour(start, fall_cm, _number(deep)))
+    return hours
