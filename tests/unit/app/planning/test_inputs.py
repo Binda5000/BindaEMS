@@ -31,6 +31,7 @@ from bindaems.app.planning.inputs import (
     PeakMonth,
     PlanInputs,
     PlanningUnavailable,
+    SlotInput,
     end_value_ct,
     horizon_prices,
     peak_months,
@@ -504,6 +505,15 @@ def test_assemble_floor_is_capped_at_the_highest_soc() -> None:
         storm_warnings=[_THUNDER],
     )
     assert {s.storm_floor_pct for s in inputs.slots[4:16]} == {35.0}
+
+
+def test_stored_inputs_without_snow_load() -> None:
+    # Eingangsdaten vor dem Plan „Schnee auf den Modulen“ laden ohne Schneeanteil
+    data = sample_inputs().model_dump(mode="json")
+    for slot in data["slots"]:
+        assert slot.pop("pv_snow_pct") is None
+    assert all(s.pv_snow_pct is None for s in PlanInputs.model_validate(data).slots)
+    assert SlotInput.model_validate(data["slots"][0]).pv_snow_pct is None
 
 
 def test_old_inputs_load_without_storm(store: PlanStore, engine: Engine) -> None:

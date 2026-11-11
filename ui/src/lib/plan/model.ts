@@ -82,7 +82,7 @@ export function stormWarningLines(storm: PlanStorm | null, now: Date = new Date(
 
 const SLOT_MS = 900_000;
 /** Zusätze zum Hauptcode eines Slots */
-const SUFFIX_CODES: readonly PlanReasonCode[] = ['GESCHAETZT', 'ERSATZPLAN'];
+const SUFFIX_CODES: readonly PlanReasonCode[] = ['PV_SCHNEE', 'GESCHAETZT', 'ERSATZPLAN'];
 
 export interface PlanBlock {
 	start: string;
@@ -99,7 +99,7 @@ export interface PlanBlock {
 	expected: string[];
 }
 
-/** Hauptcode eines Slots: der erste Code, der nicht nur „geschätzt“ oder „Ersatzplan“ sagt */
+/** Hauptcode eines Slots: der erste Code, der nicht nur „PV gekürzt“, „geschätzt“ oder „Ersatzplan“ sagt */
 function mainCode(slot: PlanSlot): string {
 	return slot.codes.find((code) => !SUFFIX_CODES.includes(code)) ?? slot.codes[0] ?? '';
 }

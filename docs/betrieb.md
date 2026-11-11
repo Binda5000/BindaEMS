@@ -6706,9 +6706,9 @@ Den Akku rechnet der Ersatzplan mit diesen Autos so:
 
 Jeder Slot trägt **Grundcodes**; das UI und die Sensoren in Home Assistant zeigen daraus deutsche
 Sätze, mehrere durch ein Leerzeichen getrennt. In einem Ersatzplan steht `ERSATZPLAN` an erster
-Stelle, bei einem Schätzpreis `GESCHAETZT` an letzter. Zahlen haben ein Dezimalkomma (`kW`, `ct`
+Stelle, bei einem Schätzpreis `GESCHAETZT` an letzter, davor bei gekürzter PV `PV_SCHNEE`. Zahlen haben ein Dezimalkomma (`kW`, `ct`
 und `kWh` mit einer Nachkommastelle, `%` ganzzahlig), Uhrzeiten sind lokal. Der Hauptcode eines
-Slots folgt der ersten passenden Regel, in dieser Reihenfolge der Prüfung (`GESCHAETZT` und
+Slots folgt der ersten passenden Regel, in dieser Reihenfolge der Prüfung (`PV_SCHNEE`, `GESCHAETZT` und
 `ERSATZPLAN` am Ende sind Zusätze, keine Hauptcodes); die Beispiele zeigen den Satz mit erfundenen
 Zahlen:
 
@@ -6735,6 +6735,7 @@ Zahlen:
 | `UNTERSTUETZUNG_RESERVIERT` | Akku-Unterstützung fürs Auto erst ab 70 %, weil der Plan den Akku bis 18:00 Uhr braucht. | Absicht `Eigenverbrauch`; die Schwelle, die der Plan für spätere Entladungen braucht, liegt über der Unterstützungsschwelle; „bis“ ist der Beginn des ersten späteren Slots ohne diesen Bedarf |
 | `KLIMA_MEHR` | Vorheizen um 1,0 K, weil Strom jetzt günstig ist oder PV übrig bleibt. | Zusatz, wenn Vorheizen und Vorkühlen an den core geht (seit Plan 5c): der Plan hält das Haus am Ende des Slots um so viele K über dem Sollwert; beim Kühlen „Vorkühlen um … K“ |
 | `KLIMA_WENIGER` | Heizung 0,5 K tiefer, weil Strom jetzt teuer ist. | Zusatz wie `KLIMA_MEHR`: der Plan lässt das Haus um so viele K unter den Sollwert; beim Kühlen „Kühlung … K schwächer“ |
+| `PV_SCHNEE` | PV gekürzt auf 10 % der Prognose: vermutlich Schnee auf den Modulen. | Zusatz hinter allen übrigen Codes des Slots, unmittelbar vor `GESCHAETZT`: die PV-Prognose des Slots ist wegen Schnee auf den Modulen gekürzt; die Zahl ist der verbleibende Anteil. Nur Slots, in denen die ungekürzte Prognose die Messschwelle erreicht |
 | `GESCHAETZT` | Preis geschätzt. | der Preis des Slots ist ein Schätzpreis |
 | `ERSATZPLAN` | Ersatzplan. | der Plan ist ein Ersatzplan |
 

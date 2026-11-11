@@ -51,6 +51,19 @@ it('ignores the estimated-price and fallback codes when picking the main code', 
 	expect(blocks).toHaveLength(1);
 });
 
+it('nennt PV_SCHNEE als Suffix hinter dem Hauptcode und vor GESCHAETZT', () => {
+	const text = 'PV gekürzt auf 10 % der Prognose: vermutlich Schnee auf den Modulen.';
+	const blocks = planBlocks([
+		slot('10:00', 'EIGENVERBRAUCH', 0, 'PV_LADEN', {
+			codes: ['PV_LADEN', 'PV_SCHNEE', 'GESCHAETZT'],
+			text
+		}),
+		slot('10:15', 'EIGENVERBRAUCH', 0, 'PV_LADEN', { codes: ['PV_SCHNEE', 'PV_LADEN'] })
+	]);
+	expect(blocks).toHaveLength(1);
+	expect(blocks[0].text).toBe(text);
+});
+
 it('carries SOC from the end of the slot before the block', () => {
 	const blocks = planBlocks([
 		slot('10:00', 'HALTEN', 0, 'HALTEN_RESTWERT', { soc_pct: 40 }),

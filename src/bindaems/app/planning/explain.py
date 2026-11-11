@@ -5,7 +5,10 @@ Der Hauptcode eines Slots folgt der ersten passenden Regel; dazu kommen ``ERSATZ
 und ``GESCHAETZT`` an letzter Stelle. Nach dem Hauptcode stehen die Codes der geplanten Autos
 (Plan 4b, Präzisierung 13), im Slot der Ankunft eines erwarteten Autos zuerst ``AUTO_ERWARTET``
 (Plan 5b, Präzisierung 10). Eine Verschiebung der Klimaanlage, die an den core geht (Plan 5c),
-nennt ``KLIMA_MEHR`` oder ``KLIMA_WENIGER`` vor ``GESCHAETZT`` (``with_thermal``). Reine Rechnung
+nennt ``KLIMA_MEHR`` oder ``KLIMA_WENIGER`` vor ``PV_SCHNEE`` und ``GESCHAETZT``
+(``with_thermal``). Ist die PV-Prognose des Slots wegen Schnee gekürzt (``pv_snow_pct``), steht
+``PV_SCHNEE`` hinter allen übrigen Codes, unmittelbar vor ``GESCHAETZT`` (Plan Schnee auf den
+Modulen, Entscheidung 8). Reine Rechnung
 ohne Zugriff auf Zeit oder Konfiguration.
 """
 
@@ -132,6 +135,10 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
     ),
     "GESCHAETZT": lambda _: "Preis geschätzt.",
     "ERSATZPLAN": lambda _: "Ersatzplan.",
+    "PV_SCHNEE": lambda p: (
+        f"PV gekürzt auf {_de(_num(p, 'pct'), 0)} % der Prognose: "
+        "vermutlich Schnee auf den Modulen."
+    ),
     "ZIEL_SOC_ABFAHRT": lambda p: (
         f"{_txt(p, 'name')} lädt {_de(_num(p, 'kw'), 1)} kW, damit es um {_txt(p, 'um')} Uhr "
         f"{_de(_num(p, 'soc'), 0)} % hat."
@@ -178,13 +185,18 @@ def thermal_reason(mode: str, steps: int | None) -> Reason | None:
     return Reason(code=code, params={"mode": mode, "k": steps * STEP_K})
 
 
+_TAIL_CODES = frozenset({"PV_SCHNEE", "GESCHAETZT"})
+
+
 def with_thermal(reasons: Sequence[Reason], reason: Reason | None) -> list[Reason]:
-    """``reasons`` mit dem Grundcode der Klimaanlage ``reason`` vor einem ``GESCHAETZT`` am Ende
-    (sonst am Ende); ohne ``reason`` unverändert."""
+    """``reasons`` mit dem Grundcode der Klimaanlage ``reason`` vor ``PV_SCHNEE`` und
+    ``GESCHAETZT`` am Ende (sonst am Ende); ohne ``reason`` unverändert."""
     result = list(reasons)
     if reason is None:
         return result
-    at = len(result) - 1 if result and result[-1].code == "GESCHAETZT" else len(result)
+    at = len(result)
+    while at > 0 and result[at - 1].code in _TAIL_CODES:
+        at -= 1
     result.insert(at, reason)
     return result
 
@@ -510,7 +522,7 @@ def reasons_for(
 ) -> list[list[Reason]]:
     """Grundcodes je Slot: ``ERSATZPLAN`` (im Ersatzplan), Hauptcode, die Codes der geplanten Autos
     (``_car_reasons``), ``SOFORT_AUS_AKKU``, ``UNTERSTUETZUNG_RESERVIERT`` (Präzisierung 6),
-    ``GESCHAETZT`` (bei Schätzpreis).
+    ``PV_SCHNEE`` (bei gekürzter PV-Prognose), ``GESCHAETZT`` (bei Schätzpreis).
 
     ``thresholds`` sind Plan-Schwelle und „bis“ je Slot (``support_thresholds``); ohne sie gibt es
     den Grundcode ``UNTERSTUETZUNG_RESERVIERT`` nie. ``ev_w`` ist die Ladeleistung je Auto und Slot,
@@ -551,6 +563,8 @@ def reasons_for(
                         params={"soc": soc_pct, "um": ensure_utc(until).isoformat()},
                     )
                 )
+        if slot.pv_snow_pct is not None:
+            reasons.append(Reason(code="PV_SCHNEE", params={"pct": round(slot.pv_snow_pct)}))
         if slot.origin == "estimated":
             reasons.append(Reason(code="GESCHAETZT"))
         result.append(reasons)

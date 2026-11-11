@@ -106,6 +106,8 @@ class SlotInput(_Model):
     vorigen Plans oder nach den ersten Slots (Planträgheit). Gespeicherte Eingangsdaten ohne die
     beiden Felder laden mit ``None`` (Plan 4b). ``storm_floor_pct`` ist die Untergrenze der
     Unwetter-Reserve am Slotende in Prozent, ``None`` ohne Warnung (alte Eingangsdaten: ``None``).
+    ``pv_snow_pct`` ist der Anteil der PV-Prognose in Prozent, auf den sie wegen Schnee gekürzt
+    ist, ``None`` ohne Kürzung (Plan Schnee auf den Modulen; alte Eingangsdaten: ``None``).
     """
 
     start: AwareDatetime
@@ -118,6 +120,7 @@ class SlotInput(_Model):
     pv_p25_w: Finite | None = None
     prev_ev_w: dict[str, Finite] | None = None
     storm_floor_pct: Finite | None = None
+    pv_snow_pct: Finite | None = None
 
 
 class PlanInputs(_Model):
@@ -279,6 +282,7 @@ def assemble_inputs(
     pv_p25_w: Mapping[datetime, float] | None = None,
     vehicles: Callable[[list[SlotInput]], list[PlanVehicleInput]] | None = None,
     storm_warnings: Sequence[StormWarning] = (),
+    pv_snow_pct: Mapping[datetime, float] | None = None,
 ) -> PlanInputs:
     """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
 
@@ -288,6 +292,8 @@ def assemble_inputs(
     ``vehicles`` ergibt die geplanten Autos zu den Slots des Horizonts (``planned_vehicles``, danach
     ``expected_vehicles``); ohne gibt es keine. ``storm_warnings`` sind die bekannten
     Unwetterwarnungen; die passenden ergeben die Untergrenze je Slot (``storm_floor_pct``).
+    ``pv_snow_pct`` ist der Schneeanteil je Slot in Prozent (``SlotInput.pv_snow_pct``); ein Slot
+    ohne Eintrag bekommt ``None``.
 
     Prüfreihenfolge: Akkuzustand, Preis des aktuellen Slots, PV, Last, Horizontlänge. Der
     Horizont endet vor dem ersten Slot ohne PV- oder Lastprognose.
@@ -320,6 +326,7 @@ def assemble_inputs(
                 ),
                 pv_p25_w=pv_p25_w.get(start) if pv_p25_w is not None else None,
                 prev_ev_w=_previous_ev_w(previous, start) if index < INERTIA_SLOTS else None,
+                pv_snow_pct=pv_snow_pct.get(start) if pv_snow_pct is not None else None,
             )
         )
     if len(slots) < MIN_SLOTS:

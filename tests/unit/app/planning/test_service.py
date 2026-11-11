@@ -36,6 +36,7 @@ from tests.plan_helpers import (
 )
 
 from bindaems.app.db.schema import plan_inputs_table
+from bindaems.app.forecast.snow import SnowCut
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.learning.thermal_model import ModeModel, ModeProfile
 from bindaems.app.planning import thermal_stage
@@ -304,6 +305,18 @@ async def test_collect_passes_the_storm_warnings(service_with, settings_service,
     assert inputs.storm_warnings == [warning]
     floors = [i for i, s in enumerate(inputs.slots) if s.storm_floor_pct is not None]
     assert floors == list(range(4, 12))
+
+
+async def test_collect_passes_snow_share(service, forecast):
+    # Nur Slots mit Kürzung und ungekürzter PV über der Messschwelle bekommen den Anteil
+    first = slot_start(forecast.forecast.issued_at)
+    day, night = first + 4 * SLOT, first + 8 * SLOT
+    uncut = {**forecast.forecast.uncut_p50_w, day: 2000.0, night: 0.0}
+    cut = SnowCut("bedeckt", 0.1, first, {day: 0.1, night: 0.1})
+    forecast.forecast = replace(forecast.forecast, uncut_p50_w=uncut, snow=cut)
+    inputs = await service.collect("start")
+    shares = {s.start: s.pv_snow_pct for s in inputs.slots if s.pv_snow_pct is not None}
+    assert shares == {day: 10}
 
 
 async def test_collect_takes_p25_and_the_planned_cars(service_with, live, forecast):

@@ -34,7 +34,8 @@ from bindaems.app.audit import Source
 from bindaems.app.control.intent import trusted
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
-from bindaems.app.forecast.service import ForecastService
+from bindaems.app.forecast.service import ForecastService, PvForecast
+from bindaems.app.forecast.snow import measure_min_w
 from bindaems.app.learning.driving_profile import VehicleProfile
 from bindaems.app.learning.thermal_service import thermal_device
 from bindaems.app.ledger.service import LedgerService
@@ -682,10 +683,24 @@ class PlanningService:
             pv_p25_w=pv.p25_w if pv is not None else None,
             vehicles=lambda slots: self._vehicles(health, intent, now, slots),
             storm_warnings=self._storm(),
+            pv_snow_pct=self._snow_pct(pv),
         )
         carried = await asyncio.to_thread(self._carried, previous)
         at_start = grid_in_battery_at_start(inputs, previous, carried=carried)
         return inputs.model_copy(update={"grid_in_battery_at_start": at_start})
+
+    def _snow_pct(self, pv: PvForecast | None) -> dict[datetime, float]:
+        """Schneeanteil der PV-Prognose in Prozent je gekürztem Slot (Plan Schnee auf den Modulen);
+        nur, wo die ungekürzte Prognose die Messschwelle erreicht, sonst sagt die Kürzung nichts."""
+        if pv is None:
+            return {}
+        kwp = sum(plane.kwp for plane in self._cfg.pv.planes)
+        floor_w = measure_min_w(kwp)
+        return {
+            slot: round(100 * factor)
+            for slot, factor in pv.snow.factors.items()
+            if pv.uncut_p50_w.get(slot, 0.0) >= floor_w
+        }
 
     def _carried(self, previous: Plan | None) -> bool:
         """``grid_in_battery_at_start`` der Eingangsdaten des vorigen Plans (blockiert: Datenbank).

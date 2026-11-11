@@ -1006,6 +1006,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "2026-10-16T16:00:00+00:00"},
         "GESCHAETZT": {},
         "ERSATZPLAN": {},
+        "PV_SCHNEE": {"pct": 10},
         "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
         "AUTO_WARTET_AUF_PV": {"name": "e-Golf", "um": "09:30"},
         "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.0, "um": "06:30"},
@@ -1047,6 +1048,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "UNTERSTUETZUNG_RESERVIERT",
         "KLIMA_MEHR",
         "KLIMA_WENIGER",
+        "PV_SCHNEE",
         "GESCHAETZT",
         "ERSATZPLAN",
     ]

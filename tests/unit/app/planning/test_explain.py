@@ -58,6 +58,7 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "2026-10-16T16:00:00+00:00"},
     "GESCHAETZT": {},
     "ERSATZPLAN": {},
+    "PV_SCHNEE": {"pct": 10},
     "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
     "AUTO_WARTET_AUF_PV": {"name": "e-Golf", "um": "09:30"},
     "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.4, "um": "06:30"},
@@ -147,6 +148,7 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         "AUTO_ERWARTET": (
             "Tesla Model 3 wird um 17:30 Uhr mit etwa 41 % erwartet (Anwesenheitsprognose)."
         ),
+        "PV_SCHNEE": "PV gekürzt auf 10 % der Prognose: vermutlich Schnee auf den Modulen.",
         "KLIMA_MEHR": "Vorheizen um 1,0 K, weil Strom jetzt günstig ist oder PV übrig bleibt.",
         "KLIMA_WENIGER": "Kühlung 0,5 K schwächer, weil Strom jetzt teuer ist.",
         "AUTO_AUS_AKKU": "Tesla Model 3 lädt 2,5 kW aus dem Akku statt aus dem Netz.",
@@ -433,6 +435,27 @@ def test_fallback_and_estimated_codes_surround_the_main_code() -> None:
     ]
 
 
+def test_snow_reason_before_estimated() -> None:
+    inputs = scenario(
+        prices=[20.0] * 2, pv=[0.0] * 2, load=[500.0] * 2, origins=["estimated", "primary"]
+    )
+    inputs = inputs.model_copy(
+        update={
+            "slots": [
+                s.model_copy(update={"pv_snow_pct": 10 if i == 0 else None})
+                for i, s in enumerate(inputs.slots)
+            ]
+        }
+    )
+    assert codes(inputs, [EV] * 2) == [
+        ["EIGENVERBRAUCH", "PV_SCHNEE", "GESCHAETZT"],
+        ["EIGENVERBRAUCH"],
+    ]
+    assert sentence(Reason(code="PV_SCHNEE", params={"pct": 10})) == (
+        "PV gekürzt auf 10 % der Prognose: vermutlich Schnee auf den Modulen."
+    )
+
+
 def test_budgets_do_not_change_plain_eigenverbrauch() -> None:
     inputs = scenario(
         prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, peak_months=[month("2026-10", 2.0)]
@@ -668,6 +691,8 @@ def test_explain_names_preheat_and_setback() -> None:
     guess = Reason(code="GESCHAETZT")
     assert with_thermal([main, guess], more) == [main, more, guess]
     assert with_thermal([main], less) == [main, less]
+    snow = Reason(code="PV_SCHNEE", params={"pct": 10})
+    assert with_thermal([main, snow, guess], more) == [main, more, snow, guess]
     assert with_thermal([main, guess], None) == [main, guess]
     assert with_thermal([], more) == [more]
 
