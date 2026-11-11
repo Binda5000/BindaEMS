@@ -439,7 +439,7 @@ class PlanningService:
         new = Fingerprint(
             last_price=last_price,
             primary=primary,
-            pv_issued=pv.issued_at if pv is not None else None,
+            pv_revision=pv.revision if pv is not None else None,
             load_issued=load.issued_at if load is not None else None,
             vehicles=vehicles,
             support_pct=self._support_pct(),

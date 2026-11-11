@@ -57,6 +57,13 @@ def test_changed_all_in_order_and_nothing():
     assert changed(new, new) == []
 
 
+def test_changed_pv_revision_is_a_pv_forecast_trigger():
+    issued = at("2026-10-16T10:07:00+00:00")
+    old = Fingerprint(None, 0, issued, None)
+    new = replace(old, pv_revision=at("2026-10-16T10:19:00+00:00"))  # Kürzung bei Schnee neu
+    assert changed(old, new) == ["pv_forecast"]
+
+
 def test_changed_support_threshold_is_a_settings_trigger():
     old = Fingerprint(None, 0, None, None, support_pct=70.0)
     assert changed(old, replace(old, support_pct=60.0)) == ["settings"]

@@ -43,12 +43,13 @@ _CORE_FIELDS: Final = 5
 @dataclass(frozen=True)
 class Fingerprint:
     """Stand der Eingangsdaten: letzter bekannter Preis-Slot und Zahl der ``primary``-Slots im
-    Fenster, Ausgabezeit von PV- und Lastprognose, Stand der geplanten Autos
-    (``vehicles_fingerprint``) und die wirksame Unterstützungsschwelle (%)."""
+    Fenster, Stand der PV-Prognose (``revision``: Abruf oder neue Kürzung bei Schnee), Ausgabezeit
+    der Lastprognose, Stand der geplanten Autos (``vehicles_fingerprint``) und die wirksame
+    Unterstützungsschwelle (%)."""
 
     last_price: datetime | None
     primary: int
-    pv_issued: datetime | None
+    pv_revision: datetime | None
     load_issued: datetime | None
     vehicles: tuple[Any, ...] = ()
     support_pct: float | None = None
@@ -73,7 +74,7 @@ def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
     result: list[PlanTrigger] = []
     if new.last_price != old.last_price or new.primary > old.primary:
         result.append("prices")
-    if new.pv_issued != old.pv_issued:
+    if new.pv_revision != old.pv_revision:
         result.append("pv_forecast")
     if new.load_issued != old.load_issued:
         result.append("load_forecast")

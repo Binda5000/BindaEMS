@@ -272,6 +272,16 @@ def test_stored_settings_without_ops_load() -> None:
     assert RuntimeSettings.model_validate(old).ops == OpsSettings()
 
 
+def test_snow_detection_defaults_on() -> None:
+    assert RuntimeSettings.model_validate({}).pv_model.snow_detection is True
+
+
+def test_stored_settings_without_snow_detection_load() -> None:
+    old = RuntimeSettings().model_dump(mode="json")
+    del old["pv_model"]["snow_detection"]
+    assert RuntimeSettings.model_validate(old).pv_model.snow_detection is True
+
+
 def test_storm_defaults() -> None:
     from bindaems.shared.settings import PlanningSettings
 

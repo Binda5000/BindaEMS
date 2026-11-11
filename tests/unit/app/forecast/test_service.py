@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
@@ -11,9 +12,10 @@ from tests.unit.app.forecast.conftest import FIXTURE
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.pv_model import plane_power_w
 from bindaems.app.forecast.service import PvForecast
+from bindaems.app.forecast.snow import NO_CUT
 from bindaems.app.ledger.service import LedgerSlot
 from bindaems.shared.settings import PvModelSettings
-from bindaems.shared.timeutil import local_day_slots
+from bindaems.shared.timeutil import SLOT, local_day_slots
 
 
 async def test_refresh_builds_forecast_and_writes_points(forecast_env) -> None:
@@ -40,7 +42,7 @@ async def test_failed_plane_keeps_previous_forecast(forecast_env, respx_mock) ->
 def test_day_energy_on_dst_day_uses_local_slots() -> None:
     day = date(2026, 10, 25)
     power = dict.fromkeys(local_day_slots(day), 1000.0)
-    forecast = PvForecast(T_APP, "open_meteo", power, power, power, power, {})
+    forecast = PvForecast(T_APP, "open_meteo", power, power, power, power, {}, power, T_APP)
     assert forecast.day_energy_kwh(day) == pytest.approx(25.0)  # 100 Slots × 0,25 h × 1 kW
     assert forecast.day_energy_kwh(date(2026, 10, 26)) is None
     assert forecast.power_at(local_day_slots(day)[3].replace(minute=7)) == 1000.0
@@ -432,3 +434,284 @@ async def test_successful_refresh_fetches_all_planes_next_time(
     clock.advance(5 * 60)
     await service.refresh()
     assert azimuths(route) == ["0.0", "50.0", "0.0", "50.0"]
+
+
+# --- Schnee auf den Modulen -------------------------------------------------------------------
+
+SNOW_AT = datetime(2026, 10, 9, 0, 0, tzinfo=UTC)  # heute 02:00 Ortszeit
+EARLY = timedelta(hours=-5)  # von 10:00 auf 05:00 Ortszeit
+MORNING = datetime(2026, 10, 9, 8, 15, tzinfo=UTC)  # 10:15 Ortszeit, Prognose um 4 kW
+NO_SNOW_DATA = "Keine Schneedaten von Open-Meteo, Schneeerkennung entfällt"
+
+
+def snowy(snowfall_cm: Mapping[datetime, float] | None = None, *, depth_m: float = 0.0) -> str:
+    """Die Aufnahme mit stündlichem Schneeblock; ``snowfall_cm`` je Beginn der Stunde (UTC)."""
+    data = json.loads(FIXTURE.read_text())
+    times = data["minutely_15"]["time"]
+    stamps = list(range(times[0] + 3600, times[-1] + 1, 3600))
+    falls = snowfall_cm or {}
+    data["hourly_units"] = {"time": "unixtime", "snowfall": "cm", "snow_depth": "m"}
+    data["hourly"] = {
+        "time": stamps,
+        "snowfall": [falls.get(datetime.fromtimestamp(t - 3600, UTC), 0.0) for t in stamps],
+        "snow_depth": [depth_m] * len(stamps),
+    }
+    return json.dumps(data)
+
+
+def ratio_ledger(forecast: PvForecast, ratios: Mapping[datetime, float]) -> FakeLedger:
+    """Abrechnung mit Ist = Verhältnis · ungekürzte P50 je Slot."""
+    return FakeLedger({slot: r * forecast.uncut_p50_w[slot] for slot, r in ratios.items()})
+
+
+def morning(ratio: float, count: int, *, first: datetime = MORNING) -> dict[datetime, float]:
+    return {first + i * SLOT: ratio for i in range(count)}
+
+
+async def test_refresh_applies_snow_cut(forecast_env, respx_mock, clock, cfg, archive) -> None:
+    clock.advance(EARLY)
+    service, sink = forecast_env()
+    route = respx_mock.routes["open_meteo"]
+    route.respond(200, text=snowy({SNOW_AT: 2.0}))
+    await service.refresh()
+    forecast = service.latest()
+    assert forecast is not None
+    assert route.calls.last.request.url.params["hourly"] == "snowfall,snow_depth"
+    uncut = forecast.uncut_p50_w[NOON]
+    assert uncut > 1000 and forecast.raw_w[NOON] == uncut  # ohne Kalibrierung
+    assert forecast.p50_w[NOON] == pytest.approx(0.1 * uncut)
+    assert forecast.p25_w[NOON] == pytest.approx(0.1 * 0.7 * uncut)
+    assert forecast.p75_w[NOON] == pytest.approx(0.1 * min(1.2 * uncut, cfg.pv.inverter_ac_max_w))
+    assert (forecast.snow.state, forecast.snow.factor, forecast.snow.since) == (
+        "vermutet",
+        0.1,
+        SNOW_AT,
+    )
+    assert forecast.revision == forecast.issued_at
+    assert (
+        forecast.p50_w[NOON - timedelta(days=1)] == forecast.uncut_p50_w[NOON - timedelta(days=1)]
+    )
+    kw = [p.fields["kw"] for p in sink.points if p.ts == NOON and p.tags["quantile"] == "p50"]
+    assert kw == [pytest.approx(0.1 * uncut / 1000.0)]  # InfluxDB bekommt die gekürzte Prognose
+    row = next(r for r in archive.records("pv", NOON, NOON + SLOT))
+    assert row.p50_w == pytest.approx(0.1 * row.raw_w)  # das Archiv auch (Entscheidung 6)
+
+
+async def test_only_the_first_plane_asks_for_snow(forecast_env, respx_mock, cfg, clock) -> None:
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    service._cfg = two_planes(cfg)
+    route = respx_mock.routes["open_meteo"]
+    route.respond(200, text=snowy({SNOW_AT: 2.0}))
+    forecast = await service.refresh()
+    assert [call.request.url.params.get("hourly") for call in route.calls] == [
+        "snowfall,snow_depth",
+        None,
+    ]
+    assert forecast is not None and forecast.snow.state == "vermutet"
+
+
+async def test_kept_first_plane_keeps_its_snow_hours(forecast_env, respx_mock, cfg, clock) -> None:
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    service._cfg = two_planes(cfg)
+    route = respx_mock.routes["open_meteo"]
+    route.side_effect = [
+        httpx.Response(200, text=snowy({SNOW_AT: 2.0})),
+        *[httpx.Response(503)] * 3,
+    ]
+    assert await service.refresh() is None
+    clock.advance(10 * 60)
+    route.side_effect = None
+    route.respond(200, text=FIXTURE.read_text())  # West ohne Schneeblock
+    forecast = await service.refresh()
+    assert forecast is not None and forecast.snow.state == "vermutet"
+
+
+async def test_refresh_without_snow_data_is_uncut(forecast_env, clock) -> None:
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    with capture_logs() as logs:
+        forecast = await service.refresh()
+    assert forecast is not None and forecast.p50_w == forecast.uncut_p50_w
+    assert forecast.snow == NO_CUT
+    status = service.component_status()
+    assert status.ok and "gekürzt" not in status.message and status.details == {}
+    assert [e["log_level"] for e in logs if e["event"] == NO_SNOW_DATA] == ["info"]
+
+
+async def test_restart_after_snowfall_keeps_cut(forecast_env, respx_mock, clock) -> None:
+    clock.advance(3600)  # 11:00 Ortszeit; Schneefall um 02:00, drei Slots mit einem Drittel
+    body = snowy({SNOW_AT: 2.0})
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=body)
+    first = await service.refresh()
+    assert first is not None and first.snow.state == "vermutet"
+    ledger = ratio_ledger(first, morning(0.3, 3))
+    assert await asyncio.to_thread(service.check_snow, ledger) is True
+    await service.refresh()  # der nächste Abruf rechnet mit den gemerkten Beobachtungen
+    before = service.latest()
+    assert before is not None and before.snow.state == "gemessen"
+    assert before.snow.factor == pytest.approx(0.3)
+    restarted, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=body)
+    await restarted.refresh()
+    restarted.check_snow(ledger)
+    after = restarted.latest()
+    assert after is not None and after.snow == before.snow
+    assert after.p50_w == pytest.approx(before.p50_w)
+
+
+async def test_snow_check_bumps_revision_and_triggers_replan(
+    forecast_env, respx_mock, clock, archive
+) -> None:
+    clock.advance(EARLY)
+    service, sink = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    issued = (await service.refresh()).issued_at
+    clock.advance(6 * 3600)  # 11:00 Ortszeit; 10:30 und 10:45 liefern 80 %
+    ledger = ratio_ledger(service.latest(), morning(0.8, 2, first=MORNING + SLOT))
+    sink.points.clear()
+    assert await asyncio.to_thread(service.check_snow, ledger) is True
+    forecast = service.latest()
+    assert forecast.revision == clock.now() and forecast.revision > issued
+    assert forecast.issued_at == issued
+    assert forecast.snow == NO_CUT and forecast.p50_w == forecast.uncut_p50_w
+    assert len(sink.points) == 3 * 384  # InfluxDB neu
+    kw = [p.fields["kw"] for p in sink.points if p.ts == NOON and p.tags["quantile"] == "p50"]
+    assert kw == [pytest.approx(forecast.uncut_p50_w[NOON] / 1000.0)]
+    rows = archive.records("pv", issued, issued + timedelta(days=2))
+    assert {r.issued_at for r in rows} == {issued}  # das Archiv bleibt
+    row = next(r for r in archive.records("pv", NOON, NOON + SLOT))
+    assert row.p50_w == pytest.approx(0.1 * row.raw_w)
+    clock.advance(15 * 60)
+    assert service.check_snow(ledger) is False
+    assert service.latest().revision == forecast.revision
+
+
+async def test_small_factor_change_keeps_the_revision(forecast_env, respx_mock, clock) -> None:
+    clock.advance(3600)  # 11:00 Ortszeit
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    first = await service.refresh()
+    assert service.check_snow(ratio_ledger(first, morning(0.3, 3))) is True
+    measured = service.latest()
+    clock.advance(15 * 60)
+    ratios = {**morning(0.3, 2), MORNING + 2 * SLOT: 0.34, MORNING + 3 * SLOT: 0.34}
+    assert service.check_snow(ratio_ledger(first, ratios)) is False  # 0,3 → 0,34
+    assert service.latest() is measured
+    clock.advance(15 * 60)
+    ratios = {**morning(0.3, 2), MORNING + 2 * SLOT: 0.4, MORNING + 3 * SLOT: 0.4}
+    assert service.check_snow(ratio_ledger(first, ratios)) is True  # 0,3 → 0,4 (gemerkt: 0,3)
+    assert service.latest().snow.factor == pytest.approx(0.4)
+
+
+async def test_snow_check_without_forecast_does_nothing(forecast_env, tmp_path, audit) -> None:
+    path = tmp_path / "pv_snow_override.json"
+    service, sink = forecast_env(override_path=path)
+    assert service.check_snow(FakeLedger({})) is False
+    service.set_snow_override("covered", actor="admin")
+    assert service.latest() is None and not path.exists() and not sink.points
+    assert audit.recent() == []
+
+
+async def test_snow_detection_off(forecast_env, respx_mock, clock, settings_service) -> None:
+    current = settings_service.current()
+    model = current.settings.pv_model.model_copy(update={"snow_detection": False})
+    settings_service.update(
+        current.settings.model_copy(update={"pv_model": model}),
+        base_version=current.version,
+        actor="admin",
+        source="ui",
+    )
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    forecast = await service.refresh()
+    assert forecast is not None and forecast.snow == NO_CUT
+    assert forecast.p50_w == forecast.uncut_p50_w
+    service.set_snow_override("covered", actor="admin")  # die Knöpfe wirken nicht
+    assert service.latest().snow == NO_CUT
+
+
+async def test_override_file_roundtrip(forecast_env, clock, tmp_path, audit) -> None:
+    path = tmp_path / "pv_snow_override.json"
+    service, _ = forecast_env(override_path=path)
+    await service.refresh()  # 10:00 Ortszeit, Open-Meteo ohne Schneeblock
+    clock.advance(60)
+    await asyncio.to_thread(service.set_snow_override, "covered", actor="admin")
+    assert json.loads(path.read_text()) == {"mode": "covered", "at": clock.now().isoformat()}
+    forecast = service.latest()
+    assert forecast.snow.state == "vermutet" and forecast.revision == clock.now()
+    assert forecast.p50_w[NOON] == pytest.approx(0.1 * forecast.uncut_p50_w[NOON])
+    reloaded, _ = forecast_env(override_path=path)  # der Knopf übersteht einen Neustart
+    assert (await reloaded.refresh()).snow == forecast.snow
+    clock.advance(60)
+    service.set_snow_override(None, actor="admin")
+    assert not path.exists() and service.latest().snow == NO_CUT
+    service.set_snow_override(None, actor="admin")  # ohne Datei: nichts zu löschen
+    entries = audit.recent()
+    assert [(e.actor, e.source, e.action) for e in entries] == [
+        ("admin", "ui", "PV: Schneeerkennung wieder automatisch"),
+        ("admin", "ui", "PV: Schneeerkennung wieder automatisch"),
+        ("admin", "ui", "PV: Schnee auf den Modulen gemeldet"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{kaputt",
+        "[]",
+        '{"mode": "covered"}',
+        '{"mode": "weg", "at": "2026-10-09T08:00:00+00:00"}',
+        '{"mode": "covered", "at": "gestern"}',
+    ],
+)
+async def test_unreadable_override_file_means_automatic(forecast_env, tmp_path, text) -> None:
+    path = tmp_path / "pv_snow_override.json"
+    path.write_text(text, encoding="utf-8")
+    with capture_logs() as logs:
+        broken, _ = forecast_env(override_path=path)
+    assert [e["log_level"] for e in logs if e["event"] == "Handschalter Schnee unlesbar"] == [
+        "warning"
+    ]
+    assert (await broken.refresh()).snow == NO_CUT
+
+
+async def test_override_free_lifts_the_cut(
+    forecast_env, respx_mock, clock, tmp_path, audit
+) -> None:
+    clock.advance(EARLY)
+    path = tmp_path / "pv_snow_override.json"
+    service, _ = forecast_env(override_path=path)
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    assert (await service.refresh()).snow.state == "vermutet"
+    clock.advance(60)
+    service.set_snow_override("free", actor="anna", source="ha")
+    assert json.loads(path.read_text())["mode"] == "free"
+    forecast = service.latest()
+    assert forecast.snow == NO_CUT and forecast.p50_w == forecast.uncut_p50_w
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source, entry.action) == (
+        "anna",
+        "ha",
+        "PV: Module als frei gemeldet",
+    )
+
+
+async def test_status_names_the_cut(forecast_env, respx_mock, clock) -> None:
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    await service.refresh()
+    status = service.component_status()
+    assert status.ok is True
+    assert status.message == (
+        "PV-Prognose von 05:00 Uhr, gekürzt auf 10 %: vermutlich Schnee auf den Modulen"
+    )
+    assert status.details == {
+        "snow_state": "vermutet",
+        "snow_factor_pct": 10,
+        "snow_since": "2026-10-09T00:00:00+00:00",
+    }

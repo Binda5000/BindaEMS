@@ -149,6 +149,8 @@ THERMAL_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Wärme
 AUTOMATION_STOP_S = 5.0  # so lange wartet das Beenden auf einen Schreibzugriff der Automatik
 BACKUP_AT = (4, 0)  # Ortszeit, nach Training (03:15), Fahrverhalten (03:40), Wärmemodell (03:50)
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
+SNOW_CHECK_MINUTE = 4  # Minute 4, 19, 34, 49: Schnee auf den Modulen, nach dem Slot der Abrechnung
+SNOW_OVERRIDE_FILE = "pv_snow_override.json"
 FORECAST_KEEP = timedelta(days=60)
 # das Training braucht 112 Tage; unter 56 holte die Nachholung nach
 WEATHER_KEEP = timedelta(days=120)
@@ -284,6 +286,8 @@ class AppRuntime:
             self._sink,
             self.forecast_archive,
             self.weather,
+            audit=self.audit,
+            override_path=cfg.app.data_dir / SNOW_OVERRIDE_FILE,
         )
         self.storm = StormService(cfg, self.settings, self._http, self._clock)
         self.ledger = LedgerService(
@@ -868,6 +872,7 @@ class AppRuntime:
             ("decisions", self.collector.run),
             ("prices", self.price_scheduler.run),
             ("forecast", self._forecast_run),
+            ("snow-check", self._snow_loop),
             ("storm", self.storm.run),
             ("load-forecast", self.load_forecast.run),
             ("load-model", self.load_model.run),
@@ -1208,6 +1213,18 @@ class AppRuntime:
         except TimeoutError:
             log.warning("Kalibrierung der PV-Prognose dauert zu lange, der Abruf beginnt ohne sie")
         await self.forecast.run()
+
+    async def _snow_loop(self) -> None:
+        """Jede Viertelstunde zur Minute 4, 19, 34, 49: Kürzung der PV-Prognose bei Schnee auf den
+        Modulen mit der Abrechnung neu prüfen; eine neue ``revision`` löst den Planer aus."""
+        while True:
+            now = self._clock.now()
+            due = next_local(now, lambda t: t.minute % 15 == SNOW_CHECK_MINUTE)
+            await asyncio.sleep((due - now).total_seconds())
+            try:
+                await asyncio.to_thread(self.forecast.check_snow, self.ledger)
+            except Exception:  # die Schleife darf nie stehen bleiben
+                log.exception("Prüfung auf Schnee auf den Modulen fehlgeschlagen")
 
     async def _fetch_temperature_history(self) -> dict[datetime, float]:
         raw = await fetch_temperature_history(self._http, self._clock, self._cfg.site.location)

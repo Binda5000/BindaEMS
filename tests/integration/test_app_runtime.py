@@ -1187,6 +1187,35 @@ async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch)
     assert names.index("forecast") > names.index("recalibrate")  # erst die Kalibrierung
 
 
+async def test_snow_check_runs_at_minute_4_and_survives_errors(runtime, monkeypatch) -> None:
+    calls: list[object] = []
+
+    def check_snow(ledger) -> bool:
+        calls.append(ledger)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.forecast, "check_snow", check_snow)
+    sleeps: list[float] = []
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=2))
+    with capture_logs() as logs, pytest.raises(StopScheduler):
+        await runtime._snow_loop()
+    assert sleeps == [4 * 60.0, 4 * 60.0]  # 10:00 Ortszeit → 10:04; die Uhr steht im Test
+    assert calls == [runtime.ledger]
+    assert "Prüfung auf Schnee auf den Modulen fehlgeschlagen" in [e["event"] for e in logs]
+
+
+async def test_runtime_keeps_the_snow_override_in_the_data_dir(
+    runtime, respx_mock, tmp_path
+) -> None:
+    fixture = Path("tests/fixtures/openmeteo_sued_2026-10-09.json")
+    body = await asyncio.to_thread(fixture.read_text)
+    respx_mock.get(OPEN_METEO_URL).respond(200, text=body)
+    assert await runtime.forecast.refresh() is not None
+    await asyncio.to_thread(runtime.forecast.set_snow_override, "covered", actor="anna")
+    assert json.loads((tmp_path / "pv_snow_override.json").read_text())["mode"] == "covered"
+    assert runtime.audit.recent()[0].action == "PV: Schnee auf den Modulen gemeldet"
+
+
 async def test_first_pv_forecast_does_not_wait_forever(runtime, monkeypatch) -> None:
     started: list[bool] = []
 

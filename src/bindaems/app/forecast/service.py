@@ -2,18 +2,30 @@
 
 Die Prognose liegt im Speicher; nach einem Neustart wird sie sofort neu abgerufen. Jede Ausgabe geht
 zusätzlich ins Archiv (Plan 3a, Präzisierung 7), aus dem später Kalibrierung und Kennzahlen kommen.
+
+Schnee auf den Modulen (Plan „Schnee auf den Modulen“): P25, P50 und P75 werden je Slot mit dem
+Faktor aus ``snow_cut`` gekürzt, ``raw_w`` und ``uncut_p50_w`` bleiben ungekürzt. Der Abruf rechnet
+die Kürzung mit den zuletzt gelesenen Ist-Werten; ``check_snow`` prüft sie jede Viertelstunde neu
+und gibt der Prognose bei einer Änderung eine neue ``revision`` (Entscheidung 8). Ins Archiv geht
+nur die Ausgabe des Abrufs. Gespeichert wird nur der Handschalter (``pv_snow_override.json``).
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+import json
+import os
+import threading
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Literal
 
 import httpx
 import structlog
 
+from bindaems.app.audit import AuditLog, Source
 from bindaems.app.fetch import FetchError
 from bindaems.app.forecast.archive import (
     Actual,
@@ -41,12 +53,15 @@ from bindaems.app.forecast.openmeteo import (
     SOURCE,
     ForecastParseError,
     OpenMeteoUnavailable,
+    SnowHour,
     WeatherSlot,
     fetch_plane,
     http_error,
     parse_plane,
+    parse_snow,
 )
 from bindaems.app.forecast.pv_model import combine, plane_power_w
+from bindaems.app.forecast.snow import NO_CUT, Observation, Override, SnowCut, snow_cut
 from bindaems.app.history.influx import RP_LONG
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.schedule import next_local
@@ -65,6 +80,13 @@ PLANE_RETRY_S = 30.0
 PLANE_KEEP = timedelta(minutes=30)  # so lange zählt eine Fläche aus einem gescheiterten Abruf
 SLOT_HOURS = 0.25
 CALIBRATION_WINDOW = timedelta(days=30)
+SNOW_WINDOW = timedelta(hours=36)  # so weit zurück liest die Prüfung auf Schnee die Abrechnung
+CHANGE_MIN = 0.05  # ab dieser Änderung eines Faktors gibt es eine neue ``revision``
+OVERRIDE_TEXT: Mapping[Literal["covered", "free"] | None, str] = {
+    "covered": "PV: Schnee auf den Modulen gemeldet",
+    "free": "PV: Module als frei gemeldet",
+    None: "PV: Schneeerkennung wieder automatisch",
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +98,9 @@ class PvForecast:
     p25_w: Mapping[datetime, float]
     p75_w: Mapping[datetime, float]
     clearness: Mapping[datetime, Clearness | None]
+    uncut_p50_w: Mapping[datetime, float]  # P50 ohne Kürzung bei Schnee
+    revision: datetime  # ``issued_at`` beim Abruf, die Zeit der Prüfung bei neuer Kürzung
+    snow: SnowCut = NO_CUT
 
     def day_energy_kwh(self, day: date) -> float | None:
         """Energie des lokalen Tages aus den vorhandenen Slots; ohne Slots ``None``."""
@@ -84,6 +109,31 @@ class PvForecast:
 
     def power_at(self, ts: datetime) -> float | None:
         return self.p50_w.get(slot_start(ts))
+
+
+@dataclass(frozen=True)
+class _Issued:
+    """Ausgegebene Prognose mit dem, was eine neue Kürzung braucht; wird nur als Ganzes ersetzt
+    (``refresh`` in der Event-Loop, ``check_snow`` im Worker-Thread)."""
+
+    forecast: PvForecast
+    uncut_p25_w: Mapping[datetime, float]
+    uncut_p75_w: Mapping[datetime, float]
+    weather: Sequence[SnowHour]  # Schneestunden der Antwort für die erste Fläche
+    temperatures: Mapping[datetime, float]
+
+
+def _cut(series: Mapping[datetime, float], cut: SnowCut) -> dict[datetime, float]:
+    return {slot: value * cut.factors.get(slot, 1.0) for slot, value in series.items()}
+
+
+def _snow_changed(old: SnowCut, new: SnowCut, now: datetime) -> bool:
+    """Neuer Zustand oder ein Faktor ab dem laufenden Slot um mehr als ``CHANGE_MIN`` anders."""
+    if old.state != new.state:
+        return True
+    first = slot_start(now)
+    slots = {s for s in (*old.factors, *new.factors) if s >= first}
+    return any(abs(old.factors.get(s, 1.0) - new.factors.get(s, 1.0)) > CHANGE_MIN for s in slots)
 
 
 class ForecastService:
@@ -98,6 +148,8 @@ class ForecastService:
         weather: WeatherArchive | None = None,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        audit: AuditLog | None = None,
+        override_path: Path | None = None,
     ) -> None:
         self._http = http
         self._cfg = cfg
@@ -107,20 +159,29 @@ class ForecastService:
         self._archive = archive
         self._weather = weather
         self._sleep = sleep
-        self._forecast: PvForecast | None = None
-        self._temperatures: dict[datetime, float] = {}  # Lufttemperatur der letzten Antwort
+        self._audit = audit
+        self._override_path = override_path
+        self._issued: _Issued | None = None
         self._error: str | None = None
-        # Flächen eines gescheiterten Abrufs: Index → Wetter, mit dem Zeitpunkt des Abrufs
-        self._kept: dict[int, tuple[datetime, list[WeatherSlot]]] = {}
+        # Flächen eines gescheiterten Abrufs: Index → Wetter und Schneestunden (nur die erste
+        # Fläche hat welche), mit dem Zeitpunkt des Abrufs
+        self._kept: dict[int, tuple[datetime, list[WeatherSlot], list[SnowHour]]] = {}
         # beide Modelle gehören zusammen und werden nur gemeinsam ersetzt
         self._models: tuple[Calibration, Bands] = (NEUTRAL, NEUTRAL_BANDS)
+        # Kürzung rechnen und Prognose ersetzen: ``check_snow`` und ``set_snow_override`` laufen in
+        # Worker-Threads, ``refresh`` in der Event-Loop; die Sperre gilt nur für Rechnen und Tausch
+        self._snow_lock = threading.Lock()
+        self._actuals: dict[datetime, float] = {}  # Ist-PV (W) der letzten Prüfung, 36 h
+        self._override = self._read_override()
 
     def latest(self) -> PvForecast | None:
-        return self._forecast
+        issued = self._issued
+        return issued.forecast if issued is not None else None
 
     def temperatures(self) -> Mapping[datetime, float]:
         """Lufttemperatur je Slot aus der letzten erfolgreichen Antwort (leer vor der ersten)."""
-        return self._temperatures
+        issued = self._issued
+        return issued.temperatures if issued is not None else {}
 
     async def refresh(self) -> PvForecast | None:
         """Neue Prognose; scheitert eine Fläche, bleibt die bisherige. Schon geholte Flächen
@@ -128,6 +189,7 @@ class ForecastService:
         model = self._settings.current().settings.pv_model
         planes: list[dict[datetime, float]] = []
         first_plane: list[WeatherSlot] = []
+        first_snow: list[SnowHour] = []
         clearness: dict[datetime, Clearness | None] = {}
         now = self._clock.now()
         self._kept = {
@@ -138,17 +200,23 @@ class ForecastService:
         for index, plane in enumerate(self._cfg.pv.planes):
             kept = self._kept.get(index)
             try:
-                weather = kept[1] if kept is not None else await self._fetch_plane(plane)
+                weather, snow = (
+                    (kept[1], kept[2])
+                    if kept is not None
+                    else await self._fetch_plane(plane, snow=index == 0)
+                )
             except (FetchError, ForecastParseError) as exc:
                 self._error = f"PV-Prognose für Fläche {plane.name} fehlgeschlagen: {exc}"
                 log.warning(
                     "PV-Prognose für Fläche fehlgeschlagen", plane=plane.name, error=str(exc)
                 )
-                return self._forecast
+                return self.latest()
             if kept is None:  # der Stempel bleibt der des Abrufs, auch wenn die Fläche wiederkommt
-                self._kept[index] = (self._clock.now(), weather)
-            if not planes:  # Klarheit und Temperatur gelten am Standort, aus der ersten Fläche
-                first_plane = weather
+                self._kept[index] = (self._clock.now(), weather, snow)
+                if index == 0 and not snow:
+                    log.info("Keine Schneedaten von Open-Meteo, Schneeerkennung entfällt")
+            if not planes:  # Klarheit, Temperatur und Schnee gelten am Standort, aus der ersten
+                first_plane, first_snow = weather, snow
                 clearness = {
                     slot.slot_start: clearness_class(slot.ghi_w_m2, slot.diffuse_w_m2)
                     for slot in weather
@@ -176,26 +244,41 @@ class ForecastService:
             p25_w[slot], p50_w[slot], p75_w[slot] = apply_band(
                 p50, bands.band(horizon, kind), max_w
             )
-        forecast = PvForecast(issued_at, SOURCE, p50_w, raw_w, p25_w, p75_w, slot_clearness)
-        self._forecast, self._error = forecast, None
+        uncut = PvForecast(
+            issued_at, SOURCE, p50_w, raw_w, p25_w, p75_w, slot_clearness, p50_w, issued_at
+        )
+        temperatures = {slot.slot_start: slot.temp_c for slot in first_plane}
+        with self._snow_lock:
+            cut = self._snow_cut(issued_at, uncut, first_snow, temperatures)
+            forecast = replace(
+                uncut,
+                p50_w=_cut(p50_w, cut),
+                p25_w=_cut(p25_w, cut),
+                p75_w=_cut(p75_w, cut),
+                snow=cut,
+            )
+            self._issued = _Issued(forecast, p25_w, p75_w, tuple(first_snow), temperatures)
+            self._publish(forecast)  # mit der Sperre: InfluxDB bekommt die Ausgaben in Reihenfolge
+        self._error = None
         self._kept = {}  # der nächste Abruf holt wieder alle Flächen
-        self._temperatures = {slot.slot_start: slot.temp_c for slot in first_plane}
-        self._publish(forecast)
         await self._archive_forecast(forecast)
         # eine behaltene erste Fläche ist bis 30 min älter als issued_at; das Archiv nimmt dann
         # bis 30 min mehr als 6 h Vorlauf auf, der nächste Abruf ersetzt diese Werte
         await self._archive_temperatures(first_plane, issued_at)
         return forecast
 
-    async def _fetch_plane(self, plane: PvPlane) -> list[WeatherSlot]:
-        """Wetter einer Fläche; bei Netzwerkfehler oder HTTP 5xx bis zu zweimal nach 30 s erneut.
+    async def _fetch_plane(
+        self, plane: PvPlane, *, snow: bool
+    ) -> tuple[list[WeatherSlot], list[SnowHour]]:
+        """Wetter einer Fläche, mit ``snow`` auch die Schneestunden derselben Antwort; bei
+        Netzwerkfehler oder HTTP 5xx bis zu zweimal nach 30 s erneut.
 
         HTTP 429 (Limit) und andere Fehler gehen sofort an den Aufrufer: Ein schneller neuer
         Versuch hilft dort nicht.
         """
         for attempt in range(1, PLANE_ATTEMPTS):
             try:
-                return await self._fetch_plane_once(plane)
+                return await self._fetch_plane_once(plane, snow=snow)
             except (FetchError, OpenMeteoUnavailable) as exc:
                 log.info(
                     "Open-Meteo nicht verfügbar, neuer Versuch",
@@ -204,13 +287,151 @@ class ForecastService:
                     error=str(exc),
                 )
             await self._sleep(PLANE_RETRY_S)
-        return await self._fetch_plane_once(plane)
+        return await self._fetch_plane_once(plane, snow=snow)
 
-    async def _fetch_plane_once(self, plane: PvPlane) -> list[WeatherSlot]:
-        raw = await fetch_plane(self._http, self._clock, self._cfg.site.location, plane)
+    async def _fetch_plane_once(
+        self, plane: PvPlane, *, snow: bool
+    ) -> tuple[list[WeatherSlot], list[SnowHour]]:
+        raw = await fetch_plane(self._http, self._clock, self._cfg.site.location, plane, snow=snow)
         if not raw.ok:
             raise http_error(raw)
-        return parse_plane(raw.body)
+        return parse_plane(raw.body), parse_snow(raw.body) if snow else []
+
+    # --- Schnee auf den Modulen ---------------------------------------------------------------
+
+    def check_snow(self, ledger: SlotSource) -> bool:
+        """Kürzung mit den Ist-Werten der letzten 36 h neu rechnen; ``True``, wenn sich Zustand
+        oder ein Faktor ab jetzt um mehr als ``CHANGE_MIN`` geändert hat. Dann ersetzt eine
+        Prognose mit ``revision`` = jetzt die bisherige und geht neu nach InfluxDB, nicht ins
+        Archiv (Entscheidung 8). Ohne Prognose ``False``.
+
+        Synchron (Datenbankarbeit; der Aufrufer nimmt ``asyncio.to_thread``). Die Ist-Werte
+        merkt sich der Dienst für den nächsten Abruf.
+        """
+        if self._issued is None:
+            return False
+        now = self._clock.now()
+        found = {
+            ensure_utc(slot): actual.pv_w
+            for slot, actual in actuals(ledger, now - SNOW_WINDOW, now).items()
+        }
+        with self._snow_lock:
+            self._actuals = found
+            forecast = self._recut(now)
+        if forecast is None:
+            return False
+        log.info(
+            "PV-Prognose bei Schnee neu gekürzt",
+            state=forecast.snow.state,
+            factor=forecast.snow.factor,
+        )
+        return True
+
+    def set_snow_override(
+        self,
+        mode: Literal["covered", "free"] | None,
+        *,
+        actor: str,
+        source: Source = "ui",
+    ) -> None:
+        """Handschalter setzen (``None``: wieder Automatik) und die Kürzung sofort mit den
+        gemerkten Ist-Werten neu rechnen; Eintrag im Änderungsprotokoll. Ohne Prognose nichts.
+
+        Synchron (Datei und Datenbank; der Aufrufer nimmt ``asyncio.to_thread``).
+        """
+        if self._issued is None:
+            return
+        now = self._clock.now()
+        override = Override(mode, now) if mode is not None else None
+        with self._snow_lock:
+            self._write_override(override)
+            self._override = override
+            self._recut(now)
+        if self._audit is not None:
+            self._audit.record(actor, source, OVERRIDE_TEXT[mode])
+        log.info("Handschalter Schnee gesetzt", mode=mode, actor=actor)
+
+    def _snow_cut(
+        self,
+        now: datetime,
+        forecast: PvForecast,
+        weather: Sequence[SnowHour],
+        temperatures: Mapping[datetime, float],
+    ) -> SnowCut:
+        """Kürzung zu ``forecast`` (ungekürzte P50) mit den gemerkten Ist-Werten; mit der Sperre."""
+        if not self._settings.current().settings.pv_model.snow_detection:
+            return NO_CUT
+        expected = forecast.uncut_p50_w
+        observations = [
+            Observation(slot, expected[slot], actual_w, temperatures.get(slot))
+            for slot, actual_w in sorted(self._actuals.items())
+            if slot in expected
+        ]
+        return snow_cut(
+            now,
+            sorted(expected),
+            weather,
+            observations,
+            total_kwp=sum(plane.kwp for plane in self._cfg.pv.planes),
+            override=self._override,
+        )
+
+    def _recut(self, now: datetime) -> PvForecast | None:
+        """Neue Kürzung der aktuellen Prognose; bei einer Änderung die neue Prognose (schon
+        ersetzt und nach InfluxDB geschrieben), sonst ``None``. Nur mit der Sperre."""
+        issued = self._issued
+        if issued is None:
+            return None
+        current = issued.forecast
+        cut = self._snow_cut(now, current, issued.weather, issued.temperatures)
+        if not _snow_changed(current.snow, cut, now):
+            return None
+        forecast = replace(
+            current,
+            p50_w=_cut(current.uncut_p50_w, cut),
+            p25_w=_cut(issued.uncut_p25_w, cut),
+            p75_w=_cut(issued.uncut_p75_w, cut),
+            snow=cut,
+            revision=now,
+        )
+        self._issued = replace(issued, forecast=forecast)
+        self._publish(forecast)
+        return forecast
+
+    def _read_override(self) -> Override | None:
+        """Handschalter aus der Datei; ohne Datei oder bei unlesbarer Datei Automatik."""
+        path = self._override_path
+        if path is None or not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            mode, at = data["mode"], ensure_utc(datetime.fromisoformat(data["at"]))
+            if mode not in ("covered", "free"):
+                raise ValueError(f"unbekannte Art {mode!r}")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            log.warning("Handschalter Schnee unlesbar", path=str(path), error=str(exc))
+            return None
+        return Override(mode, at)
+
+    def _write_override(self, override: Override | None) -> None:
+        """Atomar schreiben (temporäre Datei, ``fsync``, ``os.replace``) oder löschen."""
+        path = self._override_path
+        if path is None:
+            return
+        if override is None:
+            path.unlink(missing_ok=True)
+            return
+        text = json.dumps({"mode": override.mode, "at": override.at.isoformat()})
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)  # das Ziel entsteht erst mit dem letzten Schritt
+            raise
 
     def recalibrate(self, ledger: SlotSource) -> None:
         """Faktoren und Bänder aus Archiv und Abrechnung der letzten 30 Tage neu bestimmen.
@@ -301,10 +522,21 @@ class ForecastService:
     def component_status(self) -> ComponentStatus:
         if self._error is not None:
             return ComponentStatus("forecast", False, self._error)
-        if self._forecast is None:
+        forecast = self.latest()
+        if forecast is None:
             return ComponentStatus("forecast", False, "Noch keine PV-Prognose")
-        issued = self._forecast.issued_at.astimezone(LOCAL_TZ)
+        issued = forecast.issued_at.astimezone(LOCAL_TZ)
         message = f"PV-Prognose von {issued:%H:%M} Uhr"
+        snow = forecast.snow
+        if snow.state != "frei":  # die Komponente bleibt grün und nennt die Kürzung
+            pct = round(snow.factor * 100)
+            details = {
+                "snow_state": snow.state,
+                "snow_factor_pct": pct,
+                "snow_since": snow.since.isoformat() if snow.since is not None else None,
+            }
+            message += f", gekürzt auf {pct} %: vermutlich Schnee auf den Modulen"
+            return ComponentStatus("forecast", True, message, details=details)
         samples = self._models[0].samples
         if samples > 0:
             message += f", kalibriert aus {samples} Viertelstunden"

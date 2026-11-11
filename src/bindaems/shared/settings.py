@@ -225,6 +225,7 @@ class PvModelSettings(_Model):
     performance_ratio: Annotated[float, Field(gt=0, le=1.2)] = 0.85
     temp_coeff_pct_per_k: Annotated[float, Field(ge=-2, le=0)] = -0.35
     noct_c: Annotated[float, Field(ge=20, le=80)] = 45.0
+    snow_detection: bool = True  # Schnee auf den Modulen erkennen und die Prognose kürzen
 
 
 def _default_storm_kinds() -> list[StormKind]:

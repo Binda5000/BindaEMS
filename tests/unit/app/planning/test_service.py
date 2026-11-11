@@ -732,7 +732,19 @@ async def test_new_pv_forecast_requests_replan(service_with, forecast):
         await until(lambda: len(calls) == 1)
         await asyncio.sleep(0.05)  # die Schleife kennt den Fingerabdruck
         newer = forecast.forecast.issued_at + timedelta(minutes=5)
-        forecast.forecast = replace(forecast.forecast, issued_at=newer)
+        forecast.forecast = replace(forecast.forecast, issued_at=newer, revision=newer)
+        await until(lambda: len(calls) == 2)
+    assert triggers(calls) == ["start", "pv_forecast"]
+
+
+async def test_new_snow_cut_requests_replan(service_with, forecast):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)  # die Schleife kennt den Fingerabdruck
+        newer = forecast.forecast.revision + timedelta(minutes=12)  # Prüfung auf Schnee
+        forecast.forecast = replace(forecast.forecast, revision=newer)
         await until(lambda: len(calls) == 2)
     assert triggers(calls) == ["start", "pv_forecast"]
 

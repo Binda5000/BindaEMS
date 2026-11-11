@@ -92,6 +92,8 @@ def forecast() -> FakeForecast:
             p25_w=p50,
             p75_w=p50,
             clearness=dict.fromkeys(p50),
+            uncut_p50_w=p50,
+            revision=PLAN_NOW,
         )
     )
 

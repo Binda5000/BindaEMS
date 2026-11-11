@@ -136,7 +136,8 @@
     "pv_model": {
       "performance_ratio": 0.85,
       "temp_coeff_pct_per_k": -0.35,
-      "noct_c": 45.0
+      "noct_c": 45.0,
+      "snow_detection": true
     },
     "planning": {
       "grid_charge_allowed": false,
