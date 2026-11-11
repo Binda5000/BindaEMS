@@ -390,6 +390,12 @@ Rückweg: Einstellungen als YAML exportieren, den Schlüssel `ops` löschen, Dat
 Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“). Betrieb: Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“, und Abschnitt 7, „Benachrichtigungen“.
 Nicht dabei: Live-Alarm für Auffälligkeiten, Schwellen in den Einstellungen, Ersparnis gegen „Victron allein“, Schalter auf der Seite Betrieb stellen.
 
+**Stand Phasenzuordnung (7.11.2026):** Plan `docs/superpowers/plans/2026-11-07-phasenzuordnung-pruefen.md`, vom Betreiber am 11.11.2026 freigegeben,
+Branch `claude/project-thread-ambh18`, **nicht auf `main`, nicht ausgerollt** (Punkt 27 unter „Offen an der Anlage“). Der core prüft, ob die Phasen des Multi
+und der Wallboxen zu denen des Netzzählers passen (`core/state/phase_order.py`, in `runtime.py` neben der Plausibilität), und meldet nur: Warnungen
+`wiring.multi_phases` und `wiring.wallbox_phases.<name>`, die nichts sperren. Anlass war der 4.11.2026 (Multi und EVCS um eine Phase gedreht, Netz-L2 rund 3 h über 20 A).
+Spec: 7.3, Regel 7, „Stand Plan Phasenzuordnung“. Betrieb: `docs/betrieb.md`, Abschnitt 14, „Meldungen des core“, und „Laderegelung“, „Hinweise für die Anlage“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -2265,6 +2271,13 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       27 kW und 2,9 l/h eintragen, optional den Ölpreis; (5) Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen; liegt er deutlich darunter,
       Werte nicht ändern, sondern das Verhältnis notieren (Folgeplan „Korrekturfaktor“). Prüfen: Statistik zeigt „Heizung“ und „Wärmebedarf“, ab 14 kalten Tagen ein
       Ergebnis. Rückweg: Zeile `oil_burner` aus der `config.yaml`, `docker compose restart ems-core ems-app`, Datenbank auf `0018` zurücknehmen. Betrieb: `docs/betrieb.md`, „Ölheizung: Wärmebedarf“.
+  27. **Phasenzuordnung melden ausrollen:** umgesetzt auf Branch `claude/project-thread-ambh18`, **nicht auf `main`, nicht ausgerollt**;
+      kommt mit Stufe 2 (ab 23.11.2026), **nur `ems-core` ändert sich**, mit dem nächsten Sammel-Pull;
+      **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**; wann, entscheidet der Betreiber. Nichts wird geschaltet, die Warnungen sperren nichts.
+      Danach beobachten, ob „Phasen von Multi und Netzzähler passen nicht zusammen: …“ erscheint, solange der e-Golf lädt und die Verdrehung noch nicht
+      behoben ist (nach 5 min mit entscheidenden Zyklen; unter „System“ → „core“ → „Alarme“, Id `wiring.multi_phases`). Ebenso
+      `wiring.wallbox_phases.evcs` mit dem Vorschlag für `phase_map` (erwartet `[L2, L3, L1]`). Die Verdrehung selbst behebt der Elektriker
+      (Befund vom 4.11.2026, `docs/betrieb.md`, „Laderegelung“, „Hinweise für die Anlage“). Erscheint ein Alarm bei richtig angeschlossener Anlage, ist das ein Befund an der Prüfung.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).

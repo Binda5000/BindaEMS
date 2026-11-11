@@ -3071,6 +3071,8 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 | 15-min-Ziel überschritten: … kW in der Viertelstunde bis HH:MM. | Stufe Warnung. Die Hochrechnung lag 60 s über dem Ziel (dem Budget des gültigen Plan-Slots, sonst `control.peak_target_kw`), und Drosselung und Akku haben es nicht gehalten. Der Alarm endet mit der Viertelstunde (Abschnitt „Akku und Spitzen“, „Alarme“). |
 | Regelung der Klimaanlage ausgesetzt: Ausnahme … im Regelzyklus. | Stufe Warnung (`control.thermal_exception`). Die Strategie der Klimaanlage hat eine Ausnahme geworfen. Der core regelt Akku und Autos weiter, die Klimaanlage bleibt bei Versatz 0. Sichere das Log und melde den Fehler (Abschnitt „Klimaanlage (Phase 6a)“, „Alarme und Meldungen“). |
 | … Das Echo der UVR zeigt seit mehr als 120 s nicht den gesendeten Versatz (…). | Stufe Warnung (`thermal.echo_mismatch.<name>`). Die UVR bestätigt den gesendeten Versatz nicht. Prüfe Empfangstabelle, `own_node` und `own_output` und die Visu der UVR (Abschnitt „Klimaanlage (Phase 6a)“, „Alarme und Meldungen“). |
+| Phasen von Multi und Netzzähler passen nicht zusammen: Der Verbrauch auf L1 wäre rechnerisch … W. Passend wäre: Multi-L1 am Netz auf …, Multi-L2 auf …, Multi-L3 auf …. | Stufe Warnung (`wiring.multi_phases`). Über rund 5 min (300 entscheidende Zyklen) passt die Leistung der Phasen des Multi nicht zu der am Netzzähler: Die Rechnung „Netz − AC-in + AC-out + PV“ ergäbe auf einer Phase einen Verbrauch unter −500 W, mit einer anderen Zuordnung der Phasen aber nicht. Das heißt meist, dass der Multi gegenüber dem Netzzähler verdreht angeschlossen ist (Befund vom 4.11.2026, Abschnitt „Laderegelung“, „Hinweise für die Anlage“). Der Alarm **blockiert nichts** und gehört nicht zu den Plausibilitätsalarmen (`plaus.…`). Der Text nennt die passende Zuordnung (passt keine, sagt der Text: „Keine andere Zuordnung der Multi-Phasen passt; fehlt eine Erzeugung im Abgleich?“). Abhilfe: Der Elektriker schließt den Multi so an, dass Multi-L1 am Netz auf L1 liegt, Multi-L2 auf L2 und Multi-L3 auf L3, oder ordnet die Phasen in VEConfigure zu (das entscheidet der Installateur). Der core rechnet nicht um, denn Victron selbst braucht die richtige Zuordnung für den Ausgleich der Phasen. Der Alarm endet, sobald die Phasen passen und höchstens 20 % der entscheidenden Zyklen noch „falsch“ sind. Ohne entscheidende Zyklen (symmetrische Leistung, Multi nur durchreichend) bleibt der Stand, wie er ist. |
+| Phasen der Wallbox „…“ passen nicht zum Netzzähler: Das Auto lädt rechnerisch auf …, die Zuordnung nennt …. Abhilfe: phase_map in config.yaml mit … beginnen lassen. | Stufe Warnung (`wiring.wallbox_phases.<name>`). Dieselbe Rechnung mit dem Strom der Wallbox je Phase: Das Auto zieht rechnerisch auf anderen Netzphasen, als `phase_map` der Wallbox angibt. Geprüft wird nur, wenn der Multi passt (steht der Alarm für den Multi, gibt es keinen für die Wallbox) und die Ströme der Phasen verschieden sind. Der Alarm **blockiert nichts**. Bei der EVCS nennt er den passenden Anfang für `phase_map` in `config.yaml` (Regelbetrieb vorher aus, dann den core neu starten); alternativ lässt der Elektriker die Wallbox umklemmen. Beim Wall Connector (Tesla) meldet das Gerät seine Phasen selbst: Der Text bittet, den Anschluss prüfen zu lassen. Der Alarm endet wie der des Multi. |
 
 **„Ausgelöst“ von Hand aufräumen:** Seit 1.1.0 übersteht „ausgelöst“ einen Neustart des Cerbo
 (als „scharf“). Räumt kein zuständiger core den Watchdog auf, etwa nach einer abgebrochenen Probe
@@ -4139,6 +4141,21 @@ Zurück zu evcc: beide Aktoren im UI mit „Auf Dry-Run…“ auf Dry-Run stelle
 
 ### Hinweise für die Anlage
 
+- **Verdrehte Phasen (Befund vom 4.11.2026):** Der Netzzähler entspricht dem Zähler des Netzbetreibers
+  (Netz NÖ), die Multis hängen aber um eine Phase gedreht: Multi-L1 liegt am Netz auf L2, Multi-L2 auf L3
+  und Multi-L3 auf L1 (bestätigt mit dem Wasserkocher-Test um 19:40: Multi L1 +2,1 kW, Netzzähler L2
+  +2,2 kW). Die EVCS ist gleich gedreht: Ihre L1 und L2 liegen am Netz auf L2 und L3. Folge am 4.11.
+  von 11:05 bis 14:10, während der e-Golf lud: Victron glich die Phasen in die falsche Richtung aus
+  (der Multi lud 3,4 kW auf seiner L1 und speiste 3,5 kW auf seiner L2), Netz-L2 lag rund 3 h bei 24 bis
+  27 A, über dem Importlimit von 20 A, und der Phasenwächter rechnete „Grenze −2 A“ und drosselte den
+  e-Golf auf 6 A. Seit Plan Phasenzuordnung meldet der core die Warnungen „Phasen von Multi und
+  Netzzähler passen nicht zusammen: …“ und „Phasen der Wallbox „…“ passen nicht zum Netzzähler: …“
+  (Abschnitt 14, „Meldungen des core“); sie sperren nichts. Abhilfe: Der Elektriker schließt den Multi
+  so an, dass Multi-L1 am Netz auf L1 liegt (gegebenenfalls über die Phasenzuordnung in VEConfigure, das
+  entscheidet der Installateur). Wird die EVCS nicht umgeklemmt, setzt du `phase_map: [L2, L3, L1]` in
+  `config.yaml` (Regelbetrieb vorher aus, dann den core neu starten). **Wasserkocher-Test** zur
+  Kontrolle: Auto abgesteckt und Akku ruhig, einen bekannten Verbraucher an einer Steckdose
+  einschalten und vergleichen, auf welcher Phase der Netzzähler und der Multi (AC-out) steigen.
 - **Ein schlafender Tesla, den der core gerade übergibt,** hält die Übergabe offen, bis er aufwacht.
   Solange kann der Alarm „… Sicherwert für … nicht bestätigt.“ (`actuator.failed.vehicle.tesla`)
   anstehen (Abschnitt 14, „Meldungen des core“).

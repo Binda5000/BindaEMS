@@ -1271,6 +1271,11 @@ UI, HA, Planer und Lernmodelle können diese Werte nur lesen.
   - Verglichen wird mit der letzten gültigen Beobachtung, gezählt ab der Auswertungszeit und nicht ab dem Zeitstempel der letzten Änderung: Bei Victron-MQTT mit `suppress-republish` bleibt der Zeitstempel beim letzten Wertwechsel stehen, obwohl der Wert seither gültig war.
   - Netzleistungen springen legitim, etwa beim Start einer Wallbox. Für sie bleiben die Wertebereiche und die Energiebilanz aus Phase 1.
 
+**Stand Plan Phasenzuordnung (7.11.2026)** (`docs/superpowers/plans/2026-11-07-phasenzuordnung-pruefen.md`, Entscheidungen 1 bis 4, vom Betreiber am 11.11.2026 freigegeben; Betrieb: `docs/betrieb.md`, Abschnitt 14, „Meldungen des core“): Der core prüft zusätzlich zu Regel 7, ob die Phasen des Multi und der Wallboxen zu denen des Netzzählers passen (`core/state/phase_order.py`). Anlass war der 4.11.2026 (Multi und EVCS gegenüber dem Netzzähler um eine Phase gedreht).
+- **Nur melden:** Die Alarme `wiring.multi_phases` und `wiring.wallbox_phases.<name>` haben die Stufe Warnung und nicht die Vorsilbe `plaus.`; `InputMonitor.evaluate` zählt nur `plaus.…`, daher sperren sie weder Regelung noch Aktoren. Der Multi wird nicht per Software umgerechnet (Victron braucht die richtige Zuordnung selbst); der Alarm nennt die passende Zuordnung, bei der EVCS den passenden Anfang für `phase_map` in `config.yaml`.
+- **Rechnung:** Je Netzphase `p` und Zuordnung `σ` ist `c_σ(p) = Netz_p − AC-in_σ(p) + AC-out_σ(p) + PV_p`. Eine Zuordnung passt bei `min ≥ −200 W` und ist bei `min < −500 W` widerlegt; ein Zyklus ist entscheidend, wenn mindestens eine der sechs Zuordnungen widerlegt ist. Für eine Wallbox gilt dasselbe mit `h_π(p) = c_1:1(p) − U · I_π(p)`; ein Zyklus ist dort nur entscheidend bei mindestens zwei verschiedenen Verteilungen der Ströme.
+- **Schwellen:** 300 entscheidende Zyklen (bei 1 s rund 5 min); der Alarm kommt bei mindestens 80 % „falsch“ und geht bei höchstens 20 %. Ohne entscheidende Zyklen bleibt der Zustand.
+
 Für diese Schicht gibt es Tests mit zufälligen Eingaben (hypothesis). Sie belegen: Kein ausgehender Befehl verletzt je eine harte Grenze, egal welche Eingabe kommt.
 
 **Stand Plan 2c-2a** (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`, Präzisierungen 7 und 12, Design 2c-2, 4.3, 5.4 und 8):
