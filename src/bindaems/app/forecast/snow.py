@@ -13,6 +13,10 @@ Lesarten, wo Brief und Entscheidungen offen lassen:
   „frei seit“ ist das Maximum aus dem Ende des letzten Frei-Paars und ``at`` des Knopfs „free“.
 - Fall (b) braucht ``temp_c`` in allen drei Slots (``None`` heißt nicht kalt) und die letzte
   vergangene Schneehöhe (Stunde mit ``hour_start`` ≤ jetzt und Wert).
+- Fall (b) gilt, wenn seit dem letzten „frei seit“ kein Schneefall war (nicht nur, wenn das Wetter
+  gar keinen zeigt).
+- Jede künftige Ereignisstunde bekommt ihr eigenes Fenster bis zum Ende des Tages nach ihrem
+  lokalen Tag; überlappende Fenster ergeben den kleineren Faktor.
 - Aufeinanderfolgend heißt: Slotbeginne genau 15 min auseinander, beide messbar.
 - Der Faktor gilt ab dem laufenden Slot; vergangene Slots bekommen keinen. „Ende des nächsten
   Tages“ ist die lokale Mitternacht am Beginn von (lokales Datum + 2 Tage).
@@ -195,9 +199,7 @@ def snow_cut(
         for s in slots:
             if now_slot <= s < end:
                 cuts[s] = factor
-    future = [e for e in events if e > now]
-    if future:
-        t_n = future[0]
+    for t_n in (e for e in events if e > now):
         end = _end_of_next_day(t_n)
         for s in slots:
             if t_n <= s < end:

@@ -192,3 +192,44 @@ def test_low_slots_before_free_since_do_not_cover() -> None:
     weather = hours({}, depth=0.05)
     seen = obs(local(3, 8), [0.05] * 3) + obs(local(3, 9), [0.8, 0.8])
     assert cut(local(3, 10), weather, seen) == NO_CUT
+
+
+LONG_SLOTS = day_slots(local(3, 0), local(7, 0))
+
+
+def test_every_future_snowfall_gets_its_own_window() -> None:
+    weather = hours({**NIGHT_SNOW, (4, 6): 1.0, (5, 14): 1.0})
+    res = cut(local(3, 3, 30), weather, slots=LONG_SLOTS)
+    assert res.factors[local(5, 14)] == 0.1
+    assert res.factors[local(6, 23, 45)] == 0.1
+    assert local(7, 0) not in res.factors
+
+
+def test_second_snowfall_during_ongoing_snowfall_is_cut() -> None:
+    weather = hours({**NIGHT_SNOW, (3, 4): 0.5, (5, 14): 1.0})
+    res = cut(local(3, 3, 30), weather, slots=LONG_SLOTS)
+    assert res.state == "vermutet"
+    assert res.factors[local(5, 14)] == 0.1
+    assert local(5, 13, 45) not in res.factors
+    assert res.factors[local(6, 23, 45)] == 0.1
+
+
+def test_single_measurable_slot_is_still_assumed() -> None:
+    res = cut(local(3, 10), hours(NIGHT_SNOW), obs(local(3, 9, 30), [0.5]))
+    assert res.state == "vermutet"
+    assert res.factor == 0.1
+
+
+def test_factor_is_capped_at_one() -> None:
+    seen = []
+    for start, r in (
+        (local(3, 9), 1.3),
+        (local(3, 9, 30), 1.4),
+        (local(3, 10), 1.5),
+        (local(3, 10, 30), 1.6),
+    ):
+        seen += obs(start, [r])
+    res = cut(local(3, 11), hours(NIGHT_SNOW), seen)
+    assert res.state == "gemessen"
+    assert res.factor == 1.0
+    assert res.factors == {}
