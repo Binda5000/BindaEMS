@@ -90,7 +90,10 @@ PLANE_RETRY_S = 30.0
 PLANE_KEEP = timedelta(minutes=30)  # so lange zählt eine Fläche aus einem gescheiterten Abruf
 SLOT_HOURS = 0.25
 CALIBRATION_WINDOW = timedelta(days=30)
-SNOW_WINDOW = timedelta(hours=36)  # so weit zurück liest die Prüfung auf Schnee die Abrechnung
+# so weit zurück liest die Prüfung auf Schnee die Abrechnung, so weit wie das Wetter
+# (``past_days=1``: ab Beginn des Vortags in UTC); sonst fiele ein frei gemessener Slot heraus,
+# während der Schneefall davor noch im Wetter steht, und die Anlage gälte wieder als bedeckt
+SNOW_WINDOW = timedelta(hours=48)
 CHANGE_MIN = 0.05  # ab dieser Änderung eines Faktors gibt es eine neue ``revision``
 OVERRIDE_ACTION = "forecast.snow_override"
 NO_FORECAST = "Noch keine PV-Prognose"
@@ -197,7 +200,7 @@ class ForecastService:
         # Rechnen, nie für Datei oder Datenbank (sonst wartete die Loop darauf)
         self._snow_lock = threading.Lock()
         self._override_lock = threading.Lock()  # Datei und Speicher des Knopfs in einer Reihenfolge
-        self._actuals: dict[datetime, float] = {}  # Ist-PV (W) der letzten Prüfung, 36 h
+        self._actuals: dict[datetime, float] = {}  # Ist-PV (W) der letzten Prüfung, 48 h
         self._override = self._read_override()
         self._first = asyncio.Event()  # gesetzt mit der ersten Prognose
         # InfluxDB schreibt die Loop des Abrufs; ``_published`` zählt die ausgegebenen Prognosen,
@@ -338,7 +341,7 @@ class ForecastService:
     # --- Schnee auf den Modulen ---------------------------------------------------------------
 
     def check_snow(self, ledger: SlotSource) -> bool:
-        """Kürzung mit den Ist-Werten der letzten 36 h neu rechnen; ``True``, wenn sich Zustand
+        """Kürzung mit den Ist-Werten der letzten 48 h neu rechnen; ``True``, wenn sich Zustand
         oder ein Faktor ab jetzt um mehr als ``CHANGE_MIN`` geändert hat. Dann ersetzt eine
         Prognose mit ``revision`` = jetzt die bisherige und geht neu nach InfluxDB, nicht ins
         Archiv (Entscheidung 8). Ohne Prognose ``False``.

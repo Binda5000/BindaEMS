@@ -639,6 +639,23 @@ async def test_snow_check_bumps_revision_and_triggers_replan(
     assert service.latest().revision == forecast.revision
 
 
+async def test_free_stays_free_while_the_snowfall_is_in_the_weather(
+    forecast_env, respx_mock, clock
+) -> None:
+    # Schneefall heute 02:00, 10:30 und 10:45 frei gemessen, danach trüb (nichts messbar); die
+    # Schneestunde steht bis zum nächsten Abruf im Wetter, das bis zu 48 h zurückreicht
+    clock.advance(EARLY)
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    await service.refresh()
+    clock.advance(6 * 3600)  # 11:00 Ortszeit
+    ledger = ratio_ledger(service.latest(), morning(0.8, 2, first=MORNING + SLOT))
+    assert service.check_snow(ledger) is True and service.latest().snow == NO_CUT
+    clock.advance(timedelta(hours=36, minutes=15))  # morgen 23:15 Ortszeit, über 36 h nach 10:45
+    assert service.check_snow(ledger) is False
+    assert service.latest().snow == NO_CUT
+
+
 async def test_small_factor_change_keeps_the_revision(forecast_env, respx_mock, clock) -> None:
     clock.advance(3600)  # 11:00 Ortszeit
     service, _ = forecast_env()
