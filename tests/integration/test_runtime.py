@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.helpers import INTENT_CHARGING_DEFAULTS, FakeSink
-from tests.integration.conftest import TOKEN
+from tests.integration.conftest import GOOD_STATE, TOKEN, live_evcs, run
+from tests.integration.plant import Plant
 
 from bindaems.core.__main__ import _run, main
 from bindaems.core.adapters.tessie import TessieAdapter
@@ -15,6 +16,7 @@ from bindaems.core.api.app import create_api
 from bindaems.core.control.operating import OperatingStateMachine
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.runtime import CoreRuntime
+from bindaems.core.state.phase_order import DECISIVE_SAMPLES
 from bindaems.shared.config import Secrets
 from bindaems.shared.control import Intent
 
@@ -444,3 +446,32 @@ def test_new_vehicle_at_a_wallbox_triggers_a_tessie_poll(runtime_env, cfg, monke
     assert cycle(True) == 1  # unbekannt -> wahr zählt nicht
     assert cycle(False) == 1
     assert cycle(True) == 2
+
+
+async def test_wiring_alarm_does_not_block_control(runtime_env) -> None:
+    """Die verdrehte Multi-Zuordnung (Lage vom 4.11.) wird gemeldet, blockiert aber nichts."""
+    midday = (
+        {f"grid.l{n}.power_w": float(w) for n, w in zip((1, 2, 3), (0, 6000, -2000), strict=True)}
+        | {
+            f"vebus.l{n}.ac_in_power_w": float(w)
+            for n, w in zip((1, 2, 3), (3400, -3500, 0), strict=True)
+        }
+        | {f"vebus.l{n}.ac_out_power_w": 0.0 for n in (1, 2, 3)}
+        | {f"pv.huawei.l{n}.power_w": float(w) for n, w in zip((1, 2, 3), (300, 0, 0), strict=True)}
+    )
+    plant = Plant(watchdog_state=1)
+    rt, clock = live_evcs(runtime_env, plant=plant, state=dict(GOOD_STATE), extra=midday)
+    run(rt, clock, 32)
+    assert rt.health().mode == "CONTROL"
+    assert not [a for a in rt.health().alarms if a["id"].startswith("wiring.")]
+    run(rt, clock, DECISIVE_SAMPLES)
+    health = rt.health()
+    wiring = [a for a in health.alarms if a["id"] == "wiring.multi_phases"]
+    assert [a["severity"] for a in wiring] == ["warning"]
+    assert [a["message"] for a in wiring] == [
+        "Phasen von Multi und Netzzähler passen nicht zusammen: Der Verbrauch auf L1 wäre "
+        "rechnerisch -3100 W. Passend wäre: Multi-L1 am Netz auf L2, Multi-L2 auf L3, "
+        "Multi-L3 auf L1."
+    ]
+    assert health.inputs["ok"] is True
+    assert health.mode == "CONTROL"

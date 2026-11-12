@@ -17,8 +17,8 @@ der core bleibt unverändert.
 **Plan Ölheizung: Wärmebedarf messen** (`docs/superpowers/plans/2026-11-09-oelheizung-waermebedarf.md`) ist umgesetzt und seit
 10.11.2026 auf `main`, **nicht ausgerollt** (Punkt 26 unter „Offen an der Anlage“). **Core und app**, Migration `0019`;
 Quelle ist der Brenner „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) über Digital 6 des C.M.I.
-**Plan Schnee auf den Modulen** (`docs/superpowers/plans/2026-11-04-schnee-auf-den-modulen.md`) ist umgesetzt auf Branch
-`claude/project-thread-a3ghby`, **nicht auf `main`, nicht ausgerollt** (Punkt 27 unter „Offen an der Anlage“). Nur app, UI und HA,
+**Plan Schnee auf den Modulen** (`docs/superpowers/plans/2026-11-04-schnee-auf-den-modulen.md`) ist umgesetzt und seit
+12.11.2026 auf `main`, **nicht ausgerollt** (Punkt 28 unter „Offen an der Anlage“). Nur app, UI und HA,
 keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
@@ -29,7 +29,7 @@ keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert.
 5. **17.11.2026:** `export_days` und `scenario_days` über 18.10. bis 16.11.2026 (Abnahme Phase 3) und
    die Abnahme der Statistik (4a).
 6. **Ab 23.11.2026:** die Abnahmen 5a und 5b auswerten (28 Tage ab 26.10.2026), dann Stufe 2 des
-   Sammel-Pulls (5c, Standard-Lademodus, Vorklimatisieren, Akku ins Auto, Punkte 18 bis 22 und, sobald auf `main`, 26 Ölheizung; bei 22
+   Sammel-Pulls (5c, Standard-Lademodus, Vorklimatisieren, Akku ins Auto, Punkte 18 bis 22 und, sobald auf `main`, 26 Ölheizung, dazu 28 Schnee auf den Modulen; bei 22
    bleibt der Schalter „Unwetter-Reserve“ aus, bis Binda ihn einschaltet). Vorher
    in Influx prüfen, dass `wallbox.evcs.start_stop` am 05.11. um ~16:19 auf 1 sprang (Punkt 20). Nie nur
    `ems-app` ziehen; core und app immer gemeinsam mit fester Version.
@@ -392,6 +392,12 @@ nur `ems-app` neu**, der core bleibt unverändert, keine ACL-Zeile, kein Schritt
 Rückweg: Einstellungen als YAML exportieren, den Schlüssel `ops` löschen, Datenbank auf `0015` zurücknehmen, nach dem Rollback importieren (Betrieb: `docs/betrieb.md`,
 Abschnitt 4, „Rollback auf einen Stand vor Betrieb im Blick“). Betrieb: Abschnitt 12, „Betrieb: Check, Auffälligkeiten, Schalter“, und Abschnitt 7, „Benachrichtigungen“.
 Nicht dabei: Live-Alarm für Auffälligkeiten, Schwellen in den Einstellungen, Ersparnis gegen „Victron allein“, Schalter auf der Seite Betrieb stellen.
+
+**Stand Phasenzuordnung (7.11.2026):** Plan `docs/superpowers/plans/2026-11-07-phasenzuordnung-pruefen.md`, vom Betreiber am 11.11.2026 freigegeben,
+seit 12.11.2026 auf `main`, **nicht ausgerollt** (Punkt 27 unter „Offen an der Anlage“). Der core prüft, ob die Phasen des Multi
+und der Wallboxen zu denen des Netzzählers passen (`core/state/phase_order.py`, in `runtime.py` neben der Plausibilität), und meldet nur: Warnungen
+`wiring.multi_phases` und `wiring.wallbox_phases.<name>`, die nichts sperren. Anlass war der 4.11.2026 (Multi und EVCS um eine Phase gedreht, Netz-L2 rund 3 h über 20 A).
+Spec: 8.3, Regel 7, „Stand Plan Phasenzuordnung“. Betrieb: `docs/betrieb.md`, Abschnitt 14, „Meldungen des core“, und „Laderegelung“, „Hinweise für die Anlage“.
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
@@ -2268,7 +2274,17 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       27 kW und 2,9 l/h eintragen, optional den Ölpreis; (5) Gegenprobe über den Winter: die gerechneten Liter mit dem Tank vergleichen; liegt er deutlich darunter,
       Werte nicht ändern, sondern das Verhältnis notieren (Folgeplan „Korrekturfaktor“). Prüfen: Statistik zeigt „Heizung“ und „Wärmebedarf“, ab 14 kalten Tagen ein
       Ergebnis. Rückweg: Zeile `oil_burner` aus der `config.yaml`, `docker compose restart ems-core ems-app`, Datenbank auf `0018` zurücknehmen. Betrieb: `docs/betrieb.md`, „Ölheizung: Wärmebedarf“.
-  27. **Schnee auf den Modulen ausrollen:** umgesetzt auf Branch `claude/project-thread-a3ghby`, **nicht auf `main`, nicht ausgerollt**;
+  27. **Phasenzuordnung melden ausrollen:** umgesetzt und seit 12.11.2026 auf `main`, **nicht ausgerollt**;
+      kommt mit Stufe 2 (ab 23.11.2026), **nur `ems-core` ändert sich**, mit dem nächsten Sammel-Pull;
+      **keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**; wann, entscheidet der Betreiber. Nichts wird geschaltet, die Warnungen sperren nichts.
+      Danach beobachten, ob „Phasen von Multi und Netzzähler passen nicht zusammen: …“ erscheint, solange der e-Golf lädt und die Verdrehung noch nicht
+      behoben ist (nach 300 entscheidenden Zyklen innerhalb einer Stunde, am Stück rund 5 min; unter „System“ → „core“ → „Alarme“, Id `wiring.multi_phases`).
+      `wiring.wallbox_phases.evcs` mit dem Vorschlag für `phase_map` (erwartet `[L2, L3, L1]`) erscheint nur, wenn ihre 300 entscheidenden Zyklen vor dem Alarm
+      des Multi zusammenkommen (etwa beim Laden in der Nacht mit ruhendem Akku): Solange `wiring.multi_phases` steht, beginnt kein neuer Alarm der Wallbox; in der
+      Praxis zeigt er sich daher oft erst, wenn der Multi behoben ist. Die Verdrehung selbst behebt der Elektriker
+      (Befund vom 4.11.2026, `docs/betrieb.md`, „Laderegelung“, „Hinweise für die Anlage“). Auf einen `wiring.*`-Alarm bei richtig angeschlossener Anlage achten
+      (etwa nach dem Besuch des Elektrikers): Das wäre ein Befund an der Prüfung, nicht an der Anlage.
+  28. **Schnee auf den Modulen ausrollen:** umgesetzt und seit 12.11.2026 auf `main`, **nicht ausgerollt**;
       kommt mit dem nächsten Sammel-Pull (Stufe 2 ab 23.11.2026, sonst der danach), `ems-core` **und** `ems-app` gemeinsam mit fester Version,
       **nie `ems-app` allein** (der core bekommt keinen geänderten Code). **Keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**;
       nichts wird geschaltet. Der Schalter „Schnee erkennen“ (Einstellungen → „PV-Modell“) ist ab Werk an. Am **ersten Schneetag** den

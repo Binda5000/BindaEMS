@@ -137,6 +137,7 @@ from bindaems.core.safety.modes import (
 )
 from bindaems.core.safety.types import InputStatus, SafetyContext, Verdict
 from bindaems.core.state.derived import Derived, derive
+from bindaems.core.state.phase_order import PhaseOrderMonitor
 from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
 from bindaems.core.telemetry.sampler import TelemetrySampler
@@ -515,6 +516,7 @@ class CoreRuntime:
         ]
         self._accumulator = SlotAccumulator(self.counter_signals)
         self._plausibility = PlausibilityMonitor()
+        self._phase_order = PhaseOrderMonitor(cfg)
         self.adapters: list[Adapter] = (
             list(adapters) if adapters is not None else self.build_adapters()
         )
@@ -828,6 +830,8 @@ class CoreRuntime:
         self._notice_arrivals(snap)
         derived = derive(snap, self._cfg)
         plausibility = self._plausibility.evaluate(snap, derived, now)
+        # nur Warnung: gehört nicht in die Eingangsprüfung, blockiert also nichts
+        wiring = self._phase_order.evaluate(snap, derived, now)
         # für die Abrechnung und den 15-min-Wächter; ``None`` heißt Bilanz unbekannt
         flows = derived_flows(derived, self._cfg.wallbox_order)
         closed = self._accumulator.add(now, flows, snap)
@@ -867,6 +871,7 @@ class CoreRuntime:
         self._update_alarms(
             [
                 *plausibility,
+                *wiring,
                 *self._competitor_alarms,
                 *self._foreign_alarms,
                 *counter,
