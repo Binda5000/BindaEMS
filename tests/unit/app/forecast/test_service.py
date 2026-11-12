@@ -215,6 +215,40 @@ async def test_recalibrate_ignores_snow_days(forecast_env, archive) -> None:
     )
 
 
+async def test_bands_skip_cut_outputs_and_outlier_days(forecast_env, archive) -> None:
+    # Ausgaben mit Vorlauf 30 h (h24) und 15 h (h6_24) ab 12:00 Ortszeit
+    days = [datetime(2026, 9, 12, 10, 0, tzinfo=UTC) + timedelta(days=i) for i in range(23)]
+    cut, outliers = days[:6], days[20:]  # dazwischen 14 ungekürzte Tage
+    pv_w: dict[datetime, float] = {}
+    for day in days:
+        for i in range(8 if day in outliers else 2):
+            slot = day + timedelta(minutes=15 * i)
+            if day in cut:  # wegen Schneefall vorhergesagt auf 10 % gekürzt, die Module waren frei
+                p50_w, pv_w[slot] = 500.0, 4500.0
+            elif day in outliers:  # bedeckt: die Ausgabe bis 6 h zeigt ihn als Ausreißertag
+                p50_w, pv_w[slot] = 4000.0, 100.0
+                archive.record(
+                    "pv", slot - timedelta(hours=3), {slot: RecordValue(4000.0, 5000.0, "clear")}
+                )
+                archive.record(
+                    "pv", slot - timedelta(hours=15), {slot: RecordValue(4000.0, 5000.0, "clear")}
+                )
+            else:  # ungekürzt, auch mit dem kleinsten Faktor (P50 = 0,5 · roh)
+                p50_w = 4000.0 if i == 0 else 2500.0
+                pv_w[slot] = 1.125 * p50_w
+            archive.record(
+                "pv", slot - timedelta(hours=30), {slot: RecordValue(p50_w, 5000.0, "clear")}
+            )
+    service, _ = forecast_env()
+    await asyncio.to_thread(service.recalibrate, FakeLedger(pv_w))
+    bands = service._models[1]
+    # nur die 28 Paare der ungekürzten Tage: Ist / P50 = 1,125 (gekürzt wären es 12 Paare mit 9,
+    # an den Ausreißertagen 24 mit 0,025)
+    assert bands.band("h24", "clear") == pytest.approx((1.125, 1.125))
+    assert bands.band("h6_24", "clear") == (0.7, 1.2)  # die 24 Paare der Ausreißertage fehlen
+    assert "h6_24" not in bands.by_horizon
+
+
 async def test_refresh_archives_calibrated_p50_with_raw(forecast_env, archive) -> None:
     seed(archive, SEED_DAYS)
     service, _ = forecast_env()
@@ -773,6 +807,7 @@ async def test_override_file_is_written_outside_the_snow_lock(
     monkeypatch.setattr(os, "fsync", fsync)
     assert service.set_snow_override("covered", actor="admin") is True
     assert held == [False]
+
 
 
 class SteppingClock:

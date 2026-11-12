@@ -38,6 +38,7 @@ from bindaems.app.forecast.archive import (
     horizon_class,
 )
 from bindaems.app.forecast.calibration import (
+    FACTOR_RANGE,
     NEUTRAL,
     NEUTRAL_BANDS,
     Bands,
@@ -537,6 +538,12 @@ class ForecastService:
                 continue
             if record.horizon == "h0_6":
                 cal_pairs.append(CalPair(local.hour, record.clearness, record.raw_w, pv_w))
+            # das Archiv hat die gekürzte P50 (Entscheidung 6); ungekürzt ist P50 ≥ 0,5 · roh
+            # (kleinster Faktor, ``raw_w`` schon auf den Wechselrichter begrenzt), darunter war
+            # die Ausgabe wegen Schnee gekürzt und taugt nicht für die Bänder, auch wenn die
+            # Module frei waren
+            if record.p50_w < FACTOR_RANGE[0] * record.raw_w:
+                continue
             err_pairs.append(ErrPair(record.horizon, record.clearness, record.p50_w, pv_w))
         models = (calibrate(cal_pairs, threshold), fit_bands(err_pairs, threshold))
         self._models = models
