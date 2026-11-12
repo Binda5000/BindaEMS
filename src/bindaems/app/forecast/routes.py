@@ -14,7 +14,12 @@ from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.quality import ForecastQuality
-from bindaems.app.forecast.service import NO_FORECAST, ForecastService, PvForecast
+from bindaems.app.forecast.service import (
+    NO_FORECAST,
+    ForecastService,
+    OverrideNotSaved,
+    PvForecast,
+)
 from bindaems.app.status import status_json
 from bindaems.shared.timeutil import LOCAL_TZ, Clock
 
@@ -92,10 +97,14 @@ def forecast_router(
 
     @router.post("/pv/snow")
     async def pv_snow(body: SnowBody, session: Operator) -> dict[str, Any]:
-        """Handschalter bei Schnee (Entscheidung 9); ohne Prognose 409."""
-        done = await asyncio.to_thread(
-            service.set_snow_override, body.mode, actor=session.user.username, source="ui"
-        )
+        """Handschalter bei Schnee (Entscheidung 9); ohne Prognose 409, lässt sich die Datei
+        nicht schreiben 503 (dann bleibt alles wie vorher)."""
+        try:
+            done = await asyncio.to_thread(
+                service.set_snow_override, body.mode, actor=session.user.username, source="ui"
+            )
+        except OverrideNotSaved as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
         forecast = service.latest()
         if not done or forecast is None:
             raise HTTPException(status.HTTP_409_CONFLICT, NO_FORECAST)

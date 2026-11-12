@@ -46,7 +46,7 @@ from bindaems.app.control.intent import (
 )
 from bindaems.app.control.routes import CONFLICT, CORE_DOWN
 from bindaems.app.core_link import CoreUnavailableError
-from bindaems.app.forecast.service import NO_FORECAST
+from bindaems.app.forecast.service import NO_FORECAST, OverrideNotSaved
 from bindaems.app.ha.entities import AUTOMATIC, GUEST_MODE_LABELS, MODE_LABELS, object_id
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import HA_THERMAL_PLAN_ID, Config
@@ -436,13 +436,22 @@ class HaCommandHandler:
         elif isinstance(change, Replan) and planning is not None:
             planning.request("manual")
         elif isinstance(change, SetSnow):
-            # Datei und Rechnen der Kürzung blockieren: nicht in der Ereignisschleife
-            if self._snow is not None and not await asyncio.to_thread(
-                self._snow.set_snow_override, change.mode, actor=ACTOR, source=SOURCE
-            ):
-                raise Refused(NO_FORECAST)
+            if self._snow is not None:
+                await self._set_snow(self._snow, change)
         elif not isinstance(change, SetGridCharge | SetThermalPlan | Replan):
             await self._intents.apply(change, actor=ACTOR, source=SOURCE)
+
+    async def _set_snow(self, snow: SnowCommands, change: SetSnow) -> None:
+        """Knopf bei Schnee; ohne Prognose oder wenn die Datei sich nicht schreiben lässt
+        ``Refused``. Datei und Rechnen der Kürzung blockieren: nicht in der Ereignisschleife."""
+        try:
+            done = await asyncio.to_thread(
+                snow.set_snow_override, change.mode, actor=ACTOR, source=SOURCE
+            )
+        except OverrideNotSaved as exc:
+            raise Refused(str(exc)) from exc
+        if not done:
+            raise Refused(NO_FORECAST)
 
     async def _support(self, change: SupportSwitch | SupportThreshold) -> SetSupport:
         """Die Änderung der Unterstützung auf Basis der gültigen Absicht des core.

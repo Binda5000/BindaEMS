@@ -24,6 +24,7 @@ from bindaems.app.control.intent import (
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreUnavailableError, LiveState
+from bindaems.app.forecast.service import OVERRIDE_NOT_SAVED, OverrideNotSaved
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
 from bindaems.app.settings.service import VersionConflictError
 from bindaems.shared.control import ChargeMode, Intent, SupportIntent
@@ -99,15 +100,19 @@ class FakeAutomation:
 
 
 class FakeSnow:
-    """Zeichnet ``set_snow_override`` auf; ``ok`` ist die Antwort (``False``: keine Prognose)."""
+    """Zeichnet ``set_snow_override`` auf; ``ok`` ist die Antwort (``False``: keine Prognose),
+    ``error`` wirft er stattdessen."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[object, str, str]] = []
         self.ok = True
+        self.error: Exception | None = None
         self.thread: int | None = None
 
     def set_snow_override(self, mode, *, actor, source) -> bool:
         self.thread = threading.get_ident()
+        if self.error is not None:
+            raise self.error
         self.calls.append((mode, actor, source))
         return self.ok
 
@@ -826,6 +831,14 @@ async def test_snow_button_without_forecast_is_rejected(handler, snow, rejection
     snow.ok = False
     await handler("pv_module_frei", "PRESS")
     assert rejections.texts == [PREFIX + "Noch keine PV-Prognose"]
+
+
+async def test_snow_button_with_unwritable_file_is_rejected(handler, snow, rejections) -> None:
+    snow.error = OverrideNotSaved(OVERRIDE_NOT_SAVED)
+    with capture_logs() as logs:
+        await handler("pv_schnee_melden", "PRESS")
+    assert rejections.texts == [PREFIX + OVERRIDE_NOT_SAVED]
+    assert [e for e in logs if e["log_level"] == "error"] == []
 
 
 async def test_unknown_snow_payload_is_rejected(handler, snow, rejections) -> None:

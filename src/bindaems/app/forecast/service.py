@@ -98,6 +98,12 @@ CHANGE_MIN = 0.05  # ab dieser Änderung eines Faktors gibt es eine neue ``revis
 OVERRIDE_ACTION = "forecast.snow_override"
 NO_FORECAST = "Noch keine PV-Prognose"
 SNOW_INFO = "PV-Prognose gekürzt: vermutlich Schnee auf den Modulen"  # Entscheidung 11
+OVERRIDE_NOT_SAVED = "Handschalter Schnee nicht gespeichert (Datei nicht beschreibbar)"
+
+
+class OverrideNotSaved(Exception):
+    """Die Datei des Handschalters ließ sich nicht schreiben oder löschen (``OSError``); Knopf,
+    Kürzung und Prognose bleiben wie vorher, es gibt keinen Eintrag im Änderungsprotokoll."""
 
 
 @dataclass(frozen=True)
@@ -377,7 +383,9 @@ class ForecastService:
     ) -> bool:
         """Handschalter setzen (``None``: wieder Automatik) und die Kürzung sofort mit den
         gemerkten Ist-Werten neu rechnen; Eintrag im Änderungsprotokoll. Ohne Prognose ``False``
-        (keine Datei, kein Eintrag), sonst ``True``.
+        (keine Datei, kein Eintrag), sonst ``True``. Lässt sich die Datei nicht schreiben oder
+        löschen (``OSError``), ``OverrideNotSaved``: Dann bleibt alles wie vorher, denn der
+        Speicher ändert sich erst nach der Datei.
 
         Synchron (Datei und Datenbank; der Aufrufer nimmt ``asyncio.to_thread``).
         """
@@ -385,7 +393,16 @@ class ForecastService:
             return False
         override = Override(mode, self._clock.now()) if mode is not None else None
         with self._override_lock:
-            self._write_override(override)  # ohne ``_snow_lock``: ``fsync`` hält die Loop nicht an
+            try:  # ohne ``_snow_lock``: ``fsync`` hält die Loop nicht an
+                self._write_override(override)
+            except OSError as exc:
+                log.warning(
+                    "Handschalter Schnee nicht gespeichert",
+                    path=str(self._override_path),
+                    mode=mode,
+                    error=str(exc),
+                )
+                raise OverrideNotSaved(OVERRIDE_NOT_SAVED) from exc
             with self._snow_lock:
                 self._override = override
                 self._recut(self._clock.now())

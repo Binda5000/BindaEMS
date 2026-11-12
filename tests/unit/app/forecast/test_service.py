@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import json
 import os
 import threading
@@ -14,7 +15,12 @@ from tests.unit.app.forecast.conftest import FIXTURE, snowy
 
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.pv_model import plane_power_w
-from bindaems.app.forecast.service import PvForecast, snow_info
+from bindaems.app.forecast.service import (
+    OVERRIDE_NOT_SAVED,
+    OverrideNotSaved,
+    PvForecast,
+    snow_info,
+)
 from bindaems.app.forecast.snow import NO_CUT, SnowCut
 from bindaems.app.ledger.service import LedgerSlot
 from bindaems.app.runtime import LoopSink
@@ -825,6 +831,41 @@ async def test_override_file_is_written_outside_the_snow_lock(
     assert service.set_snow_override("covered", actor="admin") is True
     assert held == [False]
 
+
+async def test_unwritable_override_file_changes_nothing(
+    forecast_env, respx_mock, clock, tmp_path, audit, monkeypatch
+) -> None:
+    clock.advance(EARLY)
+    path = tmp_path / "data" / "pv_snow_override.json"
+    path.parent.mkdir()
+    service, sink = forecast_env(override_path=path)
+    respx_mock.routes["open_meteo"].respond(200, text=snowy({SNOW_AT: 2.0}))
+    before = await service.refresh()
+    sink.points.clear()
+
+    def full(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.ENOSPC, "Kein Platz auf dem Gerät")
+
+    clock.advance(60)
+    with monkeypatch.context() as patch:  # Platte voll beim Ersetzen der Datei
+        patch.setattr(os, "replace", full)
+        with capture_logs() as logs, pytest.raises(OverrideNotSaved) as refused:
+            service.set_snow_override("free", actor="admin")
+    assert str(refused.value) == OVERRIDE_NOT_SAVED
+    assert service.latest() is before and service.snow_override() is None
+    assert list(path.parent.iterdir()) == []  # auch die temporäre Datei ist weg
+    assert audit.recent() == [] and sink.points == []
+    assert [
+        e["log_level"] for e in logs if e["event"] == "Handschalter Schnee nicht gespeichert"
+    ] == ["warning"]
+    assert service.set_snow_override("covered", actor="admin") is True
+    covered = service.latest()
+    with monkeypatch.context() as patch:  # Automatik: die Datei lässt sich nicht löschen
+        patch.setattr(type(path), "unlink", full)
+        with pytest.raises(OverrideNotSaved):
+            service.set_snow_override(None, actor="admin")
+    assert service.latest() is covered and service.snow_override() == "covered"
+    assert path.exists() and len(audit.recent()) == 1
 
 
 class SteppingClock:

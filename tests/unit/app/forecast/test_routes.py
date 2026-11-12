@@ -7,6 +7,7 @@ from tests.app_helpers import ingest, login_as
 from tests.unit.app.forecast.conftest import NOW, snowy
 
 from bindaems.app.forecast.archive import RecordValue
+from bindaems.app.forecast.service import OVERRIDE_NOT_SAVED
 from bindaems.shared.timeutil import LOCAL_TZ
 
 
@@ -305,3 +306,16 @@ def test_snow_button_without_forecast_is_a_conflict(client, auth) -> None:
     response = client.post("/api/forecast/pv/snow", json={"mode": "free"}, headers=csrf)
     assert response.status_code == 409
     assert response.json()["detail"] == "Noch keine PV-Prognose"
+
+
+def test_snow_button_with_unwritable_file_names_the_error(
+    client, auth, snowy_forecast, tmp_path, audit
+) -> None:
+    snowy_forecast._override_path = tmp_path / "fehlt" / "pv_snow_override.json"  # kein Verzeichnis
+    csrf = login_as(client, auth, "operator")
+    response = client.post("/api/forecast/pv/snow", json={"mode": "free"}, headers=csrf)
+    assert response.status_code == 503
+    assert response.json()["detail"] == OVERRIDE_NOT_SAVED
+    snow = client.get("/api/forecast/pv").json()["snow"]
+    assert (snow["state"], snow["override"]) == ("vermutet", None)  # nichts gesetzt
+    assert all(e.action != "forecast.snow_override" for e in audit.recent())
