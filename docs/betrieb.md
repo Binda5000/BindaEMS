@@ -306,9 +306,21 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
      **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
   5. **Die Home-Assistant-Entitäten entfernen:** Den Sensor „PV Schnee“
      (`sensor.bindaems_pv_schnee`) und die Tasten „Schnee auf den Modulen“ und „Module sind frei“
-     kennt die ältere app nicht mehr; der Sensor bleibt ohne Werte stehen, ein Druck auf eine Taste
-     bewirkt nichts. Unter **Einstellungen** → **Geräte & Dienste** → **Entitäten** entfernst du
-     alle drei von Hand.
+     kennt die ältere app nicht mehr. Ihre Discovery und der letzte Zustand sind gehalten
+     (retained): Der Sensor zeigt weiter seinen letzten Wert (etwa „vermutet“), ein Druck auf eine
+     Taste bewirkt nichts. Lösche die gehaltenen Nachrichten am Broker, dann entfernt Home Assistant
+     die drei Entitäten selbst:
+
+     ```bash
+     mosquitto_pub -r -n -t homeassistant/sensor/bindaems/pv_schnee/config
+     mosquitto_pub -r -n -t bindaems/state/pv_schnee
+     mosquitto_pub -r -n -t bindaems/state/pv_schnee/attributes
+     mosquitto_pub -r -n -t homeassistant/button/bindaems/pv_schnee_melden/config
+     mosquitto_pub -r -n -t homeassistant/button/bindaems/pv_module_frei/config
+     ```
+
+     (Mit den Zugangsdaten deines Brokers, `-u … -P …`, wie beim Löschen der Uhrzeit im Abschnitt
+     „Home Assistant“; Präfix `homeassistant` und Basis `bindaems` sind die Standardwerte.)
 
   Hast du vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
   gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
