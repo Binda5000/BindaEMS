@@ -256,6 +256,65 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
     geschaltet.
 
+- **Update mit Schnee auf den Modulen:** Der Plan „Schnee auf den Modulen“ ändert nur Code der app
+  und das UI (der core bekommt keinen geänderten Code), es gibt keine Migration, keine Zeile in der
+  ACL des Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Ausgerollt wird trotzdem
+  wie immer `ems-core` **und** `ems-app` zusammen, mit dem nächsten Sammel-Pull (`docker compose pull
+  && docker compose up -d`), nicht vor dem 23.11.2026. Der Schalter „Schnee erkennen“ ist ab Werk
+  an; was er tut, steht im Abschnitt „Prognosen“, „Schnee auf den Modulen“.
+- **Rollback auf einen Stand vor Schnee auf den Modulen:** Core und app gehen wie immer gemeinsam auf
+  dasselbe Tag zurück; die Absicht des core (`intent.json`) trägt nichts Neues, die Datenbank hat
+  keine Migration. Mehrere Stellen der app tragen Neues, und eine ältere app lehnt unbekannte Felder
+  und Werte ab (`extra="forbid"`):
+  - **Die Einstellungen:** Jede Version, die nach dem Ausrollen gespeichert wurde, nennt
+    `pv_model.snow_detection`, auch mit `false`. Eine ältere app lehnt eine solche Version ab und
+    rechnet mit den **Standardwerten aller Einstellungen**, also auch ohne deinen Tarif (im Log
+    „Gespeicherte Einstellungen ungültig, Standardwerte aktiv“). Auch ein Schalter wie „Netzladen
+    erlaubt“, im UI oder in Home Assistant, speichert eine Version. Hast du seit dem Ausrollen nichts
+    gespeichert oder importiert, ist die letzte Version noch die alte, und hier ist nichts zu tun.
+  - **Pläne mit dem Grund `PV_SCHNEE`** (Viertelstunden am Tag mit gekürzter PV-Prognose) kennt eine
+    ältere app nicht. Sie überspringt diese Pläne (im Log „Plan-Zeile nicht lesbar“,
+    `code=plan_row_unreadable`), bis sie nach 30 Tagen aus der Planablage fallen; bis dahin fehlen
+    sie im Verlauf und im Vergleich Plan gegen Ist. Pläne ohne diesen Grund liest sie wie bisher.
+  - **Eingangsdaten seit dem Ausrollen** tragen je Slot `pv_snow_pct`, auch mit `null`. Die ältere
+    app liest sie nur beim ersten Lauf nach dem Start, für „Netzenergie im Akku zu Beginn“ des
+    vorigen Plans. Ist der vorige Plan einer des neuen Images (seine Eingangsdaten bleiben 7 Tage),
+    meldet sie „Eingangsdaten des vorigen Plans nicht lesbar“ (`code=plan_inputs_unreadable`) und
+    nimmt die vorsichtige Seite: Akku ins Auto und Einspeisung bleiben gesperrt, bis der Akku das
+    nächste Mal leer ist. Das ist harmlos; daran musst du nichts tun.
+  - **Das Archiv der Prognosen** hat an Tagen mit Kürzung die gekürzte P50. Die ältere app nimmt
+    diese Tage in ihr Band P25 bis P75 auf, bis sie nach 30 Tagen aus dem Fenster der Kalibrierung
+    fallen; P75 kann so lange zu hoch liegen. Die Faktoren der P50 rechnet sie aus der Roh-Prognose,
+    die bleibt ungekürzt.
+  - **Der Handschalter** liegt in `/data/pv_snow_override.json` (Volume `app-data`). Die ältere app
+    liest die Datei nicht, sie schadet nicht und kann liegen bleiben. Gehst du später wieder auf den
+    neuen Stand, gilt ein Knopf darin nur, wenn er jünger als 48 h ist.
+  - **Im Änderungsprotokoll** zeigt die ältere app die Einträge der Knöpfe mit dem Code
+    `forecast.snow_override` statt mit dem Text.
+
+  So gehst du zurück:
+
+  1. **Vor dem Rollback die Einstellungen exportieren**, noch mit dem neuen Image: **Einstellungen** →
+     „Export und Import“ → „Exportieren (YAML)“ und die Datei sichern. In der Datei unter `pv_model:`
+     die Zeile `snow_detection:` löschen (mit `true` oder `false`). Gehst du zugleich hinter die
+     Unwetter-Reserve zurück, löschst du auch den Block `storm:` unter `planning:` (nächster Punkt).
+  2. **Regelbetrieb aus** (System → „Bedienung“), wie bei jedem Wechsel des core.
+  3. In `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app).
+  4. **Nach dem Rollback die geänderte Datei importieren:** **Einstellungen** → „Export und Import“ →
+     „YAML-Datei importieren“ → „Importieren“. Bis dahin rechnet die ältere app mit den
+     Standardwerten; speichere die Einstellungen in dieser Zeit nicht von Hand. Dann den
+     **Regelbetrieb wieder an**, sobald **System** core und app mit demselben Stand zeigt.
+  5. **Die Home-Assistant-Entitäten entfernen:** Den Sensor „PV Schnee“
+     (`sensor.bindaems_pv_schnee`) und die Tasten „Schnee auf den Modulen“ und „Module sind frei“
+     kennt die ältere app nicht mehr; der Sensor bleibt ohne Werte stehen, ein Druck auf eine Taste
+     bewirkt nichts. Unter **Einstellungen** → **Geräte & Dienste** → **Entitäten** entfernst du
+     alle drei von Hand.
+
+  Hast du vor dem Rollback nicht exportiert, nimmst du den Schlüssel mit gestoppter app aus allen
+  gespeicherten Versionen, mit dem Notbehelf unter „Rollback auf einen Stand vor Akku ins Auto“ und
+  `key = "$.pv_model.snow_detection"`. Gehst du später wieder auf den Stand mit Schnee auf den
+  Modulen, ist „Schnee erkennen“ an (Standardwert).
+
 - **Update mit der Unwetter-Reserve:** Der Plan „Unwetter-Reserve“ ändert nur Code der app (der core
   bekommt keinen geänderten Code), es gibt keine Migration, keine Zeile in der ACL des
   Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Ausgerollt wird trotzdem wie
@@ -5034,6 +5093,11 @@ gibt es keine Klasse.
   fällt aus Faktoren und Band heraus. Das sind Schneetage, auch solche vor der Schneeerkennung, und
   Ausfälle der Anlage. Gespeichert wird dafür nichts; das gilt auch bei ausgeschaltetem „Schnee
   erkennen“.
+- **Gekürzte Ausgaben zählen nicht fürs Band:** Ins Archiv geht die bei Schnee gekürzte P50. Liegt
+  sie unter der Hälfte der Roh-Prognose (ungekürzt geht das nicht, der kleinste Faktor ist 0,5),
+  bleibt die Viertelstunde aus dem Band heraus, auch wenn die Module frei waren, etwa an einem
+  klaren Tag nach vorhergesagtem Schneefall, der nicht liegen blieb. Die Faktoren rechnen mit der
+  Roh-Prognose und sind davon nicht betroffen.
 
 #### Schnee auf den Modulen
 
@@ -5071,16 +5135,19 @@ Summe.
   Archiv und nach InfluxDB geht die gekürzte Prognose (die Güte zeigt, womit der Planer gerechnet
   hat).
 - **Wann:** beim Abruf jede Stunde, gleich nach dem Start der app und dann jede Viertelstunde (zur
-  Minute 4, 19, 34 und 49) mit den Ist-Werten der letzten 36 h. Ändert sich der Zustand oder der
-  Anteil einer Viertelstunde um mehr als 5 Prozentpunkte, plant der Planer binnen 15 min neu. Die
-  app speichert dafür nichts (außer dem Handschalter unten); nach einem Neustart kommt dasselbe
-  heraus.
+  Minute 4, 19, 34 und 49) mit den Ist-Werten der letzten 48 h, so weit wie das Wetter zurückreicht.
+  Ändert sich der Zustand oder der Anteil einer Viertelstunde um mehr als 5 Prozentpunkte, plant der
+  Planer binnen 15 min neu. Die app speichert dafür nichts (außer dem Handschalter unten); nach
+  einem Neustart kommt dasselbe heraus.
 - **Handschalter:** Die Knöpfe „Schnee auf den Modulen“ und „Module sind frei“ (Seite „Prognosen“,
   ab der Rolle „Bedienen“, und in Home Assistant) übersteuern die Erkennung: „Schnee auf den
   Modulen“ gilt als bedeckt ab jetzt, bis die Messung frei meldet; „Module sind frei“ gilt als frei
   gemessen ab jetzt, neuer Schneefall danach zählt wieder. Ein Knopf wirkt höchstens 48 h, der eine
   ersetzt den anderen, „Automatik“ hebt ihn auf. Abgelegt ist er in `/data/pv_snow_override.json`;
-  fehlt die Datei oder ist sie unlesbar, gilt die Automatik. Jeder Druck steht im
+  fehlt die Datei oder ist sie unlesbar, gilt die Automatik. Lässt sich die Datei nicht schreiben
+  (Platte voll, `/data` schreibgeschützt), bleibt alles wie vorher: Die Seite meldet „Handschalter
+  Schnee nicht gespeichert (Datei nicht beschreibbar)“, Home Assistant lehnt den Befehl mit diesem
+  Text ab. Jeder Druck steht im
   Änderungsprotokoll (`forecast.snow_override`, im UI „PV: Schneeerkennung (Handschalter)“).
 - **Schalter „Schnee erkennen“** (Einstellungen, „PV-Modell“, ab Werk an): Aus heißt keine Kürzung,
   die Knöpfe wirken nicht. Die Ausreißertage bleiben trotzdem aus der Kalibrierung. Das ist auch der

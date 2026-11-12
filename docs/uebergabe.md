@@ -2272,11 +2272,13 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       kommt mit dem nächsten Sammel-Pull (Stufe 2 ab 23.11.2026, sonst der danach), `ems-core` **und** `ems-app` gemeinsam mit fester Version,
       **nie `ems-app` allein** (der core bekommt keinen geänderten Code). **Keine Migration, keine ACL-Zeile, keine Änderung an `config.yaml`**;
       nichts wird geschaltet. Der Schalter „Schnee erkennen“ (Einstellungen → „PV-Modell“) ist ab Werk an. Am **ersten Schneetag** den
-      **Zeitplan** (Grund „PV gekürzt auf … % der Prognose: vermutlich Schnee auf den Modulen.“, Netzladen in der Nacht statt Warten auf PV) und die
-      Seite **Prognosen** (Karte „Schnee auf den Modulen“: Zustand, Anteil, „seit“; nach dem Abtauen „frei“) ansehen; liegt die Erkennung daneben,
+      **Zeitplan** (Grund `PV_SCHNEE` „PV gekürzt auf … % der Prognose: vermutlich Schnee auf den Modulen.“ in den Viertelstunden am Tag; der Plan
+      hält den Akku, so im Szenario `winter-schnee` gemessen, oder lädt nachts aus dem Netz, statt auf PV zu warten) und die Seite **Prognosen**
+      (Karte „Schnee auf den Modulen“: Zustand, Anteil, „seit“; nach dem Abtauen „frei“) ansehen; liegt die Erkennung daneben,
       mit „Schnee auf den Modulen“ oder „Module sind frei“ übersteuern und notieren, wann und warum. Rückweg ohne Rollback: „Schnee erkennen“ aus.
       Ein älteres Image liest Einstellungsversionen mit `pv_model.snow_detection` nicht (`extra="forbid"`); vor einem Rollback die Einstellungen
-      exportieren, den Schlüssel löschen und danach importieren. Betrieb: `docs/betrieb.md`, „Prognosen“, „Schnee auf den Modulen“.
+      exportieren, den Schlüssel löschen und danach importieren (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Schnee auf den Modulen“).
+      Betrieb: `docs/betrieb.md`, „Prognosen“, „Schnee auf den Modulen“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
