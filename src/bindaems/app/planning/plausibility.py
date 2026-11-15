@@ -38,7 +38,8 @@ Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidung 6): Mit Bedarf nac
 (``end_need_kwh``) und positivem Restwert rechnet sich Netzladen mit dem Restwert nur, solange an
 der Nachrechnung beide Schranken des Optimierers halten: die Netzenergie am Ende
 (``grid_rest_kwh``, ohne ``reserve_recharge``) und der End-SOC gegen ``max(Reserve + Bedarf,
-SOC₀)`` plus Gespeichertes, je mit ``SOC_TOL_KWH``. Ohne Bedarf wie vorher.
+SOC₀)`` plus Gespeichertes, je mit ``SOC_TOL_KWH`` plus der größten Aufrundung der Absichten
+(``ROUND_W / 2``). Ohne Bedarf wie vorher.
 
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
@@ -84,6 +85,9 @@ USED_ABOVE_W: Final = BALANCE_TOL_W
 MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss oder Netzbezug
 HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
 STORM_TOL_PCT: Final = 0.5  # so weit darf die Nachrechnung unter der Unwetter-Reserve enden
+# Schritt der Netzladeleistung der Absichten (``intents._grid_charge`` rundet auf ihn); die
+# Restwertgrenze lässt die größte Aufrundung, ``ROUND_W / 2``, als Toleranz zu
+ROUND_W: Final = 100.0
 
 PaysOffBy = Literal["discharge", "import"]
 
@@ -248,15 +252,21 @@ def _within_need(
     inputs: PlanInputs, intents: Sequence[BatteryIntent], steps: Sequence[SimStep]
 ) -> bool:
     """Beide Schranken des Restwerts aus Entscheidung 3 halten an der Nachrechnung (Entscheidung
-    6, ``SOC_TOL_KWH`` Toleranz): Netzenergie am Ende (``grid_rest_kwh``) höchstens
-    ``end_need_kwh``, und End-SOC höchstens ``max(Reserve + end_need_kwh, SOC₀)`` plus das, was PV,
-    Nachladen und Aufladen für die Unwetter-Reserve eingespeichert haben. Ohne Bedarf wahr."""
+    6): Netzenergie am Ende (``grid_rest_kwh``) höchstens ``end_need_kwh``, und End-SOC höchstens
+    ``max(Reserve + end_need_kwh, SOC₀)`` plus das, was PV, Nachladen und Aufladen für die
+    Unwetter-Reserve eingespeichert haben. Ohne Bedarf wahr.
+
+    Toleranz ist ``SOC_TOL_KWH`` plus die größte Aufrundung eines Slots durch die Absichten,
+    ``η_ch · ROUND_W / 2 · Δ`` (Ruling zu Task 3): Plant der Optimierer genau bis an die Grenze,
+    hebt die Rundung des Teil-Slots sie sonst darüber, und ``_drop_unprofitable`` striche den
+    letzten ganzen Slot Netzladen."""
     need_kwh = inputs.end_need_kwh
     if need_kwh is None:
         return True
-    if grid_rest_kwh(inputs, intents, steps) > need_kwh + SOC_TOL_KWH:
-        return False
     params = params_of(inputs)
+    tol_kwh = SOC_TOL_KWH + params.eta_ch * ROUND_W / 2 * SLOT_H / 1000
+    if grid_rest_kwh(inputs, intents, steps) > need_kwh + tol_kwh:
+        return False
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     stored_w = sum(
         item.charge_pv_w + (0.0 if r1_applies(intent) else item.charge_grid_w)
@@ -265,7 +275,7 @@ def _within_need(
     allowed_kwh = (
         max(reserve_kwh(inputs) + need_kwh, soc0_kwh) + params.eta_ch * stored_w * SLOT_H / 1000
     )
-    return steps[-1].soc_end_kwh <= allowed_kwh + SOC_TOL_KWH
+    return steps[-1].soc_end_kwh <= allowed_kwh + tol_kwh
 
 
 def pays_off_at_end(

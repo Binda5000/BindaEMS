@@ -34,6 +34,7 @@ from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
     HOLD_MIN_W,
     R1_TOL_KWH,
+    ROUND_W,
     SOC_TOL_KWH,
     charged_window_end,
     export_while_charged_kwh,
@@ -45,7 +46,6 @@ from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, BatteryIntent, BatteryI
 log = structlog.get_logger(__name__)
 
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
-ROUND_W: Final = 100.0  # Schritt der Netzladeleistung
 HOLD_SHARE: Final = 0.5  # Halten, wenn weniger als dieser Anteil des Eigenverbrauchs entlädt
 
 

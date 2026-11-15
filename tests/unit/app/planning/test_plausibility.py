@@ -535,6 +535,43 @@ def test_reserve_recharge_does_not_count_as_grid_rest() -> None:
     assert check_plan(need, flows_of(steps, inputs), intents, steps) == []
 
 
+def _rounding_case(end_need_kwh: float) -> PlanInputs:
+    """31 Slots zu 10 ct, Haus 300 W, kein PV, SOC₀ 25 %, Restwert 33,5 ct: Der Optimierer lädt
+    bis an die Restwertgrenze, vier Slots voll (7,7 kW) und einen Teil-Slot."""
+    return scenario(
+        prices=[10.0] * 31,
+        pv=[0.0] * 31,
+        load=[300.0] * 31,
+        soc_pct=25.0,
+        grid_charge=True,
+        end_value_ct=33.5,
+        end_need_kwh=end_need_kwh,
+    )
+
+
+def test_rounding_up_at_the_need_keeps_the_last_grid_charge() -> None:
+    # Fund aus der Zufallsprüfung (Fix zu Task 3): Plant der Optimierer genau bis an die Grenze,
+    # rundet ``_grid_charge`` den Teil-Slot um bis zu ``ROUND_W / 2`` auf, hier um 47 W
+    # (0,011 kWh > ``SOC_TOL_KWH``). Das darf nicht den letzten vollen Slot Netzladen kosten.
+    eta_ch = eta(88.0)
+
+    def partial_w(result: OptimizerResult) -> float:
+        return min(f.gr_b for f in result.flows if f.gr_b > 1)
+
+    base = 10.0
+    start_w = partial_w(solve(_rounding_case(base)))
+    target_w = 100 * (start_w // 100) + 53  # rundet auf das nächste Hundert auf, um 47 W
+    inputs = _rounding_case(base + (target_w - start_w) * eta_ch * SLOT_H / 1000)
+    result = solve(inputs)
+    assert partial_w(result) == pytest.approx(target_w, abs=1.0)
+    intents = derive_intents(inputs, result)
+    charges = [i.grid_charge_w for i in intents if i.kind is BatteryIntentKind.NETZLADEN]
+    assert sorted(charges) == [target_w + 47] + [7700.0] * 4
+    free = inputs.model_copy(update={"end_need_kwh": None})
+    assert intents == derive_intents(free, result)
+    assert plan_once(inputs, result).source == "optimizer"
+
+
 def test_spread_rule_charges_wear_on_the_delivered_energy() -> None:
     # Verschleiß wie im Optimierer auf die Entladung: η_rt · (π_später − w) − π_t ≥ m.
     # 0,88 · (40 − 2) − 31,3 = 2,14 ≥ 2; mit w statt η_rt · w wären es 1,90 < 2.
