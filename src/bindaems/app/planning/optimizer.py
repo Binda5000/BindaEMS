@@ -71,6 +71,16 @@ Regel R2 bleibt so unberührt. Mit dem Schalter lädt ein Slot zusammen
 höchstens ``GC_t`` (``gr_b + gr_r + gr_s ≤ GC_t``). Ohne Untergrenze gibt es weder ``gr_s`` noch
 eine dieser Bedingungen.
 
+Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidungen 1 und 3): Der Restwert gilt nur
+für den Teil des End-SOC, den das Haus nach dem Horizont braucht (``PlanInputs.end_need_kwh``).
+Mit Netzladen im Horizont (``z``) und Bedarf gibt es ``ueber_restwert ≥ 0`` mit ``ueber_restwert
+≥ s_T − (Reserve + end_need_kwh) − span · (1 − c_T)`` (``restwert_grenze``), ``span = hi − lo``,
+``c_T`` aus Regel R1; es kostet ``Restwert · ueber_restwert``. Die Grenze greift also nur, wenn
+am Horizontende Netzenergie aus diesem Horizont im Akku sein kann; ein Akku, den nur die PV füllt,
+und Netzenergie von vor dem Horizont (``k_t``) behalten den linearen Restwert. Sie ist weich, das
+Modell bleibt lösbar. Ohne Bedarf (``None``, alte Eingangsdaten) und ohne positiven Restwert gibt
+es sie nicht; ein negativer Restwert belohnte ``ueber_restwert`` ohne Ende.
+
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 """
@@ -515,6 +525,17 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                     car_battery[t] <= car_battery_max[t] * (1 - before[t]),
                     f"r1_auto_vorher_{t}",
                 )
+
+    # Netzladen auf Vorrat (Entscheidungen 1 und 3): Kann am Horizontende Netzenergie aus diesem
+    # Horizont im Akku sein (``c_T``), ist der End-SOC über Reserve + Bedarf keinen Restwert wert
+    if z and inputs.end_need_kwh is not None and inputs.end_value_ct > 0:
+        over_end = prob.add_variable("ueber_restwert", lowBound=0)
+        prob += (
+            over_end
+            >= soc[-1] - (reserve + inputs.end_need_kwh) - span * (1 - in_battery[count - 1]),
+            "restwert_grenze",
+        )
+        terms.append(inputs.end_value_ct * over_end)
 
     # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont; ein gedachter
     # Monat ohne Leistungspreis (Entscheidung 8) rechnet gleich, mit ``tier_kw`` 0 nur über ``d2``.

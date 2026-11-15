@@ -5,6 +5,7 @@ Trägheit; Akku ins Auto, wenn er übrig ist (Plan Akku ins Auto, Entscheidungen
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import datetime
 from typing import Any, NoReturn
@@ -52,7 +53,7 @@ from bindaems.app.storm.windows import storm_floors
 from bindaems.shared.config import Phase
 from bindaems.shared.plan import RESERVE_RECHARGE_MAX_W, BatteryIntentKind, StormWarning
 from bindaems.shared.settings import StormSettings, TariffSettings
-from bindaems.shared.timeutil import SLOT
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
 _EMPTY_EPS_KWH = 1e-6  # Rundung des Lösers an der Leer-Grenze von Regel R1
@@ -1577,3 +1578,138 @@ def test_old_inputs_without_storm_unchanged(monkeypatch: pytest.MonkeyPatch) -> 
     assert all(f.gr_s == 0 for f in result.flows) and result.storm_shortfall_kwh == 0.0
     names = [v.name for v in seen[0].variables()] + [c.name for c in seen[0].constraints()]
     assert not [n for n in names if "unwetter" in n or n.startswith(("gr_s", "fehl_s"))]
+
+
+# --- Netzladen auf Vorrat (Plan Netzladen auf Vorrat) ---
+
+_VORRAT_START = "2026-11-14T18:15:00+00:00"  # Samstag 19:15 Ortszeit
+_VORRAT_SLOTS = 115  # bis Montag 00:00 Ortszeit
+_VORRAT_KWH = 80.0
+_VORRAT_RESERVE_KWH = 0.2 * _VORRAT_KWH
+
+
+def _vorrat_price(local: datetime) -> float:
+    """Bezugspreis wie am 15. 11. 2026 je Ortszeit (Plan Netzladen auf Vorrat, Befund)."""
+    if local.day == 14:
+        return 36.0
+    bands = [(1, 30.0), (7, 25.5), (13, 27.0), (16, 30.0), (17, 38.5), (21, 33.0), (22, 38.5)]
+    return next((ct for end, ct in bands if local.hour < end), 32.0)
+
+
+def _vorrat_scenario(
+    end_value_ct: float, end_need_kwh: float | None, *, soc_pct: float = 23.0
+) -> PlanInputs:
+    """Binda am Samstag, 14. 11. 2026, 19:15 Ortszeit: Akku 80 kWh, Reserve 20 %, Schalter an,
+    Haus 1,4 kW, bis Sonntag 24:00; PV nur am Sonntag von 9 bis 15 Uhr, Spitze 3 kW."""
+    prices: list[float] = []
+    pv: list[float] = []
+    for index in range(_VORRAT_SLOTS):
+        local = (at(_VORRAT_START) + index * SLOT).astimezone(LOCAL_TZ)
+        prices.append(_vorrat_price(local))
+        hour = local.hour + local.minute / 60 + 7.5 / 60
+        sunny = local.day == 15 and 9.0 <= hour <= 15.0
+        pv.append(3000.0 * math.sin(math.pi * (hour - 9.0) / 6.0) if sunny else 0.0)
+    return scenario(
+        prices=prices,
+        pv=pv,
+        load=[1400.0] * _VORRAT_SLOTS,
+        soc_pct=soc_pct,
+        grid_charge=True,
+        battery=state(usable_kwh=_VORRAT_KWH),
+        start=_VORRAT_START,
+        end_value_ct=end_value_ct,
+        end_need_kwh=end_need_kwh,
+    )
+
+
+def test_grid_charge_for_end_value_stops_at_need() -> None:
+    # Restwert 32 ct gegen 25,5 ct in der Nacht: Ohne Grenze lädt der Plan bis fast 100 %, mit
+    # 20 kWh Bedarf nach dem Horizont nur bis Reserve + Bedarf
+    result = solve(_vorrat_scenario(32.0, 20.0))
+    assert result.status == "optimal"
+    assert result.flows[-1].soc_end_kwh <= _VORRAT_RESERVE_KWH + 20.0 + 0.1
+
+
+def test_without_need_keeps_old_behaviour() -> None:
+    result = solve(_vorrat_scenario(32.0, None))
+    assert result.status == "optimal"
+    assert result.flows[-1].soc_end_kwh >= 0.95 * _VORRAT_KWH
+
+
+def _pv_only(end_need_kwh: float | None) -> PlanInputs:
+    """Sommertag mit Schalter an, Netzladen rechnet sich nirgends (überall 30 ct): PV-Bogen mit
+    8 kW Spitze über die Slots 32 bis 63, Haus 500 W, Einspeisung 7 ct, Restwert 25 ct."""
+    count = 96
+    arc = pv_arc(SCENARIO_START, count, 8000.0)
+    return scenario(
+        prices=[30.0] * count,
+        pv=[w if 32 <= t <= 63 else 0.0 for t, w in enumerate(arc)],
+        load=[500.0] * count,
+        soc_pct=30.0,
+        grid_charge=True,
+        feed_in=7.0,
+        end_value_ct=25.0,
+        end_need_kwh=end_need_kwh,
+    )
+
+
+def test_need_does_not_touch_pv_only_battery() -> None:
+    # Entscheidung 1: Ohne Netzenergie im Akku am Horizontende bleibt der Restwert linear
+    capped = solve(_pv_only(5.0))
+    free = solve(_pv_only(None))
+    assert capped.status == free.status == "optimal"
+    assert sum(f.gr_b for f in free.flows) < 1
+    assert capped.flows[-1].soc_end_kwh == pytest.approx(free.flows[-1].soc_end_kwh, abs=0.01)
+    exported = [sum(f.pv_x for f in r.flows) * SLOT_KWH for r in (capped, free)]
+    assert exported[0] == pytest.approx(exported[1], abs=0.01)
+
+
+def _night_then_pv(end_need_kwh: float | None) -> PlanInputs:
+    """Nachts 20 ct (02:00 bis 08:00), tagsüber 6 h lang 6 kW PV (30 ct), abends 40 ct; Akku
+    80 kWh ab der Reserve, Haus 500 W, Einspeisung 7 ct, Restwert 30 ct. Die PV füllt den Akku
+    über Reserve + Bedarf, ohne dass er voll würde."""
+    night, day, evening = 24, 24, 48
+    return scenario(
+        prices=[20.0] * night + [30.0] * day + [40.0] * evening,
+        pv=[0.0] * night + [6000.0] * day + [0.0] * evening,
+        load=[500.0] * (night + day + evening),
+        soc_pct=20.0,
+        grid_charge=True,
+        battery=state(usable_kwh=_VORRAT_KWH),
+        feed_in=7.0,
+        end_value_ct=30.0,
+        end_need_kwh=end_need_kwh,
+    )
+
+
+def test_night_charge_with_pv_above_need_has_no_export() -> None:
+    inputs = _night_then_pv(5.0)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    intents = derive_intents(inputs, result)
+    steps = resimulate(inputs, intents)
+    for index, intent in enumerate(intents):
+        if intent.kind is BatteryIntentKind.NETZLADEN:
+            assert export_while_charged_kwh(steps, index, _VORRAT_RESERVE_KWH) <= R1_TOL_KWH
+    free = solve(_night_then_pv(None))
+    assert free.status == "optimal"
+    charged = [sum(f.gr_b for f in r.flows) * SLOT_KWH for r in (result, free)]
+    assert charged[0] < charged[1]
+
+
+def test_recharge_to_reserve_unaffected_by_need() -> None:
+    # Unter der Reserve bleibt das Nachladen, auch wenn nach dem Horizont nichts gebraucht wird:
+    # keine doppelte Strafe. Mit dem Schalter und 30 ct Restwert lädt der Plan die Lücke über
+    # ``gr_b`` statt ``gr_r`` (``gr_b`` trägt den Restwert, ``gr_r`` nicht; so auch ohne Grenze)
+    result = solve(_vorrat_scenario(30.0, 0.0, soc_pct=10.0))
+    assert result.status == "optimal"
+    assert result.flows[-1].soc_end_kwh >= _VORRAT_RESERVE_KWH - 0.01
+    assert sum(f.gr_r + f.gr_b for f in result.flows) > 0
+
+
+def test_negative_end_value_with_need_stays_solvable() -> None:
+    # Ein negativer Restwert (Median unter dem Verschleiß) belohnte ``ueber_restwert`` ohne Ende;
+    # die Grenze gilt darum nur bei positivem Restwert
+    result = solve(_vorrat_scenario(-3.0, 20.0))
+    assert result.status == "optimal"
+    assert result.flows
