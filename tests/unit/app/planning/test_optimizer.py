@@ -1634,15 +1634,18 @@ def grid_rest_kwh(inputs: PlanInputs, result: OptimizerResult) -> float:
 
 
 def test_grid_charge_for_end_value_stops_at_need() -> None:
-    # Restwert 32 ct gegen 25,5 ct in der Nacht: Ohne Grenze lädt der Plan bis fast 100 %, mit
-    # 20 kWh Bedarf nach dem Horizont bleibt höchstens der Bedarf an Netzenergie im Akku. Der
-    # End-SOC liegt darüber um die eigene Energie über der Reserve und die PV vom Sonntag, die
-    # ihren Restwert behalten (Variante G)
+    # Restwert 32 ct gegen 25,5 ct in der Nacht: Ohne Grenze lädt der Plan bis fast 100 %
+    # (64 kWh aus dem Netz), mit 20 kWh Bedarf nach dem Horizont bleibt höchstens der Bedarf an
+    # Netzenergie im Akku. Der End-SOC ist Reserve 16 + Bedarf 20 + die PV vom Sonntag (gut
+    # 4 kWh), rund 40,1 kWh; gekauft werden rund 24,5 kWh (Bedarf und die Spitzen um 16 und 21 Uhr)
     inputs = _vorrat_scenario(32.0, 20.0)
     result = solve(inputs)
     assert result.status == "optimal"
     assert grid_rest_kwh(inputs, result) <= 20.0 + 0.1
-    assert result.flows[-1].soc_end_kwh <= 0.6 * _VORRAT_KWH
+    eta_ch = params_of(inputs).eta_ch
+    pv_kwh = sum(eta_ch * f.pv_b for f in result.flows) * SLOT_KWH
+    assert result.flows[-1].soc_end_kwh <= _VORRAT_RESERVE_KWH + 20.0 + pv_kwh + 0.1
+    assert sum(f.gr_b for f in result.flows) * SLOT_KWH <= 25.0
 
 
 def test_without_need_keeps_old_behaviour() -> None:
@@ -1679,14 +1682,14 @@ def test_need_does_not_touch_pv_only_battery() -> None:
     assert exported[0] == pytest.approx(exported[1], abs=0.01)
 
 
-def _night_then_pv(end_need_kwh: float | None) -> PlanInputs:
-    """Nachts 20 ct (02:00 bis 08:00), tagsüber 6 h lang 6 kW PV (30 ct), abends 40 ct; Akku
-    80 kWh ab der Reserve, Haus 500 W, Einspeisung 7 ct, Restwert 30 ct. Die PV füllt den Akku
-    über Reserve + Bedarf, ohne dass er voll würde."""
+def _night_then_pv(end_need_kwh: float | None, pv_w: float = 6000.0) -> PlanInputs:
+    """Nachts 20 ct (02:00 bis 08:00), tagsüber 6 h lang ``pv_w`` PV (30 ct), abends 40 ct; Akku
+    80 kWh ab der Reserve, Haus 500 W, Einspeisung 7 ct, Restwert 30 ct. Mit 6 kW füllt die PV
+    den Akku über Reserve + Bedarf, ohne dass er voll würde; mit 12 kW würde er voll."""
     night, day, evening = 24, 24, 48
     return scenario(
         prices=[20.0] * night + [30.0] * day + [40.0] * evening,
-        pv=[0.0] * night + [6000.0] * day + [0.0] * evening,
+        pv=[0.0] * night + [pv_w] * day + [0.0] * evening,
         load=[500.0] * (night + day + evening),
         soc_pct=20.0,
         grid_charge=True,
@@ -1697,19 +1700,53 @@ def _night_then_pv(end_need_kwh: float | None) -> PlanInputs:
     )
 
 
-def test_night_charge_with_pv_above_need_has_no_export() -> None:
+def test_night_charge_stops_at_need_before_pv() -> None:
+    # Die PV füllt den Akku tagsüber über die Grenze, er wird nie leer: Nachts lädt der Plan nur
+    # den Bedarf und was das Haus im Horizont davon braucht, nicht für den Restwert darüber
     inputs = _night_then_pv(5.0)
     result = solve(inputs)
-    assert result.status == "optimal"
-    intents = derive_intents(inputs, result)
-    steps = resimulate(inputs, intents)
-    for index, intent in enumerate(intents):
-        if intent.kind is BatteryIntentKind.NETZLADEN:
-            assert export_while_charged_kwh(steps, index, _VORRAT_RESERVE_KWH) <= R1_TOL_KWH
     free = solve(_night_then_pv(None))
-    assert free.status == "optimal"
+    assert result.status == free.status == "optimal"
+    assert grid_rest_kwh(inputs, result) <= 5.0 + 0.1
     charged = [sum(f.gr_b for f in r.flows) * SLOT_KWH for r in (result, free)]
-    assert charged[0] < charged[1]
+    assert charged[0] < 0.5 * charged[1]
+
+
+def _export_after_grid_charge_kwh(inputs: PlanInputs, result: OptimizerResult) -> float:
+    """Höchste Einspeisung in kWh ab einem Slot mit Netzladen, bis der Akku wieder leer ist
+    (Regel R1 auf den Flüssen des Optimierers; die Absichten kürzen Netzladen selbst)."""
+    lo = params_of(inputs).lo_kwh
+    flows = result.flows
+    worst = 0.0
+    for i, f in enumerate(flows):
+        if f.gr_b <= 1:
+            continue
+        end = next(
+            (
+                j
+                for j in range(i, len(flows))
+                if flows[j].soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+            ),
+            len(flows) - 1,
+        )
+        worst = max(worst, sum(x.pv_x for x in flows[i : end + 1]) * SLOT_KWH)
+    return worst
+
+
+def test_night_charge_with_pv_above_need_has_no_export() -> None:
+    # 12 kW PV füllen den Akku tagsüber und speisen ein: Mit der Grenze bleibt Regel R1 hart
+    result = solve(_night_then_pv(5.0, pv_w=12000.0))
+    assert result.status == "optimal"
+    assert sum(f.pv_x for f in result.flows) * SLOT_KWH > 1.0
+    assert _export_after_grid_charge_kwh(_night_then_pv(5.0, pv_w=12000.0), result) <= 0.001
+
+
+def test_without_r1_night_charge_would_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Kontrollfall zum Test davor: Gilt der Akku immer als leer, lädt der Plan nachts und speist
+    # die PV danach ein; die Prüfung oben kann also scheitern
+    monkeypatch.setattr(optimizer, "R1_EMPTY_TOL_KWH", 100.0)
+    inputs = _night_then_pv(5.0, pv_w=12000.0)
+    assert _export_after_grid_charge_kwh(inputs, solve(inputs)) > 1.0
 
 
 def test_recharge_to_reserve_unaffected_by_need() -> None:
@@ -1727,3 +1764,19 @@ def test_negative_end_value_with_need_stays_solvable() -> None:
     result = solve(_vorrat_scenario(-3.0, 20.0))
     assert result.status == "optimal"
     assert result.flows
+
+
+def test_full_battery_buys_no_stock() -> None:
+    # SOC₀ 60 %: Die eigene Energie über der Reserve (32 kWh) deckt den Bedarf (20 kWh) schon.
+    # Netzladen hebt den End-SOC nicht über max(Reserve + Bedarf, SOC₀) plus das, was PV und
+    # Nachladen im Horizont gespeichert haben
+    inputs = _vorrat_scenario(32.0, 20.0, soc_pct=60.0)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    eta_ch = params_of(inputs).eta_ch
+    stored = sum(eta_ch * (f.pv_b + f.gr_r + f.gr_s) for f in result.flows) * SLOT_KWH
+    limit = max(_VORRAT_RESERVE_KWH + 20.0, 0.6 * _VORRAT_KWH)
+    assert result.flows[-1].soc_end_kwh <= limit + stored + 0.1
+    free = solve(_vorrat_scenario(32.0, None, soc_pct=60.0))
+    bought = [sum(f.gr_b for f in r.flows) * SLOT_KWH for r in (result, free)]
+    assert bought[0] < 0.5 * bought[1]
