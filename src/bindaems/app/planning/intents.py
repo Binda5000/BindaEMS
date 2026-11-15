@@ -295,7 +295,7 @@ def _drop_unprofitable(
             for index, intent in enumerate(result)
             if intent.kind is BatteryIntentKind.NETZLADEN
             and not intent.reserve_recharge
-            and not grid_charge_pays(inputs, steps, index)
+            and not grid_charge_pays(inputs, steps, index, intents=result)
         ]
         if not idle:
             break

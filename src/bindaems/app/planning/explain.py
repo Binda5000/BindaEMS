@@ -24,6 +24,7 @@ from bindaems.app.planning.plausibility import (
     EMPTY_TOL_KWH,
     MENTION_W,
     R1_TOL_KWH,
+    SOC_TOL_KWH,
     charged_window_end,
     export_while_charged_kwh,
     pays_off,
@@ -100,6 +101,10 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
     "NETZLADEN_GUENSTIG": lambda p: (
         f"Akku lädt {_de(_num(p, 'kw'), 1)} kW aus dem Netz: jetzt {_de(_num(p, 'ct'), 1)} ct, "
         f"um {_txt(p, 'um')} Uhr {_de(_num(p, 'ct_spaeter'), 1)} ct."
+    ),
+    "NETZLADEN_RESTWERT": lambda p: (
+        f"Akku lädt {_de(_num(p, 'kw'), 1)} kW aus dem Netz: jetzt {_de(_num(p, 'ct'), 1)} ct, "
+        f"für die Zeit nach {_txt(p, 'um')} Uhr."
     ),
     "HALTEN_FUER_SPITZE": lambda p: (
         f"Akku hält {_de(_num(p, 'soc'), 0)} %, weil {_txt(p, 'von')}–{_txt(p, 'bis')} Uhr "
@@ -255,6 +260,13 @@ def _first_paying_discharge(
     return None
 
 
+def _kept_to_end(steps: Sequence[SimStep], index: int) -> bool:
+    """Die Energie aus Slot ``index`` bleibt bis zum Horizontende im Akku: Der SOC fällt danach nie
+    mehr als ``SOC_TOL_KWH`` unter das Ende des Slots (im letzten Slot immer)."""
+    floor_kwh = steps[index].soc_end_kwh - SOC_TOL_KWH
+    return all(item.soc_end_kwh >= floor_kwh for item in steps[index + 1 :])
+
+
 def _at_floor(inputs: PlanInputs, item: SimStep) -> bool:
     """Der Akku steht an der Untergrenze: er entlädt weniger als ``MENTION_W``, das Haus bezieht
     mindestens ``MENTION_W`` aus dem Netz (ohne die Autos), und der SOC am Slotbeginn liegt
@@ -283,8 +295,11 @@ def _main_reason(
        Unwetter-Reserve, Entscheidung 12): ``art`` und ``stufe`` der Warnung (``warning_at``),
        ``bis`` ihr Ende (lokal), ``soc`` die Untergrenze in %. Ohne passende Warnung gelten die
        übrigen Regeln.
-    3. ``NETZLADEN_GUENSTIG`` bei Absicht ``NETZLADEN``; „um“ ist die erste spätere Entladung, für
-       die sich das Laden auszahlt (``_first_paying_discharge``), sonst der teuerste spätere Slot.
+    3. Bei Absicht ``NETZLADEN``: ``NETZLADEN_RESTWERT``, wenn die geladene Energie bis zum
+       Horizontende im Akku bleibt (``_kept_to_end``; Plan Netzladen auf Vorrat, Entscheidung 5),
+       „um“ ist das Horizontende. Sonst ``NETZLADEN_GUENSTIG``; „um“ ist die erste spätere
+       Entladung, für die sich das Laden auszahlt (``_first_paying_discharge``), sonst der
+       teuerste spätere Slot.
     4. ``HALTEN_FUER_SPITZE``, ``BUDGET_SPITZE`` oder ``HALTEN_RESTWERT`` bei Absicht ``HALTEN``.
     5. ``PV_LADEN``, wenn der Akku mindestens ``MENTION_W`` aus PV lädt.
     6. ``REGEL_R_BLOCKIERT_NETZLADEN`` bzw. ``NETZLADEN_AUS``, wenn sich Netzladen lohnen würde.
@@ -319,6 +334,11 @@ def _main_reason(
         )
 
     if intent.kind is BatteryIntentKind.NETZLADEN:
+        if _kept_to_end(steps, index):
+            return Reason(
+                code="NETZLADEN_RESTWERT",
+                params={"kw": intent.grid_charge_w / 1000, "ct": now_ct, "um": horizon_end},
+            )
         hit = _first_paying_discharge(inputs, steps, index)
         if hit is not None:
             later, later_ct = hit

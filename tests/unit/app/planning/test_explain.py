@@ -46,6 +46,7 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "NACHLADEN_RESERVE": {"kw": 3.0},
     "UNWETTER_RESERVE": {"art": "Gewitter", "stufe": "orange", "bis": "16:00", "soc": 40.0},
     "NETZLADEN_GUENSTIG": {"kw": 2.3, "ct": 10.0, "um": "18:00", "ct_spaeter": 40.0},
+    "NETZLADEN_RESTWERT": {"kw": 6.6, "ct": 25.5, "um": "00:00"},
     "HALTEN_FUER_SPITZE": {"soc": 64.4, "von": "18:00", "bis": "20:00", "ct": 38.0},
     "BUDGET_SPITZE": {"soc": 55.0, "kw": 4.3},
     "HALTEN_RESTWERT": {"soc": 70.0, "um": "05:00"},
@@ -119,6 +120,9 @@ def test_all_sentences_match_the_texts_exactly() -> None:
             "Unwetter-Reserve: Gewitter (orange) bis 16:00 Uhr, der Akku hält mindestens 40 %."
         ),
         "NETZLADEN_GUENSTIG": "Akku lädt 2,3 kW aus dem Netz: jetzt 10,0 ct, um 18:00 Uhr 40,0 ct.",
+        "NETZLADEN_RESTWERT": (
+            "Akku lädt 6,6 kW aus dem Netz: jetzt 25,5 ct, für die Zeit nach 00:00 Uhr."
+        ),
         "HALTEN_FUER_SPITZE": "Akku hält 64 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden.",
         "BUDGET_SPITZE": "Akku hält 55 %, damit die Monatsspitze unter 4,3 kW bleibt.",
         "HALTEN_RESTWERT": "Akku hält 70 % für die Zeit nach 05:00 Uhr.",
@@ -240,18 +244,20 @@ def test_reserve_recharge_has_its_own_reason() -> None:
 
 
 def test_grid_charge_without_payoff_names_the_most_expensive_later_slot() -> None:
-    # Die Batterie ist voll genug, dass kein späterer Slot entlädt, die Spread-Regel also nie
-    # greift; der teuerste spätere Slot (bei Gleichstand der frühere) wird genannt.
+    # Später entlädt der Akku nur in Slot 1 zu 11 ct, für den sich die Spread-Regel nicht rechnet,
+    # und dort unter das Ende von Slot 0 (also nicht ``NETZLADEN_RESTWERT``); der teuerste
+    # spätere Slot (bei Gleichstand der frühere) wird genannt.
     inputs = scenario(
-        prices=[10.0, 12.0, 30.0, 30.0],
+        prices=[10.0, 11.0, 30.0, 30.0],
         pv=[0.0] * 4,
-        load=[0.0] * 4,
+        load=[0.0, 1000.0, 0.0, 0.0],
         soc_pct=20.0,
         grid_charge=True,
         battery=small_battery(),
     )
     intents = [charge(1000.0), EV, EV, EV]
     steps = resimulate(inputs, intents)
+    assert steps[1].soc_end_kwh < steps[0].soc_end_kwh
     (first, *_), *_ = reasons_for(inputs, intents, steps, [None] * 4, fallback=False)
     assert first.code == "NETZLADEN_GUENSTIG"
     assert first.params["ct_spaeter"] == 30.0 and first.params["um"] == "02:30"
@@ -297,6 +303,51 @@ def test_grid_charge_skips_a_tiny_discharge_and_names_the_real_block() -> None:
     assert first.code == "NETZLADEN_GUENSTIG"
     assert first.params["um"] == "02:30" and first.params["ct_spaeter"] == 60.0
     assert sentence(first).endswith("um 02:30 Uhr 60,0 ct.")
+
+
+def _restwert_plan(load_6_w: float) -> tuple[PlanInputs, list[BatteryIntent]]:
+    """Netzladen in Slot 2 und 3 (10 ct) und in Slot 7, dazwischen Halten; in Slot 6 (40 ct)
+    deckt der Akku ``load_6_w``. Start 02:00 Uhr lokal, Horizontende 04:00 Uhr."""
+    inputs = scenario(
+        prices=[30.0, 30.0, 10.0, 10.0, 30.0, 30.0, 40.0, 10.0],
+        pv=[0.0] * 8,
+        load=[0.0] * 6 + [load_6_w, 0.0],
+        soc_pct=20.0,
+        grid_charge=True,
+        battery=small_battery(),
+    )
+    intents = [EV, EV, charge(2000.0), charge(2000.0), HOLD, HOLD, EV, charge(1000.0)]
+    return inputs, intents
+
+
+def test_grid_charge_kept_to_end_explains_end_value() -> None:
+    # Entscheidung 5: Der SOC fällt nach Slot 3 nie unter dessen Ende, die Ladung bleibt bis zum
+    # Horizontende im Akku: „für die Zeit nach“ dem Horizontende statt einer späteren Entladung.
+    inputs, intents = _restwert_plan(0.0)
+    steps = resimulate(inputs, intents)
+    reasons = reasons_for(inputs, intents, steps, [None] * 8, fallback=False)
+    main = [slot[0] for slot in reasons]
+    assert [main[i].code for i in (2, 3, 7)] == ["NETZLADEN_RESTWERT"] * 3
+    assert main[3].params == {"kw": 2.0, "ct": 10.0, "um": "04:00"}
+    assert sentence(main[3]) == (
+        "Akku lädt 2,0 kW aus dem Netz: jetzt 10,0 ct, für die Zeit nach 04:00 Uhr."
+    )
+
+
+def test_grid_charge_used_later_keeps_guenstig() -> None:
+    # Review Focus, gemischter Fall: Slot 6 entlädt den Akku unter das Ende von Slot 2. Slot 2
+    # und 3 laden für diese Entladung (``NETZLADEN_GUENSTIG``), Slot 7 für die Zeit danach.
+    inputs, intents = _restwert_plan(4000.0)
+    steps = resimulate(inputs, intents)
+    assert steps[6].soc_end_kwh < steps[2].soc_end_kwh
+    reasons = reasons_for(inputs, intents, steps, [None] * 8, fallback=False)
+    main = [slot[0] for slot in reasons]
+    assert [main[i].code for i in (2, 3, 7)] == [
+        "NETZLADEN_GUENSTIG",
+        "NETZLADEN_GUENSTIG",
+        "NETZLADEN_RESTWERT",
+    ]
+    assert main[2].params == {"kw": 2.0, "ct": 10.0, "um": "03:30", "ct_spaeter": 40.0}
 
 
 def test_hold_for_expensive_block_beats_budget_and_remaining_value() -> None:

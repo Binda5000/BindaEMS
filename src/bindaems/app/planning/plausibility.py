@@ -34,6 +34,12 @@ Entlädt die Nachrechnung in einem Slot mit Untergrenze (``SlotInput.storm_floor
 mindestens ``HOLD_MIN_W`` und endet mehr als ``STORM_TOL_PCT`` Prozentpunkte darunter, ist das ein
 Befund (Entscheidung 10); ein Ziel, das der Akku nicht erreicht, ohne zu entladen, ist keiner.
 
+Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidung 6): Mit Bedarf nach dem Horizont
+(``end_need_kwh``) und positivem Restwert rechnet sich Netzladen mit dem Restwert nur, solange an
+der Nachrechnung beide Schranken des Optimierers halten: die Netzenergie am Ende
+(``grid_rest_kwh``, ohne ``reserve_recharge``) und der End-SOC gegen ``max(Reserve + Bedarf,
+SOC₀)`` plus Gespeichertes, je mit ``SOC_TOL_KWH``. Ohne Bedarf wie vorher.
+
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
 """
@@ -216,24 +222,91 @@ def pays_off(
     return best
 
 
-def pays_off_at_end(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -> bool:
+def grid_rest_kwh(
+    inputs: PlanInputs, intents: Sequence[BatteryIntent], steps: Sequence[SimStep]
+) -> float:
+    """Netzenergie im Akku am Horizontende an der Nachrechnung, wie die Kette ``g_t`` des
+    Optimierers (Plan Netzladen auf Vorrat, Entscheidung 3, Schranke G).
+
+    ``g_t = max(0, g_{t−1} + η_ch · charge_grid_w · Δ − discharge_w · Δ / η_dis)``: Netzladen
+    eines ``NETZLADEN``-Slots ohne ``reserve_recharge`` kommt hinzu, Entladen (Haus und Autos,
+    ``discharge_w``) zählt zuerst als Netzenergie. Nachladen auf die Reserve und Aufladen für die
+    Unwetter-Reserve zählen nicht.
+    """
+    params = params_of(inputs)
+    rest = 0.0
+    for intent, item in zip(intents, steps, strict=True):
+        charged_w = item.charge_grid_w if r1_applies(intent) else 0.0
+        rest = max(
+            0.0,
+            rest + SLOT_H / 1000 * (params.eta_ch * charged_w - item.discharge_w / params.eta_dis),
+        )
+    return rest
+
+
+def _within_need(
+    inputs: PlanInputs, intents: Sequence[BatteryIntent], steps: Sequence[SimStep]
+) -> bool:
+    """Beide Schranken des Restwerts aus Entscheidung 3 halten an der Nachrechnung (Entscheidung
+    6, ``SOC_TOL_KWH`` Toleranz): Netzenergie am Ende (``grid_rest_kwh``) höchstens
+    ``end_need_kwh``, und End-SOC höchstens ``max(Reserve + end_need_kwh, SOC₀)`` plus das, was PV,
+    Nachladen und Aufladen für die Unwetter-Reserve eingespeichert haben. Ohne Bedarf wahr."""
+    need_kwh = inputs.end_need_kwh
+    if need_kwh is None:
+        return True
+    if grid_rest_kwh(inputs, intents, steps) > need_kwh + SOC_TOL_KWH:
+        return False
+    params = params_of(inputs)
+    soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    stored_w = sum(
+        item.charge_pv_w + (0.0 if r1_applies(intent) else item.charge_grid_w)
+        for intent, item in zip(intents, steps, strict=True)
+    )
+    allowed_kwh = (
+        max(reserve_kwh(inputs) + need_kwh, soc0_kwh) + params.eta_ch * stored_w * SLOT_H / 1000
+    )
+    return steps[-1].soc_end_kwh <= allowed_kwh + SOC_TOL_KWH
+
+
+def pays_off_at_end(
+    inputs: PlanInputs,
+    steps: Sequence[SimStep],
+    index: int,
+    *,
+    intents: Sequence[BatteryIntent],
+) -> bool:
     """Netzladen im Slot ``index`` rechnet sich mit dem Restwert am Horizontende.
 
     Der Optimierer bewertet die Energie im Akku am Ende mit ``end_value_ct``; Netzladen für die
     Zeit danach ist also eine spätere Nutzung, wenn die Ladung bis zum Ende im Akku bleibt (End-SOC
     der Nachrechnung mindestens um die geladene Energie über der Reserve) und
     ``η_ch · v_end − π_t ≥ m`` gilt. Der Verschleiß steckt schon im Restwert.
+
+    Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidung 6): Mit Bedarf nach dem Horizont
+    (``end_need_kwh``) und positivem Restwert gilt ``end_value_ct`` nur, solange an der
+    Nachrechnung der ``intents`` beide Schranken des Optimierers halten (``_within_need``); sonst
+    ist die Energie am Ende wie dort 0 wert, und das Netzladen rechnet sich mit dem Restwert nur
+    noch bei einem Bezugspreis von höchstens ``−m``.
     """
     params = params_of(inputs)
     charged_kwh = params.eta_ch * steps[index].charge_grid_w * SLOT_H / 1000
     if steps[-1].soc_end_kwh - params.lo_kwh < charged_kwh - SOC_TOL_KWH:
         return False
+    end_value_ct = inputs.end_value_ct
+    if end_value_ct > 0 and not _within_need(inputs, intents, steps):
+        end_value_ct = 0.0
     now_ct = inputs.slots[index].import_ct
-    return params.eta_ch * inputs.end_value_ct - now_ct >= inputs.planning.margin_ct
+    return params.eta_ch * end_value_ct - now_ct >= inputs.planning.margin_ct
 
 
-def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -> bool:
-    """Netzladen im Slot ``index`` rechnet sich an der Nachrechnung ``steps``.
+def grid_charge_pays(
+    inputs: PlanInputs,
+    steps: Sequence[SimStep],
+    index: int,
+    *,
+    intents: Sequence[BatteryIntent],
+) -> bool:
+    """Netzladen im Slot ``index`` rechnet sich an der Nachrechnung ``steps`` der ``intents``.
 
     Das gilt mit einer späteren Entladung (``pays_off``) oder mit dem Restwert am Horizontende
     (``pays_off_at_end``); mit Leistungspreis immer, weil Netzladen dann auch einer Spitze
@@ -245,7 +318,7 @@ def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -
     return (
         any(not entry.virtual for entry in inputs.peak_months)
         or pays_off(inputs, steps, index) is not None
-        or pays_off_at_end(inputs, steps, index)
+        or pays_off_at_end(inputs, steps, index, intents=intents)
     )
 
 
@@ -377,7 +450,9 @@ def check_plan(
                 f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung, "
                 "bevor der Akku leer ist",
             )
-        if not intent.reserve_recharge and not grid_charge_pays(inputs, steps, index):
+        if not intent.reserve_recharge and not grid_charge_pays(
+            inputs, steps, index, intents=intents
+        ):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
 
     car_switch = inputs.planning.car_battery_allowed

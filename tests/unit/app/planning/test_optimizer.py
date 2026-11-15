@@ -42,6 +42,7 @@ from bindaems.app.planning.optimizer import (
     storm_charge_caps_w,
 )
 from bindaems.app.planning.plausibility import R1_TOL_KWH, check_plan, export_while_charged_kwh
+from bindaems.app.planning.service import plan_once
 from bindaems.app.planning.vehicles import (
     EV_ON_W,
     PlanVehicleInput,
@@ -1780,3 +1781,27 @@ def test_full_battery_buys_no_stock() -> None:
     free = solve(_vorrat_scenario(32.0, None, soc_pct=60.0))
     bought = [sum(f.gr_b for f in r.flows) * SLOT_KWH for r in (result, free)]
     assert bought[0] < 0.5 * bought[1]
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: _vorrat_scenario(32.0, 20.0),
+        lambda: _vorrat_scenario(40.0, 5.0),
+        lambda: _vorrat_scenario(32.0, 20.0, soc_pct=60.0),
+        lambda: _vorrat_scenario(30.0, 0.0, soc_pct=10.0),
+        lambda: _night_then_pv(5.0),
+        lambda: _night_then_pv(5.0, pv_w=12000.0),
+        lambda: _pv_only(5.0),
+    ],
+    ids=["bedarf", "kleiner_bedarf", "voll", "nachladen", "nacht_pv", "nacht_pv_voll", "nur_pv"],
+)
+def test_plan_with_need_passes_plausibility_unchanged(make: Any) -> None:
+    # Plan Netzladen auf Vorrat, Entscheidung 6: Die Plausibilität rechnet mit denselben Schranken
+    # wie der Optimierer. Sein Plan bleibt plausibel, und die Absichten streichen kein Netzladen,
+    # das sie ohne Bedarf behielten
+    inputs: PlanInputs = make()
+    result = solve(inputs)
+    assert plan_once(inputs, result).source == "optimizer"
+    free = inputs.model_copy(update={"end_need_kwh": None})
+    assert derive_intents(inputs, result) == derive_intents(free, result)

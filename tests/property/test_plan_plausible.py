@@ -3,9 +3,10 @@
 Für zufällige, realistische Horizonte muss der Plan des Optimierers die Plausibilität bestehen:
 Bezugspreise 10–45 ct brutto je Stunde, Einspeisung 0–8 ct oder keine, PV mit Tagesverlauf bis
 9 kW, Last 0,3–3 kW je Stunde, SOC 20–90 %, Netzladen an oder aus, 16–96 Slots und ein Restwert
-wie aus ``inputs`` (Median der Preise danach). Dazu bis zu zwei geplante Autos (Plan 4b) mit
-Abfahrt im Horizont oder danach, zufälligem Ladestand und Ziel, Regel R2 aus P25. Ein Ersatzplan
-hieße, dass beide Seiten verschieden rechnen.
+wie aus ``inputs`` (Median der Preise danach), mit oder ohne Bedarf nach dem Horizont (0–40 kWh,
+Plan Netzladen auf Vorrat). Dazu bis zu zwei geplante Autos (Plan 4b) mit Abfahrt im Horizont
+oder danach, zufälligem Ladestand und Ziel, Regel R2 aus P25. Ein Ersatzplan hieße, dass beide
+Seiten verschieden rechnen.
 """
 
 from __future__ import annotations
@@ -65,6 +66,7 @@ def horizons(draw: st.DrawFn) -> dict[str, object]:
         "feed_in": feed_in,
         "start": first.isoformat(),
         "end_value_ct": end_value_ct,
+        "end_need_kwh": draw(st.one_of(st.none(), st.floats(0.0, 40.0))),
         "cars": draw(st.lists(cars(first, n), max_size=2, unique_by=lambda c: c["key"])),
     }
 

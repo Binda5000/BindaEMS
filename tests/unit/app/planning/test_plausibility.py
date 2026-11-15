@@ -36,7 +36,9 @@ from bindaems.app.planning.plausibility import (
     export_while_charged_kwh,
     grid_in_battery,
     grid_in_battery_at_start,
+    grid_rest_kwh,
     pays_off,
+    pays_off_at_end,
     spread_pays,
 )
 from bindaems.app.planning.service import plan_once
@@ -434,6 +436,103 @@ def test_end_value_must_beat_price_and_margin() -> None:
 
     assert "Netzladen um 02:00 rechnet sich nicht" not in issues(19.0)
     assert "Netzladen um 02:00 rechnet sich nicht" in issues(18.0)
+
+
+# --- Restwert nur bis zum Bedarf (Plan Netzladen auf Vorrat, Entscheidung 6) ----------------
+
+_NL = BatteryIntentKind.NETZLADEN
+
+
+def _restwert_case(
+    *,
+    soc_pct: float,
+    intents: list[BatteryIntent],
+    load: list[float] | None = None,
+    pv: list[float] | None = None,
+    end_need_kwh: float | None = None,
+) -> tuple[PlanInputs, list[SimStep]]:
+    """Kleiner Akku (10 kWh, Reserve 2 kWh), 15 ct je Slot, Restwert 25 ct (0,938 · 25 − 15 ≥ 2:
+    ohne Grenze rechnet sich jedes Netzladen mit dem Restwert)."""
+    count = len(intents)
+    inputs = scenario(
+        prices=[15.0] * count,
+        pv=pv or [0.0] * count,
+        load=load or [0.0] * count,
+        battery=small_battery(),
+        soc_pct=soc_pct,
+        grid_charge=True,
+        end_value_ct=25.0,
+        end_need_kwh=end_need_kwh,
+    )
+    return inputs, resimulate(inputs, intents)
+
+
+def _with_need(inputs: PlanInputs, end_need_kwh: float | None) -> PlanInputs:
+    return inputs.model_copy(update={"end_need_kwh": end_need_kwh})
+
+
+def test_pays_off_at_end_only_up_to_need() -> None:
+    # SOC₀ an der Reserve, vier Slots Netzladen, danach nichts entladen: Die Netzenergie am Ende
+    # ist die ganze Ladung. Über Reserve + Bedarf hinaus trägt sie keinen Restwert mehr.
+    intents = [BatteryIntent(kind=_NL, grid_charge_w=4000)] * 4 + [
+        BatteryIntent(kind=BatteryIntentKind.HALTEN)
+    ] * 4
+    inputs, steps = _restwert_case(soc_pct=20.0, intents=intents)
+    charged_kwh = steps[-1].soc_end_kwh - 2.0  # Reserve 2 kWh
+    assert charged_kwh == pytest.approx(4 * 4000 * SLOT_H / 1000 * eta(88.0))
+
+    def pays(end_need_kwh: float | None) -> list[bool]:
+        need = _with_need(inputs, end_need_kwh)
+        return [pays_off_at_end(need, steps, i, intents=intents) for i in range(4)]
+
+    assert pays(charged_kwh - 1.0) == [False] * 4  # bis Reserve + Bedarf + 1 kWh
+    assert pays(charged_kwh) == [True] * 4  # nur bis Reserve + Bedarf
+    assert pays(None) == [True] * 4  # ohne Bedarf wie bisher
+    issues = check_plan(
+        _with_need(inputs, charged_kwh - 1.0), flows_of(steps, inputs), intents, steps
+    )
+    assert "Netzladen um 02:00 rechnet sich nicht" in issues
+
+
+def test_pays_off_at_end_counts_pv_and_own_energy() -> None:
+    # SOC₀ 6 kWh über Reserve + Bedarf (3 kWh): Netzladen, das den End-SOC über SOC₀ hebt, trägt
+    # keinen Restwert, obwohl die Netzenergie (0,47 kWh) unter dem Bedarf liegt.
+    charge = BatteryIntent(kind=_NL, grid_charge_w=2000)
+    hold = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+    intents = [charge, hold, hold, hold]
+    inputs, steps = _restwert_case(soc_pct=60.0, intents=intents, end_need_kwh=1.0)
+    assert steps[-1].soc_end_kwh > 6.0 + 0.4
+    assert pays_off_at_end(inputs, steps, 0, intents=intents) is False
+    # Dasselbe Netzladen; das Haus entlädt danach mehr, als geladen wurde, und die PV speichert
+    # später mehr ein, als der End-SOC über SOC₀ liegt: Netzenergie am Ende 0, die PV hebt den
+    # End-SOC, nicht das Netzladen.
+    intents = [charge, BatteryIntent(), BatteryIntent(), hold]
+    inputs, steps = _restwert_case(
+        soc_pct=60.0,
+        intents=intents,
+        load=[0.0, 2400.0, 0.0, 0.0],
+        pv=[0.0, 0.0, 8000.0, 0.0],
+        end_need_kwh=1.0,
+    )
+    assert steps[2].charge_pv_w > 0 and steps[-1].soc_end_kwh > 6.0 + 0.4
+    assert grid_rest_kwh(inputs, intents, steps) == 0.0
+    assert pays_off_at_end(inputs, steps, 0, intents=intents) is True
+
+
+def test_reserve_recharge_does_not_count_as_grid_rest() -> None:
+    # SOC₀ 1 kWh unter der Reserve (2 kWh): Nachladen auf die Reserve in Slot 0, danach Netzladen
+    # für den Restwert in Slot 1 innerhalb des Bedarfs. Nur Slot 1 zählt in die Kette G.
+    recharge = BatteryIntent(kind=_NL, grid_charge_w=3000, reserve_recharge=True)
+    charge = BatteryIntent(kind=_NL, grid_charge_w=2000)
+    hold = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+    intents = [recharge, charge, hold, hold]
+    inputs, steps = _restwert_case(soc_pct=10.0, intents=intents)
+    slot_1_kwh = steps[1].soc_end_kwh - steps[1].soc_start_kwh
+    assert steps[0].charge_grid_w == 3000
+    assert grid_rest_kwh(inputs, intents, steps) == pytest.approx(slot_1_kwh)
+    need = _with_need(inputs, slot_1_kwh)
+    assert pays_off_at_end(need, steps, 1, intents=intents) is True
+    assert check_plan(need, flows_of(steps, inputs), intents, steps) == []
 
 
 def test_spread_rule_charges_wear_on_the_delivered_energy() -> None:

@@ -994,6 +994,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "NACHLADEN_RESERVE": {"kw": 3.0},
         "UNWETTER_RESERVE": {"art": "Gewitter", "stufe": "orange", "bis": "18:00", "soc": 40.0},
         "NETZLADEN_GUENSTIG": {"kw": 4.0, "ct": 12.3, "um": "18:00", "ct_spaeter": 31.5},
+        "NETZLADEN_RESTWERT": {"kw": 6.6, "ct": 25.5, "um": "00:00"},
         "HALTEN_FUER_SPITZE": {"soc": 64.0, "von": "18:00", "bis": "20:00", "ct": 38.0},
         "BUDGET_SPITZE": {"soc": 55.0, "kw": 6.5},
         "HALTEN_RESTWERT": {"soc": 40.0, "um": "10:00"},
@@ -1029,6 +1030,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
     assert list(rows) == [
         "NACHLADEN_RESERVE",
         "UNWETTER_RESERVE",
+        "NETZLADEN_RESTWERT",
         "NETZLADEN_GUENSTIG",
         "HALTEN_FUER_SPITZE",
         "BUDGET_SPITZE",
