@@ -1622,12 +1622,27 @@ def _vorrat_scenario(
     )
 
 
+def grid_rest_kwh(inputs: PlanInputs, result: OptimizerResult) -> float:
+    """Netzenergie im Akku am Horizontende wie die Kette ``netz_rest_t`` des Optimierers:
+    Netzladen ``gr_b`` kommt hinzu, Entladen (Haus und Autos) zählt zuerst als Netzenergie."""
+    params = params_of(inputs)
+    rest = 0.0
+    for f in result.flows:
+        discharge = f.bt_h + sum(f.ev_battery.values())
+        rest = max(0.0, rest + SLOT_KWH * (params.eta_ch * f.gr_b - discharge / params.eta_dis))
+    return rest
+
+
 def test_grid_charge_for_end_value_stops_at_need() -> None:
     # Restwert 32 ct gegen 25,5 ct in der Nacht: Ohne Grenze lädt der Plan bis fast 100 %, mit
-    # 20 kWh Bedarf nach dem Horizont nur bis Reserve + Bedarf
-    result = solve(_vorrat_scenario(32.0, 20.0))
+    # 20 kWh Bedarf nach dem Horizont bleibt höchstens der Bedarf an Netzenergie im Akku. Der
+    # End-SOC liegt darüber um die eigene Energie über der Reserve und die PV vom Sonntag, die
+    # ihren Restwert behalten (Variante G)
+    inputs = _vorrat_scenario(32.0, 20.0)
+    result = solve(inputs)
     assert result.status == "optimal"
-    assert result.flows[-1].soc_end_kwh <= _VORRAT_RESERVE_KWH + 20.0 + 0.1
+    assert grid_rest_kwh(inputs, result) <= 20.0 + 0.1
+    assert result.flows[-1].soc_end_kwh <= 0.6 * _VORRAT_KWH
 
 
 def test_without_need_keeps_old_behaviour() -> None:
@@ -1699,12 +1714,11 @@ def test_night_charge_with_pv_above_need_has_no_export() -> None:
 
 def test_recharge_to_reserve_unaffected_by_need() -> None:
     # Unter der Reserve bleibt das Nachladen, auch wenn nach dem Horizont nichts gebraucht wird:
-    # keine doppelte Strafe. Mit dem Schalter und 30 ct Restwert lädt der Plan die Lücke über
-    # ``gr_b`` statt ``gr_r`` (``gr_b`` trägt den Restwert, ``gr_r`` nicht; so auch ohne Grenze)
+    # keine doppelte Strafe, ``gr_r`` zählt nicht zur Netzenergie der Grenze
     result = solve(_vorrat_scenario(30.0, 0.0, soc_pct=10.0))
     assert result.status == "optimal"
     assert result.flows[-1].soc_end_kwh >= _VORRAT_RESERVE_KWH - 0.01
-    assert sum(f.gr_r + f.gr_b for f in result.flows) > 0
+    assert sum(f.gr_r for f in result.flows) > 0
 
 
 def test_negative_end_value_with_need_stays_solvable() -> None:

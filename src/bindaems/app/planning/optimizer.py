@@ -71,15 +71,18 @@ Regel R2 bleibt so unberührt. Mit dem Schalter lädt ein Slot zusammen
 höchstens ``GC_t`` (``gr_b + gr_r + gr_s ≤ GC_t``). Ohne Untergrenze gibt es weder ``gr_s`` noch
 eine dieser Bedingungen.
 
-Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidungen 1 und 3): Der Restwert gilt nur
-für den Teil des End-SOC, den das Haus nach dem Horizont braucht (``PlanInputs.end_need_kwh``).
-Mit Netzladen im Horizont (``z``) und Bedarf gibt es ``ueber_restwert ≥ 0`` mit ``ueber_restwert
-≥ s_T − (Reserve + end_need_kwh) − span · (1 − c_T)`` (``restwert_grenze``), ``span = hi − lo``,
-``c_T`` aus Regel R1; es kostet ``Restwert · ueber_restwert``. Die Grenze greift also nur, wenn
-am Horizontende Netzenergie aus diesem Horizont im Akku sein kann; ein Akku, den nur die PV füllt,
-und Netzenergie von vor dem Horizont (``k_t``) behalten den linearen Restwert. Sie ist weich, das
-Modell bleibt lösbar. Ohne Bedarf (``None``, alte Eingangsdaten) und ohne positiven Restwert gibt
-es sie nicht; ein negativer Restwert belohnte ``ueber_restwert`` ohne Ende.
+Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidungen 1 und 3, Variante G): Nur
+Netzenergie, die am Horizontende über den Bedarf nach dem Horizont (``PlanInputs.end_need_kwh``)
+hinaus noch im Akku ist, verliert ihren Restwert. Mit Netzladen im Horizont (``z``) hält die Kette
+``netz_rest_t ≥ 0`` vom ersten Slot mit ``z`` an die Netzenergie im Akku fest: ``g_t ≥ g_{t−1} +
+η_ch · gr_b · Δ − (bt_h + bt_ev) · Δ / η_dis``, davor 0. Entladen zählt also zuerst als Netzenergie;
+``gr_r`` und ``gr_s`` zählen nicht, sie tragen schon keinen Restwert. Dazu ``ueber_restwert ≥ 0``
+mit ``ueber_restwert ≥ g_T − end_need_kwh`` (``restwert_grenze``), Kosten ``Restwert ·
+ueber_restwert``. Energie aus PV, vom Beginn und Netzenergie von vor dem Horizont (``k_t``)
+behalten den linearen Restwert, ein Akku ohne Netzladen rechnet wie vorher. Die Grenze ist weich
+und stetig (keine Binärvariable), das Modell bleibt lösbar. Ohne Bedarf (``None``, alte
+Eingangsdaten) und ohne positiven Restwert gibt es sie nicht; ein negativer Restwert belohnte
+``ueber_restwert`` ohne Ende.
 
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
@@ -416,12 +419,14 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     shares = {c.index: phase_shares(c.car.grid_phases) for c in cars}
 
     terms: list[Any] = []
+    discharges: list[Any] = []
     for t, (slot, sim) in enumerate(zip(inputs.slots, slots, strict=True)):
         charge = pv_b[t] + to_battery[t]
         prob += pv_h[t] + car_pv[t] + pv_b[t] + pv_x[t] == slot.pv_w, f"pv_{t}"
         prob += pv_h[t] + gr_h[t] + bt_h[t] == slot.load_w, f"haus_{t}"
         prob += charge <= sim.max_charge_w * y[t], f"laden_{t}"
         discharge = bt_h[t] + car_battery[t] if car_battery_max[t] else bt_h[t]
+        discharges.append(discharge)
         prob += discharge <= sim.max_discharge_w * (1 - y[t]), f"entladen_{t}"
         if t in z:
             prob += gr_b[t] <= caps[t] * z[t], f"netzladen_{t}"
@@ -526,15 +531,20 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
                     f"r1_auto_vorher_{t}",
                 )
 
-    # Netzladen auf Vorrat (Entscheidungen 1 und 3): Kann am Horizontende Netzenergie aus diesem
-    # Horizont im Akku sein (``c_T``), ist der End-SOC über Reserve + Bedarf keinen Restwert wert
+    # Netzladen auf Vorrat (Variante G): Netzenergie, die am Horizontende über den Bedarf hinaus
+    # im Akku ist, trägt keinen Restwert; Entladen zählt zuerst als Netzenergie
     if z and inputs.end_need_kwh is not None and inputs.end_value_ct > 0:
+        grid_rest: Any = 0
+        for t in range(min(z), count):
+            held = prob.add_variable(f"netz_rest_{t}", lowBound=0)
+            prob += (
+                held
+                >= grid_rest + _KWH * (params.eta_ch * gr_b[t] - discharges[t] / params.eta_dis),
+                f"netz_rest_kette_{t}",
+            )
+            grid_rest = held
         over_end = prob.add_variable("ueber_restwert", lowBound=0)
-        prob += (
-            over_end
-            >= soc[-1] - (reserve + inputs.end_need_kwh) - span * (1 - in_battery[count - 1]),
-            "restwert_grenze",
-        )
+        prob += over_end >= grid_rest - inputs.end_need_kwh, "restwert_grenze"
         terms.append(inputs.end_value_ct * over_end)
 
     # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont; ein gedachter
