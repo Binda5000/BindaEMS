@@ -187,6 +187,55 @@ def test_partial_discharge_in_storm_window_rounds_to_hold() -> None:
     assert check_plan(storm, result, intents, resimulate(storm, intents)) == []
 
 
+@pytest.mark.parametrize("storm_w", [0.0, 800.0])
+def test_hold_in_storm_window_rechecks_end_value_charge(storm_w: float) -> None:
+    # Review I1 zu Task 3 (Plan Netzladen auf Vorrat): Der Optimierer entlädt im Fenster bis genau
+    # an die Untergrenze (0,3 kWh von 4,3 auf 4,0 kWh) und lädt danach für den Restwert bis genau
+    # an die Grenze P (Bedarf 2,469 kWh). ``_keep_storm`` macht Slot 0 zu ``HALTEN``, der End-SOC
+    # der Nachrechnung liegt 0,3 kWh über P. Das Netzladen muss danach noch einmal geprüft und
+    # gestrichen werden, sonst meldet ``check_plan`` „rechnet sich nicht“ und es gilt der
+    # Ersatzplan. Ein Aufladen für die Unwetter-Reserve im selben Slot (800 W, Untergrenze 45 % in
+    # Slot 1 über SOC₀) bleibt.
+    eta_ch = eta(88.0)
+    discharge_w = 0.3 * eta_ch / SLOT_H * 1000
+    charged_kwh = eta_ch * 2000 * SLOT_H / 1000
+
+    def inputs_with(need: float | None) -> PlanInputs:
+        return scenario(
+            prices=[30.0, 15.0, 30.0, 30.0],
+            pv=[0.0] * 4,
+            load=[1800.0, 0.0, 0.0, 0.0],
+            battery=small_battery(),
+            soc_pct=43.0,
+            grid_charge=True,
+            start="2026-10-16T12:00:00+00:00",
+            end_value_ct=25.0,
+            end_need_kwh=need,
+            storm_floors=[40.0, 45.0, None, None],
+        )
+
+    end_kwh = 4.0 + charged_kwh + eta_ch * storm_w * SLOT_H / 1000
+    result = flows_result(
+        [
+            flow(gr_h=1800 - discharge_w, bt_h=discharge_w, soc_end_kwh=4.0),
+            flow(gr_b=2000, gr_s=storm_w, soc_end_kwh=end_kwh),
+            flow(soc_end_kwh=end_kwh),
+            flow(soc_end_kwh=end_kwh),
+        ]
+    )
+    free = derive_intents(inputs_with(None), result)
+    assert free[0].kind is BatteryIntentKind.HALTEN
+    assert free[1] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000 + storm_w)
+    assert plan_once(inputs_with(None), result).source == "optimizer"
+
+    inputs = inputs_with(4.0 + charged_kwh - 2.0)  # P bindet: Reserve 2 + Bedarf = 4,0 + Ladung
+    intents = derive_intents(inputs, result)
+    assert intents[0].kind is BatteryIntentKind.HALTEN
+    assert intents[1] == (_recharge(storm_w) if storm_w else BatteryIntent())
+    assert check_plan(inputs, result, intents, resimulate(inputs, intents)) == []
+    assert plan_once(inputs, result).source == "optimizer"
+
+
 def test_storm_charge_is_not_trimmed_by_r1() -> None:
     # Ruling R6: Aufladen für die Unwetter-Reserve setzt im Optimierer kein ``z_t``. Füllt die PV
     # danach den Akku und speist ein, kürzt ``_keep_rule_r1`` es nicht; ein Netzladen ohne Flag

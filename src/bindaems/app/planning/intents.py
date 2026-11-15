@@ -90,7 +90,8 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     Zuletzt hält ``_keep_rule_r1`` Regel R1 an der Nachrechnung ein, und
     ``_drop_unprofitable`` streicht Netzladen, das sich dort nicht rechnet; ein Nachladen bleibt
     stehen, und aus einem gestrichenen Slot mit Nachladen oder Aufladen ab ``GRID_CHARGE_MIN_W``
-    wird dieses allein. Danach hält ``_keep_storm`` die Unwetter-Reserve an der Nachrechnung.
+    wird dieses allein. Danach hält ``_keep_storm`` die Unwetter-Reserve an der Nachrechnung; ändert
+    das die Rechnung des Netzladens (Restwertgrenze), wird erneut gestrichen und gehalten.
     Die Nachrechnung kennt die Ladeleistung der Autos und ihren Akkuanteil aus den Flüssen
     (``ev_power_w``, ``ev_battery_power_w``); der Eigenverbrauch, mit dem ``HALTEN`` vergleicht,
     ist der des Hauses ohne Autos. Gibt der Akku den Autos im Slot
@@ -140,13 +141,18 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
             charging = _grid_charge(flows.gr_b + reserve_w, cap_w, reserve_recharge=recharge)
             intents[-1] = charging or intents[-1]
     kept = _drop_unprofitable(
-        inputs,
-        _keep_rule_r1(inputs, intents, ev_w, ev_battery_w),
-        plain,
-        ev_w,
-        ev_battery_w,
+        inputs, _keep_rule_r1(inputs, intents, ev_w, ev_battery_w), plain, ev_w, ev_battery_w
     )
-    return _keep_storm(inputs, kept, ev_w, ev_battery_w)
+    # ``HALTEN`` aus ``_keep_storm`` hebt den SOC danach; Netzladen für den Restwert kann so über
+    # die Restwertgrenze kommen (Plan Netzladen auf Vorrat). Gestrichen und gehalten wird, bis
+    # sich nichts mehr ändert. Jede weitere Runde streicht ein ``NETZLADEN`` ohne
+    # ``reserve_recharge``, und keine fügt eines hinzu; Nachladen und Aufladen bleiben stehen.
+    while True:
+        kept = _keep_storm(inputs, kept, ev_w, ev_battery_w)
+        again = _drop_unprofitable(inputs, kept, plain, ev_w, ev_battery_w)
+        if again == kept:
+            return kept
+        kept = again
 
 
 def _grid_charge(watts: float, cap_w: float, *, reserve_recharge: bool) -> BatteryIntent | None:

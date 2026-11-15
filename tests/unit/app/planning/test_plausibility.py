@@ -536,10 +536,11 @@ def test_reserve_recharge_does_not_count_as_grid_rest() -> None:
 
 
 def _rounding_case(end_need_kwh: float) -> PlanInputs:
-    """31 Slots zu 10 ct, Haus 300 W, kein PV, SOC₀ 25 %, Restwert 33,5 ct: Der Optimierer lädt
-    bis an die Restwertgrenze, vier Slots voll (7,7 kW) und einen Teil-Slot."""
+    """31 Slots ab 10,30 ct, je Slot 0,01 ct billiger (die Lösung ist eindeutig), Haus 300 W, kein
+    PV, SOC₀ 25 %, Restwert 33,5 ct: Der Optimierer lädt bis an die Restwertgrenze, die letzten
+    Slots voll (7,7 kW) und davor einen Teil-Slot."""
     return scenario(
-        prices=[10.0] * 31,
+        prices=[10.0 + 0.01 * (30 - t) for t in range(31)],
         pv=[0.0] * 31,
         load=[300.0] * 31,
         soc_pct=25.0,
