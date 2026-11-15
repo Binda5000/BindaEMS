@@ -39,7 +39,7 @@ from bindaems.app.planning.inputs import (
 from bindaems.app.planning.store import PlanStore
 from bindaems.shared.plan import StormWarning
 from bindaems.shared.settings import PlanningSettings, StormSettings, TariffSettings
-from bindaems.shared.timeutil import SLOT
+from bindaems.shared.timeutil import SLOT, slot_start
 
 
 def test_horizon_runs_to_last_known_price_max_36h():
@@ -536,3 +536,57 @@ def test_old_inputs_load_without_storm(store: PlanStore, engine: Engine) -> None
     assert inputs == sample_inputs()
     stormy = assemble(planning=_storm_planning(enabled=True), storm_warnings=[_THUNDER])
     assert PlanInputs.model_validate_json(stormy.model_dump_json()) == stormy
+
+
+def test_end_need_from_load_minus_pv_after_horizon() -> None:
+    inputs = assemble(
+        prices=known(NOW, slots=20), pv=flat(NOW, 200, 0.0), load=flat(NOW, 200, 500.0)
+    )
+
+    assert len(inputs.slots) == 20
+    assert inputs.end_need_kwh == pytest.approx(96 * 0.5 * 0.25 / math.sqrt(0.88))
+
+
+def test_end_need_counts_only_net_load() -> None:
+    surplus = assemble(
+        prices=known(NOW, slots=20), pv=flat(NOW, 200, 800.0), load=flat(NOW, 200, 500.0)
+    )
+    deficit = assemble(
+        prices=known(NOW, slots=20), pv=flat(NOW, 200, 300.0), load=flat(NOW, 200, 500.0)
+    )
+
+    assert surplus.end_need_kwh == 0.0
+    assert deficit.end_need_kwh == pytest.approx(96 * 0.2 * 0.25 / math.sqrt(0.88))
+
+
+def test_end_need_uses_slot_a_day_earlier() -> None:
+    first = slot_start(NOW)
+    load = {first + i * SLOT: 500.0 for i in range(96 + 48)}
+    for i in range(48, 96):
+        load[first + i * SLOT] = 1000.0
+
+    inputs = assemble(prices=known(NOW, slots=96), pv=flat(NOW, 96 + 48, 0.0), load=load)
+
+    assert len(inputs.slots) == 96
+    assert inputs.end_need_kwh == pytest.approx((48 * 0.5 + 48 * 1.0) * 0.25 / math.sqrt(0.88))
+
+
+def test_end_need_scales_up_partial_window() -> None:
+    inputs = assemble(prices=known(NOW, slots=16), pv=flat(NOW, 26, 0.0), load=flat(NOW, 26, 500.0))
+
+    assert len(inputs.slots) == 16
+    # 10 Slots direkt, 16 über den Slot 24 h davor, 70 fehlen: 26 Slots auf 96 hochgerechnet
+    assert inputs.end_need_kwh == pytest.approx(96 * 0.5 * 0.25 / math.sqrt(0.88))
+
+
+def test_end_need_without_forecast_after_uses_day_before() -> None:
+    inputs = assemble(prices=known(NOW, slots=16), pv=flat(NOW, 16, 0.0), load=flat(NOW, 16, 400.0))
+
+    assert inputs.end_need_kwh == pytest.approx(96 * 0.4 * 0.25 / math.sqrt(0.88))
+
+
+def test_stored_inputs_without_end_need_load_as_none() -> None:
+    data = sample_inputs().model_dump(mode="json")
+    data.pop("end_need_kwh", None)
+
+    assert PlanInputs.model_validate(data).end_need_kwh is None

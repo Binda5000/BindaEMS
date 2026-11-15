@@ -10,6 +10,12 @@ ausgeschaltetem Schalter keine), in ``PlanInputs.storm_warnings``. Jeder Slot, d
 1 h, Ende)`` einer davon schneidet, bekommt die Untergrenze ``SlotInput.storm_floor_pct`` =
 ``min(Ziel, soc_max_pct)`` in Prozent (``storm_floors``); liegt sie nicht über der Reserve, keine.
 Gespeicherte Eingangsdaten ohne die Felder laden ohne Warnungen und ohne Untergrenzen.
+
+Bedarf nach dem Horizont (Plan Netzladen auf Vorrat, Entscheidung 2): ``end_need_kwh`` ist die
+Energie auf der Akkuseite, die das Haus in den 24 h nach dem Horizont aus dem Akku braucht
+(Last über PV, P50-Prognosen). Fehlt für einen Slot eine Prognose, gilt der Slot 24 h davor; fehlt
+auch der, zählt er nicht, und die Summe wird auf 96 Slots hochgerechnet. Gespeicherte
+Eingangsdaten ohne das Feld laden mit ``None`` (keine Grenze).
 """
 
 from __future__ import annotations
@@ -132,6 +138,9 @@ class PlanInputs(_Model):
     month_peak_kw: Finite | None
     peak_months: list[PeakMonth]
     end_value_ct: Finite  # ct je kWh im Akku am Horizontende
+    # Energie (kWh auf der Akkuseite), die das Haus in den 24 h nach dem Horizont aus dem Akku
+    # braucht (Plan Netzladen auf Vorrat, Entscheidung 2); alte Eingangsdaten: keine Grenze
+    end_need_kwh: NonNegativeFinite | None = None
     support_soc_pct: Finite = DEFAULT_SUPPORT_SOC_PCT  # Schwelle der Akku-Unterstützung in %
     # Untergrenzen des Budgets (Gesamtreview I2): ``control.peak_target_kw`` und der kleinste
     # Ladestrom des größten Autos (``car_floor_kw``), beide in kW
@@ -201,6 +210,36 @@ def end_value_ct(after: Sequence[PriceInput], planning: PlanningSettings) -> flo
     return max(0.0, value * planning.end_value_factor)
 
 
+def end_need_kwh(
+    pv_w: Mapping[datetime, float],
+    load_w: Mapping[datetime, float],
+    horizon_end: datetime,
+    eta_dis: float,
+) -> float:
+    """Bedarf des Hauses in den 24 h ab ``horizon_end`` in kWh auf der Akkuseite.
+
+    ``Σ max(0, Last − PV) · Δ / η_dis`` über die Slots von ``[horizon_end, +24 h)``. Fehlt für
+    einen Slot PV oder Last, gilt der Slot 24 h davor, wenn es dort beide gibt, sonst zählt er
+    nicht; die Summe der gezählten Slots wird auf alle Slots des Fensters hochgerechnet. Ohne
+    gezählten Slot 0.
+    """
+    total_slots = END_WINDOW // SLOT
+    energy_w = 0.0
+    counted = 0
+    for index in range(total_slots):
+        start = horizon_end + index * SLOT
+        if start not in pv_w or start not in load_w:
+            start -= END_WINDOW
+            if start not in pv_w or start not in load_w:
+                continue
+        energy_w += max(0.0, load_w[start] - pv_w[start])
+        counted += 1
+    if counted == 0:
+        return 0.0
+    hours = SLOT.total_seconds() / 3600
+    return energy_w * total_slots / counted * hours / 1000 / eta_dis
+
+
 def peak_months(
     starts: Sequence[datetime],
     tariff: TariffSettings,
@@ -249,6 +288,10 @@ def peak_months(
             )
         )
     return result
+
+
+def _utc_keys(series: Mapping[datetime, float]) -> dict[datetime, float]:
+    return {ensure_utc(start): value for start, value in series.items()}
 
 
 def _previous_battery_w(previous: Plan | None, start: datetime) -> float | None:
@@ -356,6 +399,9 @@ def assemble_inputs(
             [s.start for s in slots], tariff, month_peak_kw, planning.peak_soft_ct_per_kw
         ),
         end_value_ct=end_value_ct(_within(prices, horizon_end, END_WINDOW), planning),
+        end_need_kwh=end_need_kwh(
+            _utc_keys(pv_w), _utc_keys(load_w), horizon_end, eta(planning.roundtrip_pct)
+        ),
         support_soc_pct=support_soc_pct,
         peak_target_kw=peak_target_kw,
         car_floor_kw=car_floor_kw,
