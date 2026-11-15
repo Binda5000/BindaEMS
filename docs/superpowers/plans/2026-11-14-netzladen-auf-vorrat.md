@@ -25,10 +25,13 @@
 
 1. **Grenze nur bei Netzenergie im Akku.** Die Grenze greift nur, wenn am Horizontende Netzenergie aus einem Netzladen im Horizont im Akku sein kann (`c_T` = 1 aus Regel R1). Ein Akku, den nur die PV füllt, behält den linearen Restwert wie heute, sonst würde der Plan im Sommer PV einspeisen statt speichern. Netzenergie von vor dem Horizont (`k_t`, `grid_in_battery_at_start`) zählt nicht: das Laden ist schon geschehen.
 2. **Bedarf nach dem Horizont** `end_need_kwh` = `Σ max(0, Last − PV) · Δ / η_dis` über die 96 Slots `[Horizontende, +24 h)`, auf der Akkuseite (kWh SOC). Last und PV sind die P50-Prognosen, die `assemble_inputs` schon bekommt. Autos zählen nicht (ihr Bedarf nach dem Horizont ist unbekannt). Fehlt für einen Slot eine der beiden Prognosen, gilt der Slot 24 h davor, wenn es dort beide gibt. Fehlt auch der, zählt der Slot nicht; die Summe der gezählten Slots wird auf 96 Slots hochgerechnet. Weil der Horizont mindestens 4 Slots hat und das Fenster 24 h davor ihn immer trifft, zählt immer mindestens ein Slot.
-3. **Über der Grenze ist der Restwert 0, weich.** Neue Variable `über ≥ 0` mit `über ≥ s_T − (Reserve + end_need_kwh) − span · (1 − c_T)` und Kosten `end_value_ct · über`. Kein Verbot, das Modell bleibt immer lösbar. `Reserve` ist `reserve_kwh(inputs)` (nicht `lo_kwh`), `span = hi_kwh − lo_kwh`.
+3. **Über der Grenze ist der Restwert 0, weich.** Neue Variable `über ≥ 0` mit Kosten `end_value_ct · über`. Kein Verbot, das Modell bleibt immer lösbar. `Reserve` ist `reserve_kwh(inputs)` (nicht `lo_kwh`).
+   **Ruling bei der Umsetzung (15.11.2026):** Die ursprüngliche Form `über ≥ s_T − (Reserve + end_need_kwh) − span · (1 − c_T)` machte den Löser rund 30-mal langsamer (Zeitlimit 20 s bei 144 Slots), weil die LP-Relaxation `c_T` verliert. Umgesetzt sind statt dessen zwei lineare untere Schranken ohne Binärvariablen, nur wenn es Netzladen gibt (`z`), `end_need_kwh` gesetzt und `end_value_ct > 0` ist:
+   - **G (Netzenergie im Akku):** Kette `g_t ≥ g_{t−1} + η_ch · gr_b_t · Δ − (bt_h_t + Akku ins Auto_t) · Δ / η_dis`, `g ≥ 0` ab dem ersten Slot mit `z`; Entladung zählt zuerst als Netzenergie, `gr_r`/`gr_s` nicht. `über ≥ g_T − end_need_kwh`.
+   - **P (End-SOC):** `über ≥ s_T − max(Reserve + end_need_kwh, SOC₀) − η_ch · Σ (pv_b + gr_r + gr_s) · Δ`. Netzladen hebt den End-SOC nie über `max(Reserve + Bedarf, SOC₀)` plus das, was PV, Nachladen und Unwetter-Aufladen eingespeichert haben; G schließt die Lücke von P (PV am Abend verbraucht, nachts Netz nach).
 4. **Preisbasis bleibt** Median × Restwertfaktor. Die Menge war der Fehler, nicht der Preis.
 5. **Neuer Code `NETZLADEN_RESTWERT`** für einen `NETZLADEN`-Slot, dessen geladene Energie bis zum Horizontende im Akku bleibt (der SOC fällt danach nie mehr als `SOC_TOL_KWH` unter das Slotende): „Akku lädt 6,6 kW aus dem Netz: jetzt 25,5 ct, für die Zeit nach 00:00 Uhr.“ Sonst bleibt `NETZLADEN_GUENSTIG` wie heute.
-6. **Plausibilität:** `pays_off_at_end` gilt nur noch, wenn der End-SOC der Nachrechnung höchstens `Reserve + end_need_kwh + SOC_TOL_KWH` beträgt (ohne `end_need_kwh`: wie heute).
+6. **Plausibilität:** `pays_off_at_end` gilt nur noch, wenn an der Nachrechnung beide Schranken aus Entscheidung 3 halten: Netzenergie am Ende (Kette G über `charge_grid_w`, ohne Slots mit `reserve_recharge`; Entladung `discharge_w` zuerst) ≤ `end_need_kwh + SOC_TOL_KWH`, und End-SOC ≤ `max(Reserve + end_need_kwh, SOC₀) + η_ch · Σ (charge_pv_w + Nachladen/Aufladen) · Δ + SOC_TOL_KWH`. Ohne `end_need_kwh` wie heute. (Ruling 15.11.2026, ersetzt „End-SOC ≤ Reserve + Bedarf“.)
 7. **Ausrollen:** nur app, keine Migration, keine neue Einstellung, mit Stufe 2 (ab 23.11.2026). Gespeicherte Eingangsdaten ohne das Feld laden mit `end_need_kwh = None` (keine Grenze). Der Restwertfaktor bleibt auf 0,6, bis Binda nach dem Ausrollen entscheidet (siehe „Nach dem Ausrollen“).
 
 ## Global Constraints
@@ -98,6 +101,8 @@
 - Modify: `src/bindaems/app/planning/explain.py` (`_SENTENCES`, `_main_reason` Regel 3, Docstring)
 - Modify: `src/bindaems/shared/plan.py` (`ReasonCode`: `"NETZLADEN_RESTWERT"` nach `"NETZLADEN_GUENSTIG"`)
 - Modify: `ui/src/lib/api/schemas.ts` (Liste der Codes, gleiche Stelle)
+- Modify: `docs/betrieb.md` (nur die Tabelle der Begründungen, Zeile ~6893: neue Zeile `NETZLADEN_RESTWERT`; Ruling aus dem Pre-flight, damit jeder Commit grün ist)
+- Modify: `tests/unit/test_docs.py` (Code `NETZLADEN_RESTWERT` mit `{"kw": 6.6, "ct": 25.5, "um": "00:00"}` in beiden Listen, Zeile ~999 und ~1035)
 - Test: `tests/unit/app/planning/test_plausibility.py`, `tests/unit/app/planning/test_explain.py`; UI ohne eigenen Test (nur die Liste der Codes, `pnpm check`)
 
 **Interfaces:**
@@ -105,13 +110,15 @@
 - Produces: `Reason(code="NETZLADEN_RESTWERT", params={"kw": float, "ct": float, "um": "HH:MM"})`; Satz `"Akku lädt {kw} kW aus dem Netz: jetzt {ct} ct, für die Zeit nach {um} Uhr."` (Zahlen wie bei `NETZLADEN_GUENSTIG` mit `_de(…, 1)`).
 
 - [ ] **Step 1: Failing tests:**
-  - `test_pays_off_at_end_only_up_to_need` (Plausibilität): Nachrechnung mit End-SOC = Reserve + Bedarf + 1 kWh und `end_value_ct` hoch genug → `pays_off_at_end(...) is False`; End-SOC = Reserve + Bedarf → `True`; `end_need_kwh=None` → `True` (wie heute).
+  - `test_pays_off_at_end_only_up_to_need` (Plausibilität, Entscheidung 6): Akku mit SOC₀ = Reserve, Netzladen bis Reserve + Bedarf + 1 kWh, danach nichts entladen, `end_value_ct` hoch genug → `pays_off_at_end(...) is False`; Netzladen nur bis Reserve + Bedarf → `True`; `end_need_kwh=None` → `True` (wie heute).
+  - `test_pays_off_at_end_counts_pv_and_own_energy`: SOC₀ über Reserve + Bedarf und Netzladen, das den End-SOC über SOC₀ hebt → `False`; dasselbe Netzladen, wenn die PV später mehr einspeichert, als darüber liegt, und die Netzenergie am Ende ≤ Bedarf ist → `True`.
+  - `test_reserve_recharge_does_not_count_as_grid_rest`: SOC₀ unter der Reserve, `NETZLADEN` mit `reserve_recharge` bis zur Reserve, Bedarf 0, danach ein Netzladen-Slot für den Restwert innerhalb des Bedarfs → der Nachlade-Slot zählt nicht in die Kette G.
   - `test_text_netzladen_restwert` (in der Tabelle der Sätze in `test_explain.py`, Zeile ~51 und ~124): `{"kw": 6.6, "ct": 25.5, "um": "00:00"}` → `"Akku lädt 6,6 kW aus dem Netz: jetzt 25,5 ct, für die Zeit nach 00:00 Uhr."`.
   - `test_grid_charge_kept_to_end_explains_end_value`: Plan mit `NETZLADEN` in Slot 2 und 3, SOC danach nie unter dem Ende von Slot 3 → Slot 3 hat `NETZLADEN_RESTWERT` mit `um` = Horizontende (lokal).
   - `test_grid_charge_used_later_keeps_guenstig`: wie oben, aber in Slot 6 entlädt der Akku unter das Ende von Slot 2 → Slot 2 bleibt `NETZLADEN_GUENSTIG` (Review Focus, gemischter Fall).
 - [ ] **Step 2:** Tests → FAIL.
-- [ ] **Step 3:** `pays_off_at_end`: zusätzliche Bedingung aus Entscheidung 6. `_main_reason`, Regel 3: vor der Suche nach `_first_paying_discharge` prüfen, ob `min(steps[j].soc_end_kwh for j > index) ≥ steps[index].soc_end_kwh − SOC_TOL_KWH` (im letzten Slot: wahr); dann `NETZLADEN_RESTWERT` mit `um` = `horizon_end`. Code in `ReasonCode` und `schemas.ts`.
-- [ ] **Step 4:** Tests grün, dazu `pytest tests/unit/app/planning tests/unit/test_docs.py -q` und `cd ui && pnpm check && pnpm test` (der Docs-Test schlägt fehl, bis Task 4 die Tabelle nachführt: das ist erwartet und wird in Task 4 grün).
+- [ ] **Step 3:** `pays_off_at_end`: zusätzliche Bedingungen aus Entscheidung 6. Braucht die Kette die Absichten (`reserve_recharge`), bekommt `pays_off_at_end`/`grid_charge_pays` sie als Parameter; alle Aufrufer nachziehen. `_main_reason`, Regel 3: vor der Suche nach `_first_paying_discharge` prüfen, ob `min(steps[j].soc_end_kwh for j > index) ≥ steps[index].soc_end_kwh − SOC_TOL_KWH` (im letzten Slot: wahr); dann `NETZLADEN_RESTWERT` mit `um` = `horizon_end`. Code in `ReasonCode` und `schemas.ts`.
+- [ ] **Step 4:** Tests grün, dazu `pytest tests/unit/app/planning tests/unit/test_docs.py -q` und `cd ui && pnpm check && pnpm test` (auch der Docs-Test ist grün, weil die Tabellenzeile schon in diesem Task kommt).
 - [ ] **Step 5: Commit** `fix(app): Netzladen für den Restwert prüfen und benennen`
 
 ### Task 4: Doku, Spec und Übergabe
