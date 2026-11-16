@@ -19,7 +19,11 @@ der core bleibt unverändert.
 Quelle ist der Brenner „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) über Digital 6 des C.M.I.
 **Plan Schnee auf den Modulen** (`docs/superpowers/plans/2026-11-04-schnee-auf-den-modulen.md`) ist umgesetzt und seit
 12.11.2026 auf `main`, **nicht ausgerollt** (Punkt 28 unter „Offen an der Anlage“). Nur app, UI und HA,
-keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert. Offen an der Anlage, in dieser Reihenfolge:
+keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert.
+**Plan Netzladen auf Vorrat verhindern** (`docs/superpowers/plans/2026-11-14-netzladen-auf-vorrat.md`) ist umgesetzt, steht auf dem Branch
+`claude/project-thread-bmj8qa`, noch nicht auf `main`, und ist **nicht ausgerollt** (Punkt 29 unter „Offen an der Anlage“). Nur app, keine Migration,
+keine Änderung an `config.yaml`; der core bleibt unverändert. Der Restwertfaktor steht an der Anlage seit 14.11.2026, 19:31 auf 0,6.
+Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
    nachts wie geplant).
@@ -29,7 +33,7 @@ keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert.
 5. **17.11.2026:** `export_days` und `scenario_days` über 18.10. bis 16.11.2026 (Abnahme Phase 3) und
    die Abnahme der Statistik (4a).
 6. **Ab 23.11.2026:** die Abnahmen 5a und 5b auswerten (28 Tage ab 26.10.2026), dann Stufe 2 des
-   Sammel-Pulls (5c, Standard-Lademodus, Vorklimatisieren, Akku ins Auto, Punkte 18 bis 22 und, sobald auf `main`, 26 Ölheizung, dazu 28 Schnee auf den Modulen; bei 22
+   Sammel-Pulls (5c, Standard-Lademodus, Vorklimatisieren, Akku ins Auto, Punkte 18 bis 22 und, sobald auf `main`, 26 Ölheizung, dazu 28 Schnee auf den Modulen und, sobald auf `main`, 29 Netzladen auf Vorrat; bei 22
    bleibt der Schalter „Unwetter-Reserve“ aus, bis Binda ihn einschaltet). Vorher
    in Influx prüfen, dass `wallbox.evcs.start_stop` am 05.11. um ~16:19 auf 1 sprang (Punkt 20). Nie nur
    `ems-app` ziehen; core und app immer gemeinsam mit fester Version.
@@ -2295,6 +2299,17 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Ein älteres Image liest Einstellungsversionen mit `pv_model.snow_detection` nicht (`extra="forbid"`); vor einem Rollback die Einstellungen
       exportieren, den Schlüssel löschen und danach importieren (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Schnee auf den Modulen“).
       Betrieb: `docs/betrieb.md`, „Prognosen“, „Schnee auf den Modulen“.
+  29. **Netzladen auf Vorrat verhindern ausrollen:** umgesetzt auf dem Branch `claude/project-thread-bmj8qa`, noch nicht auf `main`, **nicht ausgerollt**;
+      kommt mit Stufe 2 (ab 23.11.2026), **nur `ems-app` ändert sich** (Planung), mit dem nächsten Sammel-Pull und fester Version, core und app wie immer gemeinsam gezogen;
+      **keine Migration, keine neue Einstellung, keine Änderung an `config.yaml`**. Nichts wird geschaltet. Gespeicherte Eingangsdaten ohne `end_need_kwh`
+      laden mit `None` (keine Grenze). **Stand an der Anlage:** Binda hat am 14.11.2026, 19:31 den Restwertfaktor auf **0,6** gestellt (Standard 0,9); der Plan
+      danach lud rund 10 kWh zu 25,5 ct für 15 bis 23 Uhr (38,5 ct), Ende bei 20 %, 6,01 € gegen 6,78 € (Anlass war der Plan von 19:18 mit rund 70 kWh von 22 auf 99 %,
+      27,93 € gegen 6,92 € für den Victron allein). **Nach dem Ausrollen:** (1) einen Abend mit hohen geschätzten Preisen nach dem Horizont abwarten (Samstag ist der
+      typische Fall); im Zeitplan sollte das Netzladen bei Faktor 0,6 gleich bleiben wie jetzt. (2) Dann den Restwertfaktor probeweise auf 0,9 zurück und „Neu planen“:
+      Der Plan darf jetzt höchstens bis etwa Reserve plus Bedarf des nächsten Tages laden, nicht mehr bis 100 %, und die Slots heißen „… für die Zeit nach 00:00 Uhr.“
+      (`NETZLADEN_RESTWERT`). Ist das noch zu viel, bei 0,6 bis 0,75 bleiben: das ist eine Frage der Vorsicht bei Schätzpreisen, nicht mehr ein Fehler.
+      Rückweg ohne Migration: das vorige Image (der Restwertfaktor bleibt, wie Binda ihn gestellt hat). Betrieb: `docs/betrieb.md`, „Planung“, „Erklärungen“;
+      Spec: 5.5 und 9.6, „Stand Plan Netzladen auf Vorrat“. Rulings und aufgeschobene Kleinigkeiten stehen unter „Bewusst offen gelassen“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -4420,3 +4435,22 @@ Safety-Schicht sind unverändert. Der Gesamtreview ist durchgeführt; was die Fi
   `tests.e2e.ui_server`). Der E2E-Test „System zählt die Komponenten …“ erwartete seit Task 3 noch „10 von 11 in Ordnung“ (die Komponente
   „Unwetterwarnungen“ kam dazu), jetzt „11 von 12“. Der Kopf des Zeitplans nennt den Tag nach der Uhr des Browsers (wie die Abfahrt,
   Ruling F-7), im Demo-Backend also mit Datum.
+
+Entschieden in Plan „Netzladen auf Vorrat“ (Rulings des Controllers bei der Umsetzung, je mit Kosten, falls falsch; die, die das Verhalten ändern, stehen auch in der Spec, 5.5 und 9.6, „Stand Plan Netzladen auf Vorrat“):
+
+- **Variante G statt der Form mit `c_T` (Task 2):** Die Kette `g_t ≥ g_{t−1} + η_ch · gr_b_t · Δ − (bt_h_t + Akku ins Auto_t) · Δ / η_dis`, `g ≥ 0`, `über ≥ g_T − end_need_kwh`, Kosten `end_value_ct · über`, statt `über ≥ s_T − Reserve − Bedarf − span · (1 − c_T)`; die wörtliche Form machte den Löser rund 30-mal langsamer (Median 73 ms auf 2,2 s, bei 144 Slots bis zum Zeitlimit von 20 s). Mit G rechnet er 0,2 bis 1,6 s, alles optimal. Kosten, falls falsch: eigene Energie und PV über dem Bedarf behalten ihren Restwert (Befundszenario: End-SOC 42,5 statt 36 kWh); der Netzzukauf bleibt auf den Bedarf begrenzt.
+- **Schutz `end_value_ct > 0` und Test 5 mit `gr_r` und `gr_b` (Task 2):** angenommen; Kosten: keine.
+- **Zweite untere Schranke P zusätzlich zu G (Review Task 2):** `über ≥ s_T − max(Reserve + Bedarf, SOC₀) − η_ch · Σ (pv_b + gr_r + gr_s) · Δ`. Ohne sie ersetzte der Plan bei 60 % Start und 20 kWh Bedarf eigene Energie im Akku durch Netzstrom und endete bei 72 kWh. Beide Schranken sind linear, keine Binären (P allein maß 92 ms). Kosten, falls falsch: etwas vorsichtigeres Netzladen am Horizontende.
+- **Entscheidung 6 neu (Task 3):** `pays_off_at_end` nur, wenn an der Nachrechnung die Netzenergie am Ende (Kette G) ≤ Bedarf und der End-SOC ≤ `max(Reserve + Bedarf, SOC₀)` plus `η_ch ·` der PV-, Nachlade- und Unwetterladung ist; ohne Bedarf wie bisher. Sie ersetzt „End-SOC ≤ Reserve + Bedarf“, das zu G nicht mehr passte.
+- **Rundungstoleranz (Task 3, Ruling 1):** Die Toleranz beider Schranken in `pays_off_at_end` ist `SOC_TOL_KWH + η_ch ·` größte Rundung von `_grid_charge` `· Δ` (die Konstante steht jetzt als `ROUND_W` in `plausibility.py`, nicht als Zahl). Die Nachrechnung der gerundeten Absichten darf um die Rundung über dem Optimierer liegen; ohne sie strich `_drop_unprofitable` in 7 von 250 Zufallshorizonten den letzten Netzlade-Slot ganz (bis etwa 1,9 kWh). Kosten, falls falsch: die Plausibilität lässt höchstens etwa 0,02 kWh mehr Vorrat zu. Mit Test aus einem der gefundenen Zufallsfälle.
+- **Gemischter Slot `gr_b + gr_r` (Task 3, Ruling 2):** bleibt, wie er ist; die Prüfung ist dann strenger, nie lockerer (nur wenn der gemischte Slot allein vom Restwert lebt).
+- **Rest-Fall Streichen statt Kürzen (Task 3):** Entlädt der Optimierer eine Teilleistung, ist die Absicht `HALTEN` und liegt die Nachrechnung 0,17 kWh über P, wird der letzte Netzlade-Slot gestrichen. Das bleibt aufgeschoben (Kürzen statt Streichen in `_drop_unprofitable`): vorsichtige Seite, rund 1 von 250 Horizonten, nie ein Ersatzplan. Kosten, falls falsch: gelegentlich etwa 1,6 kWh weniger Netzladen als optimal.
+- **Schleife `_drop_unprofitable` und `_keep_storm` (Task 3, Review I1):** `_keep_storm` lief nach `_drop_unprofitable`; eine Teilentladung im Unwetterfenster wurde `HALTEN`, der End-SOC lag über P, und `check_plan` meldete „rechnet sich nicht“ (Ersatzplan). Jetzt laufen beide in einer Schleife bis zum Stillstand.
+- **Verteilt:** Task 3 trägt die Zeile `NETZLADEN_RESTWERT` in `docs/betrieb.md` (Tabelle der Begründungen) und beide Listen in `tests/unit/test_docs.py` selbst ein, damit jeder Commit grün ist; Task 4 macht den Rest der Doku. Die volle pytest-Suite läuft im Container nicht durch (stockt bei wenig CPU); die ganze Suite prüft die CI des Branches, lokal je Task die betroffenen Ordner.
+
+Aufgeschobene Kleinigkeiten aus Plan „Netzladen auf Vorrat“ (Deferred minors), aus den Reviews der Tasks 1 bis 3. Keine davon gefährdet die Anlage: Der Plan wird nur vorsichtiger.
+
+- **Eingangsdaten (Task 1):** `_utc_keys` kopiert PV und Last redundant.
+- **Optimierer (Task 2):** das Szenario von Test 4 ist eigene Wahl; `gr_b`, das die Reserve füllt, zählt als Netzenergie (G); Spielraum bei SOC₀ unter der Reserve durch `gr_r` (konservativ).
+- **Plausibilität (Task 3):** M1 die Toleranz deckt nur einen gerundeten Slot; M2 `_within_need` wird je Slot neu gerechnet; M3 der Rundungstest hängt an der HiGHS-Wahl bei 31 gleichen Preisen (nach Fix-Runde 1 mit fallenden Preisen); die Schleife `_drop_unprofitable`/`_keep_storm` hat keine ausdrückliche Rundengrenze (sie endet beweisbar, weil jede Runde nur Netzladen streicht oder Entladung auf `HALTEN` setzt); der gemischte Slot `gr_b + gr_r` zählt in G; der Rest-Fall Streichen statt Kürzen (oben).
+- **Nicht in diesem Plan (bewusst):** Vorheizen und Vorkühlen (`thermal_shift`) bewertet Akkuenergie am Ende weiter mit `end_value_ct`, auch über der Grenze (5c ist nicht ausgerollt; Wirkung klein); die Spread-Regel der Plausibilität (`pays_off`) prüft weiter nur, ob es eine spätere teure Entladung gibt, nicht die Menge (mit Grenze und neuem Text kein Fehler mehr, nur eine schwache Prüfung).

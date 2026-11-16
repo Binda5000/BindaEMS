@@ -6278,6 +6278,14 @@ Jeder Lauf friert zuerst die Eingangsdaten ein, löst dann das Modell und prüft
    **Restwert** der Energie im Akku am Horizontende ist der Median der Bezugspreise der folgenden
    24 h mal dem Wirkungsgrad der Entladung, abzüglich Verschleiß und mal dem Vorsichtsfaktor; ohne
    Preise dort 0.
+   Der Restwert gilt nur für den Teil, den das Haus nach dem Horizont braucht (seit dem Plan
+   „Netzladen auf Vorrat“): Der **Bedarf** ist die Energie, die das Haus in den 24 h nach dem Horizont
+   aus dem Akku braucht (Last minus PV der Prognosen, ohne Autos, auf der Akkuseite). Netzenergie im
+   Akku über diesem Bedarf, und ein End-SOC über Reserve plus Bedarf (oder dem SOC zu Beginn, wenn
+   der höher ist), den nicht PV oder Nachladen gefüllt haben, bekommen keinen Restwert. Der Plan lädt
+   bei hohen Schätzpreisen nach dem Horizont deshalb höchstens bis etwa Reserve plus Bedarf des
+   nächsten Tages aus dem Netz, nicht mehr bis 100 %; ein Akku, den nur die PV füllt, behält den
+   Restwert. Ohne bekannten Bedarf (ältere gespeicherte Pläne) gibt es keine Grenze.
 2. **Optimierer:** ein gemischt-ganzzahliges lineares Modell, gelöst mit HiGHS über PuLP, **in einem
    eigenen Kindprozess** je Lauf. HiGHS hat ein Zeitlimit von 20 s und ein MIP-Gap von 0,5 %; nach
    30 s beendet die app den Prozess. Das Modell minimiert die Kosten aus Bezug und Einspeisung, den
