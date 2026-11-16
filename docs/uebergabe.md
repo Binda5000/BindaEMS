@@ -20,8 +20,8 @@ Quelle ist der Brenner „Anf.Brenner“ (CAN-Knoten 1, Ausgang 5) über Digital
 **Plan Schnee auf den Modulen** (`docs/superpowers/plans/2026-11-04-schnee-auf-den-modulen.md`) ist umgesetzt und seit
 12.11.2026 auf `main`, **nicht ausgerollt** (Punkt 28 unter „Offen an der Anlage“). Nur app, UI und HA,
 keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert.
-**Plan Netzladen auf Vorrat verhindern** (`docs/superpowers/plans/2026-11-14-netzladen-auf-vorrat.md`) ist umgesetzt, steht auf dem Branch
-`claude/project-thread-bmj8qa`, noch nicht auf `main`, und ist **nicht ausgerollt** (Punkt 29 unter „Offen an der Anlage“). Nur app, keine Migration,
+**Plan Netzladen auf Vorrat verhindern** (`docs/superpowers/plans/2026-11-14-netzladen-auf-vorrat.md`) ist umgesetzt und seit
+16.11.2026 auf `main`, **nicht ausgerollt** (Punkt 29 unter „Offen an der Anlage“). Nur app, keine Migration,
 keine Änderung an `config.yaml`; der core bleibt unverändert. Der Restwertfaktor steht an der Anlage seit 14.11.2026, 19:31 auf 0,6.
 Offen an der Anlage, in dieser Reihenfolge:
 
@@ -2300,7 +2300,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Ein älteres Image liest Einstellungsversionen mit `pv_model.snow_detection` nicht (`extra="forbid"`); vor einem Rollback die Einstellungen
       exportieren, den Schlüssel löschen und danach importieren (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Schnee auf den Modulen“).
       Betrieb: `docs/betrieb.md`, „Prognosen“, „Schnee auf den Modulen“.
-  29. **Netzladen auf Vorrat verhindern ausrollen:** umgesetzt auf dem Branch `claude/project-thread-bmj8qa`, noch nicht auf `main`, **nicht ausgerollt**;
+  29. **Netzladen auf Vorrat verhindern ausrollen:** umgesetzt und seit 16.11.2026 auf `main`, **nicht ausgerollt**;
       kommt mit Stufe 2 (ab 23.11.2026), **nur `ems-app` ändert sich** (Planung), mit dem nächsten Sammel-Pull und fester Version, core und app wie immer gemeinsam gezogen;
       **keine Migration, keine neue Einstellung, keine Änderung an `config.yaml`**. Nichts wird geschaltet. Gespeicherte Eingangsdaten ohne `end_need_kwh`
       laden mit `None` (keine Grenze). **Stand an der Anlage:** Binda hat am 14.11.2026, 19:31 den Restwertfaktor auf **0,6** gestellt (Standard 0,9); der Plan
