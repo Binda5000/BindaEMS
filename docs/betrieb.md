@@ -256,6 +256,29 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     „Akku ins Auto, wenn übrig“ ist ab Werk aus, und solange die Aktoren im Dry-Run sind, wird nichts
     geschaltet.
 
+- **Rollback auf einen Stand vor Netzladen auf Vorrat:** Core und app gehen wie immer gemeinsam auf
+  dasselbe Tag zurück (in `.env` `BINDAEMS_VERSION=<tag>`, dann `docker compose up -d`); geändert hat
+  der Plan nur Code der app. Es gibt keine Migration, keine neue Einstellung und nichts zu
+  exportieren, und der Restwertfaktor bleibt, wie du ihn gestellt hast. Zwei Stellen der app tragen
+  Neues, und eine ältere app lehnt unbekannte Felder und Werte ab (`extra="forbid"`). Beides ist
+  harmlos; daran musst du nichts tun, und du löschst keine Zeilen von Hand:
+  - **Eingangsdaten seit dem Ausrollen** tragen `end_need_kwh` (den Bedarf nach dem Horizont, auch mit
+    `null`). Die ältere app liest sie nur beim ersten Lauf nach dem Start, für „Netzenergie im Akku
+    zu Beginn“ des vorigen Plans. Ist der vorige Plan einer des neuen Images (seine Eingangsdaten
+    bleiben 7 Tage), meldet sie „Eingangsdaten des vorigen Plans nicht lesbar“
+    (`code=plan_inputs_unreadable`) und nimmt die vorsichtige Seite: Akku ins Auto und Einspeisung
+    bleiben gesperrt, bis der Akku das nächste Mal leer ist. Ab dem zweiten Lauf rechnet sie mit
+    ihren eigenen Eingangsdaten.
+  - **Pläne mit dem Grund `NETZLADEN_RESTWERT`** („… für die Zeit nach … Uhr.“) kennt eine ältere app
+    nicht. Sie überspringt diese Pläne (im Log „Plan-Zeile nicht lesbar“, `code=plan_row_unreadable`):
+    beim Start (der neueste lesbare Plan gilt dann als voriger Plan), im Verlauf und im Vergleich Plan
+    gegen Ist (`GET /api/plan/review`). Die Zeilen bleiben samt Eingangsdaten stehen (das Kürzen
+    nach 7 Tagen lässt eine unlesbare Zeile aus), bis das Aufräumen sie nach **30 Tagen** löscht; so
+    lange fehlen diese Pläne im Verlauf, und die Warnung steht bei jedem Lesen im Log. Pläne ohne
+    den Grund liest die ältere app wie bisher, und was sie selbst plant, steht wieder darin. Gehst du
+    wieder auf den neuen Stand, liest er alle Zeilen wieder; Eingangsdaten der älteren app laden mit
+    `end_need_kwh: null` (keine Grenze).
+
 - **Update mit Schnee auf den Modulen:** Der Plan „Schnee auf den Modulen“ ändert nur Code der app
   und das UI (der core bekommt keinen geänderten Code), es gibt keine Migration, keine Zeile in der
   ACL des Mosquitto-Benutzers `bindaems` und keine Änderung an `config.yaml`. Ausgerollt wird trotzdem
@@ -6282,10 +6305,13 @@ Jeder Lauf friert zuerst die Eingangsdaten ein, löst dann das Modell und prüft
    „Netzladen auf Vorrat“): Der **Bedarf** ist die Energie, die das Haus in den 24 h nach dem Horizont
    aus dem Akku braucht (Last minus PV der Prognosen, ohne Autos, auf der Akkuseite). Netzenergie im
    Akku über diesem Bedarf, und ein End-SOC über Reserve plus Bedarf (oder dem SOC zu Beginn, wenn
-   der höher ist), den nicht PV oder Nachladen gefüllt haben, bekommen keinen Restwert. Der Plan lädt
-   bei hohen Schätzpreisen nach dem Horizont deshalb höchstens bis etwa Reserve plus Bedarf des
-   nächsten Tages aus dem Netz, nicht mehr bis 100 %; ein Akku, den nur die PV füllt, behält den
-   Restwert. Ohne bekannten Bedarf (ältere gespeicherte Pläne) gibt es keine Grenze.
+   der höher ist), den nicht PV, Nachladen oder Aufladen für die Unwetter-Reserve gefüllt haben,
+   bekommen keinen Restwert. Der Plan lädt bei hohen Schätzpreisen nach dem Horizont deshalb
+   höchstens bis etwa Reserve plus Bedarf des nächsten Tages aus dem Netz, nicht mehr bis 100 %; ein
+   Akku, den nur die PV füllt, behält den Restwert. Steht im Horizont eine Untergrenze der
+   Unwetter-Reserve, zählt nur der End-SOC, und die Grenze ist mindestens die höchste Untergrenze:
+   Die Unwetter-Reserve geht vor, der Plan darf den Akku dafür auch über den Bedarf aus dem Netz
+   laden. Ohne bekannten Bedarf (ältere gespeicherte Pläne) gibt es keine Grenze.
 2. **Optimierer:** ein gemischt-ganzzahliges lineares Modell, gelöst mit HiGHS über PuLP, **in einem
    eigenen Kindprozess** je Lauf. HiGHS hat ein Zeitlimit von 20 s und ein MIP-Gap von 0,5 %; nach
    30 s beendet die app den Prozess. Das Modell minimiert die Kosten aus Bezug und Einspeisung, den
@@ -6591,7 +6617,12 @@ Schalter ist **ab Werk aus**; Binda schaltet ihn vor der Gewittersaison ein (bis
   nimmt es wie jedes Nachladen bis 3000 W auch ohne Schalter an. **Regel R:** Wie nach einem
   Netzladen kann danach Netzenergie im Akku sein; solange sie nicht verbraucht ist (Akku an der
   Reserve), kostet die Einspeisung in Folgeläufen 200 ct je kWh, und der Akku gibt keinem Auto
-  etwas (unten, „Autos“).
+  etwas (unten, „Autos“). **Mit „Netzladen erlaubt“** darf der Plan über die 3 kW hinaus Netzladen
+  dazunehmen, um die Untergrenze früher zu erreichen; die Grenze des Restwerts beim Bedarf nach dem
+  Horizont (oben, „Wie ein Plan entsteht“, seit dem Plan „Netzladen auf Vorrat“) liegt dann
+  mindestens bei der höchsten Untergrenze. Dieses Netzladen muss sich wie jedes andere mit dem
+  Restwert oder einer späteren Entladung rechnen; nur wegen des Bedarfs streicht die Prüfung es
+  nicht.
 - **Autos:** Die Plan-Schwelle der Akku-Unterstützung rechnet mit der Untergrenze je Slot statt mit
   der Reserve, „Sofort aus dem Akku“ ist in Slots mit Untergrenze aus, und solange der Plan für die
   Warnung aufladen darf, gibt der Akku keinem Auto in „Geplant“ etwas (kein Akku ins Auto im ganzen

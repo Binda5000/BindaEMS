@@ -47,7 +47,7 @@
 - **Netzladen nachts, PV füllt tagsüber über die Grenze, Akku wird nie leer**: Der Plan lädt nachts nur, was sich ohne Restwert über der Grenze rechnet; kein Einspeisen trotz R1. Test in Task 2.
 - **Prognose endet vor oder mit dem Horizont** (Horizont endet am Ende der Lastprognose, übermorgen 24:00): Ersatz über Slot −24 h, Hochrechnung. Tests in Task 1.
 - **SOC₀ unter der Reserve mit Nachladen `gr_r`** und Grenze: Nachladen bis zur Reserve bleibt, keine doppelte Strafe, die das Nachladen verhindert. Test in Task 2.
-- **Text bei Netzladen, das teils am Nachmittag gebraucht wird und teils bis zum Ende bleibt**: frühe Slots (bis zum späteren Minimum des SOC) `NETZLADEN_GUENSTIG`, spätere `NETZLADEN_RESTWERT`. Test in Task 3.
+- **Text bei Netzladen, das teils am Nachmittag gebraucht wird und teils bis zum Ende bleibt**: Entscheidung 5 rechnet je Slot mit dem SOC, nicht in der Reihenfolge der Ladung. Slots, deren Ende nicht über dem späteren Minimum des SOC liegt (bei durchgehendem Netzladen die frühen), heißen `NETZLADEN_RESTWERT`; Slots, unter deren Ende der SOC danach fällt (die späten), bleiben `NETZLADEN_GUENSTIG`. (Korrigiert nach dem Gesamtreview, Befund M1.) Test in Task 3.
 
 ---
 
