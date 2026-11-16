@@ -1805,3 +1805,72 @@ def test_plan_with_need_passes_plausibility_unchanged(make: Any) -> None:
     assert plan_once(inputs, result).source == "optimizer"
     free = inputs.model_copy(update={"end_need_kwh": None})
     assert derive_intents(inputs, result) == derive_intents(free, result)
+
+
+# --- Unwetter-Reserve mit Bedarf (Ruling zur Fix-Welle, I1 und I2) ---
+
+_STORM_NEED_SLOTS = 32
+_STORM_NEED_FLOOR = range(8, 24)
+
+
+def _storm_with_need(end_need_kwh: float | None, *, floors: bool = True) -> PlanInputs:
+    """Akku 80 kWh ab 38 %, Schalter an, Haus 800 W, kein PV; 20 ct bis Slot 23, danach 22 ct
+    (keine Spanne für eine spätere Entladung), Restwert 30 ct. Unwetter-Untergrenze 78 %
+    (62,4 kWh) in den Slots 8 bis 23: ``gr_s`` (3 kW) allein reicht nicht, der Optimierer lädt
+    mit ``gr_b`` dazu, weit über Reserve + Bedarf hinaus."""
+    count = _STORM_NEED_SLOTS
+    return scenario(
+        prices=[20.0] * 24 + [22.0] * (count - 24),
+        pv=[0.0] * count,
+        load=[800.0] * count,
+        soc_pct=38.0,
+        grid_charge=True,
+        battery=state(usable_kwh=_VORRAT_KWH),
+        end_value_ct=30.0,
+        end_need_kwh=end_need_kwh,
+        storm_floors=(
+            [78.0 if t in _STORM_NEED_FLOOR else None for t in range(count)] if floors else None
+        ),
+    )
+
+
+def test_storm_floor_with_need_keeps_the_run_up() -> None:
+    # Befund I2: Die Plausibilität sah die SOC-Grenze überschritten und strich das Netzladen, das
+    # der Optimierer zur Untergrenze braucht; der Akku blieb bei 47,7 statt 62,4 kWh. Mit einer
+    # Untergrenze im Horizont zählt sie zur Basis der Grenze, die Absichten bleiben wie ohne Bedarf
+    inputs = _storm_with_need(20.0)
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert plan_once(inputs, result).source == "optimizer"
+    intents = derive_intents(inputs, result)
+    assert intents == derive_intents(inputs.model_copy(update={"end_need_kwh": None}), result)
+    steps = resimulate(inputs, intents)
+    floor_kwh = 0.78 * _VORRAT_KWH
+    last = _STORM_NEED_FLOOR[-1]
+    assert result.flows[last].soc_end_kwh == pytest.approx(floor_kwh, abs=0.1)
+    assert steps[last].soc_end_kwh >= result.flows[last].soc_end_kwh - 0.1
+
+
+def _recorded_model(monkeypatch: pytest.MonkeyPatch, inputs: PlanInputs) -> list[str]:
+    """Namen der Variablen und Bedingungen des Modells, das ``solve`` für ``inputs`` löst."""
+    seen: list[pulp.LpProblem] = []
+    original = pulp.LpProblem.solve
+
+    def record(self: pulp.LpProblem, *args: Any, **kwargs: Any) -> Any:
+        seen.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", record)
+    assert solve(inputs).status == "optimal"
+    return [v.name for v in seen[0].variables()] + [c.name for c in seen[0].constraints()]
+
+
+def test_storm_floor_drops_the_grid_rest_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Befund I1: Die Kette G machte Horizonte mit Untergrenze bis zu viermal langsamer. Mit
+    # Untergrenze gilt nur die SOC-Grenze P; ohne Untergrenze bleiben beide Schranken
+    stormy = _recorded_model(monkeypatch, _storm_with_need(20.0))
+    assert "restwert_grenze_soc" in stormy
+    assert not [n for n in stormy if n.startswith("netz_rest") or n == "restwert_grenze"]
+    calm = _recorded_model(monkeypatch, _storm_with_need(20.0, floors=False))
+    assert "restwert_grenze_soc" in calm and "restwert_grenze" in calm
+    assert [n for n in calm if n.startswith("netz_rest_kette")]

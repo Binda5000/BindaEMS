@@ -93,6 +93,14 @@ vorher, ebenso Netzenergie von vor dem Horizont (``k_t``). Die Grenze ist weich 
 Binärvariable), das Modell bleibt lösbar. Ohne Bedarf (``None``, alte Eingangsdaten) und ohne
 positiven Restwert gibt es sie nicht; ein negativer Restwert belohnte ``ueber_restwert`` ohne Ende.
 
+Mit Unwetter-Untergrenze in einem Slot des Horizonts (Ruling zur Fix-Welle) gibt es nur
+``restwert_grenze_soc``, und deren Basis ist ``max(Reserve + end_need_kwh, SOC₀, F_max)`` mit der
+höchsten Untergrenze ``F_max`` in kWh (``storm_floor_max_kwh``, ebenso in der Plausibilität). Die
+Unwetter-Reserve ist Sicherheit und geht der Grenze des Vorrats vor: Netzladen darf den Akku bis
+zur Untergrenze heben, auch über den Bedarf. Die Kette entfällt dort, weil sie zusammen mit den
+Bedingungen der Unwetter-Reserve die Lösezeit bis aufs Vierfache hob; die Lücke der SOC-Grenze
+(PV am Tag verbraucht, nachts Netz nach) bleibt an Unwettertagen offen.
+
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 """
@@ -114,6 +122,7 @@ from bindaems.app.planning.battery_model import (
     params_of,
     reserve_kwh,
     sim_slots,
+    storm_floor_max_kwh,
 )
 from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import INERTIA_SLOTS, PlanInputs
@@ -542,23 +551,29 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
 
     # Netzladen auf Vorrat (Variante G mit SOC-Grenze): Netzenergie über dem Bedarf, die am
     # Horizontende im Akku ist, trägt keinen Restwert (Entladen zählt zuerst als Netzenergie), und
-    # Netzladen hebt den End-SOC nicht über max(Reserve + Bedarf, SOC₀) plus Gespeichertes
+    # Netzladen hebt den End-SOC nicht über max(Reserve + Bedarf, SOC₀) plus Gespeichertes. Mit
+    # Unwetter-Untergrenze im Horizont gilt nur die SOC-Grenze, mit F_max in ihrer Basis
     if z and inputs.end_need_kwh is not None and inputs.end_value_ct > 0:
-        grid_rest: Any = 0
-        for t in range(min(z), count):
-            held = prob.add_variable(f"netz_rest_{t}", lowBound=0)
-            prob += (
-                held
-                >= grid_rest + _KWH * (params.eta_ch * gr_b[t] - discharges[t] / params.eta_dis),
-                f"netz_rest_kette_{t}",
-            )
-            grid_rest = held
+        top_floor = storm_floor_max_kwh(inputs)
+        grid_rest: Any = None
+        if top_floor is None:
+            grid_rest = 0
+            for t in range(min(z), count):
+                held = prob.add_variable(f"netz_rest_{t}", lowBound=0)
+                prob += (
+                    held
+                    >= grid_rest
+                    + _KWH * (params.eta_ch * gr_b[t] - discharges[t] / params.eta_dis),
+                    f"netz_rest_kette_{t}",
+                )
+                grid_rest = held
         over_end = prob.add_variable("ueber_restwert", lowBound=0)
-        prob += over_end >= grid_rest - inputs.end_need_kwh, "restwert_grenze"
+        if grid_rest is not None:
+            prob += over_end >= grid_rest - inputs.end_need_kwh, "restwert_grenze"
         stored = pulp.lpSum(
             params.eta_ch * _KWH * (pv_b[t] + to_battery[t] - gr_b[t]) for t in range(count)
         )
-        allowed = max(reserve + inputs.end_need_kwh, soc0)
+        allowed = max(reserve + inputs.end_need_kwh, soc0, top_floor or 0.0)
         prob += over_end >= soc[-1] - allowed - stored, "restwert_grenze_soc"
         terms.append(inputs.end_value_ct * over_end)
 

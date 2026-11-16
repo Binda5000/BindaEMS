@@ -206,6 +206,17 @@ def reserve_kwh(inputs: PlanInputs) -> float:
     return battery.reserve_pct / 100 * battery.usable_kwh
 
 
+def storm_floor_max_kwh(inputs: PlanInputs) -> float | None:
+    """Die höchste Unwetter-Untergrenze des Horizonts in kWh (``F_max``), ``None`` ohne
+    Untergrenze. Optimierer und Plausibilität rechnen damit die Grenze des Restwerts (Plan
+    Netzladen auf Vorrat, Ruling zur Fix-Welle): Mit Untergrenze gilt nur die SOC-Grenze, mit
+    ``F_max`` in ihrer Basis."""
+    floors = [s.storm_floor_pct for s in inputs.slots if s.storm_floor_pct is not None]
+    if not floors:
+        return None
+    return max(floors) / 100 * inputs.battery.usable_kwh
+
+
 def sim_slots(
     inputs: PlanInputs,
     ev_w: Sequence[Mapping[str, float]] = (),

@@ -39,7 +39,8 @@ Netzladen auf Vorrat (Plan Netzladen auf Vorrat, Entscheidung 6): Mit Bedarf nac
 der Nachrechnung beide Schranken des Optimierers halten: die Netzenergie am Ende
 (``grid_rest_kwh``, ohne ``reserve_recharge``) und der End-SOC gegen ``max(Reserve + Bedarf,
 SOC₀)`` plus Gespeichertes, je mit ``SOC_TOL_KWH`` plus der größten Aufrundung der Absichten
-(``ROUND_W / 2``). Ohne Bedarf wie vorher.
+(``ROUND_W / 2``). Mit Unwetter-Untergrenze im Horizont gilt wie im Optimierer nur die SOC-Grenze,
+mit der höchsten Untergrenze ``F_max`` in ihrer Basis. Ohne Bedarf wie vorher.
 
 Vorheizen und Vorkühlen (Plan 5c): ``check_thermal`` prüft den Versatz je Slot gegen das
 Komfortband der Betriebsart; ein Befund verwirft nur die Verschiebung, nicht den Plan.
@@ -58,6 +59,7 @@ from bindaems.app.planning.battery_model import (
     params_of,
     reserve_kwh,
     sim_slots,
+    storm_floor_max_kwh,
 )
 from bindaems.app.planning.grid_phases import PHASES, phase_room_w, phase_shares
 from bindaems.app.planning.inputs import PlanInputs
@@ -256,6 +258,10 @@ def _within_need(
     ``max(Reserve + end_need_kwh, SOC₀)`` plus das, was PV, Nachladen und Aufladen für die
     Unwetter-Reserve eingespeichert haben. Ohne Bedarf wahr.
 
+    Mit Unwetter-Untergrenze im Horizont (Ruling zur Fix-Welle, wie im Optimierer) gilt nur die
+    SOC-Grenze, und ihre Basis ist ``max(Reserve + end_need_kwh, SOC₀, F_max)``
+    (``storm_floor_max_kwh``): Die Unwetter-Reserve geht der Grenze des Vorrats vor.
+
     Toleranz ist ``SOC_TOL_KWH`` plus die größte Aufrundung eines Slots durch die Absichten,
     ``η_ch · ROUND_W / 2 · Δ`` (Ruling zu Task 3): Plant der Optimierer genau bis an die Grenze,
     hebt die Rundung des Teil-Slots sie sonst darüber, und ``_drop_unprofitable`` striche den
@@ -265,16 +271,16 @@ def _within_need(
         return True
     params = params_of(inputs)
     tol_kwh = SOC_TOL_KWH + params.eta_ch * ROUND_W / 2 * SLOT_H / 1000
-    if grid_rest_kwh(inputs, intents, steps) > need_kwh + tol_kwh:
+    top_floor_kwh = storm_floor_max_kwh(inputs)
+    if top_floor_kwh is None and grid_rest_kwh(inputs, intents, steps) > need_kwh + tol_kwh:
         return False
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     stored_w = sum(
         item.charge_pv_w + (0.0 if r1_applies(intent) else item.charge_grid_w)
         for intent, item in zip(intents, steps, strict=True)
     )
-    allowed_kwh = (
-        max(reserve_kwh(inputs) + need_kwh, soc0_kwh) + params.eta_ch * stored_w * SLOT_H / 1000
-    )
+    base_kwh = max(reserve_kwh(inputs) + need_kwh, soc0_kwh, top_floor_kwh or 0.0)
+    allowed_kwh = base_kwh + params.eta_ch * stored_w * SLOT_H / 1000
     return steps[-1].soc_end_kwh <= allowed_kwh + tol_kwh
 
 

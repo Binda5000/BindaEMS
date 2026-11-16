@@ -494,6 +494,35 @@ def test_pays_off_at_end_only_up_to_need() -> None:
     assert "Netzladen um 02:00 rechnet sich nicht" in issues
 
 
+def test_pays_off_at_end_with_storm_floor_counts_up_to_the_floor() -> None:
+    # Ruling zur Fix-Welle (I1 und I2): Hat ein Slot des Horizonts eine Unwetter-Untergrenze, gilt
+    # nur die SOC-Grenze, mit der höchsten Untergrenze F_max in ihrer Basis. Dasselbe Netzladen wie
+    # oben (3,75 kWh Netzenergie, End-SOC 5,75 kWh) bei 1 kWh Bedarf: ohne Untergrenze über beiden
+    # Schranken, unter F_max = 6 kWh rechnet es sich, über F_max = 4 kWh nicht.
+    intents = [BatteryIntent(kind=_NL, grid_charge_w=4000)] * 4 + [
+        BatteryIntent(kind=BatteryIntentKind.HALTEN)
+    ] * 4
+    inputs, steps = _restwert_case(soc_pct=20.0, intents=intents, end_need_kwh=1.0)
+    assert grid_rest_kwh(inputs, intents, steps) > 3.7
+    assert steps[-1].soc_end_kwh == pytest.approx(5.75, abs=0.01)
+
+    def pays(floor_pct: float | None) -> list[bool]:
+        floors = [None, None, None, None, floor_pct, floor_pct, None, None]
+        stormy = inputs.model_copy(
+            update={
+                "slots": [
+                    slot.model_copy(update={"storm_floor_pct": floor})
+                    for slot, floor in zip(inputs.slots, floors, strict=True)
+                ]
+            }
+        )
+        return [pays_off_at_end(stormy, steps, i, intents=intents) for i in range(4)]
+
+    assert pays(None) == [False] * 4
+    assert pays(60.0) == [True] * 4
+    assert pays(40.0) == [False] * 4
+
+
 def test_pays_off_at_end_counts_pv_and_own_energy() -> None:
     # SOC₀ 6 kWh über Reserve + Bedarf (3 kWh): Netzladen, das den End-SOC über SOC₀ hebt, trägt
     # keinen Restwert, obwohl die Netzenergie (0,47 kWh) unter dem Bedarf liegt.
