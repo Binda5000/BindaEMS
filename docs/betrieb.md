@@ -5644,7 +5644,7 @@ Automatik ist ab Werk **aus**, und kein Aktor wird dafür live geschaltet.
   `presence_entities` (je Auto eine HA-Entität). Einträge für Autos, die `config.yaml` nicht kennt,
   übergeht die app. **Änderungen wirken sofort:** Das Ziel jedes Wochentags rechnet die app bei jeder
   Verwendung (Vorschlag, Automatik, Karte „Fahrverhalten“, Home Assistant) aus dem abgelegten
-  Verbrauch (P80) mit dem aktuellen Puffer und Ziel-SOC-Bereich neu, mit „(begrenzt)“ dazu. Jede
+  P80 des tiefsten Stands unterwegs (bei Profilen von vor Plan Auswärts laden aus dem Verbrauch) mit dem aktuellen Puffer und Ziel-SOC-Bereich neu, mit „(begrenzt)“ dazu. Jede
   Änderung von `learning.driving` außer den Schaltern der Automatik startet außerdem gleich einen
   neuen Lauf (etwa für eine geänderte Anwesenheit aus Home Assistant), nicht erst um 03:40 Uhr; läuft
   schon einer, folgt der neue danach.
@@ -5658,7 +5658,9 @@ Seit Plan Auswärts laden (`docs/superpowers/plans/2026-11-21-auswaerts-laden.md
 Tesla an einer Ladesäule. Dazu liest sie die Ladestände zwischen Abfahrt und Rückkehr (die der core
 schon in die Messung `soc` schreibt) und zählt jeden zusammenhängenden Anstieg um mindestens 3
 Prozentpunkte als Laden auswärts; kleinere Schwankungen sind Messrauschen. Lädt das Auto mittags
-kurz zu Hause, zählt das nicht als auswärts. Nur app und UI ändern sich: keine Migration, keine
+kurz zu Hause oder steckt es an der eigenen Wallbox an, bevor die Anwesenheit auf „zu Hause“ wechselt,
+zählt das nicht als auswärts (ein Anstieg, der einen Aufenthalt zu Hause oder einen Ansteckvorgang
+berührt). Nur app und UI ändern sich: keine Migration, keine
 neue Einstellung, keine Änderung an `config.yaml`, der core bleibt unverändert. Home Assistant
 ändert sich nur im Wert von „Vorschlag Ziel-SOC“.
 
@@ -5670,7 +5672,8 @@ neue Einstellung, keine Änderung an `config.yaml`, der core bleibt unverändert
   mindestens“ und „höchstens“ begrenzt. Beim Tesla ist das die Strecke bis zur Ladestelle, ohne
   Laden unterwegs die ganze Fahrt. Ein Auto, das nie auswärts lädt (e-Golf), rechnet fast wie
   bisher. Wie tief der Stand bis zur Ladestelle fiel, ist unbekannt, wenn das erste Laden schon mit
-  dem ersten Messwert nach der Abfahrt beginnt (etwa weil das Auto schlief); solche Fahrten zählen
+  dem ersten Messwert nach der Abfahrt beginnt oder bis dahin nur gleiche Werte wie bei der Abfahrt
+  vorliegen (etwa weil das Auto schlief oder der Wert veraltet ist); solche Fahrten zählen
   für das Ziel und die Trefferquote „Ziel“ nicht. Die Trefferquote „Ziel“ ist getroffen, wenn der
   tiefste Stand über dem Puffer blieb.
 - **Kopfzeile:** Der Kopf der Karte nennt zusätzlich „· auswärts geladen an {a} von {n} Fahrten“

@@ -121,8 +121,10 @@ gibt es noch keine Zahl.
 ein negativer Verbrauch das Ziel fast immer „traf“. Nach dem Ausrollen gilt der tiefste Stand
 unterwegs: Das Ziel ist getroffen, wenn Ziel minus „Abfahrt minus tiefster Stand“ mindestens der
 Puffer ist; Tage, an denen der tiefste Stand unbekannt ist, zählen nicht. Die 28 Tage der Abnahme
-laufen weiter; Tage vor dem Ausrollen bewertet die app mit den Profilen von damals (Regel
-„net“), danach mit der neuen.
+laufen weiter; für Tage vor dem Ausrollen kommt das Ziel aus den Profilen von damals (alte Regel aus dem
+Nettoverbrauch), danach aus dem tiefsten Stand; gemessen wird jeder Tag am tiefsten Stand unterwegs.
+Die Trefferquote „Ziel“ der Abnahme ändert sich darum beim Ausrollen auch für frühere Tage; vor dem
+Ausrollen abgelesene Zahlen gelten für den alten Stand.
 
 Prüfschritte:
 
