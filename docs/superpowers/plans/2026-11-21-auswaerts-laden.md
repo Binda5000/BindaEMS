@@ -29,7 +29,7 @@
 
 **Warum nicht „Bedarf daheim als erwarteter Ankunfts-SOC“:** Das macht der Planer für erwartete Autos schon (`arrival_soc_p50`, siehe Befund). Was fehlt, ist nur die richtige Grundlage für das Ziel bei der Abfahrt.
 
-## Entscheidungen (Vorschlag, Freigabe offen)
+## Entscheidungen (vom Betreiber am 21.11.2026 um 17:02 freigegeben: Variante A)
 
 1. **Option A.**
 2. **Laden unterwegs** ist ein Anstieg des Ladestands um **mindestens 3 Prozentpunkte** zwischen Abfahrt und Rückkehr (`AWAY_CHARGE_MIN_PP = 3.0`). Gezählt wird je zusammenhängendem Anstieg (aufeinanderfolgende Werte, die nicht fallen); kleinere Anstiege sind Messrauschen (Kälte, Rundung) und zählen nicht.
