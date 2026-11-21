@@ -149,20 +149,23 @@ def _arrival_soc(
 
 def _trip_soc(
     soc: list[tuple[datetime, float]],
-    stays: list[Stay],
+    home: list[Stay],
     departure: datetime,
     departure_soc: float,
     return_at: datetime,
     return_soc: float,
 ) -> TripSoc:
-    """Fahrverbrauch, auswärts Geladenes und Entladung einer Fahrt aus den Ladeständen."""
+    """Fahrverbrauch, auswärts Geladenes und Entladung einer Fahrt aus den Ladeständen.
+
+    ``home``: Aufenthalte und Ansteckvorgänge; ein Anstieg, der eines davon berührt, ist zu Hause.
+    """
     points = [(departure, departure_soc)]
     points += [(ts, value) for ts, value in soc if departure < ts < return_at]
     points.append((return_at, return_soc))
     deltas = [points[i + 1][1] - points[i][1] for i in range(len(points) - 1)]
 
     def at_home(i: int) -> bool:
-        return any(start < points[i + 1][0] and end > points[i][0] for start, end in stays)
+        return any(start < points[i + 1][0] and end > points[i][0] for start, end in home)
 
     # Anstiege: maximale Folgen von Schritten ohne Abfall
     runs: list[tuple[int, int]] = []
@@ -183,14 +186,14 @@ def _trip_soc(
         if height < AWAY_CHARGE_MIN_PP:
             continue
         counted_total += height
-        if not any(at_home(i) for i in range(begin, end)):
+        if not any(at_home(i) for i in range(begin, end) if deltas[i] > 0):
             charged_away += height
             if first_away_start is None:
                 first_away_start = begin
     drawdown: float | None = None
     if first_away_start != 0:
         drawdown = max(0.0, departure_soc - min(value for _, value in points))
-    return TripSoc(departure_soc - return_soc + counted_total, charged_away, drawdown)
+    return TripSoc(max(0.0, departure_soc - return_soc + counted_total), charged_away, drawdown)
 
 
 def day_records(history: VehicleHistory, *, today: date) -> list[DayRecord]:
@@ -204,6 +207,7 @@ def day_records(history: VehicleHistory, *, today: date) -> list[DayRecord]:
         return []
     soc = sorted((ensure_utc(ts), value) for ts, value in history.soc)
     session_starts = [ensure_utc(s) for s, _ in history.sessions]
+    home = _merge([*stays, *((ensure_utc(s), _session_end(e)) for s, e in history.sessions)])
     session_ends = sorted(ensure_utc(e) for _, e in history.sessions if e is not None)
 
     if known_from == _ALWAYS:
@@ -215,7 +219,7 @@ def day_records(history: VehicleHistory, *, today: date) -> list[DayRecord]:
     records: list[DayRecord] = []
     day = first_day
     while day < today:
-        record = _record(day, stays, known_from, soc, session_starts, session_ends)
+        record = _record(day, stays, home, known_from, soc, session_starts, session_ends)
         if record is not None:
             records.append(record)
         day += timedelta(days=1)
@@ -225,6 +229,7 @@ def day_records(history: VehicleHistory, *, today: date) -> list[DayRecord]:
 def _record(
     day: date,
     stays: list[Stay],
+    home: list[Stay],
     known_from: datetime,
     soc: list[tuple[datetime, float]],
     session_starts: list[datetime],
@@ -259,7 +264,7 @@ def _record(
     trip: TripSoc | None = None
     if departure_soc is not None and return_soc is not None and return_at is not None:
         net = departure_soc - return_soc
-        trip = _trip_soc(soc, stays, departure, departure_soc, return_at, return_soc)
+        trip = _trip_soc(soc, home, departure, departure_soc, return_at, return_soc)
     return DayRecord(
         day,
         weekday,

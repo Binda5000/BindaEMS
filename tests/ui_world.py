@@ -1012,7 +1012,7 @@ async def _learning(app: AppRuntime) -> None:
 
 DRIVING_COMPUTED_AT = datetime(2026, 10, 9, 1, 40, tzinfo=UTC)  # 03:40 Ortszeit, der Lauf der Nacht
 TESLA_TRIP_DAYS = 56  # Fenster des Fahrverhaltens: acht Wochen
-TESLA_AWAY_CHARGE_TRIPS = (9, 21)  # Fahrtage (von hinten gezählt), an denen der Tesla auswärts lädt
+TESLA_AWAY_CHARGE_TRIPS = (9, 21)  # Fahrtage (vom ältesten an gezählt) mit Laden auswärts
 
 
 def _local(day: date, at: str) -> datetime:

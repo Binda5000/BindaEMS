@@ -326,6 +326,78 @@ def test_away_charge_split_by_drop_counts_both_runs() -> None:
     assert rec.drawdown_pp == 20.0
 
 
+def test_charging_session_before_presence_flip_is_home() -> None:
+    # Wallbox daheim: Ansteckvorgang ab 18:00, die Anwesenheit wechselt erst 18:08 (Verzug);
+    # der Anstieg davor ist Laden zu Hause, nicht auswärts
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "18:08", True),
+        sessions=[(at(MON, "18:00"), at(TUE, "07:00"))],
+        soc=[
+            (at(MON, "07:10"), 80.0),
+            (at(MON, "17:55"), 60.0),
+            (at(MON, "18:00"), 60.0),
+            (at(MON, "18:05"), 62.4),
+            (at(MON, "18:10"), 64.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 0.0
+    assert rec.consumption_pp == 20.0  # 80 − 64 + 4
+    assert rec.net_pp == 16.0
+
+
+def test_consumption_is_never_negative() -> None:
+    # Abfahrt 80, unterwegs 79, Rückkehr 81 (2 pp Laden daheim, unter der Schwelle)
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "17:45", True),
+        soc=[(at(MON, "07:10"), 80.0), (at(MON, "12:00"), 79.0), (at(MON, "17:50"), 81.0)],
+    )
+    rec = record(hist, MON)
+    assert rec.net_pp == -1.0
+    assert rec.consumption_pp == 0.0
+
+
+def test_flat_steps_into_home_stay_do_not_make_away_charge_home() -> None:
+    # Treppe: auswärts 50 → 80 (11:00), danach gleiche Werte bis in den Mittagsaufenthalt daheim;
+    # nur die Schritte mit Anstieg entscheiden über „zu Hause“
+    hist = history(
+        pt(MON, "07:30", False),
+        pt(MON, "12:00", True),
+        pt(MON, "13:00", False),
+        pt(MON, "18:00", True),
+        soc=[
+            (at(MON, "07:20"), 50.0),
+            (at(MON, "10:00"), 50.0),
+            (at(MON, "11:00"), 80.0),
+            (at(MON, "11:55"), 80.0),
+            (at(MON, "12:30"), 80.0),
+            (at(MON, "18:05"), 60.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 30.0
+    assert rec.consumption_pp == 20.0  # 50 − 60 + 30
+
+
+def test_leading_flat_step_keeps_drawdown_unknown() -> None:
+    # Abfahrt 50, erster Wert noch 50 (veraltet), dann Laden: vorsichtig ohne Entladung
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "17:45", True),
+        soc=[
+            (at(MON, "07:10"), 50.0),
+            (at(MON, "07:25"), 50.0),
+            (at(MON, "09:00"), 70.0),
+            (at(MON, "17:50"), 60.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 20.0
+    assert rec.drawdown_pp is None
+
+
 def test_day_without_known_state_is_skipped() -> None:
     hist = history(pt(MON, "12:00", False), pt(TUE, "08:00", True), seed=None)
     days = [r.day for r in day_records(hist, today=TODAY)]
