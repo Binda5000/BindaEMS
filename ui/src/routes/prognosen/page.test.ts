@@ -364,11 +364,13 @@ it('zeigt das Fahrverhalten beider Autos und die Anwesenheit', async () => {
 	const driving = card('Fahrverhalten');
 	expect(
 		await within(driving).findByRole('heading', {
-			name: 'Tesla Model 3 · Quelle: Tessie · 56 Tage'
+			name: 'Tesla Model 3 · Quelle: Tessie · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
 		})
 	).toBeVisible();
 	expect(
-		within(driving).getByRole('heading', { name: 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage' })
+		within(driving).getByRole('heading', {
+			name: 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage · auswärts geladen an 0 von 2 Fahrten'
+		})
 	).toBeVisible();
 	expect(within(driving).getByText('Fahrverhalten berechnet am 09.10. 03:40.')).toBeVisible();
 	expect(
@@ -397,7 +399,7 @@ it('nennt bei der Quelle Home Assistant die Entität aus den Einstellungen', asy
 	render(Page);
 	expect(
 		await within(card('Fahrverhalten')).findByRole('heading', {
-			name: 'Tesla Model 3 · Quelle: Home Assistant (device_tracker.tesla) · 56 Tage'
+			name: 'Tesla Model 3 · Quelle: Home Assistant (device_tracker.tesla) · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
 		})
 	).toBeVisible();
 });
@@ -410,7 +412,7 @@ it('zeigt die Quelle Home Assistant auch ohne lesbare Einstellungen', async () =
 	render(Page);
 	expect(
 		await within(card('Fahrverhalten')).findByRole('heading', {
-			name: 'Tesla Model 3 · Quelle: Home Assistant · 56 Tage'
+			name: 'Tesla Model 3 · Quelle: Home Assistant · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
 		})
 	).toBeVisible();
 });

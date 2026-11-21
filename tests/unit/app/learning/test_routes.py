@@ -335,6 +335,8 @@ VEHICLE_KEYS = [
     "next_trip",
     "presence",
     "quality",
+    "away_trips",
+    "charge_known",
     "automation",
 ]
 AUTOMATION_KEYS = ["enabled", "state", "text", "paused_until", "last_set_at"]

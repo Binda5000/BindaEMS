@@ -1297,7 +1297,10 @@ export const DrivingWeekdaySchema = v.object({
 	arrival_p50: v.nullable(v.string()),
 	arrival_soc_p50: NullableNumber,
 	consumption_p50_pp: NullableNumber,
+	/** Brutto-Verbrauch einer Fahrt (P80) */
 	consumption_p80_pp: NullableNumber,
+	/** Tiefster Stand unterwegs gegenüber der Abfahrt (P80); Grundlage des Ziels beim Laden auswärts */
+	drawdown_p80_pp: NullableNumber,
 	/** Vorschlag Ziel-SOC; `target_clamped`: auf die Grenzen der Einstellungen begrenzt */
 	target_soc_pct: NullableNumber,
 	target_clamped: v.boolean(),
@@ -1341,6 +1344,9 @@ export const DrivingVehicleSchema = v.object({
 	data_from: v.nullable(Iso),
 	data_to: v.nullable(Iso),
 	days: v.number(),
+	/** Fahrten mit Laden auswärts von den Fahrten mit bekanntem Ladestand */
+	away_trips: v.number(),
+	charge_known: v.number(),
 	weekdays: v.array(DrivingWeekdaySchema),
 	next_trip: v.nullable(DrivingTripSchema),
 	/** Wahrscheinlichkeit angesteckt je Viertelstunde der nächsten 48 Stunden; leer ohne Stand */

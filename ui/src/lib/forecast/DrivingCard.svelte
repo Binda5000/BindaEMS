@@ -49,7 +49,16 @@
 			car.source === null
 				? ''
 				: ` · Quelle: ${drivingSourceText(car.source, presenceEntities[car.key])}`;
-		return `${car.name}${source} · ${car.days} Tage`;
+		const away =
+			car.charge_known > 0
+				? ` · auswärts geladen an ${car.away_trips} von ${car.charge_known} Fahrten`
+				: '';
+		return `${car.name}${source} · ${car.days} Tage${away}`;
+	}
+
+	/** Lädt das Auto auf mindestens der Hälfte der Fahrten auswärts, reicht das Ziel nur bis zum tiefsten Stand */
+	function mostlyAway(car: DrivingVehicle): boolean {
+		return car.charge_known > 0 && car.away_trips * 2 >= car.charge_known;
 	}
 
 	/** Autos, deren Tabelle jeden Tag einzeln zeigt (Standard: gleiche Tage in einer Zeile) */
@@ -213,6 +222,12 @@
 						>
 							Tage einzeln
 						</button>
+					{/if}
+					{#if mostlyAway(car)}
+						<p class="muted">
+							Lädt meist auswärts: Der Vorschlag Ziel reicht bis zum tiefsten Stand unterwegs, nicht
+							für die ganze Strecke.
+						</p>
 					{/if}
 					<p class="muted quality">{quality(car)}</p>
 				{/if}

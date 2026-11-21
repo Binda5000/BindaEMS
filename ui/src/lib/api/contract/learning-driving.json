@@ -28,6 +28,7 @@
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
           "consumption_p80_pp": 18.6,
+          "drawdown_p80_pp": 18.6,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"
@@ -46,6 +47,7 @@
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
           "consumption_p80_pp": 18.6,
+          "drawdown_p80_pp": 18.6,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"
@@ -64,6 +66,7 @@
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
           "consumption_p80_pp": 19.0,
+          "drawdown_p80_pp": 18.6,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"
@@ -82,6 +85,7 @@
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
           "consumption_p80_pp": 18.6,
+          "drawdown_p80_pp": 18.6,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"
@@ -100,6 +104,7 @@
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
           "consumption_p80_pp": 19.0,
+          "drawdown_p80_pp": 18.6,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"
@@ -118,6 +123,7 @@
           "arrival_soc_p50": null,
           "consumption_p50_pp": null,
           "consumption_p80_pp": null,
+          "drawdown_p80_pp": null,
           "target_soc_pct": null,
           "target_clamped": false,
           "target_confidence": null
@@ -136,6 +142,7 @@
           "arrival_soc_p50": null,
           "consumption_p50_pp": null,
           "consumption_p80_pp": null,
+          "drawdown_p80_pp": null,
           "target_soc_pct": null,
           "target_clamped": false,
           "target_confidence": null
@@ -925,6 +932,8 @@
         "target_n": 17,
         "target_hit_pct": 94
       },
+      "away_trips": 2,
+      "charge_known": 40,
       "automation": {
         "enabled": true,
         "state": "paused",
@@ -955,6 +964,7 @@
           "arrival_soc_p50": 65.0,
           "consumption_p50_pp": 22.5,
           "consumption_p80_pp": 24.0,
+          "drawdown_p80_pp": 24.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "low"
@@ -973,6 +983,7 @@
           "arrival_soc_p50": 65.0,
           "consumption_p50_pp": 22.5,
           "consumption_p80_pp": 24.0,
+          "drawdown_p80_pp": 24.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "low"
@@ -991,6 +1002,7 @@
           "arrival_soc_p50": 65.0,
           "consumption_p50_pp": 22.5,
           "consumption_p80_pp": 24.0,
+          "drawdown_p80_pp": 24.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "low"
@@ -1009,6 +1021,7 @@
           "arrival_soc_p50": 65.0,
           "consumption_p50_pp": 22.5,
           "consumption_p80_pp": 24.0,
+          "drawdown_p80_pp": 24.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "low"
@@ -1027,6 +1040,7 @@
           "arrival_soc_p50": 65.0,
           "consumption_p50_pp": 22.5,
           "consumption_p80_pp": 24.0,
+          "drawdown_p80_pp": 24.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "low"
@@ -1045,6 +1059,7 @@
           "arrival_soc_p50": null,
           "consumption_p50_pp": null,
           "consumption_p80_pp": null,
+          "drawdown_p80_pp": null,
           "target_soc_pct": null,
           "target_clamped": false,
           "target_confidence": null
@@ -1063,6 +1078,7 @@
           "arrival_soc_p50": null,
           "consumption_p50_pp": null,
           "consumption_p80_pp": null,
+          "drawdown_p80_pp": null,
           "target_soc_pct": null,
           "target_clamped": false,
           "target_confidence": null
@@ -1852,6 +1868,8 @@
         "target_n": 0,
         "target_hit_pct": null
       },
+      "away_trips": 0,
+      "charge_known": 2,
       "automation": {
         "enabled": false,
         "state": "off",

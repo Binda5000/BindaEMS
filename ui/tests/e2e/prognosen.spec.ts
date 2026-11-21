@@ -132,8 +132,14 @@ test('Gast sieht das Fahrverhalten beider Autos und die Anwesenheit der nächste
 
 	// gleiche Tage stehen zusammen („Mo bis Fr“); „Tage einzeln“ löst sie auf
 	await driving.getByRole('button', { name: 'Tage einzeln' }).first().click();
-	const tesla = driving.getByRole('table', { name: 'Tesla Model 3 · Quelle: Tessie · 56 Tage' });
+	const tesla = driving.getByRole('table', {
+		name: 'Tesla Model 3 · Quelle: Tessie · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
+	});
 	await expect(tesla.getByRole('row')).toHaveCount(1 + 7);
+	await expect(
+		driving.getByRole('heading', { name: /auswärts geladen an 2 von 40 Fahrten/ })
+	).toBeVisible();
+	await expect(driving.getByText(/Lädt meist auswärts/)).toHaveCount(0); // 2 von 40 liegt unter der Hälfte
 	const monday = tesla.getByRole('row', { name: /^Mo / });
 	await expect(monday).toContainText('8 (100 %)');
 	await expect(monday).toContainText('07:15');
@@ -146,7 +152,7 @@ test('Gast sieht das Fahrverhalten beider Autos und die Anwesenheit der nächste
 	).toBeVisible();
 
 	const egolf = driving.getByRole('table', {
-		name: 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage'
+		name: 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage · auswärts geladen an 0 von 2 Fahrten'
 	});
 	const egolfMonday = egolf.getByRole('row', { name: /^Mo bis Fr \(aus Mo–Fr\)/ });
 	await expect(egolfMonday).toContainText('08:00');

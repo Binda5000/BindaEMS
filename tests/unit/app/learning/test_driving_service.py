@@ -590,6 +590,7 @@ async def test_status_before_the_first_run(service, cfg) -> None:
         [],
         None,
     )
+    assert (tesla["away_trips"], tesla["charge_known"]) == (0, 0)
     assert tesla["quality"] == {
         "days": 28,
         "departure_n": 0,
@@ -628,6 +629,8 @@ async def test_status_shape_after_a_run(service, reader) -> None:
         "next_trip",
         "presence",
         "quality",
+        "away_trips",
+        "charge_known",
     }
     assert (tesla["source"], tesla["days"]) == ("tessie", 56)
     assert len(tesla["weekdays"]) == 7
@@ -646,6 +649,7 @@ async def test_status_shape_after_a_run(service, reader) -> None:
         "arrival_soc_p50": 60.0,
         "consumption_p50_pp": 20.0,
         "consumption_p80_pp": 20.0,
+        "drawdown_p80_pp": monday["drawdown_p80_pp"],
         "target_soc_pct": 50,
         "target_clamped": True,
         "target_confidence": "high",
@@ -894,3 +898,18 @@ async def test_next_night_run_is_0340_local_as_an_exact_instant(make_service, no
         await later.run()
     assert now + timedelta(seconds=sleeps[0]) == due
     assert due.astimezone(LOCAL_TZ).time() == time(3, 40)
+
+
+async def test_vehicle_json_has_away_counts(service, reader, engine) -> None:
+    commuter(reader)
+    await service.recompute()
+    template = VehicleProfile.model_validate(rows(engine, "tesla")[0].profile)
+    weekdays = [wp.model_copy(update={"drawdown_p80_pp": 33.0}) for wp in template.weekdays]
+    profile = template.model_copy(
+        update={"away_trips": 9, "charge_known": 10, "weekdays": weekdays}
+    )
+    put_row(engine, "tesla", NOW + timedelta(minutes=1), profile)
+    service._profiles["tesla"] = profile
+    tesla = next(v for v in service.status()["vehicles"] if v["key"] == "tesla")
+    assert (tesla["away_trips"], tesla["charge_known"]) == (9, 10)
+    assert tesla["weekdays"][0]["drawdown_p80_pp"] == 33.0

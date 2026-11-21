@@ -38,8 +38,8 @@ async function individually(): Promise<void> {
 	}
 }
 
-const TESLA = 'Tesla Model 3 · Quelle: Tessie · 56 Tage';
-const EGOLF = 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage';
+const TESLA = 'Tesla Model 3 · Quelle: Tessie · 56 Tage · auswärts geladen an 2 von 40 Fahrten';
+const EGOLF = 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage · auswärts geladen an 0 von 2 Fahrten';
 
 it('zeigt je Auto den Kopf mit Quelle und Tagen', () => {
 	show();
@@ -169,7 +169,9 @@ it('zeigt ein Auto ohne Tage mit „Noch keine Daten für dieses Auto.“, ohne 
 		data_to: null,
 		weekdays: [],
 		next_trip: null,
-		presence: []
+		presence: [],
+		away_trips: 0,
+		charge_known: 0
 	});
 	show({ data: driving({ vehicles: [car] }) });
 	expect(screen.getByRole('heading', { name: 'e-Golf · 0 Tage' })).toBeVisible();
@@ -190,13 +192,15 @@ it('nennt bei Home Assistant die eingestellte Entität, sonst nur den Namen', ()
 	});
 	expect(
 		screen.getByRole('heading', {
-			name: 'Tesla Model 3 · Quelle: Home Assistant (device_tracker.tesla) · 56 Tage'
+			name: 'Tesla Model 3 · Quelle: Home Assistant (device_tracker.tesla) · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
 		})
 	).toBeVisible();
 	unmount();
 	render(DrivingCard, { data, error: null, admin: false, onRecompute: vi.fn() });
 	expect(
-		screen.getByRole('heading', { name: 'Tesla Model 3 · Quelle: Home Assistant · 56 Tage' })
+		screen.getByRole('heading', {
+			name: 'Tesla Model 3 · Quelle: Home Assistant · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
+		})
 	).toBeVisible();
 });
 
@@ -205,7 +209,7 @@ it('nennt „Home Assistant (home_entity)“ für die Entität der Konfiguration
 	show({ data: driving({ vehicles: [car] }) });
 	expect(
 		screen.getByRole('heading', {
-			name: 'Tesla Model 3 · Quelle: Home Assistant (home_entity) · 56 Tage'
+			name: 'Tesla Model 3 · Quelle: Home Assistant (home_entity) · 56 Tage · auswärts geladen an 2 von 40 Fahrten'
 		})
 	).toBeVisible();
 });
@@ -330,4 +334,41 @@ it('lässt „Tage einzeln“ weg, wenn kein Auto zusammengefasste Tage hat', ()
 	const weekdays = tesla.weekdays.map((day, index) => ({ ...day, trips: index }));
 	show({ data: driving({ vehicles: [{ ...tesla, weekdays }] }) });
 	expect(screen.queryByRole('button', { name: 'Tage einzeln' })).toBeNull();
+});
+
+const HINT =
+	'Lädt meist auswärts: Der Vorschlag Ziel reicht bis zum tiefsten Stand unterwegs, nicht für die ganze Strecke.';
+
+function withAway(away_trips: number, charge_known: number) {
+	const tesla = drivingVehicle('tesla', { away_trips, charge_known });
+	show({
+		data: driving({
+			vehicles: [tesla, drivingVehicle('egolf', { away_trips: 0, charge_known: 0 })]
+		})
+	});
+}
+
+it('nennt im Kopf die Fahrten mit Laden auswärts und ab 50 % den Hinweis', () => {
+	withAway(9, 10);
+	expect(
+		screen.getByRole('heading', { name: /auswärts geladen an 9 von 10 Fahrten/ })
+	).toBeVisible();
+	expect(screen.getByText(HINT)).toBeVisible();
+});
+
+it('ohne bekannte Fahrten kein Zusatz und kein Hinweis', () => {
+	withAway(0, 0);
+	expect(
+		screen.getByRole('heading', { name: 'Tesla Model 3 · Quelle: Tessie · 56 Tage' })
+	).toBeVisible();
+	expect(screen.queryByText(/auswärts geladen/)).toBeNull();
+	expect(screen.queryByText(HINT)).toBeNull();
+});
+
+it('unter 50 % nur der Zusatz im Kopf', () => {
+	withAway(2, 10);
+	expect(
+		screen.getByRole('heading', { name: /auswärts geladen an 2 von 10 Fahrten/ })
+	).toBeVisible();
+	expect(screen.queryByText(HINT)).toBeNull();
 });

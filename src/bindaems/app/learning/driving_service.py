@@ -87,6 +87,7 @@ def _weekday_json(wp: WeekdayProfile) -> dict[str, Any]:
         "arrival_soc_p50": wp.arrival_soc_p50,
         "consumption_p50_pp": wp.consumption_p50_pp,
         "consumption_p80_pp": wp.consumption_p80_pp,
+        "drawdown_p80_pp": wp.drawdown_p80_pp,
         "target_soc_pct": wp.target_soc_pct,
         "target_clamped": wp.target_clamped,
         "target_confidence": wp.target_confidence,
@@ -478,6 +479,8 @@ class DrivingService:
                 "next_trip": None,
                 "presence": [],
                 "quality": quality,
+                "away_trips": 0,
+                "charge_known": 0,
             }
         trip = next_trip(profile, now)
         first = slot_start(now)
@@ -496,4 +499,6 @@ class DrivingService:
                 for slot in slots
             ],
             "quality": quality,
+            "away_trips": profile.away_trips,
+            "charge_known": profile.charge_known,
         }
