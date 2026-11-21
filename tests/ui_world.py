@@ -15,6 +15,7 @@ import math
 import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from functools import partial
 from pathlib import Path
@@ -1011,6 +1012,7 @@ async def _learning(app: AppRuntime) -> None:
 
 DRIVING_COMPUTED_AT = datetime(2026, 10, 9, 1, 40, tzinfo=UTC)  # 03:40 Ortszeit, der Lauf der Nacht
 TESLA_TRIP_DAYS = 56  # Fenster des Fahrverhaltens: acht Wochen
+TESLA_AWAY_CHARGE_TRIPS = (9, 21)  # Fahrtage (von hinten gezählt), an denen der Tesla auswärts lädt
 
 
 def _local(day: date, at: str) -> datetime:
@@ -1032,6 +1034,9 @@ def _trip(
         return_at=_local(day, back),
         return_soc=back_soc,
         consumption_pp=used_pp,
+        net_pp=used_pp,
+        charged_away_pp=0.0,
+        drawdown_pp=used_pp,
     )
 
 
@@ -1055,6 +1060,7 @@ def _tesla_profile(today: date) -> VehicleProfile:
     """Der Tesla pendelt Mo bis Fr gegen 07:15 Uhr (leichte Streuung) und kommt gegen 17:40 Uhr
     mit etwa 40 % zurück; er steckt über Nacht und am Wochenende."""
     records: list[DayRecord] = []
+    trips = 0
     plugged: list[date] = []  # Tage, an denen er abends angesteckt wurde (nicht immer)
     for back in range(TESLA_TRIP_DAYS, 0, -1):
         day = today - timedelta(days=back)
@@ -1064,7 +1070,11 @@ def _tesla_profile(today: date) -> VehicleProfile:
         shift = day.toordinal() % 3
         leave = f"07:{15 + 5 * shift:02d}"
         used = 16.0 + day.toordinal() % 4  # 16 bis 19 Prozentpunkte
-        records.append(_trip(day, leave, 58.0, f"17:{30 + 5 * shift}", 58.0 - used, used))
+        trip = _trip(day, leave, 58.0, f"17:{30 + 5 * shift}", 58.0 - used, used)
+        trips += 1
+        if trips in TESLA_AWAY_CHARGE_TRIPS:  # lädt an zwei Tagen auswärts
+            trip = replace(trip, charged_away_pp=20.0, consumption_pp=used + 20)
+        records.append(trip)
         if day.toordinal() * 3 % 8 != 5:
             plugged.append(day)
     # jeder Ansteckvorgang endet kurz vor der nächsten Abfahrt (die letzte war heute um 07:15)

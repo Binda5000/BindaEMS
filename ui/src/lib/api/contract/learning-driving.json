@@ -63,7 +63,7 @@
           "arrival_p50": "17:35",
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
-          "consumption_p80_pp": 18.6,
+          "consumption_p80_pp": 19.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"
@@ -99,7 +99,7 @@
           "arrival_p50": "17:35",
           "arrival_soc_p50": 40.5,
           "consumption_p50_pp": 17.5,
-          "consumption_p80_pp": 18.6,
+          "consumption_p80_pp": 19.0,
           "target_soc_pct": 50,
           "target_clamped": true,
           "target_confidence": "high"

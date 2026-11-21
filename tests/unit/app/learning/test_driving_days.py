@@ -221,13 +221,109 @@ def test_departure_soc_looks_back_six_hours() -> None:
     assert record(hist, MON).departure_soc is None
 
 
-def test_consumption_can_be_negative() -> None:
+def test_net_can_be_negative() -> None:
     hist = history(
         pt(MON, "07:20", False),
         pt(MON, "17:45", True),
         soc=[(at(MON, "07:10"), 40.0), (at(MON, "17:50"), 55.0)],
     )
-    assert record(hist, MON).consumption_pp == -15.0
+    rec = record(hist, MON)
+    assert rec.net_pp == -15.0
+    assert rec.charged_away_pp == 15.0
+    assert rec.consumption_pp == 0.0
+    assert rec.drawdown_pp is None
+
+
+def test_away_charge_is_detected() -> None:
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "17:45", True),
+        soc=[
+            (at(MON, "07:10"), 40.0),
+            (at(MON, "08:00"), 30.0),
+            (at(MON, "08:30"), 45.0),
+            (at(MON, "09:00"), 75.0),
+            (at(MON, "17:50"), 55.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.net_pp == -15.0
+    assert rec.charged_away_pp == 45.0
+    assert rec.consumption_pp == 30.0
+    assert rec.drawdown_pp == 10.0
+
+
+def test_small_rises_are_noise() -> None:
+    # 70 → 61 → 62 → 61 → 62 → 60: Anstiege von 1 pp zählen nicht
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "17:45", True),
+        soc=[
+            (at(MON, "07:10"), 70.0),
+            (at(MON, "08:00"), 61.0),
+            (at(MON, "09:00"), 62.0),
+            (at(MON, "10:00"), 61.0),
+            (at(MON, "11:00"), 62.0),
+            (at(MON, "17:50"), 60.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 0.0
+    assert rec.consumption_pp == rec.net_pp == 10.0
+    assert rec.drawdown_pp == 10.0
+
+
+def test_charge_during_home_stop_is_not_away() -> None:
+    # Fahrt 07:30, daheim 12:00–13:00 (Ladestand 12:05 40, 12:55 70), zurück 18:00 mit 50
+    hist = history(
+        pt(MON, "07:30", False),
+        pt(MON, "12:00", True),
+        pt(MON, "13:00", False),
+        pt(MON, "18:00", True),
+        soc=[
+            (at(MON, "07:20"), 70.0),
+            (at(MON, "12:05"), 40.0),
+            (at(MON, "12:55"), 70.0),
+            (at(MON, "18:05"), 50.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 0.0
+    assert rec.consumption_pp == 50.0  # 70 − 50 + 30
+    assert rec.drawdown_pp == 30.0  # Abfahrt 70, tiefster Stand 40
+
+
+def test_drawdown_unknown_without_point_before_charge() -> None:
+    # Abfahrt 50, erster Wert unterwegs 75, zurück 60
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "17:45", True),
+        soc=[(at(MON, "07:10"), 50.0), (at(MON, "09:00"), 75.0), (at(MON, "17:50"), 60.0)],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 25.0
+    assert rec.consumption_pp == 15.0
+    assert rec.drawdown_pp is None
+
+
+def test_away_charge_split_by_drop_counts_both_runs() -> None:
+    # 60 → 40 → 50 → 45 → 70 → 55: zwei Anstiege (10 und 25), beide ≥ 3
+    hist = history(
+        pt(MON, "07:20", False),
+        pt(MON, "17:45", True),
+        soc=[
+            (at(MON, "07:10"), 60.0),
+            (at(MON, "08:00"), 40.0),
+            (at(MON, "09:00"), 50.0),
+            (at(MON, "10:00"), 45.0),
+            (at(MON, "11:00"), 70.0),
+            (at(MON, "17:50"), 55.0),
+        ],
+    )
+    rec = record(hist, MON)
+    assert rec.charged_away_pp == 35.0
+    assert rec.consumption_pp == 40.0
+    assert rec.drawdown_pp == 20.0
 
 
 def test_day_without_known_state_is_skipped() -> None:

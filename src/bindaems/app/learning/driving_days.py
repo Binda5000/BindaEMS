@@ -7,6 +7,13 @@ der Tag ``away`` (Ruling P2). Die Abfahrt ist das Ende dieses Aufenthalts, wenn 
 fällt; so gehört eine Abfahrt um 00:30 zum neuen Tag. Rückkehr und Ankunft sind der Beginn des
 Aufenthalts, der die folgende Nacht umfasst; Zwischenstopps teilen die Fahrt nicht. Alle Zeitpunkte
 sind UTC, Tage und Anker lokal.
+
+Laden unterwegs: Der Ladestand ändert sich zwischen Abfahrt und Rückkehr nicht nur durch Fahren.
+Ein Anstieg (Folge von Schritten ohne Abfall) ab ``AWAY_CHARGE_MIN_PP`` zählt als Laden; berührt er
+einen Aufenthalt zu Hause, ist er ein Zwischenstopp daheim, sonst Laden auswärts. ``net_pp`` ist
+Abfahrts- minus Rückkehrstand, ``consumption_pp`` der Fahrverbrauch (netto plus alles Geladene),
+``charged_away_pp`` das auswärts Geladene und ``drawdown_pp`` die tiefste Entladung gegenüber der
+Abfahrt (unbekannt, wenn das Laden auswärts gleich nach der Abfahrt beginnt).
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ UNPLUG_WINDOW: Final = timedelta(minutes=30)
 DEPARTURE_SOC_LOOKBACK: Final = timedelta(hours=6)
 RETURN_SOC_WINDOW: Final = timedelta(minutes=30)
 SESSION_GRACE: Final = timedelta(minutes=5)
+AWAY_CHARGE_MIN_PP: Final = 3.0  # kleinere Anstiege sind Messrauschen
 
 _NEVER: Final = datetime.max.replace(tzinfo=UTC)  # offenes Ende: gilt über heute hinaus
 _ALWAYS: Final = datetime.min.replace(tzinfo=UTC)  # Beginn vor allen Daten
@@ -43,7 +51,17 @@ class DayRecord:
     arrival_soc: float | None
     return_at: datetime | None
     return_soc: float | None
-    consumption_pp: float | None
+    consumption_pp: float | None  # Fahrverbrauch: netto plus alles unterwegs Geladene
+    net_pp: float | None = None  # Abfahrts- minus Rückkehrstand
+    charged_away_pp: float | None = None  # auswärts geladene Prozentpunkte
+    drawdown_pp: float | None = None  # tiefste Entladung gegenüber der Abfahrt
+
+
+@dataclass(frozen=True)
+class TripSoc:
+    consumption_pp: float
+    charged_away_pp: float
+    drawdown_pp: float | None
 
 
 def _local(day: date, at: time) -> datetime:
@@ -129,6 +147,52 @@ def _arrival_soc(
     return _soc_between(soc, at, limit, last=False)
 
 
+def _trip_soc(
+    soc: list[tuple[datetime, float]],
+    stays: list[Stay],
+    departure: datetime,
+    departure_soc: float,
+    return_at: datetime,
+    return_soc: float,
+) -> TripSoc:
+    """Fahrverbrauch, auswärts Geladenes und Entladung einer Fahrt aus den Ladeständen."""
+    points = [(departure, departure_soc)]
+    points += [(ts, value) for ts, value in soc if departure < ts < return_at]
+    points.append((return_at, return_soc))
+    deltas = [points[i + 1][1] - points[i][1] for i in range(len(points) - 1)]
+
+    def at_home(i: int) -> bool:
+        return any(start < points[i + 1][0] and end > points[i][0] for start, end in stays)
+
+    # Anstiege: maximale Folgen von Schritten ohne Abfall
+    runs: list[tuple[int, int]] = []
+    first = 0
+    for i, delta in enumerate(deltas):
+        if delta < 0:
+            if i > first:
+                runs.append((first, i))
+            first = i + 1
+    if len(deltas) > first:
+        runs.append((first, len(deltas)))
+
+    counted_total = 0.0
+    charged_away = 0.0
+    first_away_start: int | None = None
+    for begin, end in runs:
+        height = sum(deltas[begin:end])
+        if height < AWAY_CHARGE_MIN_PP:
+            continue
+        counted_total += height
+        if not any(at_home(i) for i in range(begin, end)):
+            charged_away += height
+            if first_away_start is None:
+                first_away_start = begin
+    drawdown: float | None = None
+    if first_away_start != 0:
+        drawdown = max(0.0, departure_soc - min(value for _, value in points))
+    return TripSoc(departure_soc - return_soc + counted_total, charged_away, drawdown)
+
+
 def day_records(history: VehicleHistory, *, today: date) -> list[DayRecord]:
     """Ein Datensatz je bewertetem Tag vor ``today``, nach Tag sortiert.
 
@@ -191,9 +255,11 @@ def _record(
     return_soc = _arrival_soc(soc, session_starts, return_at) if return_at else None
     arrival = return_at if return_at is not None and day_start <= return_at < day_end else None
     arrival_soc = _arrival_soc(soc, session_starts, arrival) if arrival else None
-    consumption = (
-        departure_soc - return_soc if departure_soc is not None and return_soc is not None else None
-    )
+    net: float | None = None
+    trip: TripSoc | None = None
+    if departure_soc is not None and return_soc is not None and return_at is not None:
+        net = departure_soc - return_soc
+        trip = _trip_soc(soc, stays, departure, departure_soc, return_at, return_soc)
     return DayRecord(
         day,
         weekday,
@@ -204,5 +270,8 @@ def _record(
         arrival_soc,
         return_at,
         return_soc,
-        consumption,
+        trip.consumption_pp if trip else None,
+        net,
+        trip.charged_away_pp if trip else None,
+        trip.drawdown_pp if trip else None,
     )
