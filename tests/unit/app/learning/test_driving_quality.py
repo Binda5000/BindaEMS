@@ -61,6 +61,7 @@ def record(
     *,
     departure: str | None = "07:30",
     consumption: float | None = 30.0,
+    drawdown: float | None = 30.0,
     away: bool = False,
     weekday: int | None = None,
 ) -> DayRecord:
@@ -75,6 +76,7 @@ def record(
         return_at=None,
         return_soc=None,
         consumption_pp=consumption,
+        drawdown_pp=drawdown,
     )
 
 
@@ -144,19 +146,29 @@ def test_no_suggestion_is_not_rated() -> None:
 
 def test_target_hit_needs_reserve_left() -> None:
     snapshot = [(evening_before(), profile(target=60))]
-    exact = rates([record(consumption=40.0)], snapshot)  # 60 - 40 = 20 = Puffer
-    short = rates([record(consumption=40.5)], snapshot)
-    generous = rates([record(consumption=10.0)], snapshot)
-    negative = rates([record(consumption=-5.0)], snapshot)  # unterwegs geladen
+    exact = rates([record(drawdown=40.0)], snapshot)  # 60 - 40 = 20 = Puffer
+    short = rates([record(drawdown=40.5)], snapshot)
+    generous = rates([record(drawdown=10.0)], snapshot)
+    negative = rates([record(drawdown=-5.0)], snapshot)
     assert (exact.target_n, exact.target_hits) == (1, 1)
     assert (short.target_n, short.target_hits) == (1, 0)
     assert (generous.target_n, generous.target_hits) == (1, 1)
     assert (negative.target_n, negative.target_hits) == (1, 1)
 
 
-def test_unknown_consumption_rates_the_departure_only() -> None:
-    result = rates([record(consumption=None)], [(evening_before(), profile())])
+def test_target_hit_uses_drawdown() -> None:
+    snapshot = [(evening_before(), profile(target=50))]
+    # der Fahrverbrauch ist hoch (unterwegs geladen), maßgeblich ist der tiefste Stand
+    hit = rates([record(consumption=70.0, drawdown=25.0)], snapshot)
+    miss = rates([record(consumption=5.0, drawdown=35.0)], snapshot)
+    assert (hit.target_n, hit.target_hits) == (1, 1)
+    assert (miss.target_n, miss.target_hits) == (1, 0)
+
+
+def test_target_day_without_drawdown_is_not_rated() -> None:
+    result = rates([record(consumption=30.0, drawdown=None)], [(evening_before(), profile())])
     assert result == HitRates(1, 1, 0, 0)
+    assert result.target_n == 0
 
 
 def test_away_and_tripless_days_are_not_trip_days() -> None:

@@ -5,6 +5,14 @@ Aus den Tagesdatensätzen (``driving_days``) und den Ansteckvorgängen entsteht 
 eigene (6 ist Sonntag und Feiertag). Hat ein Wochentag weniger als ``MIN_DAYS`` bewertete Tage,
 rechnet das Profil mit der Gruppe (``basis = "group"``). Unbekannt bleibt unbekannt: Ohne Werte
 gibt es keinen Vorschlag, nie einen Ersatzwert. Alle Zeiten des Tages sind lokal (Wiener Zeit).
+
+Das Ziel folgt dem tiefsten Stand unterwegs (``drawdown_p80_pp``, ``target_basis = "drawdown"``):
+Wer auswärts nachlädt, braucht für die Fahrt weniger als der Fahrverbrauch, und der Nettoverbrauch
+(Abfahrt minus Rückkehr) kann sogar negativ sein. ``consumption_p50_pp`` und ``consumption_p80_pp``
+beschreiben den Fahrverbrauch (netto plus unterwegs Geladenes). Ein älterer Stand ohne diese Felder
+behält ``target_basis = "net"`` und das Ziel aus ``consumption_p80_pp``. ``away_trips`` und
+``charge_known`` zählen über alle Tagesdatensätze die Fahrtage mit Laden unterwegs und die Fahrtage,
+deren Laden bekannt ist.
 """
 
 from __future__ import annotations
@@ -34,7 +42,7 @@ NEXT_TRIP_DAYS: Final = 8  # heute und die sieben folgenden Tage: der gleiche Wo
 # Konfidenz der Abfahrt: Fahrtage des Wochentags selbst und Streuung P80 − P20 in Minuten
 DEPARTURE_HIGH: Final = (6, 60.0)
 DEPARTURE_MEDIUM: Final = (3, 120.0)
-# Konfidenz des Ziels: Werte des Verbrauchs und Streuung P80 − P20 in Prozentpunkten
+# Konfidenz des Ziels: Werte des tiefsten Stands unterwegs und Streuung P80 − P20 in Prozentpunkten
 TARGET_HIGH: Final = (6, 15.0)
 TARGET_MEDIUM: Final = (3, 30.0)
 
@@ -76,6 +84,8 @@ class WeekdayProfile(_Model):
     target_soc_pct: int | None
     target_clamped: bool
     target_confidence: Confidence | None
+    drawdown_p80_pp: float | None = None  # P80 der tiefsten Entladung gegenüber der Abfahrt
+    target_basis: Literal["net", "drawdown"] = "net"  # woraus das Ziel entsteht; alt: netto
 
 
 class VehicleProfile(_Model):
@@ -86,6 +96,8 @@ class VehicleProfile(_Model):
     days: int  # bewertete Tage insgesamt, auch ``away``
     weekdays: list[WeekdayProfile]  # 7, Index = Wochentag
     presence: list[list[float]]  # 7 × 96: Anteil der Tage mit angestecktem Auto je Viertelstunde
+    away_trips: int = 0  # Fahrtage mit Laden unterwegs (über alle Tagesdatensätze)
+    charge_known: int = 0  # Fahrtage, deren Laden unterwegs bekannt ist
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
@@ -143,12 +155,13 @@ def _level(
     return "low"
 
 
-def _target(consumption_p80_pp: float | None, settings: DrivingSettings) -> tuple[int | None, bool]:
+def _target(drawdown_p80_pp: float | None, settings: DrivingSettings) -> tuple[int | None, bool]:
     """Vorschlag Ziel und ob er begrenzt ist: ``clamp(ceil5(Reserve + max(0, P80)), min, max)``;
-    ohne Verbrauch kein Ziel."""
-    if consumption_p80_pp is None:
+    ``P80`` ist der tiefste Stand unterwegs (bei einem älteren Stand der Nettoverbrauch); ohne
+    Wert kein Ziel."""
+    if drawdown_p80_pp is None:
         return None, False
-    wanted = _ceil5(settings.return_reserve_pct + max(0.0, consumption_p80_pp))
+    wanted = _ceil5(settings.return_reserve_pct + max(0.0, drawdown_p80_pp))
     target = min(max(wanted, settings.target_min_pct), settings.target_max_pct)
     return target, target != wanted
 
@@ -158,12 +171,16 @@ def with_settings(profile: VehicleProfile, settings: DrivingSettings) -> Vehicle
 
     Ein abgelegter Stand trägt das Ziel der Einstellungen seines Laufs; „Puffer“, „Ziel-SOC
     mindestens“ und „höchstens“ sollen aber sofort gelten, nicht erst nach dem nächsten Lauf. Das
-    Ziel jedes Wochentags entsteht darum neu aus dem abgelegten P80 des Verbrauchs, mit
-    ``target_clamped`` dazu. Ein Wochentag mit Ziel, aber ohne P80 (gibt es aus ``build_profile``
-    nicht), wird nur in den Bereich geklemmt. Alles Übrige bleibt."""
+    Ziel jedes Wochentags entsteht darum neu aus dem abgelegten P80, mit ``target_clamped`` dazu:
+    bei ``target_basis = "drawdown"`` aus ``drawdown_p80_pp`` (fehlt er, gibt es kein Ziel), bei
+    ``"net"`` (ältere Stände) wie bisher aus ``consumption_p80_pp``. Ein Wochentag mit Ziel, aber
+    ohne P80 der Basis „net“ (gibt es aus ``build_profile`` nicht), wird nur in den Bereich
+    geklemmt. Alles Übrige bleibt."""
     weekdays: list[WeekdayProfile] = []
     for wp in profile.weekdays:
-        if wp.consumption_p80_pp is not None:
+        if wp.target_basis == "drawdown":
+            target, clamped = _target(wp.drawdown_p80_pp, settings)
+        elif wp.consumption_p80_pp is not None:
             target, clamped = _target(wp.consumption_p80_pp, settings)
         elif wp.target_soc_pct is not None:
             target = min(max(wp.target_soc_pct, settings.target_min_pct), settings.target_max_pct)
@@ -209,13 +226,14 @@ def _weekday_profile(
     arrival_socs = [r.arrival_soc for r in sample if r.arrival_soc is not None]
     consumption = [r.consumption_pp for r in sample if r.consumption_pp is not None]
 
+    drawdown = [r.drawdown_pp for r in sample if r.drawdown_pp is not None]
+
     consumption_p80 = percentile(consumption, 80) if consumption else None
-    target, clamped = _target(consumption_p80, settings)
+    drawdown_p80 = percentile(drawdown, 80) if drawdown else None
+    target, clamped = _target(drawdown_p80, settings)
     target_confidence: Confidence | None = None
-    if consumption:
-        target_confidence = _level(
-            len(consumption), _spread(consumption), TARGET_HIGH, TARGET_MEDIUM
-        )
+    if drawdown:
+        target_confidence = _level(len(drawdown), _spread(drawdown), TARGET_HIGH, TARGET_MEDIUM)
 
     return WeekdayProfile(
         weekday=weekday,
@@ -234,6 +252,8 @@ def _weekday_profile(
         target_soc_pct=target,
         target_clamped=clamped,
         target_confidence=target_confidence,
+        drawdown_p80_pp=drawdown_p80,
+        target_basis="drawdown",
     )
 
 
@@ -312,6 +332,7 @@ def build_profile(
 ) -> VehicleProfile:
     """Das Profil eines Autos aus seinen Tagesdatensätzen und Ansteckvorgängen."""
     data_to = _local_instant(today, time(0))
+    trip_days = [r for r in records if not r.away and r.departure is not None]
     first = min((r.day for r in records), default=None)
     data_from = _local_instant(first, time(0)) if first is not None else data_to
     return VehicleProfile(
@@ -322,6 +343,10 @@ def build_profile(
         days=len(records),
         weekdays=[_weekday_profile(w, records, settings) for w in range(7)],
         presence=_presence(sessions, today=today),
+        away_trips=sum(
+            1 for r in trip_days if r.charged_away_pp is not None and r.charged_away_pp > 0
+        ),
+        charge_known=sum(1 for r in trip_days if r.charged_away_pp is not None),
     )
 
 

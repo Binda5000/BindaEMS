@@ -64,8 +64,9 @@ def hit_rates(
 
     ``snapshots`` sind die gespeicherten Stände desselben Autos als (``computed_at``, Profil).
     Fahrtag ist ein Tag, der nicht ``away`` ist und eine erste Abfahrt hat. Die Abfahrt zählt als
-    Treffer, wenn das Auto nicht vor dem Vorschlag fuhr; das Ziel, wenn Ziel minus tatsächlicher
-    Verbrauch mindestens ``reserve_pct`` ergibt.
+    Treffer, wenn das Auto nicht vor dem Vorschlag fuhr; das Ziel, wenn Ziel minus tiefster Stand
+    unterwegs (``drawdown_pp``, die größte Entladung gegenüber der Abfahrt) mindestens
+    ``reserve_pct`` ergibt. Ein Tag ohne ``drawdown_pp`` zählt für das Ziel nicht.
     """
     ordered = sorted(((ensure_utc(at), profile) for at, profile in snapshots), key=lambda s: s[0])
     first = today - timedelta(days=days)
@@ -84,8 +85,8 @@ def hit_rates(
         if (
             suggestion.target_soc_pct is not None
             and suggestion.target_confidence in RATED
-            and record.consumption_pp is not None
+            and record.drawdown_pp is not None
         ):
             target_n += 1
-            target_hits += suggestion.target_soc_pct - record.consumption_pp >= reserve_pct
+            target_hits += suggestion.target_soc_pct - record.drawdown_pp >= reserve_pct
     return HitRates(departure_n, departure_hits, target_n, target_hits)

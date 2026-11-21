@@ -47,6 +47,8 @@ def rec(
     *,
     departure: float | None = 450,
     consumption: float | None = None,
+    drawdown: float | None = None,
+    charged_away: float | None = None,
     arrival: float | None = None,
     arrival_soc: float | None = None,
     away: bool = False,
@@ -63,6 +65,8 @@ def rec(
         return_at=None,
         return_soc=None,
         consumption_pp=consumption,
+        charged_away_pp=charged_away,
+        drawdown_pp=drawdown,
     )
 
 
@@ -72,6 +76,15 @@ def saturdays(departures: list[float | None], consumptions: list[float | None] |
     return [
         rec(d, departure=dep, consumption=c)
         for d, dep, c in zip(days, departures, values, strict=True)
+    ]
+
+
+def target_saturdays(departures: list[float | None], values: list[float | None]):
+    """Samstage ohne Laden unterwegs: der tiefste Stand ist der Fahrverbrauch."""
+    days = days_of(5, len(departures))
+    return [
+        rec(d, departure=dep, consumption=v, drawdown=v)
+        for d, dep, v in zip(days, departures, values, strict=True)
     ]
 
 
@@ -167,7 +180,7 @@ def test_holiday_records_feed_weekday_six() -> None:
 def test_target_rounding_tolerates_float_noise() -> None:
     # P80 von 18,1, 18,1 und 29,6 ist 25,000000000000004 und darf nicht auf 30 aufrunden
     settings = DrivingSettings(return_reserve_pct=0, target_min_pct=20)
-    sat = profile_of(saturdays([480] * 3, [29.6, 18.1, 18.1]), settings=settings).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 3, [29.6, 18.1, 18.1]), settings=settings).weekdays[5]
     assert sat.consumption_p80_pp is not None
     assert sat.consumption_p80_pp > 25.0
     assert sat.target_soc_pct == 25
@@ -175,55 +188,138 @@ def test_target_rounding_tolerates_float_noise() -> None:
 
 def test_target_is_reserve_plus_p80_rounded_up_to_5() -> None:
     # 20 + 22,4 = 42,4 → 45, begrenzt auf mindestens 50
-    sat = profile_of(saturdays([480] * 3, [22.4] * 3)).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 3, [22.4] * 3)).weekdays[5]
     assert sat.target_soc_pct == 50
     assert sat.target_clamped is True
     # 20 + 32,4 = 52,4 → 55, innerhalb der Grenzen
-    sat = profile_of(saturdays([480] * 3, [32.4] * 3)).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 3, [32.4] * 3)).weekdays[5]
     assert sat.target_soc_pct == 55
     assert sat.target_clamped is False
 
 
 def test_target_on_exact_multiple_of_five_is_not_rounded_up() -> None:
-    sat = profile_of(saturdays([480] * 3, [35.0] * 3)).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 3, [35.0] * 3)).weekdays[5]
     assert sat.target_soc_pct == 55
     assert sat.target_clamped is False
 
 
 def test_target_uses_p80_of_consumption() -> None:
     # P80 von 10, 20, 30, 40, 50 ist 42: 20 + 42 = 62 → 65
-    sat = profile_of(saturdays([480] * 5, [10, 20, 30, 40, 50])).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 5, [10, 20, 30, 40, 50])).weekdays[5]
     assert sat.consumption_p80_pp == 42.0
     assert sat.consumption_p50_pp == 30.0
     assert sat.target_soc_pct == 65
 
 
 def test_target_clamped_to_max() -> None:
-    sat = profile_of(saturdays([480] * 3, [80.0] * 3)).weekdays[5]  # 20 + 80 = 100 → 90
+    sat = profile_of(target_saturdays([480] * 3, [80.0] * 3)).weekdays[5]  # 20 + 80 = 100 → 90
     assert sat.target_soc_pct == 90
     assert sat.target_clamped is True
 
 
 def test_target_follows_the_settings() -> None:
     settings = DrivingSettings(return_reserve_pct=10, target_min_pct=30, target_max_pct=60)
-    sat = profile_of(saturdays([480] * 3, [31.0] * 3), settings=settings).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 3, [31.0] * 3), settings=settings).weekdays[5]
     assert sat.target_soc_pct == 45  # 10 + 31 = 41 → 45
 
 
-def test_negative_consumption_counts_as_zero_for_target() -> None:
+def test_target_ignores_consumption_and_follows_drawdown() -> None:
+    # Fahrverbrauch 40, unterwegs nie tiefer als 5 pp unter der Abfahrt: Ziel folgt dem Tiefststand
+    days = days_of(5, 3)
+    records = [rec(d, departure=480, consumption=40.0, drawdown=5.0) for d in days]
+    sat = profile_of(records, settings=DrivingSettings(target_min_pct=20)).weekdays[5]
+    assert sat.consumption_p80_pp == 40.0
+    assert sat.drawdown_p80_pp == 5.0
+    assert sat.target_soc_pct == 25  # 20 + 5
+    assert sat.target_clamped is False
+
+
+def test_negative_drawdown_counts_as_zero_for_target() -> None:
     settings = DrivingSettings(target_min_pct=20)
-    sat = profile_of(saturdays([480] * 3, [-10.0] * 3), settings=settings).weekdays[5]
-    assert sat.consumption_p80_pp == -10.0  # das Profil behält den echten Wert
+    sat = profile_of(target_saturdays([480] * 3, [-10.0] * 3), settings=settings).weekdays[5]
+    assert sat.drawdown_p80_pp == -10.0
     assert sat.target_soc_pct == 20  # nur die Reserve
     assert sat.target_clamped is False
-    clamped = profile_of(saturdays([480] * 3, [-10.0] * 3)).weekdays[5]
-    assert clamped.target_soc_pct == 50
-    assert clamped.target_clamped is True
+
+
+def test_target_uses_drawdown_not_net() -> None:
+    # fünf Montage: net −20, drawdown 12, 15, 10, 14, 13 → P80 14,2 → 20 + 14,2 → 35 → geklemmt 50
+    days = days_of(0, 5)
+    records = [
+        DayRecord(
+            d,
+            0,
+            False,
+            minute_of_day(d, 450),
+            None,
+            None,
+            None,
+            None,
+            None,
+            consumption_pp=dd + 3.0,
+            net_pp=-20.0,
+            charged_away_pp=23.0,
+            drawdown_pp=dd,
+        )
+        for d, dd in zip(days, [12.0, 15.0, 10.0, 14.0, 13.0], strict=True)
+    ]
+    wp = profile_of(records).weekdays[0]
+    assert wp.target_basis == "drawdown"
+    assert wp.drawdown_p80_pp == pytest.approx(14.2)
+    assert (wp.target_soc_pct, wp.target_clamped) == (50, True)
+    assert wp.consumption_p80_pp is not None and wp.consumption_p80_pp > 0
+
+
+def test_drawdown_none_days_do_not_count_for_target() -> None:
+    days = days_of(5, 3)
+    records = [rec(d, departure=480, consumption=30.0, drawdown=None) for d in days]
+    sat = profile_of(records).weekdays[5]
+    assert sat.consumption_p80_pp == 30.0
+    assert sat.target_soc_pct is None and sat.target_confidence is None
+    assert sat.drawdown_p80_pp is None
+
+
+def test_vehicle_counts_away_trips() -> None:
+    # 11 Fahrtage über mehrere Wochentage: 9 mit Laden unterwegs, einer mit 0, einer unbekannt
+    days = days_of(5, 4) + days_of(0, 4) + days_of(1, 3)
+    charged: list[float | None] = [10.0] * 9 + [0.0, None]
+    records = [
+        rec(d, departure=450, consumption=20.0, drawdown=20.0, charged_away=c)
+        for d, c in zip(days, charged, strict=True)
+    ]
+    records.append(rec(days_of(2, 1)[0], departure=None, charged_away=5.0))  # kein Fahrtag
+    records.append(rec(days_of(3, 1)[0], departure=None, away=True))  # auswärts: kein Fahrtag
+    profile = profile_of(sorted(records, key=lambda r: r.day))
+    assert (profile.away_trips, profile.charge_known) == (9, 10)
+
+
+def test_old_snapshot_keeps_net_target() -> None:
+    profile = profile_of(target_saturdays([480] * 3, [42.0] * 3))
+    data = profile.model_dump(mode="json")
+    for key in ("away_trips", "charge_known"):
+        del data[key]
+    for wp in data["weekdays"]:
+        del wp["drawdown_p80_pp"], wp["target_basis"]
+    old = VehicleProfile.model_validate(data)
+    assert old.weekdays[5].target_basis == "net"
+    assert (old.away_trips, old.charge_known) == (0, 0)
+    sat = with_settings(old, DrivingSettings(target_max_pct=60)).weekdays[5]
+    assert (sat.target_soc_pct, sat.target_clamped) == (60, True)  # aus consumption_p80_pp
+    assert with_settings(old, SETTINGS).weekdays[5].target_soc_pct == 65
+
+
+def test_with_settings_drawdown_basis_without_p80_has_no_target() -> None:
+    profile = profile_of(target_saturdays([480] * 3, [42.0] * 3))
+    weekdays = list(profile.weekdays)
+    weekdays[5] = weekdays[5].model_copy(update={"drawdown_p80_pp": None})
+    profile = profile.model_copy(update={"weekdays": weekdays})
+    sat = with_settings(profile, SETTINGS).weekdays[5]
+    assert (sat.target_soc_pct, sat.target_clamped) == (None, False)
 
 
 def test_with_settings_rederives_the_target_from_the_stored_p80() -> None:
     # Ruling F-2: Ziel und „begrenzt“ folgen den aktuellen Einstellungen ohne neuen Lauf
-    profile = profile_of(saturdays([480] * 3, [42.0] * 3))  # 20 + 42 = 62 → 65
+    profile = profile_of(target_saturdays([480] * 3, [42.0] * 3))  # 20 + 42 = 62 → 65
     assert profile.weekdays[5].target_soc_pct == 65
     narrow = with_settings(profile, DrivingSettings(target_max_pct=60))
     assert (narrow.weekdays[5].target_soc_pct, narrow.weekdays[5].target_clamped) == (60, True)
@@ -241,9 +337,11 @@ def test_with_settings_rederives_the_target_from_the_stored_p80() -> None:
 
 def test_with_settings_clamps_a_target_without_p80() -> None:
     # ein Stand ohne P80 (gibt es aus build_profile nicht): das Ziel wird nur geklemmt
-    profile = profile_of(saturdays([480] * 3, [42.0] * 3))
+    profile = profile_of(target_saturdays([480] * 3, [42.0] * 3))
     weekdays = list(profile.weekdays)
-    weekdays[5] = weekdays[5].model_copy(update={"consumption_p80_pp": None, "target_soc_pct": 85})
+    weekdays[5] = weekdays[5].model_copy(
+        update={"consumption_p80_pp": None, "target_soc_pct": 85, "target_basis": "net"}
+    )
     profile = profile.model_copy(update={"weekdays": weekdays})
     sat = with_settings(profile, DrivingSettings(target_max_pct=70)).weekdays[5]
     assert (sat.target_soc_pct, sat.target_clamped) == (70, True)
@@ -306,20 +404,24 @@ def test_departure_confidence_levels(trips: int, spread: float, expected: str) -
     ],
 )
 def test_target_confidence_levels(values: list[float], expected: str) -> None:
-    sat = profile_of(saturdays([480] * len(values), values)).weekdays[5]
+    sat = profile_of(target_saturdays([480] * len(values), values)).weekdays[5]
     assert sat.target_confidence == expected
 
 
 def test_consumption_values_count_for_confidence_not_trip_days() -> None:
     # sechs Fahrten, aber nur zwei Verbrauchswerte
-    sat = profile_of(saturdays([480] * 6, [10, 10, None, None, None, None])).weekdays[5]
+    sat = profile_of(target_saturdays([480] * 6, [10, 10, None, None, None, None])).weekdays[5]
     assert sat.departure_confidence == "high"
     assert sat.target_confidence == "low"
 
 
 def test_group_basis_is_never_high() -> None:
     # zehn Fahrten, Spanne 0, aber kein Wochentag mit drei eigenen Tagen
-    records = [rec(day, departure=450, consumption=20.0) for w in range(5) for day in days_of(w, 2)]
+    records = [
+        rec(day, departure=450, consumption=20.0, drawdown=20.0)
+        for w in range(5)
+        for day in days_of(w, 2)
+    ]
     monday = profile_of(records).weekdays[0]
     assert monday.basis == "group"
     assert monday.trips == 10
@@ -495,7 +597,7 @@ def test_next_trip_skips_days_without_trip() -> None:
 
 
 def test_next_trip_carries_the_target() -> None:
-    records = [rec(day, departure=435.0, consumption=30.0) for day in days_of(0, 3)]
+    records = [rec(day, departure=435.0, consumption=30.0, drawdown=30.0) for day in days_of(0, 3)]
     trip = next_trip(profile_of(records), local(date(2026, 12, 6), "12:00"))
     assert trip is not None
     assert trip.date == date(2026, 12, 7)
@@ -577,7 +679,7 @@ def test_profile_bounds_and_counts() -> None:
 
 
 def test_profile_round_trips_through_json() -> None:
-    records = saturdays([440, 450, 460, 470, 480, 490], [12.0, 18.0, 22.0, 30.0, 8.0, 15.0])
+    records = target_saturdays([440, 450, 460, 470, 480, 490], [12.0, 18.0, 22.0, 30.0, 8.0, 15.0])
     records += workweek_records()
     sessions = [(local(days_of(0, 2)[0], "18:00"), None)]
     profile = profile_of(records, sessions)
