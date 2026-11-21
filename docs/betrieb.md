@@ -5635,7 +5635,8 @@ Automatik ist ab Werk **aus**, und kein Aktor wird dafür live geschaltet.
 - **Profil:** Je Wochentag (Gruppen „Mo–Fr“, „Sa“, „So/Feiertag“, wenn ein Wochentag weniger als 3
   Tage hat) Abfahrt (P20, auf die Viertelstunde abgerundet), Ankunft, Ladestand bei der Ankunft,
   Verbrauch (P80) und daraus das Ziel: Reserve (`return_reserve_pct`) plus Verbrauch, auf 5 %
-  aufgerundet und zwischen `target_min_pct` und `target_max_pct` begrenzt. Dazu die **Konfidenz**
+  aufgerundet und zwischen `target_min_pct` und `target_max_pct` begrenzt (seit Plan Auswärts laden
+  rechnet das Ziel mit dem tiefsten Stand unterwegs, siehe „Laden außer Haus“ unten). Dazu die **Konfidenz**
   („hoch“, „mittel“, „niedrig“) und je Viertelstunde die Wahrscheinlichkeit, dass das Auto angesteckt
   ist.
 - **Einstellungen** (`learning.driving`): `return_reserve_pct` (20), `target_min_pct` (50),
@@ -5650,6 +5651,45 @@ Automatik ist ab Werk **aus**, und kein Aktor wird dafür live geschaltet.
 - **Komponente `driving`** unter **System** → „Komponenten“: „Fahrverhalten aktuell“, „Noch keine
   Fahrdaten“ (normal, bis das erste Profil Tage hat; Status in Ordnung) oder „Fahrverhalten
   fehlgeschlagen: {Fehler}“ (Status nicht in Ordnung).
+
+### Laden außer Haus
+
+Seit Plan Auswärts laden (`docs/superpowers/plans/2026-11-21-auswaerts-laden.md`) erkennt die app, wenn ein Auto unterwegs nachlädt, etwa der
+Tesla an einer Ladesäule. Dazu liest sie die Ladestände zwischen Abfahrt und Rückkehr (die der core
+schon in die Messung `soc` schreibt) und zählt jeden zusammenhängenden Anstieg um mindestens 3
+Prozentpunkte als Laden auswärts; kleinere Schwankungen sind Messrauschen. Lädt das Auto mittags
+kurz zu Hause, zählt das nicht als auswärts. Nur app und UI ändern sich: keine Migration, keine
+neue Einstellung, keine Änderung an `config.yaml`, der core bleibt unverändert. Home Assistant
+ändert sich nur im Wert von „Vorschlag Ziel-SOC“.
+
+- **Verbrauch:** Die Spalte „Verbrauch“ auf **Prognosen** zeigt weiter das P80, jetzt aber den
+  **Fahrverbrauch der ganzen Strecke** (Abfahrt minus Rückkehr plus das Nachgeladene), nie negativ.
+  Vorher stand dort bei einem Auto, das meist auswärts lädt, ein negativer Wert.
+- **Ziel aus dem tiefsten Stand:** Der Vorschlag Ziel deckt den **tiefsten Stand unterwegs**: Puffer
+  plus P80 von „Abfahrt minus tiefster Stand“, auf 5 % aufgerundet und zwischen „Ziel-SOC
+  mindestens“ und „höchstens“ begrenzt. Beim Tesla ist das die Strecke bis zur Ladestelle, ohne
+  Laden unterwegs die ganze Fahrt. Ein Auto, das nie auswärts lädt (e-Golf), rechnet fast wie
+  bisher. Wie tief der Stand bis zur Ladestelle fiel, ist unbekannt, wenn das erste Laden schon mit
+  dem ersten Messwert nach der Abfahrt beginnt (etwa weil das Auto schlief); solche Fahrten zählen
+  für das Ziel und die Trefferquote „Ziel“ nicht. Die Trefferquote „Ziel“ ist getroffen, wenn der
+  tiefste Stand über dem Puffer blieb.
+- **Kopfzeile:** Der Kopf der Karte nennt zusätzlich „· auswärts geladen an {a} von {n} Fahrten“
+  (`n` sind die Fahrten im Fenster, bei denen das Laden unterwegs bekannt ist, `a` die mit Laden
+  auswärts; ohne `n` fehlt der Zusatz). Die Demo-Welt zeigt beim Tesla „an 2 von 40 Fahrten“.
+- **Hinweis:** Ab einem Anteil von 50 % steht unter der Tabelle: „Lädt meist auswärts: Der Vorschlag Ziel reicht bis zum tiefsten Stand unterwegs, nicht für die ganze Strecke.“ Dann ist ein niedriges Ziel
+  kein Fehler; das Auto lädt den Rest unterwegs.
+- **Planer unverändert:** Erwartete Autos rechnen weiter mit dem Ladestand bei der Ankunft, der das
+  Laden unterwegs schon enthält.
+- **API:** `GET /api/learning/driving` nennt je Wochentag zusätzlich `drawdown_p80_pp` und je Auto
+  `away_trips` und `charge_known`.
+- **Nach dem Ausrollen:** Auf **Prognosen** „Jetzt neu berechnen“ (Admin). Beim Tesla sollte
+  „Verbrauch“ positiv sein und der Kopf „auswärts geladen an etwa 9 von 10 Fahrten“ nennen, dazu der
+  Hinweissatz; das Ziel bleibt wahrscheinlich bei 50 % „(begrenzt)“, solange die Strecke bis zur
+  Ladestelle kurz ist. Zeigt der Kopf „0 von …“, obwohl er auswärts lädt, fehlen die Ladestände
+  unterwegs in InfluxDB. Prüfe mit `SELECT last("pct") FROM "soc" WHERE "id" = 'tesla' AND time > now() - 2d GROUP BY time(5m) fill(none)`,
+  dass tagsüber Werte da sind, und melde es, bevor die Automatik das Ziel übernimmt. Profile von vor
+  diesem Plan laden weiter und rechnen das Ziel nach der alten Regel, bis die nächste Berechnung
+  sie ersetzt.
 
 ### Die Automatik für Ziel und Abfahrt
 
@@ -5718,7 +5758,7 @@ Schlüssel vorn.
   `vehicles`. Je Auto: `key`, `name`, `source`, `data_from`, `data_to`, `days`, `weekdays` (sieben
   Einträge mit `weekday`, `basis`, `days`, `trips`, `trip_pct`, `departure`, `departure_p50`,
   `departure_p80`, `departure_confidence`, `arrival_p50`, `arrival_soc_p50`, `consumption_p50_pp`,
-  `consumption_p80_pp`, `target_soc_pct`, `target_clamped`, `target_confidence`), `next_trip`,
+  `consumption_p80_pp`, `drawdown_p80_pp`, `target_soc_pct`, `target_clamped`, `target_confidence`), `away_trips`, `charge_known`, `next_trip`,
   `presence`, `quality` (Trefferquote der letzten 28 Tage) und `automation` (`enabled`, `state`,
   `text`, `paused_until`, `last_set_at`). Alle Zeitstempel sind ISO 8601 in UTC, Werte der Form
   `HH:MM` sind Ortszeit. `presence` nennt die nächsten 48 Stunden als Viertelstunden `{"start": …, "p": 0.88}` ab dem Beginn der laufenden

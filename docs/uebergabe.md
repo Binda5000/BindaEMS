@@ -23,6 +23,7 @@ keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert.
 **Plan Netzladen auf Vorrat verhindern** (`docs/superpowers/plans/2026-11-14-netzladen-auf-vorrat.md`) ist umgesetzt und seit
 16.11.2026 auf `main`, **nicht ausgerollt** (Punkt 29 unter „Offen an der Anlage“). Nur app, keine Migration,
 keine Änderung an `config.yaml`; der core bleibt unverändert. Der Restwertfaktor steht an der Anlage seit 14.11.2026, 19:31 auf 0,6.
+**Plan Auswärts laden im Fahrverhalten** (`docs/superpowers/plans/2026-11-21-auswaerts-laden.md`) ist umgesetzt auf dem Branch `claude/project-thread-rs6xjm`, noch nicht auf `main`, **nicht ausgerollt** (Punkt 30 unter „Offen an der Anlage“). Nur app und UI, keine Migration; der core bleibt unverändert.
 Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
@@ -1346,6 +1347,7 @@ Spec: 8.3, Regel 7, „Stand Plan Phasenzuordnung“. Betrieb: `docs/betrieb.md`
 | `docs/verification/abnahme-phase-6a.md` | Checkliste für die Abnahme 6a: Empfangstabelle, Timeout, 7 Tage Dry-Run, im Live-Betrieb Bereich, Schrittregel, Rückkehr auf 0 und Echo; Abfragen auf Entscheidungslog und Influx |
 | `docs/verification/abnahme-phase-5a.md` | Checkliste für die Abnahme 5a (Lastmodell): 28 Tage ab dem Ausrollen, Prognosegüte (Modell mindestens 10 % besser oder Profil automatisch aktiv), Verfahren und Grund in der Karte „Lastprognose“, Registry (jede Nacht eine Version), `load-model` ohne Fehler, Rückfall bei fehlender Modelldatei |
 | `docs/verification/abnahme-phase-5b.md` | Checkliste für die Abnahme 5b (Fahrverhalten): 28 Tage ab dem Ausrollen, Vorschläge mit Konfidenz auf „Prognosen“, „Laden“ und in HA, Trefferquote je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch die Automatik, erwartetes Auto im Zeitplan und beim Anstecken ersetzt |
+| `docs/superpowers/plans/2026-11-21-auswaerts-laden.md` | Plan Auswärts laden im Fahrverhalten, 4 Tasks, 10 Entscheidungen, freigegeben vom Betreiber am 21.11.2026 (Variante A); umgesetzt auf dem Branch `claude/project-thread-rs6xjm`, noch nicht auf `main`, nicht ausgerollt (Punkt 30); nur app und UI |
 | `docs/verification/abnahme-phase-5c.md` | Checkliste für die Abnahme 5c (Vorheizen und Vorkühlen): Teil A 14 Tage Vorschau mit Schalter aus (Heizmodell taugt, Vorschau in jedem Plan ohne Fehler, τ und `C` plausibel), Teil B 14 Tage live (95 % der Viertelstunden im Komfortband ±0,5 K, ±3 K und Schrittregel wie 6a, Akku-Wächter binnen 6 min, Ersparnis nicht negativ, Räume per Sichtprüfung, nichts Unangenehmes) |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a, 5b, 5c und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
@@ -2316,6 +2318,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       nach 30 Tagen aus der Planablage fallen; so lange fehlen sie im Verlauf und im Vergleich Plan gegen Ist. Beides harmlos, nichts von Hand löschen
       (`docs/betrieb.md`, Abschnitt 4, „Rollback auf einen Stand vor Netzladen auf Vorrat“). Betrieb: `docs/betrieb.md`, „Planung“, „Erklärungen“;
       Spec: 5.5 und 9.6, „Stand Plan Netzladen auf Vorrat“. Rulings und aufgeschobene Kleinigkeiten stehen unter „Bewusst offen gelassen“.
+  30. **Auswärts laden im Fahrverhalten ausrollen:** umgesetzt auf dem Branch `claude/project-thread-rs6xjm`, noch nicht auf `main`, **nicht ausgerollt**;
+      kommt mit oder nach Stufe 2 (ab 23.11.2026), **nur `ems-app` und UI ändern sich**, mit dem nächsten Sammel-Pull und fester Version, core und app wie immer gemeinsam gezogen;
+      **keine Migration, keine neue Einstellung, keine Änderung an `config.yaml`**, der core bleibt unverändert. Nichts wird geschaltet; Home Assistant ändert sich
+      nur im Wert von „Vorschlag Ziel-SOC“. Gespeicherte Profile von vor dem Plan laden mit `target_basis = "net"` (alte Zielregel). **Nach dem Ausrollen:**
+      (1) auf **Prognosen** „Jetzt neu berechnen“ (Admin) und den Kopf des Tesla prüfen: „Verbrauch“ positiv, „auswärts geladen an etwa 9 von 10 Fahrten“, der Hinweissatz,
+      Vorschlag Ziel aus dem tiefsten Stand (wahrscheinlich weiter 50 % „(begrenzt)“). (2) Zeigt der Kopf „0 von …“, obwohl der Tesla auswärts lädt, fehlen die Ladestände unterwegs
+      in InfluxDB: `SELECT last("pct") FROM "soc" WHERE "id" = 'tesla' AND time > now() - 2d GROUP BY time(5m) fill(none)` muss tagsüber Werte haben; dann melden, bevor die Automatik
+      das Ziel übernimmt. Betrieb: `docs/betrieb.md`, „Fahrverhalten (Phase 5b)“, „Laden außer Haus“; Spec: 10.4 und 13, „Stand Plan Auswärts laden“;
+      Abnahme: `docs/verification/abnahme-phase-5b.md`. Aufgeschobene Kleinigkeiten stehen unter „Bewusst offen gelassen“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -4463,3 +4474,12 @@ Aufgeschobene Kleinigkeiten aus Plan „Netzladen auf Vorrat“ (Deferred minors
 - **Plausibilität (Task 3):** M1 die Toleranz deckt nur einen gerundeten Slot; M2 `_within_need` wird je Slot neu gerechnet; M3 der Rundungstest hängt an der HiGHS-Wahl bei 31 gleichen Preisen (nach Fix-Runde 1 mit fallenden Preisen); die Schleife `_drop_unprofitable`/`_keep_storm` hat keine ausdrückliche Rundengrenze (sie endet beweisbar, weil jede Runde nur Netzladen streicht oder Entladung auf `HALTEN` setzt); der gemischte Slot `gr_b + gr_r` zählt in G; der Rest-Fall Streichen statt Kürzen (oben).
 - **Eigener Befund außerhalb dieses Plans, „Regel R nach dem Aufladen“ (Gesamtreview, schon auf `main`):** In Unwetterhorizonten mit SOC nahe oder unter der Reserve fällt der Plan selten in den Ersatzplan, „Plan unplausibel: Regel R verletzt: Netzladen um …, danach 0,1 bis 0,7 kWh Einspeisung …“ (3 von 150 Zufallshorizonten mit Unwetter, ebenso ohne Bedarf und auf dem Stand vor diesem Plan, `36a20058`; `_keep_storm` läuft nach `_keep_rule_r1`). Gehört in einen eigenen Plan, bevor der Schalter „Unwetter-Reserve“ an ist (Punkt 22). Kosten, solange offen: in diesen Läufen der Ersatzplan statt des Optimierers. Ebenfalls schon auf `main`: Mit „Netzladen erlaubt“ lädt der Optimierer für die Untergrenze teils mit `gr_b` statt `gr_s` (über die 3 kW hinaus oder weil `gr_b` den Restwert behält); rechnet sich dieses Netzladen nicht, streichen es die Absichten, und die Untergrenze wird später oder nicht erreicht (Zufallsfall des Reviews: 50,2 statt 63,0 kWh am Ende des Vorlaufs, auf `main` und nach diesem Plan gleich). Kein Ersatzplan, weil die Prüfung der Unwetter-Reserve nur Entladen unter die Untergrenze meldet.
 - **Nicht in diesem Plan (bewusst):** Vorheizen und Vorkühlen (`thermal_shift`) bewertet Akkuenergie am Ende weiter mit `end_value_ct`, auch über der Grenze (5c ist nicht ausgerollt; Wirkung klein); die Spread-Regel der Plausibilität (`pays_off`) prüft weiter nur, ob es eine spätere teure Entladung gibt, nicht die Menge (mit Grenze und neuem Text kein Fehler mehr, nur eine schwache Prüfung).
+
+Aufgeschobene Kleinigkeiten aus Plan „Auswärts laden im Fahrverhalten“ (Deferred minors), aus den Reviews der Tasks 1 bis 3. Keine davon gefährdet die Anlage:
+
+- **M1:** Der Kommentar „von hinten gezählt“ bei `TESLA_AWAY_CHARGE_TRIPS` in `tests/ui_world.py` ist irreführend.
+- **M2:** Es gibt keinen Grenztest bei genau 3,0 Prozentpunkten (`AWAY_CHARGE_MIN_PP`).
+- **M3:** Der Testname `test_consumption_values_count_for_confidence_not_trip_days` ist veraltet (die Konfidenz zählt jetzt die Tiefstände); ebenso der Kommentar „ein Tag ohne Verbrauch bleibt ohne Ziel“ in `test_driving_profile.py`.
+- **M4:** In `driving_profile._weekday_profile` steht eine überflüssige Leerzeile zwischen dem Aufbau der Verbrauchs- und der Tiefstand-Liste.
+- **M5:** Es gibt keinen Test für den Hinweis bei genau 50 %.
+- **M6:** Ein nicht verlangter Doc-Kommentar in `schemas.ts`.

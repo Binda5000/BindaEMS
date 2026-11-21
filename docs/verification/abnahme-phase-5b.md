@@ -116,6 +116,14 @@ Auto nicht früher fuhr; **Ziel getroffen**, wenn der vorgeschlagene Ziel-SOC mi
 Verbrauch mindestens der Puffer bei der Rückkehr ist. Steht dort „Trefferquote: noch zu wenig Tage“,
 gibt es noch keine Zahl.
 
+**Stand Plan Auswärts laden** (`docs/superpowers/plans/2026-11-21-auswaerts-laden.md`): Die Trefferquote
+„Ziel“ eines Autos, das meist auswärts lädt (Tesla), war vor diesem Plan wenig aussagekräftig, weil
+ein negativer Verbrauch das Ziel fast immer „traf“. Nach dem Ausrollen gilt der tiefste Stand
+unterwegs: Das Ziel ist getroffen, wenn Ziel minus „Abfahrt minus tiefster Stand“ mindestens der
+Puffer ist; Tage, an denen der tiefste Stand unbekannt ist, zählen nicht. Die 28 Tage der Abnahme
+laufen weiter; Tage vor dem Ausrollen bewertet die app mit den Profilen von damals (Regel
+„net“), danach mit der neuen.
+
 Prüfschritte:
 
 1. Am Ende der 28 Tage die Zahlen je Auto abrufen (`GET /api/learning/driving`, `quality`):
