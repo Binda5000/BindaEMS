@@ -685,6 +685,8 @@ class AppRuntime:
                 ),
             ],
             ui_dir=cfg.app.ui_dir,
+            trusted_proxies=cfg.app.trusted_proxies,
+            client_cert=cfg.app.client_cert,
         )
         self._server: _AppServer | None = None
         self._tasks: list[asyncio.Task[None]] = []
@@ -939,13 +941,12 @@ class AppRuntime:
             await asyncio.sleep(RESTART_S)
 
     async def _serve_http(self) -> None:
-        trusted = self._cfg.app.trusted_proxies
+        # X-Forwarded-* wertet create_app aus (nur von app.trusted_proxies), nicht uvicorn
         config = uvicorn.Config(
             self.app,
             host=self._cfg.app.host,
             port=self._cfg.app.port,
-            proxy_headers=bool(trusted),
-            forwarded_allow_ips=",".join(trusted) if trusted else None,
+            proxy_headers=False,
             log_config=None,
             access_log=False,
             lifespan="off",

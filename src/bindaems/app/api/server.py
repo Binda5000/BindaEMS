@@ -14,8 +14,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from bindaems import __version__
+from bindaems.app.api.access import AccessGate, PeerMarker, networks
+from bindaems.shared.config import ClientCertConfig
 
 log = structlog.get_logger(__name__)
 
@@ -80,7 +83,14 @@ class SecurityHeaders:
         await self._app(scope, receive, send_with_headers)
 
 
-def create_app(routers: Sequence[APIRouter], *, ui_dir: Path | None = None) -> FastAPI:
+def create_app(
+    routers: Sequence[APIRouter],
+    *,
+    ui_dir: Path | None = None,
+    trusted_proxies: Sequence[str] = (),
+    client_cert: ClientCertConfig | None = None,
+) -> FastAPI:
+    """Anwendung mit Zugangsprüfung; ``X-Forwarded-*`` zählt nur von ``trusted_proxies``."""
     app = FastAPI(title="BindaEMS", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.exception_handler(StarletteHTTPException)
@@ -104,7 +114,19 @@ def create_app(routers: Sequence[APIRouter], *, ui_dir: Path | None = None) -> F
         headers = security_headers(request.scope["path"], csp)
         return JSONResponse({"detail": "Interner Fehler"}, status_code=500, headers=headers)
 
+    # zuletzt hinzugefügt = außen: PeerMarker → ProxyHeaders → SecurityHeaders → AccessGate,
+    # damit auch die Abweisung der Zugangsprüfung die Security-Header trägt
+    app.add_middleware(
+        AccessGate,
+        trusted_proxies=trusted_proxies,
+        client_cert=client_cert if client_cert is not None else ClientCertConfig(),
+    )
     app.add_middleware(SecurityHeaders, csp=csp)
+    # Netze normalisiert ("10.0.0.9/24" → "10.0.0.0/24"): uvicorn liest sie sonst als Text, der
+    # nie passt; leer = keiner vertraut, X-Forwarded-For wird ignoriert
+    proxies = [str(net) for net in networks(trusted_proxies)]
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=proxies)
+    app.add_middleware(PeerMarker)
     return app
 
 

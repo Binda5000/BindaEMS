@@ -29,7 +29,7 @@ from bindaems.app.db.schema import charging_session, planned_charge
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.ha.entities import build_inputs, retired_discovery
 from bindaems.app.runtime import AppRuntime, StatsInputs
-from bindaems.shared.config import Config, Secrets
+from bindaems.shared.config import ClientCertConfig, Config, Secrets
 from bindaems.shared.control import Intent, SupportIntent
 from bindaems.shared.decisions import decision_to_json
 from bindaems.shared.settings import PlanningSettings, PowerComponent
@@ -183,6 +183,36 @@ def test_with_token_the_notifier_takes_over_the_rejections(cfg: Config, tmp_path
         assert "ha-notify" not in names
     finally:
         rt.engine.dispose()
+
+
+def test_runtime_wires_the_client_cert_gate(cfg: Config, tmp_path) -> None:
+    app_cfg = cfg.app.model_copy(
+        update={
+            "trusted_proxies": ["10.0.0.2"],
+            "client_cert": ClientCertConfig(required=True, exempt_networks=["192.168.1.0/24"]),
+        }
+    )
+    rt = make_runtime(cfg.model_copy(update={"app": app_cfg}), tmp_path)
+    try:
+        client = TestClient(rt.app, base_url="https://testserver", client=("10.0.0.2", 50000))
+        outside = {"X-Forwarded-For": "203.0.113.7"}
+        assert client.get("/api/system", headers=outside).status_code == 403
+        assert client.get("/health", headers=outside).status_code == 200
+        home = {"X-Forwarded-For": "192.168.1.20"}
+        assert client.get("/api/system", headers=home).status_code == 401  # weiter zum Login
+    finally:
+        rt.engine.dispose()
+
+
+async def test_http_server_leaves_forwarded_headers_to_the_app(runtime, monkeypatch) -> None:
+    seen: list[object] = []
+
+    async def serve(self, sockets=None) -> None:
+        seen.append(self.config)
+
+    monkeypatch.setattr("bindaems.app.runtime._AppServer.serve", serve)
+    await runtime._serve_http()
+    assert len(seen) == 1 and seen[0].proxy_headers is False
 
 
 def test_runtime_wires_the_control_routes(runtime) -> None:
