@@ -24,7 +24,7 @@ keine Migration, keine Änderung an `config.yaml`; der core bleibt unverändert.
 16.11.2026 auf `main`, **nicht ausgerollt** (Punkt 29 unter „Offen an der Anlage“). Nur app, keine Migration,
 keine Änderung an `config.yaml`; der core bleibt unverändert. Der Restwertfaktor steht an der Anlage seit 14.11.2026, 19:31 auf 0,6.
 **Plan Auswärts laden im Fahrverhalten** (`docs/superpowers/plans/2026-11-21-auswaerts-laden.md`) ist umgesetzt und seit 23.11.2026 auf `main`, **nicht ausgerollt** (Punkt 30 unter „Offen an der Anlage“). Nur app und UI, keine Migration; der core bleibt unverändert.
-**Plan Fernzugriff mit Client-Zertifikaten** (`docs/superpowers/plans/2026-11-23-fernzugriff-client-zertifikate.md`) ist umgesetzt auf dem Branch `claude/project-thread-5jm8c1`, noch nicht auf `main`, nicht ausgerollt (Punkt 31 unter „Offen an der Anlage“). Nur app, keine Migration; der core bleibt unverändert, ab Werk aus (`app.client_cert.required: false`).
+**Plan Fernzugriff mit Client-Zertifikaten** (`docs/superpowers/plans/2026-11-23-fernzugriff-client-zertifikate.md`) ist umgesetzt und seit 23.11.2026 auf `main`, nicht ausgerollt (Punkt 31 unter „Offen an der Anlage“). Nur app, keine Migration; der core bleibt unverändert, ab Werk aus (`app.client_cert.required: false`).
 Offen an der Anlage, in dieser Reihenfolge:
 
 1. Die ersten Tage mit Victron live beobachten (Zeitplan „Der core führt den Plan aus.“, Netzladen nur
@@ -1349,7 +1349,7 @@ Spec: 8.3, Regel 7, „Stand Plan Phasenzuordnung“. Betrieb: `docs/betrieb.md`
 | `docs/verification/abnahme-phase-5a.md` | Checkliste für die Abnahme 5a (Lastmodell): 28 Tage ab dem Ausrollen, Prognosegüte (Modell mindestens 10 % besser oder Profil automatisch aktiv), Verfahren und Grund in der Karte „Lastprognose“, Registry (jede Nacht eine Version), `load-model` ohne Fehler, Rückfall bei fehlender Modelldatei |
 | `docs/verification/abnahme-phase-5b.md` | Checkliste für die Abnahme 5b (Fahrverhalten): 28 Tage ab dem Ausrollen, Vorschläge mit Konfidenz auf „Prognosen“, „Laden“ und in HA, Trefferquote je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch die Automatik, erwartetes Auto im Zeitplan und beim Anstecken ersetzt |
 | `docs/superpowers/plans/2026-11-21-auswaerts-laden.md` | Plan Auswärts laden im Fahrverhalten, 4 Tasks, 10 Entscheidungen, freigegeben vom Betreiber am 21.11.2026 (Variante A); umgesetzt und seit 23.11.2026 auf `main`, nicht ausgerollt (Punkt 30); nur app und UI |
-| `docs/superpowers/plans/2026-11-23-fernzugriff-client-zertifikate.md` | Plan Fernzugriff mit Client-Zertifikaten (HAProxy, mTLS, Nachprüfung in der app), 4 Tasks, 6 Entscheidungen; umgesetzt auf dem Branch `claude/project-thread-5jm8c1`, noch nicht auf `main`, nicht ausgerollt (Punkt 31); nur app |
+| `docs/superpowers/plans/2026-11-23-fernzugriff-client-zertifikate.md` | Plan Fernzugriff mit Client-Zertifikaten (HAProxy, mTLS, Nachprüfung in der app), 4 Tasks, 6 Entscheidungen; umgesetzt und seit 23.11.2026 auf `main`, nicht ausgerollt (Punkt 31); nur app |
 | `docs/verification/abnahme-phase-5c.md` | Checkliste für die Abnahme 5c (Vorheizen und Vorkühlen): Teil A 14 Tage Vorschau mit Schalter aus (Heizmodell taugt, Vorschau in jedem Plan ohne Fehler, τ und `C` plausibel), Teil B 14 Tage live (95 % der Viertelstunden im Komfortband ±0,5 K, ±3 K und Schrittregel wie 6a, Akku-Wächter binnen 6 min, Ersparnis nicht negativ, Räume per Sichtprüfung, nichts Unangenehmes) |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a, 5b, 5c und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
@@ -2329,7 +2329,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       in InfluxDB: `SELECT last("pct") FROM "soc" WHERE "id" = 'tesla' AND time > now() - 2d GROUP BY time(5m) fill(none)` muss tagsüber Werte haben; dann melden, bevor die Automatik
       das Ziel übernimmt. Betrieb: `docs/betrieb.md`, „Fahrverhalten (Phase 5b)“, „Laden außer Haus“; Spec: 10.4 und 13, „Stand Plan Auswärts laden“;
       Abnahme: `docs/verification/abnahme-phase-5b.md`. Aufgeschobene Kleinigkeiten stehen unter „Bewusst offen gelassen“.
-  31. **Fernzugriff mit Client-Zertifikaten einrichten und ausrollen:** umgesetzt auf dem Branch `claude/project-thread-5jm8c1`, noch nicht auf `main`, **nicht ausgerollt**;
+  31. **Fernzugriff mit Client-Zertifikaten einrichten und ausrollen:** umgesetzt und seit 23.11.2026 auf `main`, **nicht ausgerollt**;
       **nur `ems-app`**, keine Migration, der core bleibt unverändert; ab Werk aus (`app.client_cert.required: false`), das Image ändert ohne Eintrag in `config.yaml` nichts.
       Kann mit jedem gemeinsamen Pull nach Stufe 2 mit (core und app wie immer gemeinsam, feste Version). Nichts wird geschaltet. **An der Anlage, in dieser Reihenfolge**
       (Einzelheiten und die HAProxy-Zeilen: `docs/betrieb.md`, Abschnitt 6, „Fernzugriff mit Client-Zertifikaten (HAProxy)“):
