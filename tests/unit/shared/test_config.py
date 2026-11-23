@@ -152,6 +152,50 @@ def test_trusted_proxies_accept_addresses_and_networks(tmp_path: Path) -> None:
     assert load_config(p).app.trusted_proxies == ["10.0.0.0/8", "fd00::1"]
 
 
+def test_client_cert_defaults_off(tmp_path: Path) -> None:
+    cfg = load_config(write_cfg(tmp_path, lambda d: None))
+    assert cfg.app.client_cert.required is False
+    assert cfg.app.client_cert.exempt_networks == []
+
+
+def test_client_cert_required_needs_trusted_proxy(tmp_path: Path) -> None:
+    p = write_cfg(
+        tmp_path, lambda d: d["app"].update(trusted_proxies=[], client_cert={"required": True})
+    )
+    with pytest.raises(ConfigError, match=r"client_cert\.required verlangt app\.trusted_proxies"):
+        load_config(p)
+
+
+def test_client_cert_required_needs_secure_cookies(tmp_path: Path) -> None:
+    p = write_cfg(
+        tmp_path,
+        lambda d: d["app"].update(
+            trusted_proxies=["192.168.1.10"], cookie_secure=False, client_cert={"required": True}
+        ),
+    )
+    with pytest.raises(ConfigError, match=r"client_cert\.required verlangt app\.cookie_secure"):
+        load_config(p)
+
+
+@pytest.mark.parametrize("value", ["lan", "192.168.1.0/33"])
+def test_exempt_networks_must_be_networks(tmp_path: Path, value: str) -> None:
+    p = write_cfg(tmp_path, lambda d: d["app"].update(client_cert={"exempt_networks": [value]}))
+    with pytest.raises(ConfigError, match="exempt_networks"):
+        load_config(p)
+
+
+def test_client_cert_accepts_valid_settings(tmp_path: Path) -> None:
+    p = write_cfg(
+        tmp_path,
+        lambda d: d["app"].update(
+            trusted_proxies=["192.168.1.10"],
+            client_cert={"required": True, "exempt_networks": ["192.168.1.0/24"]},
+        ),
+    )
+    cc = load_config(p).app.client_cert
+    assert cc.required is True and cc.exempt_networks == ["192.168.1.0/24"]
+
+
 def test_ha_mqtt_topics_must_be_plain_names(tmp_path: Path) -> None:
     p = write_cfg(tmp_path, lambda d: d["homeassistant"]["mqtt"].update(base_topic="bindaems/#"))
     with pytest.raises(ConfigError, match="base_topic"):

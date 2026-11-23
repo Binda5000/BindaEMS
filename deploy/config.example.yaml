@@ -153,6 +153,11 @@ app:
   core_url: http://ems-core:8081
   trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
   cookie_secure: true
+  # Fernzugriff mit Client-Zertifikaten (docs/betrieb.md, Abschnitt 6): erst einschalten, wenn HAProxy
+  # mTLS prüft und die Kopfzeilen X-BindaEMS-Client-Cert/-CN setzt
+  # client_cert:
+  #   required: true
+  #   exempt_networks: [192.168.1.0/24]   # Heimnetz ohne Zertifikat; leer = jedes Gerät braucht eins
   # ping_interval_s: 300   # Takt des Lebenszeichens in s (60 bis 3600); es wird nur gesendet, wenn BINDAEMS_PING_URL gesetzt ist
 
 # Wärme und Kälte (Phase 6a): die Klimaanlage an der UVR610. Der core liest vom C.M.I. per CoE V2 (UDP)

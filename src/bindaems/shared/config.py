@@ -580,6 +580,28 @@ class CoreApiConfig(_Model):
     port: Annotated[int, Field(ge=1, le=65535)] = 8081
 
 
+def _check_networks(value: list[str]) -> list[str]:
+    """Prüft, dass jede Angabe eine IP-Adresse oder ein Netz ist (Proxy- und Netzlisten)."""
+    for entry in value:
+        try:
+            ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            raise ValueError(f"keine gültige IP-Adresse oder kein gültiges Netz: {entry}") from None
+    return value
+
+
+class ClientCertConfig(_Model):
+    """Fernzugriff mit Client-Zertifikat: HAProxy prüft mTLS und setzt die Kopfzeilen."""
+
+    required: bool = False
+    exempt_networks: list[str] = Field(default_factory=list)  # Netze ohne Zertifikatspflicht
+
+    @field_validator("exempt_networks")
+    @classmethod
+    def _exempt_are_networks(cls, value: list[str]) -> list[str]:
+        return _check_networks(value)
+
+
 class AppConfig(_Model):
     """ems-app: HTTP-Server, Datenablage und Anbindung an den core."""
 
@@ -594,17 +616,21 @@ class AppConfig(_Model):
     decisions_keep_days: Annotated[int, Field(ge=1, le=3650)] = 180  # Entscheidungslog in SQLite
     ping_interval_s: Annotated[float, Field(ge=60, le=3600)] = 300.0  # Takt des Lebenszeichens
 
+    client_cert: ClientCertConfig = Field(default_factory=ClientCertConfig)
+
     @field_validator("trusted_proxies")
     @classmethod
     def _proxies_are_networks(cls, value: list[str]) -> list[str]:
-        for entry in value:
-            try:
-                ipaddress.ip_network(entry, strict=False)
-            except ValueError:
-                raise ValueError(
-                    f"keine gültige IP-Adresse oder kein gültiges Netz: {entry}"
-                ) from None
-        return value
+        return _check_networks(value)
+
+    @model_validator(mode="after")
+    def _client_cert_needs_proxy_and_cookies(self) -> Self:
+        if self.client_cert.required:
+            if not self.trusted_proxies:
+                raise ValueError("client_cert.required verlangt app.trusted_proxies")
+            if not self.cookie_secure:
+                raise ValueError("client_cert.required verlangt app.cookie_secure: true")
+        return self
 
 
 class SafetyConfig(_Model):
