@@ -176,6 +176,21 @@ def test_proxy_given_as_network_with_host_bits_is_trusted() -> None:
     assert _access(response).client_ip == "203.0.113.7"
 
 
+def test_ipv4_mapped_lan_client_counts_as_lan() -> None:
+    response = _client("::ffff:192.168.1.5", exempt=RFC1918).get("/api/ping")
+    assert response.status_code == 200 and _access(response).remote is False
+
+
+def test_ipv4_mapped_proxy_is_trusted() -> None:
+    # Dual-Stack-Socket: der Proxy 10.0.0.2 erscheint als ::ffff:10.0.0.2
+    headers = {"X-Forwarded-For": "203.0.113.7", **CERT}
+    response = _client("::ffff:10.0.0.2").get("/api/ping", headers=headers)
+    assert response.status_code == 200
+    assert _access(response) == Access(
+        client_ip="203.0.113.7", via_proxy=True, remote=True, device="handy-binda"
+    )
+
+
 def test_websocket_without_cert_is_rejected() -> None:
     client = _client(PROXY)
     with pytest.raises(WebSocketDisconnect) as excinfo:

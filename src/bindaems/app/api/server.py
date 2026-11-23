@@ -17,7 +17,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from bindaems import __version__
-from bindaems.app.api.access import AccessGate, PeerMarker, networks
+from bindaems.app.api.access import AccessGate, PeerMarker, proxy_hosts
 from bindaems.shared.config import ClientCertConfig
 
 log = structlog.get_logger(__name__)
@@ -123,9 +123,9 @@ def create_app(
     )
     app.add_middleware(SecurityHeaders, csp=csp)
     # Netze normalisiert ("10.0.0.9/24" → "10.0.0.0/24"): uvicorn liest sie sonst als Text, der
-    # nie passt; leer = keiner vertraut, X-Forwarded-For wird ignoriert
-    proxies = [str(net) for net in networks(trusted_proxies)]
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=proxies)
+    # nie passt; IPv4 auch als ::ffff:…, wie AccessGate; leer = keiner vertraut, X-Forwarded-For
+    # wird ignoriert
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=proxy_hosts(trusted_proxies))
     app.add_middleware(PeerMarker)
     return app
 

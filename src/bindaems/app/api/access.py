@@ -69,6 +69,17 @@ def networks(entries: Iterable[str]) -> tuple[_Network, ...]:
     return tuple(ipaddress.ip_network(entry, strict=False) for entry in entries)
 
 
+def proxy_hosts(entries: Iterable[str]) -> list[str]:
+    """``trusted_proxies`` für uvicorns ``ProxyHeadersMiddleware``: normalisiert und IPv4-Netze
+    zusätzlich als IPv4-gemappte IPv6-Netze (``::ffff:…``), wie sie ein Dual-Stack-Socket meldet."""
+    hosts: list[str] = []
+    for net in networks(entries):
+        hosts.append(str(net))
+        if isinstance(net, ipaddress.IPv4Network):
+            hosts.append(f"::ffff:{net.network_address}/{96 + net.prefixlen}")
+    return hosts
+
+
 def _within(host: str | None, nets: Sequence[_Network]) -> bool:
     if not host:
         return False
@@ -76,6 +87,8 @@ def _within(host: str | None, nets: Sequence[_Network]) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:  # z. B. "testclient" oder ein Unix-Socket
         return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped  # ::ffff:192.168.1.5 ist 192.168.1.5
     return any(ip in net for net in nets)
 
 
