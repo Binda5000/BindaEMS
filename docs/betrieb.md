@@ -929,6 +929,122 @@ Proxmox-Firewall der VM oder in der iptables-Kette `DOCKER-USER`. Läuft der Pro
 Container auf dieser VM, entfernst du `ports` beim Dienst `ems-app` und hängst den Proxy an
 das Netz `internal`; er erreicht die app dann unter `http://ems-app:8080`.
 
+### Fernzugriff mit Client-Zertifikaten (HAProxy)
+
+Von unterwegs erreichst du das EMS über VPN oder, wenn du es willst, über den Reverse Proxy
+mit Client-Zertifikat (mTLS). Das Zertifikat ist der Besitzfaktor (das Gerät), das Passwort der
+Wissensfaktor. HAProxy prüft das Zertifikat, die app prüft nach (`app.client_cert`), damit ein
+Fehler in der Proxy-Konfiguration das EMS nicht offen ins Internet stellt. Die Beschreibung gilt
+für das HAProxy-Plugin der OPNsense; Hostname hier `ems.example.at`, Heimnetz alle Netze nach
+RFC 1918.
+
+**Kopfzeilen zwischen HAProxy und app**
+
+| Kopfzeile | Wert | Wer setzt sie |
+|---|---|---|
+| `X-BindaEMS-Client-Cert` | `1`, nur wenn `ssl_c_used` und `ssl_c_verify` = 0 | HAProxy; vorher immer gelöscht |
+| `X-BindaEMS-Client-CN` | CN des Zertifikats (Gerätename), höchstens 64 Zeichen | HAProxy; vorher immer gelöscht |
+| `X-Forwarded-For`, `X-Forwarded-Proto` | wie bisher (`option forwardfor`, `https`) | HAProxy |
+
+Die app wertet beide `X-BindaEMS-*` nur aus, wenn die direkte Gegenstelle in
+`app.trusted_proxies` liegt; von jeder anderen Adresse ignoriert sie sie.
+
+**Einrichtung in der OPNsense** (nichts davon schaltet einen Aktor)
+
+1. **CA und Sperrliste:** „System → Trust → Authorities“: neue interne CA, z. B. „BindaEMS
+   Client-CA“ (EC P-256 oder RSA 2048, 10 Jahre). „System → Trust → Revocation“: interne CRL für
+   diese CA anlegen, mit langer Lebensdauer (z. B. 3650 Tage).
+2. **Ein Zertifikat je Gerät:** „System → Trust → Certificates“: Typ „Client“, ausgestellt von
+   der Client-CA, CN = Gerätename (z. B. `handy-anna`, `macbook-anna`), 825 Tage. Als PKCS #12
+   mit Passwort herunterladen und auf das Gerät bringen (Import siehe unten). Ein verlorenes
+   Gerät widerrufst du dort, danach im HAProxy „Apply“.
+3. **Public Service:** der vorhandene für `ems.example.at` auf der WAN-Adresse, Port 443:
+   „Client Certificate Auth“ an, „Verification“ auf `optional` (das Heimnetz kommt ohne
+   Zertifikat; teilen sich andere Dienste den Public Service, bleiben sie ohne Zertifikat
+   erreichbar) oder `required` (jedes Gerät braucht eins), „Certificate Authorities“ die
+   Client-CA **und** „CRLs“ die CRL aus Schritt 1. Ohne CRL wirkt kein Widerruf; eine
+   abgelaufene CRL lässt HAProxy **jedes** Zertifikat ablehnen.
+4. **Backend des EMS:** „X-Forwarded-For“ an, Tunnel-Timeout 1 h für den Live-WebSocket,
+   Health-Check `GET /health`, dazu unter „Option pass-through“ diese Zeilen. Sie gelten
+   unabhängig davon, welcher Public Service die Verbindung angenommen hat:
+
+```haproxy
+http-request del-header X-BindaEMS-Client-Cert
+http-request del-header X-BindaEMS-Client-CN
+# andere TLS-Verbindung (anderer SNI, HTTP/2-Coalescing): der Browser baut eine eigene auf
+http-request return status 421 if !{ ssl_fc_sni -i ems.example.at }
+http-request deny deny_status 403 if !{ ssl_c_used } !{ src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 }
+http-request deny deny_status 403 if { ssl_c_used } !{ ssl_c_verify 0 }
+http-request set-header X-BindaEMS-Client-Cert 1 if { ssl_c_used } { ssl_c_verify 0 }
+http-request set-header X-BindaEMS-Client-CN %[ssl_c_s_dn(CN)] if { ssl_c_used } { ssl_c_verify 0 }
+http-response set-header Strict-Transport-Security "max-age=31536000"
+```
+
+5. **Firewall:** WAN → 443 zur OPNsense, falls noch nicht vorhanden. Port 8080 der VM bleibt nur
+   vom Proxy erreichbar (Proxmox-Firewall oder `DOCKER-USER`, siehe oben). Dann „Apply“.
+
+Hinweise:
+
+- `app.trusted_proxies` nennt **nur** die Adresse des HAProxy (der OPNsense), nie ein ganzes
+  LAN. Sonst könnte dort jedes Gerät `X-Forwarded-For` und die `X-BindaEMS-*`-Kopfzeilen selbst
+  wählen und die Prüfung umgehen.
+- Teilt sich der Public Service Port 443 mit anderen Diensten, fragt der Browser eines Geräts
+  mit EMS-Zertifikat auch dort nach einem Zertifikat; die Auswahl „keins“ genügt.
+- Firefox auf Android nutzt keine Client-Zertifikate aus dem System; dort Chrome nehmen.
+- `app.client_cert` erst einschalten, wenn die Prüfungen unten bestehen.
+
+**Zertifikat auf dem Gerät installieren**
+
+- **Android:** Datei `.p12` aufs Gerät, dann Einstellungen → Sicherheit → Verschlüsselung und
+  Anmeldedaten → Zertifikat installieren → „VPN- und App-Nutzerzertifikat“, Passwort eingeben.
+  Chrome und die EMS-App vom Home-Bildschirm fragen danach beim ersten Aufruf nach dem Zertifikat.
+- **macOS:** Doppelklick auf die `.p12`, Schlüsselbund „Anmeldung“, Passwort eingeben.
+- Lehnt ein Gerät die Datei mit „falsches Passwort“ ab (neuere OpenSSL-Verschlüsselung),
+  wandle sie um:
+
+  ```bash
+  openssl pkcs12 -in gerät.p12 -nodes -out gerät.pem
+  openssl pkcs12 -export -legacy -in gerät.pem -out gerät-legacy.p12
+  ```
+
+  Danach `gerät.pem` löschen; es enthält den Schlüssel.
+
+**Prüfen, noch mit `client_cert.required: false`**
+
+1. Echte Adressen: Vom Handy im Mobilnetz (WLAN aus) die Seite öffnen. Im HAProxy-Log und im
+   Log der app (`Anmeldung erfolgreich … ip=`) muss die öffentliche Adresse stehen, keine
+   `10.…`, `172.16–31.…` oder `192.168.…`.
+2. Handy ohne Zertifikat im Mobilnetz: abgelehnt (403).
+3. Mit Zertifikat: Zertifikat auswählen, anmelden, Live-Werte auf der Übersicht, **in der App
+   vom Home-Bildschirm** und auf dem MacBook (Chrome und Safari). Zeigt ein Gerät keine
+   Live-Werte, ist der WebSocket `/api/live` mit dem Zertifikat nicht aufgebaut worden; melde es.
+4. Ein Testzertifikat anlegen, widerrufen, „Apply“: abgelehnt.
+5. Umgehung von außen (anderer SNI, Host des EMS): muss 421 liefern, nicht 401:
+
+   ```bash
+   curl -k --resolve andere.example.at:443:<öffentliche-IP> -H 'Host: ems.example.at' \
+     https://andere.example.at/api/auth/me
+   ```
+
+6. Im Heimnetz ohne Zertifikat wie bisher.
+
+**Einschalten:** in `config.yaml`
+
+```yaml
+app:
+  client_cert:
+    required: true
+    exempt_networks: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+```
+
+(verlangt `app.trusted_proxies` und `app.cookie_secure: true`), dann
+`docker compose restart ems-app` (gleiches Image; die app liest nur `config.yaml` neu).
+Danach Prüfung 2, 3 und 6 noch einmal. Ab jetzt weist die app Anfragen von außen ohne geprüftes
+Zertifikat mit 403 ab (`/health` bleibt offen; der Live-WebSocket wird vor dem Annehmen
+geschlossen), und Admins ohne TOTP melden sich von unterwegs nicht mehr an. Im Log erscheinen
+bei jeder Anmeldung `ip=` und `device=` (der CN des Zertifikats), auch bei „Anmeldung
+abgelehnt“. Rückweg: `required: false` und `restart ems-app`.
+
 ## 7. Home Assistant über MQTT
 
 Die app meldet ihre Sensoren per MQTT Discovery am Mosquitto von Home Assistant an
@@ -1908,7 +2024,10 @@ scannst den QR-Code mit einer Authenticator-App (oder tippst das angezeigte Gehe
 den sechsstelligen Bestätigungscode ein und wählst „Aktivieren“. Ab dann fragt die Anmeldung
 nach Passwort und Bestätigungscode. Für Admins ist das dringend empfohlen; „System“ und die
 Übersicht weisen auf Admins ohne TOTP hin. Ist das Telefon verloren, hilft `reset-totp`
-(Abschnitt 5).
+(Abschnitt 5). Ist `app.client_cert.required` an (Abschnitt 6, „Fernzugriff mit Client-Zertifikaten
+(HAProxy)“), melden sich Admins von unterwegs nur noch mit TOTP an; ohne TOTP lehnt die app
+nach richtigem Passwort ab („Admins melden sich von unterwegs nur mit TOTP an …“), im Heimnetz
+richtest du es unter „Konto“ ein. Ab Werk ist das aus.
 
 ### Sitzung und Leerlauf
 

@@ -56,7 +56,7 @@ Architektur in zwei Sätzen: Der kleine, kritische Prozess `ems-core` liest alle
 - 1/3-Phasen-Umschaltung. Die Hardware fehlt; die Schnittstelle ist vorbereitet.
 - Steuerung im Netzausfall: Das EMS überwacht dann nur.
 - Herunterfahren des Proxmox-Clusters (NUT o. Ä.).
-- Öffentlicher Internetzugang: Zugriff von unterwegs läuft über VPN.
+- Öffentlicher Internetzugang ohne Client-Zertifikat: von unterwegs über VPN oder über den Reverse Proxy mit mTLS (14).
 - Cloud-Abhängigkeiten für sicherheitsrelevante Funktionen.
 
 ---
@@ -209,7 +209,7 @@ Alles, was in diesem Abschnitt als „zu prüfen“ markiert ist, wird im Prüfp
 | E10 | Gemischt-ganzzahlige Optimierung (MILP) mit HiGHS plus regelbasierter Ersatzplan | optimale Planung inklusive Binärentscheidungen (Mindestladeleistung); robust bei Solverproblemen | reine Heuristik |
 | E11 | Open-Meteo mit eigenem PV-Modell und Kalibrierung | kostenlos, Einstrahlung je Fläche | Solcast oder Forecast.Solar als Standard |
 | E12 | Python ≥ 3.12 (asyncio, FastAPI, pymodbus, aiomqtt, httpx) | Vorschlag der Spec; gutes Ökosystem für Optimierung und ML | – |
-| E13 | Fernzugriff über VPN, TOTP optional | kein öffentlicher Angriffspunkt | öffentlicher Zugriff mit Pflicht-2FA |
+| E13 | Fernzugriff über VPN oder Reverse Proxy mit Client-Zertifikat (mTLS) und Nachprüfung in der app; TOTP für Admins von unterwegs Pflicht | Besitzfaktor (Gerät) vor dem Login, kein offener Angriffspunkt; ab Werk aus | öffentlicher Zugriff ohne Zertifikat, nur mit Pflicht-2FA |
 
 ---
 
@@ -2304,7 +2304,24 @@ pv:
   - Vertrauen in `X-Forwarded-*` nur vom konfigurierten Reverse Proxy
 - **Konten:** keine Selbstregistrierung; den ersten Admin legt ein CLI-Befehl an.
 - **Protokoll:** Jede Änderung landet im Änderungsprotokoll.
-- **Zugriff:** HTTPS terminiert am Reverse Proxy; von außen nur über VPN.
+- **Zugriff:** HTTPS terminiert am Reverse Proxy; von außen über VPN oder über den Reverse Proxy mit Client-Zertifikat (mTLS), das die app nachprüft (Stand Plan Fernzugriff unten).
+
+**Stand Plan Fernzugriff (23.11.2026)** (`docs/superpowers/plans/2026-11-23-fernzugriff-client-zertifikate.md`, Entscheidungen 1 bis 6; Betrieb: `docs/betrieb.md`, Abschnitt 6, „Fernzugriff mit Client-Zertifikaten (HAProxy)“): Öffentlicher Zugriff ist möglich, aber nur nach mTLS am Reverse Proxy; die app prüft nach. Das Zertifikat ist der Besitzfaktor (Gerät), das Passwort der Wissensfaktor; VPN bleibt erlaubt. Nur app, keine Migration, der core bleibt unverändert, ab Werk aus (`app.client_cert.required: false`: dieselben Antworten wie vor dem Plan).
+- **Kopfzeilen-Vertrag:** HAProxy löscht `X-BindaEMS-Client-Cert` und `X-BindaEMS-Client-CN` aus jeder Anfrage und setzt sie nur nach erfolgreicher Prüfung neu: `X-BindaEMS-Client-Cert: 1` nur bei `ssl_c_used` und `ssl_c_verify` = 0, `X-BindaEMS-Client-CN` mit dem CN (Gerätename), von der app auf 64 Zeichen gekürzt. Dazu `X-Forwarded-For` und `X-Forwarded-Proto` wie heute. Die app wertet beide `X-BindaEMS-*` nur aus, wenn die direkte Gegenstelle in `app.trusted_proxies` liegt (`app/api/access.py`); von jeder anderen Adresse ignoriert sie sie, ebenso `X-Forwarded-For` (uvicorn trägt die Adresse nicht mehr selbst um, `proxy_headers` ist aus, das macht `ProxyHeadersMiddleware` mit denselben Proxys).
+- **Einstellung:** `app.client_cert.required` (Standard `false`) und `app.client_cert.exempt_networks` (Standard leer; Betrieb: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`). `required: true` verlangt `app.trusted_proxies` und `app.cookie_secure: true`; jede Angabe in `exempt_networks` muss ein Netz oder eine Adresse sein.
+- **Regeln** bei `required: true` (die Tabelle gilt für HTTP und WebSocket):
+
+  | Anfrage | Ergebnis |
+  |---|---|
+  | `/health` (genau dieser Pfad) | immer erlaubt, ohne Zertifikat |
+  | echte Client-Adresse in `exempt_networks` (Heimnetz) | erlaubt wie heute |
+  | von außen, Proxy meldet geprüftes Zertifikat (`X-BindaEMS-Client-Cert: 1`) | erlaubt; der CN steht als Gerät im Log |
+  | von außen ohne Zertifikat, Gegenstelle kein vertrauter Proxy oder Kopfzeile fehlt, anders als `1` oder mehrfach | abgewiesen: HTTP 403 `{"detail": "Zugriff nur mit Client-Zertifikat"}`, WebSocket Schließcode 1008 vor dem Annehmen |
+
+  Die echte Adresse ist die, die der vertraute Proxy per `X-Forwarded-For` anhängt (der letzte Eintrag, nicht ein vom Client mitgeschickter).
+- **Festlegungen der Umsetzung:** Eine Anfrage über den Proxy ohne verwertbares `X-Forwarded-For` zählt als von außen, nie als Heimnetz (der Proxy steht meist selbst im Heimnetz). Eine mehrfach gesendete `X-BindaEMS-*`-Kopfzeile zählt als fehlend; nur der Wert `1` gilt als Zertifikat. Die Einträge in `trusted_proxies` werden vor der Auswertung zu Netzen normalisiert (auch `10.0.0.9/24`). Die 403-Antwort trägt die Security-Header und `Cache-Control: no-store`. Die Abweisung wird je Adresse höchstens einmal pro Minute geloggt („Zugriff ohne Client-Zertifikat abgewiesen“, mit Adresse und Pfad). Die Anmeldung loggt Gerät (CN) und Adresse in „Anmeldung erfolgreich“, „Anmeldung fehlgeschlagen“, „Anmeldung gesperrt“ und „Anmeldung abgelehnt“.
+- **TOTP für Admins von unterwegs:** Gilt nur bei `app.client_cert.required: true` (ab Werk aus, dann keine TOTP-Pflicht). Meldet sich ein Admin ohne eingerichtetes TOTP von außen mit richtigem Passwort an, lehnt die app mit 403 ab („Admins melden sich von unterwegs nur mit TOTP an. Richte TOTP im Heimnetz unter „Konto“ ein.“); es entsteht keine Sitzung, und der Fehlversuchszähler wird zurückgesetzt. Mit falschem Passwort bleibt es bei 401 und einem gezählten Fehlversuch, die Rolle wird nicht verraten. Lesen und Bedienen brauchen nur Passwort und Zertifikat. Eine im Heimnetz begonnene Admin-Sitzung endet wie bisher nach 30 min Leerlauf.
+- **Nicht Teil des Plans:** ein Ersatz für den Live-WebSocket per Abfragen (erst, wenn die Prüfung an der Anlage zeigt, dass ein Gerät ihn mit Zertifikat nicht aufbaut), eine CA oder Skripte im Repo (CA, Zertifikate und Sperrliste liegen in der OPNsense).
 
 ---
 
