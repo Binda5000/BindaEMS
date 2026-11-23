@@ -4497,3 +4497,15 @@ Aufgeschobene Kleinigkeiten aus Plan „Auswärts laden im Fahrverhalten“ (Def
 - **M5:** Es gibt keinen Test für den Hinweis bei genau 50 %.
 - **Rückweg:** Ein älteres Image liest die neuen Zeilen in `driving_profile` nicht (`extra="forbid"`): Es meldet je Zeile und Lauf „Ein abgelegter Stand des Fahrverhaltens ist unlesbar“, nimmt den jüngsten alten Stand und rechnet beim Start neu; die Trefferquote übergeht die neuen Stände. Harmlos; die Zeilen fallen nach 70 Tagen aus `driving_profile`, nichts von Hand löschen. Das steht noch nicht in Punkt 30 und `betrieb.md`.
 - **Zahl im Betrieb:** „etwa 9 von 10 Fahrten“ in `betrieb.md` und Punkt 30 passt nicht ganz zur Anzeige; der Kopf zählt alle Fahrtage im 56-Tage-Fenster, an der Anlage also etwa „36 von 40“.
+
+Aufgeschobene Kleinigkeiten aus Plan „Fernzugriff mit Client-Zertifikaten“ (Deferred minors), aus den Reviews der Tasks 1 bis 4, dem Gesamtreview und dem Re-Review der Fix-Welle (die Nummern gelten nur hier). Keine davon öffnet den Zugang; wo sie wirken, weist die app eher zu viel ab.
+
+- **Rulings:** Die TOTP-Pflicht für Admins von unterwegs gilt nur mit `app.client_cert.required: true` (ab Werk wäre sonst jeder Admin ohne TOTP ausgesperrt). Das CA-Skript im Repo entfällt (Entscheidung 3: CA, Zertifikate und CRL in der OPNsense).
+- **M-a:** Ein Eintrag in `trusted_proxies` oder `exempt_networks` in der Form `::ffff:…` passt seit der Normalisierung IPv4-gemappter Adressen nicht mehr (die app weist dann ab und warnt „trusted_proxies prüfen“). Einträge als IPv4 schreiben; später entweder beide Formen prüfen oder solche Einträge in der Konfiguration ablehnen.
+- **M-b:** Die Erkennung „Proxy-Kopfzeilen von nicht vertrauter Gegenstelle“ prüft `X-Forwarded-For` und `X-BindaEMS-*`, nicht `X-Forwarded-Proto`. Ist `trusted_proxies` falsch **und** im Backend „X-Forwarded-For“ aus, käme eine Anfrage ohne Zertifikat als Heimnetz durch. Das Betriebshandbuch verlangt „X-Forwarded-For“ an; `x-forwarded-proto` in die Erkennung aufzunehmen wäre eine billige Härtung.
+- **M3:** Die Drossel der Warnungen leert sich, wenn mehr als 1024 Adressen in einer Minute abgewiesen werden (mehr Log, begrenzter Speicher).
+- **M4:** Bei einem abgewiesenen Admin (unterwegs ohne TOTP) läuft das Rehash des Passworts trotzdem (harmlos, das Passwort war richtig).
+- **M6:** Es gibt keinen Routen-Test für einen Admin mit TOTP von unterwegs (der Service-Test deckt es).
+- **M8:** `Cache-Control: no-store` trägt die 403 nur unter `/api`.
+- **M9:** Der Satz „Firefox auf Android nutzt keine Client-Zertifikate aus dem System“ in `betrieb.md` ist nicht an der Anlage geprüft.
+- **Feldtest offen (Entscheidung 4):** Ob Chrome in der App vom Home-Bildschirm (Android) und Safari auf dem Mac das Zertifikat auch für den Live-WebSocket `/api/live` mitschicken, zeigt erst A6 an der Anlage; scheitert es, folgt ein eigener kleiner Plan (Ersatz über Abfragen).
