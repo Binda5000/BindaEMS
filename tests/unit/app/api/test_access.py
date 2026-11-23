@@ -7,6 +7,7 @@ from structlog.testing import capture_logs
 from bindaems.app.api.access import (
     CN_MAX,
     LOG_MEMORY,
+    UNTRUSTED_WARNING,
     Access,
     AccessGate,
     PeerMarker,
@@ -16,6 +17,7 @@ from bindaems.app.api.server import create_app
 from bindaems.shared.config import ClientCertConfig
 
 PROXY = "10.0.0.2"
+RFC1918 = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 DENIED = {"detail": "Zugriff nur mit Client-Zertifikat"}
 CERT = {"X-BindaEMS-Client-Cert": "1", "X-BindaEMS-Client-CN": "handy-binda"}
 
@@ -38,11 +40,19 @@ def _router() -> APIRouter:
     return router
 
 
-def _app(*, required: bool = True, trusted: list[str] | None = None) -> FastAPI:
+def _app(
+    *,
+    required: bool = True,
+    trusted: list[str] | None = None,
+    exempt: list[str] | None = None,
+) -> FastAPI:
     return create_app(
         [_router()],
         trusted_proxies=[PROXY] if trusted is None else trusted,
-        client_cert=ClientCertConfig(required=required, exempt_networks=["192.168.1.0/24"]),
+        client_cert=ClientCertConfig(
+            required=required,
+            exempt_networks=["192.168.1.0/24"] if exempt is None else exempt,
+        ),
     )
 
 
@@ -117,6 +127,37 @@ def test_spoofed_headers_from_untrusted_peer_are_ignored() -> None:
     headers = {"X-Forwarded-For": "192.168.1.5", **CERT}
     response = _client("203.0.113.9").get("/api/ping", headers=headers)
     assert response.status_code == 403 and response.json() == DENIED
+
+
+def test_forwarded_for_as_separate_header_lines_is_rejected() -> None:
+    # Regressionstest: vom Client eine eigene Zeile „192.168.1.5“, vom Proxy „203.0.113.7“
+    headers = [("X-Forwarded-For", "192.168.1.5"), ("X-Forwarded-For", "203.0.113.7")]
+    response = _client(PROXY).get("/api/ping", headers=headers)
+    assert response.status_code == 403 and response.json() == DENIED
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"X-Forwarded-For": "203.0.113.7"}, {"X-BindaEMS-Client-Cert": "1"}],
+    ids=["forwarded-for", "cert-header"],
+)
+def test_proxy_headers_from_lan_peer_not_in_trusted_proxies_are_rejected(
+    headers: dict[str, str],
+) -> None:
+    # OPNsense erreicht die VM von 10.0.0.3, konfiguriert ist 10.0.0.2: kein Heimnetz-Freipass
+    client = _client("10.0.0.3", exempt=RFC1918)
+    with capture_logs() as logs:
+        response = client.get("/api/ping", headers=headers)
+        client.get("/api/ping", headers=headers)
+    assert response.status_code == 403 and response.json() == DENIED
+    warned = [e for e in logs if e["event"] == UNTRUSTED_WARNING]
+    assert [(e["ip"], e["log_level"]) for e in warned] == [("10.0.0.3", "warning")]
+
+
+def test_lan_client_without_proxy_headers_passes_with_rfc1918() -> None:
+    response = _client("192.168.1.5", exempt=RFC1918).get("/api/ping")
+    assert response.status_code == 200
+    assert _access(response) == Access("192.168.1.5", via_proxy=False, remote=False, device=None)
 
 
 def test_proxy_without_forwarded_for_is_not_lan() -> None:
