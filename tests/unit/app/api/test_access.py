@@ -5,12 +5,14 @@ from starlette.websockets import WebSocketDisconnect
 from structlog.testing import capture_logs
 
 from bindaems.app.api.access import (
+    CN_HEADER,
     CN_MAX,
     LOG_MEMORY,
     UNTRUSTED_WARNING,
     Access,
     AccessGate,
     PeerMarker,
+    _header,
     access_of,
 )
 from bindaems.app.api.server import create_app
@@ -230,6 +232,28 @@ def test_cn_is_truncated_and_ignored_without_cert() -> None:
         headers={"X-Forwarded-For": "192.168.1.20", "X-BindaEMS-Client-CN": "handy-binda"},
     )
     assert lan.status_code == 200 and _access(lan).device is None
+
+
+def test_cn_is_decoded_as_utf8() -> None:
+    headers = {
+        "X-Forwarded-For": "203.0.113.7",
+        "X-BindaEMS-Client-Cert": "1",
+        "X-BindaEMS-Client-CN": "küche-tablet".encode(),
+    }
+    response = _client(PROXY).get("/api/ping", headers=headers)
+    assert _access(response).device == "küche-tablet"
+    # ungültiges UTF-8 bricht nichts (der TestClient kann es nicht senden, daher direkt)
+    assert _header({"headers": [(CN_HEADER.encode(), b"k\xfc")]}, CN_HEADER) == "k\ufffd"
+
+
+def test_cn_is_truncated_after_decoding() -> None:
+    headers = {
+        "X-Forwarded-For": "203.0.113.7",
+        "X-BindaEMS-Client-Cert": "1",
+        "X-BindaEMS-Client-CN": ("ü" * 80).encode(),
+    }
+    response = _client(PROXY).get("/api/ping", headers=headers)
+    assert _access(response).device == "ü" * CN_MAX
 
 
 def test_off_never_blocks_but_records_access() -> None:

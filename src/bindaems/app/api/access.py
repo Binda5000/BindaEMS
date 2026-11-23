@@ -93,10 +93,13 @@ def _within(host: str | None, nets: Sequence[_Network]) -> bool:
 
 
 def _header(scope: Scope, name: str) -> str | None:
-    """Wert einer Kopfzeile, nur wenn sie genau einmal vorkommt; mehrfach zählt als fehlend."""
+    """Wert einer Kopfzeile, nur wenn sie genau einmal vorkommt; mehrfach zählt als fehlend.
+
+    Als UTF-8 gelesen (HAProxy reicht den CN als UTF-8 durch); ungültige Bytes werden zu „�“.
+    """
     wanted = name.encode("latin-1")
     values = [value for key, value in scope["headers"] if key.lower() == wanted]
-    return values[0].decode("latin-1") if len(values) == 1 else None
+    return values[0].decode("utf-8", errors="replace") if len(values) == 1 else None
 
 
 def _has_proxy_headers(scope: Scope) -> bool:
