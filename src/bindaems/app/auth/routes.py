@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from bindaems.app.api.access import access_of
 from bindaems.app.audit import AuditLog
 from bindaems.app.auth.service import (
     MAX_PASSWORD_LEN,
+    AdminTotpRequiredError,
     AuthService,
     InvalidCredentialsError,
     InvalidTotpError,
@@ -79,10 +81,6 @@ def user_json(user: User) -> dict[str, Any]:
     }
 
 
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client is not None else None
-
-
 def _locked(exc: LockedError) -> HTTPException:
     return HTTPException(
         status.HTTP_429_TOO_MANY_REQUESTS,
@@ -91,19 +89,27 @@ def _locked(exc: LockedError) -> HTTPException:
     )
 
 
-def auth_router(auth: AuthService, guard: Guard) -> APIRouter:
+def auth_router(auth: AuthService, guard: Guard, *, enforce_remote_totp: bool = False) -> APIRouter:
     router = APIRouter(prefix="/api/auth")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
 
     @router.post("/login")
     def login(body: LoginBody, request: Request) -> Response:
-        ip = _client_ip(request)
+        access = access_of(request)
+        ip = access.client_ip if access is not None else None
+        device = access.device if access is not None else None
+        # Die TOTP-Pflicht für Admins gilt nur, wenn das Client-Zertifikat verlangt wird
+        remote = enforce_remote_totp and access is not None and access.remote
         try:
             session = auth.login(
-                body.username, body.password, totp=body.totp, remember=body.remember
+                body.username,
+                body.password,
+                totp=body.totp,
+                remember=body.remember,
+                remote=remote,
             )
         except LockedError as exc:
-            log.warning("Anmeldung gesperrt", username=body.username, ip=ip)
+            log.warning("Anmeldung gesperrt", username=body.username, ip=ip, device=device)
             return JSONResponse(
                 {"detail": str(exc)},
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -114,10 +120,18 @@ def auth_router(auth: AuthService, guard: Guard) -> APIRouter:
                 {"detail": str(exc), "totp_required": True},
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
+        except AdminTotpRequiredError as exc:
+            log.warning(
+                "Anmeldung abgelehnt: Admin von unterwegs ohne TOTP",
+                username=body.username,
+                ip=ip,
+                device=device,
+            )
+            return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_403_FORBIDDEN)
         except InvalidCredentialsError as exc:
-            log.warning("Anmeldung fehlgeschlagen", username=body.username, ip=ip)
+            log.warning("Anmeldung fehlgeschlagen", username=body.username, ip=ip, device=device)
             return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_401_UNAUTHORIZED)
-        log.info("Anmeldung erfolgreich", username=session.user.username, ip=ip)
+        log.info("Anmeldung erfolgreich", username=session.user.username, ip=ip, device=device)
         response = JSONResponse({"user": user_json(session.user)})
         guard.set_session_cookies(response, session)
         return response

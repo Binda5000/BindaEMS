@@ -592,7 +592,7 @@ class AppRuntime:
         guard = Guard(self.auth, cookie_secure=cfg.app.cookie_secure)
         self.app: FastAPI = create_app(
             [
-                auth_router(self.auth, guard),
+                auth_router(self.auth, guard, enforce_remote_totp=cfg.app.client_cert.required),
                 users_router(self.auth, guard),
                 audit_router(self.audit, guard),
                 settings_router(self.settings, cfg, guard),

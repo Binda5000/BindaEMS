@@ -60,6 +60,14 @@ class TotpRequiredError(AuthError):
         super().__init__("Bestätigungscode erforderlich")
 
 
+class AdminTotpRequiredError(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Admins melden sich von unterwegs nur mit TOTP an. "
+            "Richte TOTP im Heimnetz unter „Konto“ ein."
+        )
+
+
 class LockedError(AuthError):
     def __init__(self, until: datetime, now: datetime) -> None:
         self.until = until
@@ -339,14 +347,22 @@ class AuthService:
     # --- Anmeldung -----------------------------------------------------------------------
 
     def login(
-        self, username: str, password: str, *, totp: str | None, remember: bool
+        self,
+        username: str,
+        password: str,
+        *,
+        totp: str | None,
+        remember: bool,
+        remote: bool = False,
     ) -> NewSession:
         key = username.strip().lower()[:64]
         # Prüfen der Sperre, Passwortprüfung und Zählen des Fehlversuchs ohne Wettlauf
         with self._login_locks[hash(key) % LOGIN_STRIPES]:
-            return self._login(key, password, totp=totp, remember=remember)
+            return self._login(key, password, totp=totp, remember=remember, remote=remote)
 
-    def _login(self, key: str, password: str, *, totp: str | None, remember: bool) -> NewSession:
+    def _login(
+        self, key: str, password: str, *, totp: str | None, remember: bool, remote: bool
+    ) -> NewSession:
         now = self._clock.now()
         until = self._locked_until(key)
         if until is not None and now < until:
@@ -368,6 +384,7 @@ class AuthService:
             if step is None:
                 self._fail(key, now)
                 raise InvalidCredentialsError()
+        refused = remote and row.role == "admin" and not row.totp_enabled
         rehash = (
             self._hash(password) if self._hasher.check_needs_rehash(row.password_hash) else None
         )
@@ -384,7 +401,10 @@ class AuthService:
                         .where(user_table.c.id == row.id)
                         .values(password_hash=rehash)
                     )
-                session = self._create_session(conn, _user(row), remember, now)
+                if not refused:
+                    session = self._create_session(conn, _user(row), remember, now)
+        if refused:  # Passwort stimmte: Fehlversuche sind zurückgesetzt, aber keine Sitzung
+            raise AdminTotpRequiredError()
         if session is None:
             self._fail(key, now)
             raise InvalidCredentialsError()

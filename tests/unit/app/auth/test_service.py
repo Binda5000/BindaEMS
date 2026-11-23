@@ -12,6 +12,7 @@ from sqlalchemy import select
 from tests.app_helpers import PASSWORD, T_APP
 
 from bindaems.app.auth.service import (
+    AdminTotpRequiredError,
     AuthService,
     InvalidCredentialsError,
     InvalidUsernameError,
@@ -323,3 +324,56 @@ def test_reset_totp_turns_two_factor_off_without_password(auth, audit, clock) ->
     assert not auth.get_user(user.id).totp_enabled
     assert auth.login("chris", PASSWORD, totp=None, remember=False)
     assert (audit.recent()[0].action, audit.recent()[0].source) == ("user.totp_disable", "cli")
+
+
+def _admin_with_totp(auth, clock, role: str = "admin") -> str:
+    user = auth.create_user("chris", PASSWORD, role, actor="cli", source="cli")
+    secret, _ = auth.totp_begin(user.id, PASSWORD)
+    auth.totp_enable(user.id, pyotp.TOTP(secret).at(clock.now()), actor="chris", source="ui")
+    return secret
+
+
+def test_remote_admin_without_totp_is_refused(auth, engine) -> None:
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    with pytest.raises(AdminTotpRequiredError, match="nur mit TOTP"):
+        auth.login("chris", PASSWORD, totp=None, remember=False, remote=True)
+    with engine.connect() as conn:
+        assert conn.execute(select(session_table.c.id)).scalars().all() == []
+
+
+def test_remote_admin_with_totp_logs_in(auth, clock) -> None:
+    secret = _admin_with_totp(auth, clock)
+    clock.advance(timedelta(seconds=60))
+    code = pyotp.TOTP(secret).at(clock.now())
+    session = auth.login("chris", PASSWORD, totp=code, remember=False, remote=True)
+    assert session.user.role == "admin"
+
+
+def test_remote_operator_without_totp_logs_in(auth) -> None:
+    auth.create_user("chris", PASSWORD, "operator", actor="cli", source="cli")
+    assert auth.login("chris", PASSWORD, totp=None, remember=False, remote=True)
+
+
+def test_lan_admin_without_totp_logs_in(auth) -> None:
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    assert auth.login("chris", PASSWORD, totp=None, remember=False, remote=False)
+
+
+def test_remote_admin_wrong_password_counts_as_failure(auth) -> None:
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError):
+            auth.login("chris", "falsch-falsch", totp=None, remember=False, remote=True)
+    with pytest.raises(LockedError):
+        auth.login("chris", PASSWORD, totp=None, remember=False, remote=True)
+
+
+def test_refused_remote_admin_resets_failures(auth) -> None:
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    for _ in range(4):
+        with pytest.raises(InvalidCredentialsError):
+            auth.login("chris", "falsch-falsch", totp=None, remember=False)
+    with pytest.raises(AdminTotpRequiredError):
+        auth.login("chris", PASSWORD, totp=None, remember=False, remote=True)
+    with pytest.raises(InvalidCredentialsError):  # Zähler stand wieder bei 0, nicht gesperrt
+        auth.login("chris", "falsch-falsch", totp=None, remember=False)

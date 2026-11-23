@@ -1,10 +1,12 @@
 import pyotp
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 from tests.app_helpers import PASSWORD, login_as
 
 from bindaems.app.api.server import create_app
 from bindaems.app.auth.routes import auth_router
 from bindaems.app.auth.web import Guard
+from bindaems.shared.config import ClientCertConfig
 
 
 def test_login_sets_strict_secure_cookies(make_client, auth) -> None:
@@ -212,3 +214,49 @@ def test_user_requests_keep_the_session_alive(make_client, auth, clock) -> None:
     assert client.get("/api/auth/me").status_code == 200
     clock.advance(11 * 60)
     assert client.get("/api/auth/me").status_code == 200
+
+
+PROXY = "10.0.0.2"
+CERT = {"X-BindaEMS-Client-Cert": "1", "X-BindaEMS-Client-CN": "handy-binda"}
+
+
+def _remote_client(auth, *, enforce: bool, required: bool = True) -> TestClient:
+    guard = Guard(auth, cookie_secure=True)
+    app = create_app(
+        [auth_router(auth, guard, enforce_remote_totp=enforce)],
+        trusted_proxies=[PROXY],
+        client_cert=ClientCertConfig(required=required),
+    )
+    return TestClient(app, client=(PROXY, 50000), base_url="https://testserver")
+
+
+def test_login_route_returns_403_for_remote_admin_without_totp(auth) -> None:
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    response = _remote_client(auth, enforce=True).post(
+        "/api/auth/login", json={"username": "chris", "password": PASSWORD}, headers=CERT
+    )
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Admins melden sich von unterwegs nur mit TOTP an. "
+        "Richte TOTP im Heimnetz unter „Konto“ ein."
+    }
+    assert "set-cookie" not in response.headers
+
+
+def test_remote_admin_without_totp_logs_in_when_cert_not_required(auth) -> None:
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    response = _remote_client(auth, enforce=False, required=False).post(
+        "/api/auth/login", json={"username": "chris", "password": PASSWORD}
+    )
+    assert response.status_code == 200
+
+
+def test_login_log_names_device(auth) -> None:
+    auth.create_user("chris", PASSWORD, "operator", actor="cli", source="cli")
+    with capture_logs() as logs:
+        response = _remote_client(auth, enforce=True).post(
+            "/api/auth/login", json={"username": "chris", "password": PASSWORD}, headers=CERT
+        )
+    assert response.status_code == 200
+    entry = next(e for e in logs if e["event"] == "Anmeldung erfolgreich")
+    assert entry["device"] == "handy-binda"
