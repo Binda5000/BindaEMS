@@ -158,6 +158,7 @@ app:
   # client_cert:
   #   required: true
   #   exempt_networks: [192.168.1.0/24]   # Heimnetz ohne Zertifikat; leer = jedes Gerät braucht eins
+  #   # mit [] zählt jede Anmeldung als von unterwegs: Admins vorher TOTP einrichten
   # ping_interval_s: 300   # Takt des Lebenszeichens in s (60 bis 3600); es wird nur gesendet, wenn BINDAEMS_PING_URL gesetzt ist
 
 # Wärme und Kälte (Phase 6a): die Klimaanlage an der UVR610. Der core liest vom C.M.I. per CoE V2 (UDP)

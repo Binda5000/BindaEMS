@@ -988,6 +988,19 @@ Hinweise:
 - `app.trusted_proxies` nennt **nur** die Adresse des HAProxy (der OPNsense), nie ein ganzes
   LAN. Sonst könnte dort jedes Gerät `X-Forwarded-For` und die `X-BindaEMS-*`-Kopfzeilen selbst
   wählen und die Prüfung umgehen.
+- Die Adresse in `app.trusted_proxies` ist genau die, von der die OPNsense die VM erreicht (bei
+  mehreren Schnittstellen die im Netz der VM). Prüfbar im Log der app bei einer Anmeldung aus dem
+  Heimnetz: Steht dort `ip=` mit der Adresse des Geräts, stimmt sie; steht dort eine Adresse der
+  OPNsense, gehört genau diese in `app.trusted_proxies`. Stimmt sie nicht, weist die
+  app mit `required: true` jede Anfrage mit `X-Forwarded-For` ab (403) und loggt
+  „X-Forwarded-For von nicht vertrauter Gegenstelle – app.trusted_proxies prüfen“ mit `ip=` der
+  Gegenstelle, also der Adresse, die dort hingehört.
+- Jeder Name, unter dem das EMS über den HAProxy erreicht wird, auch ein nur intern genutzter,
+  muss in der `ssl_fc_sni`-Bedingung stehen (`ssl_fc_sni -i name1 name2`); sonst antwortet
+  HAProxy dort mit 421.
+- Nutzt das Heimnetz IPv6 zum HAProxy, gehört das IPv6-Präfix (ULA, z. B. `fd00::/8`, bzw. das
+  Präfix des Providers) in `app.client_cert.exempt_networks` **und** in die `src`-Liste der
+  `deny`-Zeile oben. Sonst gilt ein Gerät im Heimnetz, das über IPv6 kommt, als von unterwegs.
 - Teilt sich der Public Service Port 443 mit anderen Diensten, fragt der Browser eines Geräts
   mit EMS-Zertifikat auch dort nach einem Zertifikat; die Auswahl „keins“ genügt.
 - Firefox auf Android nutzt keine Client-Zertifikate aus dem System; dort Chrome nehmen.
@@ -1037,7 +1050,8 @@ app:
     exempt_networks: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
 ```
 
-(verlangt `app.trusted_proxies` und `app.cookie_secure: true`), dann
+(verlangt `app.trusted_proxies` und `app.cookie_secure: true`). Mit `exempt_networks: []` zählt
+jede Anmeldung als von unterwegs, auch aus dem Heimnetz: Admins richten vorher TOTP ein. Dann
 `docker compose restart ems-app` (gleiches Image; die app liest nur `config.yaml` neu).
 Danach Prüfung 2, 3 und 6 noch einmal. Ab jetzt weist die app Anfragen von außen ohne geprüftes
 Zertifikat mit 403 ab (`/health` bleibt offen; der Live-WebSocket wird vor dem Annehmen

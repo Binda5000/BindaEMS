@@ -2299,7 +2299,7 @@ pv:
 - **Schutzmaßnahmen:**
   - CSRF-Schutz per Double-Submit-Token
   - Sperre für 15 min nach 5 Fehlversuchen innerhalb von 15 min
-  - TOTP optional, für Admins empfohlen
+  - TOTP optional, für Admins empfohlen; von unterwegs für Admins Pflicht, wenn `app.client_cert.required` an ist (Stand Plan Fernzugriff)
   - Security-Header (u. a. CSP)
   - Vertrauen in `X-Forwarded-*` nur vom konfigurierten Reverse Proxy
 - **Konten:** keine Selbstregistrierung; den ersten Admin legt ein CLI-Befehl an.
