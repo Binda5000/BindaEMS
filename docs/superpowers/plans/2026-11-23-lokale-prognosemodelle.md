@@ -92,6 +92,7 @@ Schick mir die Ausgabe der letzten Schleife, die Zeile je Tag von `export_days` 
 **Hinweise:**
 - Ein Slot ohne archivierte Prognose zählt im Lauf mit dem Ist-Wert, also perfekt. Liegt „Prognose“ in der Ausgabe von `export_days` an einem Tag unter 100 %, ist Lauf A dort zu günstig; ich nehme solche Tage aus der Auswertung.
 - Die Läufe rechnen „Victron allein“ jedes Mal gleich; verglichen wird nur die Zeile des Optimierers.
+- **Gegenprobe mit synthetischen Tagen (23.11.2026, Takt 60, je 3 Tage):** Die Methode läuft (leere Prognose → Ist-Wert). `winter-spread`: Prognose 18,96 €, Last perfekt 18,90 €, PV perfekt 19,01 €, beide 18,90 € (Victron allein 33,66 €). `wechselhaft`: 14,14 / 14,15 / 14,13 / 14,16 € (24,08 €). Perfekte Voraussicht ist also nicht immer billiger: Der Planer plant rollierend mit Restwert am Horizontende, ein paar Cent sind Rauschen. Deshalb zählt ein Unterschied unter 0,50 € im Monat als 0. Die synthetischen Prognosefehler sind erfunden; die Größenordnung an der Anlage zeigt erst Teil A.
 
 ## Global Constraints
 
