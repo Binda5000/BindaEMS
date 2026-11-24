@@ -62,15 +62,9 @@ cd /opt/bindaems
 docker compose run --rm --entrypoint python ems-app \
   -m bindaems.tools.export_days --config /config/config.yaml \
   --von 2026-10-27 --bis 2026-11-22 --out /data/prog-a.json
-# B und C: eine Größe ohne Prognose (der Lauf nimmt dann den Ist-Wert)
-docker compose run --rm --entrypoint python ems-app -c '
-import json
-for name, key in (("last", "load_forecast_w"), ("pv", "pv_forecast_w")):
-    d = json.load(open("/data/prog-a.json"))
-    for s in d["slots"]:
-        s[key] = {}
-    json.dump(d, open(f"/data/prog-{name}.json", "w"))
-'
+# B und C: eine Größe ohne Prognose (der Lauf nimmt dann den Ist-Wert); je eine Zeile
+docker compose run --rm --entrypoint python ems-app -c 'import json; d=json.load(open("/data/prog-a.json")); [s.update(load_forecast_w={}) for s in d["slots"]]; json.dump(d, open("/data/prog-last.json","w"))'
+docker compose run --rm --entrypoint python ems-app -c 'import json; d=json.load(open("/data/prog-a.json")); [s.update(pv_forecast_w={}) for s in d["slots"]]; json.dump(d, open("/data/prog-pv.json","w"))'
 # D: beide perfekt
 docker compose run --rm --entrypoint python ems-app \
   -m bindaems.tools.export_days --config /config/config.yaml \
